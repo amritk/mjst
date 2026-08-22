@@ -209,11 +209,16 @@ describe('asyncapi ruleset', () => {
     expect(await has(doc, 'asyncapi-3-document-unresolved')).toBe(true)
   })
 
-  it('does not report the 3.x structure twice when no resolver is injected', async () => {
+  it('reports a 3.x structural error under exactly one rule', async () => {
+    // There is one structural rule per major. Spectral ships a
+    // resolved/unresolved pair; running both here double-reported every
+    // structural error as soon as a `$ref` resolver was injected.
     const doc = base3()
     doc['operations'] = { onUserSignedUp: { action: 'shout', channel: { $ref: '#/channels/user' } } }
-    const codes = await codesWith(allRules, doc)
-    expect(codes.has('asyncapi-3-document-resolved')).toBe(false)
+    const structural = [...(await codesWith(allRules, doc))].filter((code) =>
+      String(code).startsWith('asyncapi-3-document'),
+    )
+    expect(structural).toEqual(['asyncapi-3-document-unresolved'])
   })
 
   // Descriptions and tags ---------------------------------------------------

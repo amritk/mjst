@@ -7,9 +7,10 @@ import { lint } from '../../core'
 import { aasFormats, aasFunctions, allFunctions, asyncapi, createAsyncApiRuleset } from './index'
 
 // A minimal AsyncAPI 2.6 document with obvious, resolution-free violations: the
-// info object has no contact, description or license, and the one operation has
-// no description. Enough to prove the ruleset runs end to end with both the
-// built-in functions (truthy) and the AsyncAPI-specific ones wired in.
+// info object has no contact, description or license, the one operation has no
+// description, and its payload declares a type that is not a type. Enough to
+// prove the ruleset runs end to end with both the built-in functions (truthy)
+// and the AsyncAPI-specific ones (asyncApiPayload) wired in.
 const doc = [
   'asyncapi: 2.6.0',
   'info:',
@@ -20,7 +21,7 @@ const doc = [
   '    subscribe:',
   '      message:',
   '        payload:',
-  '          type: object',
+  '          type: not-a-type',
   '',
 ].join('\n')
 
@@ -33,8 +34,9 @@ describe('createAsyncApiRuleset', () => {
     expect(codes.has('asyncapi-info-contact')).toBe(true)
     // A 2.x rule backed by a built-in function: the operation has no description.
     expect(codes.has('asyncapi-operation-description')).toBe(true)
-    // A 2.x rule backed by an AsyncAPI-specific function.
-    expect(codes.has('asyncapi-operation-operationId')).toBe(true)
+    // A 2.x rule backed by an AsyncAPI-specific function (`asyncApiPayload`),
+    // as opposed to the two above, which both run the core `truthy`.
+    expect(codes.has('asyncapi-payload')).toBe(true)
     // Every finding carries an exact source range.
     for (const finding of findings) expect(finding.range.start.line).toBeGreaterThanOrEqual(0)
   })
@@ -44,7 +46,7 @@ describe('createAsyncApiRuleset', () => {
     const json = JSON.stringify({
       asyncapi: '2.6.0',
       info: { title: 'Test API', version: '1.0.0' },
-      channels: { 'user/signedup': { subscribe: { message: { payload: { type: 'object' } } } } },
+      channels: { 'user/signedup': { subscribe: { message: { payload: { type: 'not-a-type' } } } } },
     })
     const fromYaml = (await lint(doc, { ruleset })).map((finding) => finding.code).sort()
     const fromJson = (await lint(json, { ruleset })).map((finding) => finding.code).sort()

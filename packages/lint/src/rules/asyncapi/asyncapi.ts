@@ -26,15 +26,25 @@ const V2_MESSAGE_TRAITS = [
   '$.components.messageTraits[*]',
 ]
 
-// Payload rules are gated to messages that leave `schemaFormat` unset: those are
-// the only payloads that are AsyncAPI Schema Objects. An Avro or Protobuf
-// payload is a different language entirely, and
-// `asyncapi-payload-unsupported-schemaFormat` is what reports it.
-const V2_DEFAULT_FORMAT_PAYLOADS = [
-  '$.components.messageTraits[?(@.schemaFormat === void 0)].payload',
-  '$.components.messages[?(@.schemaFormat === void 0)].payload',
-  "$.channels[*][publish,subscribe][?(@property === 'message' && @.schemaFormat === void 0)].payload",
-]
+/** Every place a 2.x message can be written, messages and traits alike. */
+const V2_ALL_MESSAGES = [...V2_MESSAGES, ...V2_MESSAGE_TRAITS]
+
+/**
+ * Narrows a message location to the messages that leave `schemaFormat` unset:
+ * those are the only payloads that are AsyncAPI Schema Objects. An Avro or
+ * Protobuf payload is a different language entirely, and
+ * `asyncapi-payload-unsupported-schemaFormat` is what reports it.
+ *
+ * A location ending in a collection takes the filter directly; one ending in the
+ * fixed `message` field has to filter the operation that holds it, since there is
+ * no collection to filter over.
+ */
+const defaultFormatOnly = (given: string): string =>
+  given.endsWith('.message')
+    ? `${given.slice(0, -'.message'.length)}[?(@property === 'message' && @.schemaFormat === void 0)]`
+    : `${given.slice(0, -'[*]'.length)}[?(@.schemaFormat === void 0)]`
+
+const V2_DEFAULT_FORMAT_PAYLOADS = V2_ALL_MESSAGES.map((given) => `${defaultFormatOnly(given)}.payload`)
 
 // `^` selects the payload schema itself from the `default` / `examples` it
 // carries, so the function receives the schema and can validate the value
@@ -168,25 +178,24 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-headers-schema-type-object': {
     description: 'Headers schema type must be "object".',
     formats: ['aas2'],
-    given: [
-      '$.components.messageTraits[*].headers',
-      '$.components.messages[*].headers',
-      `${V2_OPERATIONS}.message.headers`,
-      `${V2_OPERATIONS}.message.traits[*].headers`,
-    ],
+    given: V2_ALL_MESSAGES.map((given) => `${given}.headers`),
     severity: 'error',
     then: { function: 'schema', functionOptions: { schema: HEADERS_OBJECT_SCHEMA, allErrors: true } },
   },
   'asyncapi-message-examples': {
     description: 'Message examples must be valid against the payload and headers schemas.',
     formats: ['aas2'],
-    given: [...V2_MESSAGES, ...V2_MESSAGE_TRAITS],
+    given: V2_ALL_MESSAGES,
     severity: 'error',
     then: { function: 'asyncApiMessageExamples' },
   },
   'asyncapi-message-messageId-uniqueness': {
     description: 'Every messageId must be unique.',
     formats: ['aas2'],
+    // Unresolved: a reusable `components` entry reached by two `$ref`s appears
+    // twice in the dereferenced tree, and counting those as two declarations
+    // reported a duplicate id for a document that only ever declared one.
+    resolved: false,
     given: '$',
     severity: 'error',
     then: { function: 'asyncApiMessageIdUnique' },
@@ -207,6 +216,10 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-operation-operationId-uniqueness': {
     description: 'Every operationId must be unique.',
     formats: ['aas2'],
+    // Unresolved: a reusable `components` entry reached by two `$ref`s appears
+    // twice in the dereferenced tree, and counting those as two declarations
+    // reported a duplicate id for a document that only ever declared one.
+    resolved: false,
     given: '$',
     severity: 'error',
     then: { function: 'asyncApiOperationIdUnique' },
@@ -242,7 +255,7 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-payload-unsupported-schemaFormat': {
     description: 'Message payload validation is only supported with an unspecified schemaFormat.',
     formats: ['aas2'],
-    given: ['$.components.messageTraits[*]', '$.components.messages[*]', `${V2_OPERATIONS}.message`],
+    given: V2_ALL_MESSAGES,
     severity: 'info',
     then: { field: 'schemaFormat', function: 'undefined' },
   },
@@ -252,7 +265,7 @@ const v2Rules: Record<string, RuleEntry> = {
     severity: 'error',
     resolved: false,
     given: '$',
-    then: { function: 'asyncApiDocumentSchema', functionOptions: { resolved: false } },
+    then: { function: 'asyncApiDocumentSchema' },
   },
   'asyncapi-schema-default': {
     description: 'Schema default must be valid against its schema.',
@@ -347,12 +360,24 @@ const v2Rules: Record<string, RuleEntry> = {
       `${V2_OPERATIONS}.traits[*].tags`,
       `${V2_COMPONENT_OPERATIONS}.traits[*].tags`,
       '$.components.operationTraits[*].tags',
-      ...[...V2_MESSAGES, ...V2_MESSAGE_TRAITS].map((given) => `${given}.tags`),
+      ...V2_ALL_MESSAGES.map((given) => `${given}.tags`),
     ],
     severity: 'error',
     then: { function: 'aasTagsUnique' },
   },
 }
+
+// 3.0 keys channels by name and hangs messages off the channel, so "every
+// message" is a different set of places than in 2.x — but it is still a set that
+// several rules have to agree on.
+const V3_MESSAGES = ['$.channels[*].messages[*]', '$.components.channels[*].messages[*]', '$.components.messages[*]']
+const V3_MESSAGE_TRAITS = [
+  '$.channels[*].messages[*].traits[*]',
+  '$.components.channels[*].messages[*].traits[*]',
+  '$.components.messages[*].traits[*]',
+  '$.components.messageTraits[*]',
+]
+const V3_ALL_MESSAGES = [...V3_MESSAGES, ...V3_MESSAGE_TRAITS]
 
 /** AsyncAPI 3.x rules. 3.0 moved operations to the top level and channels to an addressed map. */
 const v3Rules: Record<string, RuleEntry> = {
@@ -383,35 +408,30 @@ const v3Rules: Record<string, RuleEntry> = {
     // reads would already have been replaced by the server it names.
     description: 'Channel servers must reference servers defined in the servers object.',
     formats: ['aas3'],
+    // Unresolved, or the `$ref` this reads would already have been replaced by
+    // the server it names.
     resolved: false,
-    given: '$.channels[*]',
-    severity: 'error',
-    then: { field: '$.servers[*].$ref', function: 'pattern', functionOptions: { match: '^#\\/servers\\/' } },
-  },
-  'asyncapi-3-document-resolved': {
-    description: 'Validate structure of AsyncAPI v3 specification after resolving references.',
-    formats: ['aas3'],
-    severity: 'error',
     given: '$',
-    then: { function: 'asyncApiDocumentSchema', functionOptions: { resolved: true } },
+    severity: 'error',
+    then: { function: 'asyncApiChannelServers' },
   },
   'asyncapi-3-document-unresolved': {
-    description: 'Validate structure of AsyncAPI v3 specification before resolving references.',
+    // One structural pass per major, against the document as written — see
+    // `asyncApiDocumentSchema`. Spectral pairs this with an
+    // `asyncapi-3-document-resolved` twin; running both here reported every
+    // structural error twice whenever a `$ref` resolver was injected, which the
+    // CLI always does.
+    description: 'Validate structure of AsyncAPI v3 specification.',
     formats: ['aas3'],
     severity: 'error',
     resolved: false,
     given: '$',
-    then: { function: 'asyncApiDocumentSchema', functionOptions: { resolved: false } },
+    then: { function: 'asyncApiDocumentSchema' },
   },
   'asyncapi-3-headers-schema-type-object': {
     description: 'Headers schema type must be "object".',
     formats: ['aas3'],
-    given: [
-      '$.components.messageTraits[*].headers',
-      '$.components.messages[*].headers',
-      '$.channels[*].messages[*].headers',
-      '$.channels[*].messages[*].traits[*].headers',
-    ],
+    given: V3_ALL_MESSAGES.map((given) => `${given}.headers`),
     severity: 'error',
     then: { function: 'schema', functionOptions: { schema: HEADERS_OBJECT_SCHEMA, allErrors: true } },
   },
@@ -432,7 +452,7 @@ const v3Rules: Record<string, RuleEntry> = {
   'asyncapi-3-payload-unsupported-schemaFormat': {
     description: 'Message payload validation is only supported with an unspecified schemaFormat.',
     formats: ['aas3'],
-    given: ['$.components.messages[*].payload', '$.channels[*].messages[*].payload'],
+    given: V3_ALL_MESSAGES.map((given) => `${given}.payload`),
     severity: 'info',
     then: { field: 'schemaFormat', function: 'undefined' },
   },
@@ -491,6 +511,10 @@ const v3Rules: Record<string, RuleEntry> = {
       '$.info.tags',
       '$.servers[*].tags',
       '$.components.servers[*].tags',
+      // The Channel Object carries `tags` in 3.0 too, and it is the most obvious
+      // place for a duplicate to be written.
+      '$.channels[*].tags',
+      '$.components.channels[*].tags',
       '$.operations[*].tags',
       '$.components.operations[*].tags',
       '$.operations[*].traits[*].tags',

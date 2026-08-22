@@ -7,7 +7,7 @@ one into the sibling `.ts` module that [`index.ts`](./index.ts) imports — a
 static import so the package can be bundled, and so it runs where
 `createRequire` does not exist (Workers, Deno). The build fails if a `.json`
 file and its module drift apart. They back the `asyncapi-schema` and
-`asyncapi-3-document-{resolved,unresolved}` rules, and the AsyncAPI Schema
+`asyncapi-3-document-unresolved` rules, and the AsyncAPI Schema
 Object subschema each one carries backs `asyncapi-payload`.
 
 | File | Version | Source |
@@ -33,8 +33,8 @@ are draft-07 and refer to their own subschemas by absolute URI
 (`http://asyncapi.com/definitions/3.0.0/info.json`) rather than by JSON
 Pointer — but every one of those URIs is an `$id` declared inside the same
 document, so the interpreter resolves them from its own resource registry with
-nothing to fetch. The draft-07 `definitions` keyword and the draft-04/07
-metaschemas the documents embed for `schemaFormat` support come along
+nothing to fetch. The draft-07 `definitions` keyword and the draft-07
+metaschema the documents embed for `schemaFormat` support come along
 unchanged.
 
 ## Adaptation: three ReDoS-prone patterns

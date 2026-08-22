@@ -54,7 +54,8 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
 7. **`createRuleset` is memoized** per `(definition object, basePath,
    restrictTo)`. Mutating a definition you already passed in will not rebuild the
    ruleset — pass a fresh object instead.
-8. **AsyncAPI rules are gated per major.** The 3.x rules are named with an
+8. **Most AsyncAPI rules are gated per major** (11 of the 55 apply to both).
+   The 3.x-only rules are named with an
    `asyncapi-3-` prefix (`asyncapi-3-operation-description`) and the 2.x ones are
    not, because 3.0 moved operations to the top level and tags under `info`.
    Re-severitying `asyncapi-operation-description` does nothing to a 3.0

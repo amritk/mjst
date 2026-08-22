@@ -28,7 +28,6 @@ export {
   asyncApiSchemaVersion,
   LATEST_ASYNCAPI_VERSION,
   loadAsyncApiSchema,
-  loadResolvedAsyncApiSchema,
 } from './schemas'
 
 /** The built-in `@amritk/lint` functions plus the AsyncAPI-specific ones, keyed by name. */

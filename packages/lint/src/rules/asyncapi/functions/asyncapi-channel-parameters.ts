@@ -43,13 +43,13 @@ export const asyncApiChannelParameters: RulesetFunction = (channel, _options, co
 
   const address = channelAddress(channel, context.path, context.document.data)
   if (address === undefined) return []
-  const declared = parseUrlVariables(address)
+  const declared = new Set(parseUrlVariables(address))
 
   const results: IFunctionResult[] = []
   // `Object.hasOwn`, not `in`: parameter names come from the document, so a
   // `{constructor}` in the address would otherwise be answered by
   // `Object.prototype` and its missing description go unreported.
-  const missing = declared.filter((name) => !Object.hasOwn(parameters, name))
+  const missing = [...declared].filter((name) => !Object.hasOwn(parameters, name))
   if (missing.length > 0) {
     results.push({
       message: `Channel parameters must be described: ${missing.join(', ')}`,
@@ -57,7 +57,7 @@ export const asyncApiChannelParameters: RulesetFunction = (channel, _options, co
     })
   }
   for (const name of Object.keys(parameters)) {
-    if (!declared.includes(name)) {
+    if (!declared.has(name)) {
       results.push({
         message: `Channel parameter "${name}" is not used in the channel address`,
         path: [...context.path, 'parameters', name],

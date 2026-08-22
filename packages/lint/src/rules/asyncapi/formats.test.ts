@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { aas2, aas2_0, aas2_6, aas3, aas3_0, aasFormats } from './formats'
+import { ASYNCAPI_VERSIONS } from './schemas'
 
 const doc = (asyncapi: unknown): unknown => ({ asyncapi })
 
@@ -35,13 +36,23 @@ describe('asyncapi formats', () => {
     }
   })
 
-  it('exposes both the dotted and underscored spelling of every minor', () => {
-    for (const [dotted, underscored] of [
-      ['aas2.0', 'aas2_0'],
-      ['aas2.6', 'aas2_6'],
-      ['aas3.0', 'aas3_0'],
-    ]) {
-      expect(aasFormats[dotted as string]).toBe(aasFormats[underscored as string])
+  it('exposes both the dotted and underscored spelling of every bundled minor', () => {
+    // Driven off the bundled version list rather than a hand-written trio, which
+    // left 2.2–2.5 with no coverage at all.
+    for (const version of ASYNCAPI_VERSIONS) {
+      const dotted = `aas${version}`
+      const underscored = `aas${version.replace('.', '_')}`
+      expect(aasFormats[dotted], dotted).toBeDefined()
+      expect(aasFormats[dotted], version).toBe(aasFormats[underscored])
+      expect(aasFormats[dotted]?.({ asyncapi: `${version}.0` }), version).toBe(true)
     }
+  })
+
+  it('does not treat a different major as 2.x or 3.x', () => {
+    // `/^2\.\d/` rather than `/^2/`: a hypothetical 20.x must not inherit the
+    // 2.x ruleset.
+    expect(aas2({ asyncapi: '20.0.0' })).toBe(false)
+    expect(aas3({ asyncapi: '30.0.0' })).toBe(false)
+    expect(aas2({ asyncapi: '2' })).toBe(false)
   })
 })

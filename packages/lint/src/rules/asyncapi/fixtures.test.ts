@@ -61,7 +61,6 @@ describe('asyncapi fixtures', () => {
     for (const codes of [two, three]) {
       expect(codes.has('asyncapi-schema')).toBe(false)
       expect(codes.has('asyncapi-3-document-unresolved')).toBe(false)
-      expect(codes.has('asyncapi-3-document-resolved')).toBe(false)
       expect(codes.has('asyncapi-payload')).toBe(false)
       expect(codes.has('asyncapi-channel-parameters')).toBe(false)
     }
@@ -90,17 +89,68 @@ describe('asyncapi fixtures', () => {
     expect(without.has('asyncapi-payload')).toBe(false)
   })
 
-  it('checks a 3.0 operation channel only the resolver can reach', async () => {
-    // The published 3.0 schema types `operations.*.channel` as a Reference, so
-    // the unresolved pass never looks past the pointer. Behind it here is a
-    // channel whose `address` is a number.
-    const doc = JSON.stringify({
-      asyncapi: '3.0.0',
-      info: { title: 'T', version: '1.0.0' },
-      channels: { user: { address: 42 } },
-      operations: { onSignup: { action: 'receive', channel: { $ref: '#/channels/user' } } },
-    })
-    const withResolver = (await lint(doc, { ruleset: allRules, resolve })).map((finding) => finding.code)
-    expect(withResolver).toContain('asyncapi-3-document-resolved')
+  it('reports each structural error exactly once, resolver or not', async () => {
+    // Regression: the 3.x structural check used to be a resolved/unresolved
+    // pair, so every structural error in a 3.0 document was reported twice as
+    // soon as a `$ref` resolver was injected — which the CLI always does.
+    const doc = JSON.stringify(
+      {
+        asyncapi: '3.0.0',
+        info: { title: 'T', version: '1.0.0' },
+        channels: { user: { address: 'user/x', messages: { m: { payload: { type: 'object' } } } } },
+        operations: { o: { action: 'shout', channel: { $ref: '#/channels/user' } } },
+      },
+      null,
+      2,
+    )
+    const structural = (findings: { code: string | number }[]): (string | number)[] =>
+      findings.map((finding) => finding.code).filter((code) => String(code).startsWith('asyncapi-3-document'))
+
+    const withResolver = structural(await lint(doc, { ruleset: allRules, resolve }))
+    const without = structural(await lint(doc, { ruleset: allRules }))
+    expect(withResolver.length).toBeGreaterThan(0)
+    expect(withResolver).toEqual(without)
+  })
+
+  it('does not multiply a structural error by the number of $refs reaching it', async () => {
+    // A reusable message with one mistake, referenced from two channels. The
+    // structural rule runs unresolved precisely so this stays one finding
+    // rather than one per reference site.
+    const doc = JSON.stringify(
+      {
+        asyncapi: '2.6.0',
+        info: { title: 'T', version: '1.0.0' },
+        channels: {
+          a: { subscribe: { operationId: 'a', message: { $ref: '#/components/messages/M' } } },
+          b: { subscribe: { operationId: 'b', message: { $ref: '#/components/messages/M' } } },
+        },
+        components: { messages: { M: { messageId: 42 } } },
+      },
+      null,
+      2,
+    )
+    const findings = await lint(doc, { ruleset: allRules, resolve })
+    expect(findings.filter((finding) => finding.code === 'asyncapi-schema')).toHaveLength(1)
+  })
+
+  it('does not invent a duplicate id for a component reused through $ref', async () => {
+    // Regression: the uniqueness rules walked the dereferenced tree, so one
+    // reusable message reached by two `$ref`s looked like two declarations of
+    // the same messageId and errored on a perfectly valid document.
+    const doc = JSON.stringify(
+      {
+        asyncapi: '2.6.0',
+        info: { title: 'T', version: '1.0.0' },
+        channels: {
+          a: { subscribe: { operationId: 'a', message: { $ref: '#/components/messages/M' } } },
+          b: { subscribe: { operationId: 'b', message: { $ref: '#/components/messages/M' } } },
+        },
+        components: { messages: { M: { messageId: 'shared', payload: { type: 'object' } } } },
+      },
+      null,
+      2,
+    )
+    const codes = (await lint(doc, { ruleset: allRules, resolve })).map((finding) => finding.code)
+    expect(codes).not.toContain('asyncapi-message-messageId-uniqueness')
   })
 })

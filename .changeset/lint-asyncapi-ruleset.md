@@ -16,15 +16,19 @@ const ruleset = createAsyncApiRuleset() // recommended rules, like `spectral:asy
 const findings = await lint(document, { ruleset })
 ```
 
-55 rules, named to match Spectral's so an existing `.spectral.yml` that
-re-severities individual rules keeps working. They are gated by format, with the
-3.x rules under an `asyncapi-3-` prefix, because 3.0 moved operations to the top
-level and tags under `info` — a 2.x document never picks up a 3.x rule.
+54 rules, named to match Spectral's so an existing `.spectral.yml` that
+re-severities individual rules keeps working — the one Spectral rule with no
+counterpart here is `asyncapi-3-document-resolved`, for the reason below. 43 of
+them are gated by format,
+with the 3.x-only rules under an `asyncapi-3-` prefix, because 3.0 moved
+operations to the top level and tags under `info` — a 2.x document never picks up
+a 3.x rule. The remaining 11 describe things both majors share (`info`, servers,
+channel parameters, unused components) and run on either.
 
 New exports: `createAsyncApiRuleset`, `resolveAsyncApiRuleset`, `asyncapi`,
 `aasFunctions`, `allFunctions`, `aasFormats` (`aas2`, `aas2.0`–`aas2.6`, `aas3`,
-`aas3.0`), `loadAsyncApiSchema`, `loadResolvedAsyncApiSchema`,
-`asyncApiSchemaVersion`, `ASYNCAPI_VERSIONS` and `LATEST_ASYNCAPI_VERSION`.
+`aas3.0`), `loadAsyncApiSchema`, `asyncApiSchemaVersion`, `ASYNCAPI_VERSIONS` and
+`LATEST_ASYNCAPI_VERSION`.
 
 Three things worth knowing:
 
@@ -38,14 +42,13 @@ Three things worth knowing:
   a single unambiguous quantifier rather than by opting out of the check. The
   test suite asserts the equivalence over a generated corpus, and fails if a
   re-vendored schema reintroduces an upstream pattern.
-- **AsyncAPI 3.0 needs a widened schema for `resolved: true` rules.** The
-  published schema does not merely allow a `$ref` for a channel's servers and an
-  operation's channel and messages — it requires one, so a dereferenced document
-  stops matching the schema its own spec calls valid.
-  `loadResolvedAsyncApiSchema` widens exactly those four positions to "a
-  Reference Object *or* the object it points at", which checks the inlined
-  content while still tolerating a `$ref` a resolver deliberately left in place
-  (`@amritk/resolve-refs` does that for a chain that would close a cycle).
+- **Structural validation runs once, against the document as written.** There is
+  one meta-schema rule per major and it is `resolved: false`, matching the
+  `oas*-schema` rules. Validating the dereferenced tree instead re-checks every
+  `components` entry once per `$ref` that reaches it, so one mistake in a
+  reusable message reported three times in a document that used it twice. The
+  trade-off is that content pulled in from another file is not structurally
+  checked — the same gap the OpenAPI preset has.
 - **The structural rules skip a version they have no schema for.** A future
   `2.7.0` document keeps getting the style rules, but is never judged against
   2.6's meta-schema.

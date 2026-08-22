@@ -7,7 +7,6 @@ import {
   asyncApiSchemaVersion,
   LATEST_ASYNCAPI_VERSION,
   loadAsyncApiSchema,
-  loadResolvedAsyncApiSchema,
 } from './index'
 
 /**
@@ -172,59 +171,5 @@ describe('AsyncAPI meta-schemas', () => {
 
   it('names a latest version it actually bundles', () => {
     expect(asyncApiSchemaVersion(LATEST_ASYNCAPI_VERSION)).toBe(ASYNCAPI_VERSIONS[ASYNCAPI_VERSIONS.length - 1])
-  })
-})
-
-describe('the resolved 3.0 variant', () => {
-  /** A 3.0 document whose operation points at its channel by reference. */
-  const referencing = {
-    asyncapi: '3.0.0',
-    info: { title: 'T', version: '1' },
-    channels: { user: { address: 'user/signedup' } },
-    operations: { onSignup: { action: 'receive', channel: { $ref: '#/channels/user' } } },
-  }
-  /** The same document after a resolver has inlined that reference. */
-  const inlined = {
-    ...referencing,
-    operations: { onSignup: { action: 'receive', channel: { address: 'user/signedup' } } },
-  }
-
-  it('leaves every version but 3.0 exactly as published', () => {
-    for (const version of ASYNCAPI_VERSIONS) {
-      if (version === '3.0') continue
-      expect(loadResolvedAsyncApiSchema(version), version).toBe(loadAsyncApiSchema(version))
-    }
-  })
-
-  it('is a distinct 3.0 schema, cached, and does not mutate the published one', () => {
-    const resolved = loadResolvedAsyncApiSchema('3.0') as { $id?: string }
-    expect(resolved).not.toBe(loadAsyncApiSchema('3.0'))
-    expect(resolved).toBe(loadResolvedAsyncApiSchema('3.0'))
-    expect(resolved.$id).not.toBe((loadAsyncApiSchema('3.0') as { $id?: string }).$id)
-    // The published schema must still reject the inlined form — proof the clone
-    // was patched rather than the original.
-    expect(validate(loadAsyncApiSchema('3.0'), { formats: 'all' })(inlined)).not.toBe(true)
-  })
-
-  it('accepts an inlined reference where the published schema demands a $ref', () => {
-    const published = validate(loadAsyncApiSchema('3.0'), { formats: 'all' })
-    const resolved = validate(loadResolvedAsyncApiSchema('3.0'), { formats: 'all' })
-    // Both accept the document as written...
-    expect(published(referencing)).toBe(true)
-    // ...including the variant, since a resolver leaves a cyclic or unresolvable
-    // `$ref` in place and that is not this rule's error to report.
-    expect(resolved(referencing)).toBe(true)
-    // ...but only the variant accepts it once the reference has been inlined.
-    expect(published(inlined)).not.toBe(true)
-    expect(resolved(inlined)).toBe(true)
-  })
-
-  it('still validates the content it now reaches', () => {
-    const resolved = validate(loadResolvedAsyncApiSchema('3.0'), { formats: 'all' })
-    const broken = {
-      ...referencing,
-      operations: { onSignup: { action: 'receive', channel: { address: 42 } } },
-    }
-    expect(resolved(broken)).not.toBe(true)
   })
 })

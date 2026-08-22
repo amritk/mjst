@@ -11,16 +11,39 @@ const OAUTH2_FLOWS = ['implicit', 'password', 'clientCredentials', 'authorizatio
 
 const SECURITY_SCHEMES_REF = '#/components/securitySchemes/'
 
-/** Every scope name declared across an OAuth2 security scheme's flows. */
-const declaredScopes = (flows: unknown): string[] => {
-  if (!isObject(flows)) return []
+/**
+ * Every scope name declared across an OAuth2 security scheme's flows. Returned as
+ * a `Set`: both the scheme's scope list and the requirement's are document-sized,
+ * so a linear membership test per requested scope made the rule quadratic — an
+ * 8000-scope scheme cost seconds.
+ */
+const declaredScopes = (flows: unknown): ReadonlySet<string> => {
   const scopes = new Set<string>()
+  if (!isObject(flows)) return scopes
   for (const name of OAUTH2_FLOWS) {
     const flow = flows[name]
     if (!isObject(flow) || !isObject(flow['scopes'])) continue
     for (const scope of Object.keys(flow['scopes'])) scopes.add(scope)
   }
-  return [...scopes]
+  return scopes
+}
+
+/**
+ * Decodes one JSON Pointer segment of a `$ref`: percent-escapes first (the
+ * fragment is a URI), then `~1`/`~0`. The `$ref` is document text, so a
+ * malformed escape like `%zz` is something an author can write, and
+ * `decodeURIComponent` throws `URIError` on it — which replaced a real finding
+ * with an internal-error diagnostic on the wrong node. An undecodable segment is
+ * compared as written instead.
+ */
+const pointerSegment = (segment: string): string => {
+  let decoded = segment
+  try {
+    decoded = decodeURIComponent(segment)
+  } catch {
+    // Not valid percent-encoding — compare the segment literally.
+  }
+  return decoded.replace(/~1/g, '/').replace(/~0/g, '~')
 }
 
 /** The `components.securitySchemes` map of the raw document, or an empty one. */
@@ -71,7 +94,7 @@ export const asyncApiSecurity: RulesetFunction<unknown, IAsyncApiSecurityOptions
         },
       ]
     }
-    const name = decodeURIComponent(ref.slice(SECURITY_SCHEMES_REF.length)).replace(/~1/g, '/').replace(/~0/g, '~')
+    const name = pointerSegment(ref.slice(SECURITY_SCHEMES_REF.length))
     return isDeclared(schemes, name)
       ? []
       : [
@@ -103,9 +126,9 @@ export const asyncApiSecurity: RulesetFunction<unknown, IAsyncApiSecurityOptions
     if (!isObject(scheme) || scheme['type'] !== 'oauth2') continue
     const available = declaredScopes(scheme['flows'])
     requested.forEach((scope, index) => {
-      if (typeof scope === 'string' && !available.includes(scope)) {
+      if (typeof scope === 'string' && !available.has(scope)) {
         results.push({
-          message: `Security scope "${scope}" is not declared by the "${key}" scheme. Available: [${available.join(', ')}]`,
+          message: `Security scope "${scope}" is not declared by the "${key}" scheme. Available: [${[...available].join(', ')}]`,
           path: [...context.path, key, index],
         })
       }

@@ -13,7 +13,10 @@ import { isObject } from './helpers'
  */
 export const serverVariables: RulesetFunction = (server, _options, context) => {
   if (!isObject(server) || typeof server['url'] !== 'string') return []
+  // A `Set` alongside the list: the URL's template count and the `variables` map
+  // are both document-sized, so a linear membership scan per variable was quadratic.
   const templates = [...server['url'].matchAll(/\{([^}]+)\}/g)].map((m) => m[1] as string)
+  const templateNames = new Set(templates)
   const variables = isObject(server['variables']) ? server['variables'] : {}
   const results: IFunctionResult[] = []
 
@@ -27,7 +30,7 @@ export const serverVariables: RulesetFunction = (server, _options, context) => {
   }
 
   for (const [name, variable] of Object.entries(variables)) {
-    if (!templates.includes(name)) {
+    if (!templateNames.has(name)) {
       results.push({
         message: `Server variable "${name}" is not used in the URL`,
         path: [...context.path, 'variables', name],

@@ -80,9 +80,32 @@ describe('mergeTraits', () => {
   })
 
   it('stops merging at a depth cap rather than following the document down', () => {
-    let deep: Record<string, unknown> = { leaf: true }
-    for (let i = 0; i < 200; i++) deep = { nested: deep }
-    expect(() => mergeTraits({ traits: [deep] })).not.toThrow()
+    // Observable, not merely "did not throw": 200 frames do not overflow, so a
+    // no-throw assertion held with the cap removed entirely. Past the cap the
+    // trait subtree is adopted wholesale instead of merged, so the message's own
+    // leaf stops surviving the merge.
+    const chain = (depth: number, leaf: Record<string, unknown>): Record<string, unknown> => {
+      let node = leaf
+      for (let i = 0; i < depth; i++) node = { nested: node }
+      return node
+    }
+    const merged = mergeTraits({ ...chain(70, { fromMessage: true }), traits: [chain(70, { fromTrait: true })] })
+    let node: unknown = merged
+    while (node !== null && typeof node === 'object' && 'nested' in node) {
+      node = (node as Record<string, unknown>)['nested']
+    }
+    // Uncapped this would be `{ fromMessage: true, fromTrait: true }`.
+    expect(node).toEqual({ fromTrait: true })
+  })
+
+  it('keeps a prototype-named key as an own data property', () => {
+    // The `Object.hasOwn` read guard in `mergePatch` is defensive rather than
+    // load-bearing — every `Object.prototype` value is a function, which the
+    // merge treats as "not an object" either way — but the resulting key must
+    // still land as the patch wrote it.
+    const merged = mergeTraits({ traits: [{ constructor: { injected: true } }] })
+    expect(merged['constructor']).toEqual({ injected: true })
+    expect(Object.hasOwn(merged, 'constructor')).toBe(true)
   })
 
   it('ignores a traits entry that is not an object', () => {
@@ -255,6 +278,43 @@ describe('asyncApiSecurity', () => {
     ])
   })
 
+  it('decodes JSON Pointer and percent escapes in a 3.x reference', () => {
+    const escaped = {
+      components: {
+        securitySchemes: {
+          'a/b': { type: 'httpApiKey' },
+          'c~d': { type: 'httpApiKey' },
+          'e f': { type: 'httpApiKey' },
+        },
+      },
+    }
+    for (const ref of [
+      '#/components/securitySchemes/a~1b',
+      '#/components/securitySchemes/c~0d',
+      '#/components/securitySchemes/e%20f',
+    ]) {
+      expect(run(asyncApiSecurity, { $ref: ref }, { objectType: 'Operation' }, contextFor(escaped)), ref).toEqual([])
+    }
+  })
+
+  it('survives a malformed percent escape instead of throwing', () => {
+    // `decodeURIComponent` throws `URIError` on `%zz`, and the `$ref` is document
+    // text — the rule used to die and report an internal error on the wrong node.
+    const found = run(
+      asyncApiSecurity,
+      { $ref: '#/components/securitySchemes/%zz' },
+      { objectType: 'Operation' },
+      contextFor(document),
+    )
+    expect(found).toEqual(['Operation security requirement "%zz" is not a defined security scheme'])
+  })
+
+  it('falls back to Operation when no objectType is given', () => {
+    expect(run(asyncApiSecurity, { missing: [] }, undefined, contextFor(document))).toEqual([
+      'Operation security requirement "missing" is not a defined security scheme',
+    ])
+  })
+
   it('leaves an inline 3.x scheme alone — it defines itself', () => {
     expect(run(asyncApiSecurity, { type: 'userPassword' }, { objectType: 'Operation' }, contextFor(document))).toEqual(
       [],
@@ -414,21 +474,20 @@ describe('asyncApiPayload', () => {
 describe('asyncApiDocumentSchema', () => {
   it('validates against the schema for the version the document declares', () => {
     const bad = { asyncapi: '2.6.0', info: { title: 'T', version: '1' }, channels: 'no' }
-    expect(run(asyncApiDocumentSchema, bad, { resolved: false }, contextFor(bad))).not.toEqual([])
+    expect(run(asyncApiDocumentSchema, bad, undefined, contextFor(bad))).not.toEqual([])
   })
 
   it('says nothing for a version it bundles no schema for', () => {
     const future = { asyncapi: '2.7.0', channels: 'no' }
-    expect(run(asyncApiDocumentSchema, future, { resolved: false }, contextFor(future))).toEqual([])
+    expect(run(asyncApiDocumentSchema, future, undefined, contextFor(future))).toEqual([])
   })
 
-  it('skips the resolved pass when it was handed the raw tree', () => {
+  it('validates whichever tree it is handed, with no options to configure', () => {
+    // There is one structural rule per major and it takes no options, so the
+    // function must not depend on any being passed.
     const bad = { asyncapi: '3.0.0', info: { title: 'T', version: '1' }, channels: 'no' }
     const context = contextFor(bad)
-    // The engine hands resolved rules the raw tree when no resolver is injected;
-    // the unresolved twin already reported this exact tree.
-    expect(run(asyncApiDocumentSchema, context.document.data, { resolved: true }, context)).toEqual([])
-    // A genuinely resolved tree is a different object, so it is checked.
-    expect(run(asyncApiDocumentSchema, structuredClone(bad), { resolved: true }, context)).not.toEqual([])
+    expect(run(asyncApiDocumentSchema, context.document.data, undefined, context)).not.toEqual([])
+    expect(run(asyncApiDocumentSchema, structuredClone(bad), undefined, context)).not.toEqual([])
   })
 })

@@ -59,20 +59,29 @@ export const readSchemaModuleDigest = (set, name) => {
   }
 }
 
+/** `biome.json`'s formatter line width. A declaration longer than this gets wrapped. */
+const LINE_WIDTH = 120
+
 /**
- * Renders the module for one vendored schema. The literal is single-quoted with
- * only backslashes and apostrophes escaped, which is exactly what the formatter
- * would produce for JSON text, so regenerating never fights `biome format`.
+ * Renders the module for one vendored schema.
+ *
+ * The literal is single-quoted with only backslashes and apostrophes escaped,
+ * which is what the formatter produces for JSON text. The *declaration* is
+ * wrapped the way the formatter wraps an over-long one, so `biome check` is
+ * clean straight after regenerating — emitting it on one line meant the
+ * documented refresh procedure left all twelve modules failing CI until someone
+ * happened to run `bun run format`.
  */
 export const renderSchemaModule = (set, name) => {
   const minified = minifiedSchema(set, name)
   const literal = `'${minified.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+  const declaration = `export const ${name}Json = ${literal}`
   return [
     `// Generated from ./${name}.json by scripts/generate-schema-modules.mjs — do not edit.`,
     `// source-sha256: ${schemaDigest(set, name)}`,
     '',
     `/** The vendored ${set.spec} meta-schema from \`${name}.json\`, as JSON text. Parsed on first use. */`,
-    `export const ${name}Json = ${literal}`,
+    declaration.length > LINE_WIDTH ? `export const ${name}Json =\n  ${literal}` : declaration,
     '',
   ].join('\n')
 }
