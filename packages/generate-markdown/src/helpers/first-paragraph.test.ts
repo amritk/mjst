@@ -35,19 +35,22 @@ describe('first-paragraph', () => {
     expect(remainingParagraphs(value)).toBe('    <div>\n      hi\n\n      there\n    </div>\n\nUse it verbatim.')
   })
 
-  // The blank line inside the block is part of it, so the block does not end
-  // there. Asserting this through `remainingParagraphs` proves nothing — it
-  // rejoins paragraphs with a blank line, so a torn block comes back identical.
+  // The blank lines inside the block are part of it, so the block does not end
+  // there. Two of them, because rejoining paragraphs puts one blank line back
+  // between them — a torn block with a single blank line comes back identical
+  // and proves nothing.
   it('keeps an indented code block whole', () => {
-    expect(firstParagraph('    code a\n\n    code b\n\nAfter.')).toBe('code a\n\n    code b')
-    expect(remainingParagraphs('    code a\n\n    code b\n\nAfter.')).toBe('After.')
+    const value = '    code a\n\n\n    code b\n\nAfter.'
+    // A row holds one line and a code block is not one line, so the row takes
+    // the prose and the sample goes below it, indentation and all.
+    expect(firstParagraph(value)).toBe('After.')
+    expect(remainingParagraphs(value)).toBe('    code a\n\n\n    code b')
   })
 
-  // A tab indents a code block as surely as four spaces do. (`firstParagraph`
-  // trims its own leading whitespace — its result is destined for a one-line
-  // table cell — so the indentation itself is checked on the remainder.)
+  // A tab indents a code block as surely as four spaces do — so a row skips it
+  // for the prose after it, rather than taking `code a` de-indented.
   it('reads a tab-indented block as code too', () => {
-    expect(firstParagraph('\tcode a\n\n\tcode b\n\nAfter.')).toBe('code a\n\n\tcode b')
+    expect(firstParagraph('\tcode a\n\n\tcode b\n\nAfter.')).toBe('After.')
     expect(remainingParagraphs('Intro.\n\n\t<div>')).toBe('\t<div>')
   })
 
@@ -102,10 +105,13 @@ describe('first-paragraph', () => {
     expect(firstParagraph(value)).toBe(value)
   })
 
+  // Torn at the blank line, the second half (`b` then the closing run) is no
+  // longer a code block, so the row would take *that* — which is how the tear
+  // shows up here.
   it('reads a fence that opens the description', () => {
     const value = '```\na\n\nb\n```\n\nAfter.'
-    expect(firstParagraph(value)).toBe('```\na\n\nb\n```')
-    expect(remainingParagraphs(value)).toBe('After.')
+    expect(firstParagraph(value)).toBe('After.')
+    expect(remainingParagraphs(value)).toBe('```\na\n\nb\n```')
   })
 
   // Four spaces makes an indented code block, not a fence, so the line does not

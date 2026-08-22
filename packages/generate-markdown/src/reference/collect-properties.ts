@@ -1,5 +1,5 @@
-import { MAX_SCHEMA_DEPTH, stubRequired } from '#helpers/dereference'
 import { asArray, asProperties, asSchema, isObject } from '#helpers/guards'
+import { couldBeObject, MAX_SCHEMA_DEPTH, stubRequired } from '#helpers/schema-shape'
 import type { SchemaProperty } from '#types/schema'
 
 /**
@@ -39,46 +39,6 @@ const defineOwn = (target: Record<string, SchemaProperty>, key: string, value: S
 
 const merge = (target: Record<string, SchemaProperty>, source: Readonly<Record<string, SchemaProperty>>): void => {
   for (const [name, child] of Object.entries(source)) defineOwn(target, name, child)
-}
-
-/**
- * True when a branch could describe an object, and so has a say in what an
- * alternative requires.
- *
- * A branch that names no fields still constrains objects — `{ type: 'object',
- * additionalProperties: { … } }` is the free-form half of "a map of strings, or
- * this exact pair", and a document taking that half has none of the other
- * half's required fields. Filtering on "declares a named property" dropped it
- * from the intersection and asserted **Required** on fields a valid document is
- * free to omit.
- *
- * What is excluded is a branch that cannot be an object at all: the `string` in
- * `string | { … }`, whose empty requirement set would otherwise strip every
- * marker off the object form.
- */
-const couldBeObject = (node: SchemaProperty, depth = 0): boolean => {
-  // A stub stands for an object definition, so it is one — it just votes with
-  // the requirements it carries rather than with the empty set it looks like.
-  if (stubRequired(node) !== undefined) return true
-  if (depth > MAX_SCHEMA_DEPTH) return true
-  const declared = typeof node.type === 'string' ? [node.type] : Array.isArray(node.type) ? node.type : undefined
-  if (declared !== undefined && !declared.includes('object')) return false
-  const values = asArray(node.enum)
-  if (values.length > 0 && !values.some(isObject)) return false
-  if (node.const !== undefined && !isObject(node.const)) return false
-  // `allOf` branches all apply, so a branch that cannot be an object settles it
-  // for the whole node — that is how a `$ref` to `allOf: [{ type: 'string' }]`
-  // describes a string, and reading only the node's own `type` let it vote on
-  // what an object alternative requires.
-  if (!asArray(node.allOf).every((branch) => couldBeObject(asSchema(branch), depth + 1))) return false
-  // A union of alternatives is an object only if one of its alternatives is —
-  // `anyOf: [{ type: 'string' }, { type: 'number' }]` is a scalar however many
-  // ways it is spelled.
-  for (const keyword of [node.anyOf, node.oneOf]) {
-    const branches = asArray(keyword)
-    if (branches.length > 0 && !branches.some((branch) => couldBeObject(asSchema(branch), depth + 1))) return false
-  }
-  return true
 }
 
 /** The names every one of these sets holds. Empty when there are no sets. */

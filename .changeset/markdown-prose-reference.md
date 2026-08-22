@@ -40,4 +40,16 @@ the output directory or naming no file, and a schema nested past what the walk
 can read. A reference to an `$anchor`, or the empty pointer `#` a self-recursive schema
 uses, resolves instead of emptying the property that carried it.
 
+A recursive reference collapses where it repeats, keeping what the definition is
+— its prose, its `x-doc` type, notes and footers — and what it requires, so the
+alternative beside it keeps its **Required** markers. Where it goes and what it
+is called stay the ref site's to say. Reading what a definition requires refuses
+to re-enter one already on the path, so a combinator language (`Filter` is `And`
+or `Or`, each inheriting `Filter`) renders instead of never finishing.
+
+A table row is one line, so a code block never goes in one: a description
+opening with a fenced or indented sample gives the row its first paragraph of
+prose, and the sample prints below the row with its indentation intact — it used
+to reach the reader de-indented, as live markup, and nowhere else on the page.
+
 `generateMarkdown()` — the README table — is unchanged.

@@ -1929,7 +1929,9 @@ describe('generate-markdown-files', () => {
       }),
     )
     expect(content).toContain('Use it verbatim.')
-    expect(content.split('\n').filter((line) => line.trim() === '```')).toHaveLength(0)
+    // The whole outer block, below the row: cut at the blank line, the inner
+    // ``` run would have closed the outer ```` one and the rest would spill.
+    expect(content).toContain('````md\n```js\nconst a = 1\n\nconst b = 2\n```\n````')
   })
 
   it('keeps an indented code block in a description indented', () => {
@@ -2568,6 +2570,176 @@ describe('generate-markdown-files', () => {
     const next = section(content, '### next')
     expect(next).toContain('**Type:** `NodeShape`')
     expect(next).toContain('A node in the tree.')
+  })
+
+  // A combinator language reaches the same definitions again by another path:
+  // `Filter` is `And | Or`, and each of those inherits `Filter` through `allOf`.
+  // Reading what a truncation stands for re-walked every one of those paths, so
+  // this nine-line schema never finished rendering at all.
+  it('renders a definition that composes itself through two branches', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { filter: { $ref: '#/$defs/Filter' } },
+        $defs: {
+          Filter: { anyOf: [{ $ref: '#/$defs/And' }, { $ref: '#/$defs/Or' }] },
+          And: {
+            type: 'object',
+            allOf: [{ $ref: '#/$defs/Filter' }],
+            required: ['and'],
+            properties: { and: { type: 'array', items: { type: 'string' } } },
+          },
+          Or: {
+            type: 'object',
+            allOf: [{ $ref: '#/$defs/Filter' }],
+            required: ['or'],
+            properties: { or: { type: 'array', items: { type: 'string' } } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### and')
+    expect(content).toContain('### or')
+    // Neither branch requires what the other does, so neither field is marked.
+    expect(content).not.toContain('**Required**')
+  })
+
+  // Refusing to re-enter a definition already on the path is what makes the
+  // reading terminate; this is the backstop for the schema that terminates and
+  // still takes longer than anyone will wait. Silence would leave the reader
+  // with **Required** markers that are guesses.
+  it('refuses a schema whose definitions compose in too many ways to read', () => {
+    const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+    const $defs = Object.fromEntries(
+      names.map((name) => [
+        name,
+        {
+          type: 'object',
+          required: [name],
+          properties: Object.fromEntries(names.map((other) => [other, {}])),
+          anyOf: names.filter((other) => other !== name).map((other) => ({ $ref: `#/$defs/${other}` })),
+        },
+      ]),
+    )
+    expect(() => generateMarkdownFiles({ properties: { root: { $ref: '#/$defs/a' } }, $defs })).toThrow(
+      /compose in too many ways/,
+    )
+  })
+
+  // `$ref: '#'` is the spelling a self-recursive schema uses, and it makes the
+  // *root* the definition being truncated — whose `x-doc` is the page's own
+  // configuration. Copying it wholesale headed the property with the page title
+  // and printed the page's example underneath it a second time.
+  it('does not take the page title and example onto a self-referencing property', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { title: 'App configuration', example: '{ "name": "demo" }' },
+        properties: {
+          name: { type: 'string' },
+          parent: { $ref: '#', description: 'A parent config this one extends.' },
+        },
+      }),
+    )
+    expect(content).toContain('## parent')
+    expect(content).not.toContain('## App configuration')
+    expect(content.match(/\{ "name": "demo" \}/g)).toHaveLength(1)
+  })
+
+  // Where a property is documented is the ref site's to say. Carried down from
+  // the definition, it tore the truncated child out of its parent and
+  // republished it as a top-level heading on another file, with no path to say
+  // what it belonged to.
+  it('does not move a truncated child onto the page its definition names', () => {
+    const files = generateMarkdownFiles({
+      'x-doc': { pages: [{ id: 'nodes', file: 'nodes.md', title: 'Nodes' }] },
+      properties: { alt: { $ref: '#/$defs/Node', 'x-doc': { page: 'index' } } },
+      $defs: {
+        Node: {
+          type: 'object',
+          'x-doc': { page: 'nodes' },
+          properties: { label: { type: 'string' }, child: { $ref: '#/$defs/Node' } },
+        },
+      },
+    })
+    const index = files.find((file) => file.filename === 'index.md')?.content ?? ''
+    const nodes = files.find((file) => file.filename === 'nodes.md')?.content ?? ''
+    expect(index).toContain('### child')
+    expect(nodes).not.toContain('child')
+  })
+
+  // The rule the ref site's own `description` wins by holds on both routes: two
+  // properties sharing a definition each print their own sentence, whether the
+  // reference was inlined or truncated.
+  it('lets a truncated ref site description beat the definition doc keyword', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            'x-doc': { description: 'A node. Described once, in $defs.' },
+            properties: { child: { $ref: '#/$defs/Node', description: "This node's own child." } },
+          },
+        },
+      }),
+    )
+    expect(section(content, '### child')).toContain("This node's own child.")
+    expect(section(content, '### child')).not.toContain('Described once')
+  })
+
+  // The scalar half of `string | { … }` has no say in what the object half
+  // requires. One reader applied that rule and the other did not, so the same
+  // union was documented two ways on one page depending on which route reached
+  // it.
+  it('documents one union the same way whether it is truncated or not', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { first: { $ref: '#/$defs/Other' }, nested: { $ref: '#/$defs/Item' } },
+        $defs: {
+          Other: { anyOf: [{ type: 'string' }, { type: 'object', required: ['id'], properties: { id: {} } }] },
+          Item: {
+            anyOf: [
+              { type: 'string' },
+              {
+                type: 'object',
+                required: ['id'],
+                properties: {
+                  id: {},
+                  kid: {
+                    anyOf: [{ $ref: '#/$defs/Item' }, { type: 'object', required: ['id'], properties: { id: {} } }],
+                  },
+                },
+              },
+            ],
+          },
+        },
+      }),
+    )
+    // `first.id`, `nested.id`, and `nested.kid.id` — the truncated route reads
+    // the union the same way the inlined one does.
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(3)
+    expect(section(content, '#### id')).toContain('**Required**')
+  })
+
+  // A row is one line and a code block is not one line. Squeezed into a cell it
+  // lost the indentation that made it code, and a sample of HTML reached the
+  // reader as live markup — and as nothing else, because the block below the
+  // row skips whatever the row already said.
+  it('keeps a description that opens with a code sample out of the row', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          theme: {
+            type: 'object',
+            properties: {
+              template: { type: 'string', description: '    <div class="x">sample</div>\n\nPaste it verbatim.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| `template` | `string` | Paste it verbatim. |')
+    expect(content).toContain('\n    <div class="x">sample</div>')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

@@ -65,18 +65,52 @@ const trimBlankLines = (value: string): string => {
 }
 
 /**
- * The first paragraph of a description. Table cells hold one line, so the rest
- * of a long description belongs on the property's own heading rather than
- * squeezed into a row.
+ * Trims a whole description for rendering.
+ *
+ * `String.prototype.trim` is the wrong tool: it takes the leading four spaces
+ * off a description that opens with an indented code block, and a sample of
+ * HTML then reaches the reader as live markup. Leading blank lines go, the
+ * indentation of the first line stays when it is what makes that line code.
  */
-export const firstParagraph = (value: string): string => trimBlankLines(splitParagraphs(value)[0] ?? '').trim()
+export const trimDescription = (value: string): string => trimBlankLines(value.replace(/^(?:[ \t]*\n)+/, ''))
+
+/** True when the whole paragraph is a code block, fenced or indented. */
+const isCodeBlock = (paragraph: string): boolean =>
+  fenceMarker(paragraph.split('\n')[0] ?? '') !== undefined || isIndentedCode(paragraph)
 
 /**
- * Everything after the first paragraph.
+ * Which paragraph a table row can hold — the first one that is not a code
+ * block, because a row is one line and a code block is not one line.
+ *
+ * A description opening with a sample used to put that sample in the cell: the
+ * indent that made it code was trimmed off on the way in, and `<div>` in a
+ * schema's prose reached the reader as live markup rather than as the snippet
+ * they were told to paste. Fenced blocks fared no better, arriving as
+ * ``` ```js code ``` ``` on one line.
+ */
+const rowParagraph = (paragraphs: readonly string[]): number => paragraphs.findIndex((entry) => !isCodeBlock(entry))
+
+/**
+ * The first paragraph of a description a table row can hold. Table cells hold
+ * one line, so the rest of a long description belongs on the property's own
+ * heading rather than squeezed into a row.
+ */
+export const firstParagraph = (value: string): string => {
+  const paragraphs = splitParagraphs(value)
+  const index = rowParagraph(paragraphs)
+  return index === -1 ? '' : trimBlankLines(paragraphs[index] ?? '').trim()
+}
+
+/**
+ * Everything the row could not hold.
  *
  * A table row holds one line, so it carries {@link firstParagraph} and no more.
  * When the block below a row skips what the row already said, this is the part
- * it must still print — those paragraphs have appeared nowhere else.
+ * it must still print — those paragraphs have appeared nowhere else, the
+ * opening code sample included.
  */
-export const remainingParagraphs = (value: string): string =>
-  trimBlankLines(splitParagraphs(value).slice(1).join('\n\n'))
+export const remainingParagraphs = (value: string): string => {
+  const paragraphs = splitParagraphs(value)
+  const index = rowParagraph(paragraphs)
+  return trimBlankLines(paragraphs.filter((_, position) => position !== index).join('\n\n'))
+}

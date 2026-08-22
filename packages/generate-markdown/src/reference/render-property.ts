@@ -1,4 +1,4 @@
-import { remainingParagraphs } from '#helpers/first-paragraph'
+import { remainingParagraphs, trimDescription } from '#helpers/first-paragraph'
 import { formatInlineLiteral } from '#helpers/format-literal'
 import { asArray } from '#helpers/guards'
 import { heading } from '#helpers/heading'
@@ -97,7 +97,7 @@ export const renderProperty = (
   // Under a row, only the paragraph the row could hold is a restatement. The
   // rest of the description has appeared nowhere else, and dropping it lost
   // whole paragraphs of prose.
-  const description = readDescription(prop).trim()
+  const description = trimDescription(readDescription(prop))
   const prose = options.summarised ? remainingParagraphs(description) : description
   if (prose.length > 0) blocks.push(prose)
 
@@ -139,7 +139,7 @@ export const renderProperty = (
   // example the author wrote is content, and stays.
   const shown = derived === undefined ? meta.examples : options.summarised ? [] : [derived]
   blocks.push(...renderExamples(shown, context.language))
-  for (const footer of meta.footers) blocks.push(footer.trim())
+  for (const footer of meta.footers) blocks.push(trimDescription(footer))
 
   const childLevelBase = titled ? level + 1 : level
   const layout = meta.layout ?? context.layout

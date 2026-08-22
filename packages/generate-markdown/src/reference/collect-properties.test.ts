@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { dereferenceSchema, MAX_SCHEMA_DEPTH } from '#helpers/dereference'
+import { dereferenceSchema } from '#helpers/dereference'
+import { MAX_SCHEMA_DEPTH } from '#helpers/schema-shape'
 import { collectProperties, hasProperties } from '#reference/collect-properties'
 import type { SchemaProperty } from '#types/schema'
 

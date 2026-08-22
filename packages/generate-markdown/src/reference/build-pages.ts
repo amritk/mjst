@@ -1,6 +1,6 @@
-import { MAX_SCHEMA_DEPTH } from '#helpers/dereference'
 import { asArray, asProperties, asSchema } from '#helpers/guards'
 import { readDocMeta } from '#helpers/read-doc-meta'
+import { MAX_SCHEMA_DEPTH } from '#helpers/schema-shape'
 import { childEntries, formatPath, sortEntries } from '#reference/child-entries'
 import { INDEX_PAGE_ID } from '#reference/read-doc-config'
 import type { DocConfig, DocSection } from '#types/doc'

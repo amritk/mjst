@@ -643,6 +643,7 @@ An **example** is either a code string, or an object:
 | `properties`, `allOf`, `anyOf` / `oneOf`, `then` / `else`, `dependentSchemas` | The children. `allOf` branches all apply, so they contribute properties *and* requirements; alternatives and conditionals contribute properties only, and a field is required only when every alternative requires it |
 | `items`, `prefixItems`, `additionalProperties`, `patternProperties` | The children of a container — an array documents its item shape (every tuple position), a map documents its value shape (every pattern) under a `<name>` key. A node with named properties *and* a container documents both |
 | `$ref` / `$defs` / `$anchor` | Inlined before rendering — a JSON pointer (`#/$defs/x`), the empty pointer (`#`, the document itself, as a self-recursive schema writes it), or a plain-name fragment naming an `$anchor` (`#x`); a reference out of the document is not fetched. A sibling keyword at the ref site wins — except `properties` and `required`, which merge with the definition's (both applicators apply), and `x-doc`, which merges per key so a ref site can assign a page without discarding the definition's examples. A ref site's own `description` still wins over the definition's `x-doc.description` |
+| A recursive `$ref` | Collapsed where it repeats, so generation terminates. The truncation keeps what the definition *is* — its `description`, and its `x-doc` `type`, notes and footers — and what it requires, so an alternative beside it keeps its **Required** markers. Where it goes and what it is called stay the ref site's to say: `x-doc.page`, `section`, `title`, `order` and examples are not carried down. Reading what a definition requires refuses to re-enter one already on the path, and stops with an error past 10,000 nodes rather than enumerate a `$defs` that composes in too many ways |
 | root `anyOf` / `oneOf` / `allOf` | Flattened into one property list. A property is only marked required when every branch that declares it requires it |
 
 Each property renders in a fixed order, so a page reads as a reference rather
@@ -657,7 +658,10 @@ headings, which docs sites read as twelve pages. Under a `table` layout, a child
 that has a shape of its own gets a heading and a table below the row, carrying
 only what the row cannot: the rest of its description (the row holds the first
 paragraph), a `null` default (the column skips those), its allowed values,
-constraints, notes and examples, and its own children.
+constraints, notes and examples, and its own children. A row is one line, so a
+code block never goes in one: a description opening with a fenced or indented
+sample gives the row its first paragraph of prose instead, and the sample itself
+prints below the row with its indentation intact.
 
 ### Splitting across files
 
