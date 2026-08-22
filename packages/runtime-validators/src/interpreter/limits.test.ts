@@ -202,6 +202,30 @@ describe('limits', () => {
     expect(hasUnsafeRegex('(\\/((?:[^\\/~])|(~[01]))*)*')).toBe(false)
   })
 
+  it('gives back the waived level when two exempted groups sit side by side', () => {
+    // The same composition the test below covers, reached by concatenation
+    // instead of nesting. Each loop takes the exemption on its own merits, so
+    // each scores height 1 and the pattern scores 1 — but each is nullable, so
+    // nothing pins which loop owns which word, and w words spread over k loops
+    // C(w+k-1, k-1) ways. Eight of them is degree-7 polynomial: 5.6 seconds on
+    // 43 characters, from a 50-byte pattern, and every one of those loops was
+    // refused outright before the exemption existed.
+    const sequence = (count: number, body: string): string => `^${`(${body})*`.repeat(count)}$`
+    for (const unsafe of [
+      sequence(8, '-a*'),
+      sequence(4, '-a*'),
+      sequence(2, '-a*'),
+      sequence(2, '\\.[A-Za-z_][A-Za-z0-9_]*'),
+      // Wrapped so the exemption is inherited rather than granted in place.
+      '^(?:(-a*)*)(?:(-b*)*)$',
+    ]) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // One is the case the exemption exists for, and stays admitted.
+    expect(hasUnsafeRegex(sequence(1, '-a*'))).toBe(false)
+    expect(hasUnsafeRegex(sequence(1, '\\.[A-Za-z_][A-Za-z0-9_]*'))).toBe(false)
+  })
+
   it('gives back the waived level when something repeats the exempted group', () => {
     // The exemption proves one pass over the loop derives each word one way. It
     // does not make `(BODY)*` safe to nest, because that matches the empty string

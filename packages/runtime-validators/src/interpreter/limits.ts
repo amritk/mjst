@@ -943,6 +943,7 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
   let ambiguous = false
   let tooDeep = false
   let exempted = false
+  let branchExemptions = 0 // exempted loops in the branch being scanned
   const branches: string[] = []
   let branchStart = i
   let pos = i
@@ -951,13 +952,16 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
     if (c === ')') break
     if (c === '|') {
       branches.push(source.slice(branchStart, pos))
+      if (branchExemptions > 1) branchHeight += 1
       if (branchHeight > height) height = branchHeight
       branchHeight = 0
+      branchExemptions = 0
       pos++
       branchStart = pos
       continue
     }
     let atomHeight = 0
+    let atomExempted = false
     let after: number
     let inner: RegionScan | null = null
     if (c === '(') {
@@ -970,7 +974,10 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
       atomHeight = inner.height
       if (inner.ambiguous) ambiguous = true
       if (inner.tooDeep) tooDeep = true
-      if (inner.exempted) exempted = true
+      if (inner.exempted) {
+        exempted = true
+        atomExempted = true
+      }
       after = source[inner.next] === ')' ? inner.next + 1 : inner.next
     } else if (c === '[') {
       after = skipClass(source, pos)
@@ -993,18 +1000,28 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
         // A repetition whose body is separator-anchored forces one split per
         // input, so it nests without adding anything to backtrack over and does
         // not count toward star height. See {@link isAnchoredRepetition}.
-        if (inner !== null && isAnchoredRepetition(inner, budget)) exempted = true
-        else atomHeight += 1
+        if (inner !== null && isAnchoredRepetition(inner, budget)) {
+          exempted = true
+          atomExempted = true
+        } else atomHeight += 1
         // Only an *unbounded* repetition turns an ambiguous alternation into
         // exponential backtracking: `(a|a){1,10}` tops out at 2^10 parses.
         if (inner !== null && hasAmbiguousAlternation(inner.branches, budget)) ambiguous = true
       }
       after = q.next
     }
+    if (atomExempted) branchExemptions += 1
     if (atomHeight > branchHeight) branchHeight = atomHeight
     pos = after
   }
   branches.push(source.slice(branchStart, pos))
+  // Two exempted loops written side by side compose exactly the way one under a
+  // quantifier does, and for the same reason: each is nullable, so nothing pins
+  // which loop owns which word. `^(-a*)*(-a*)*…$` with eight of them is degree-7
+  // polynomial — 5.6 seconds on 43 characters — and every one of those loops was
+  // refused outright before the exemption existed. One is the case the exemption
+  // is for; two is where it stops holding.
+  if (branchExemptions > 1) branchHeight += 1
   if (branchHeight > height) height = branchHeight
   return { height, ambiguous, tooDeep, exempted, branches, next: pos }
 }
