@@ -101,4 +101,39 @@ describe('format-literal', () => {
     expect(JSON.parse(formatLiteral(value, 'json'))).toEqual(value)
     expect(JSON.parse(formatInlineLiteral(value, 'json'))).toEqual(value)
   })
+
+  // Every spelling of the language a `.ts`/`.tsx` docs page uses renders the
+  // same way; one missing from the set silently switched a page to JSON.
+  it('reads every javascript language id the same way', () => {
+    for (const language of ['js', 'javascript', 'jsx', 'ts', 'tsx', 'typescript', 'TypeScript']) {
+      expect(formatInlineLiteral({ a: 'b' }, language), language).toBe("{ a: 'b' }")
+    }
+    expect(formatInlineLiteral({ a: 'b' }, 'json')).toBe('{"a": "b"}')
+  })
+
+  // A literal control character inside a `**Default:**` code span breaks out of
+  // the span and takes the rest of the line with it; a bare backslash makes the
+  // next escape mean something else.
+  it('escapes what a single-quoted javascript string cannot hold', () => {
+    expect(formatInlineLiteral('a\\b', 'js')).toBe("'a\\\\b'")
+    expect(formatInlineLiteral('a\rb', 'js')).toBe("'a\\rb'")
+    expect(formatInlineLiteral('a\tb', 'js')).toBe("'a\\tb'")
+    expect(formatInlineLiteral('a\nb', 'js')).toBe("'a\\nb'")
+  })
+
+  // `2fa: 1` is a syntax error; the key has to be quoted.
+  it('quotes a javascript key that cannot be written bare', () => {
+    expect(formatInlineLiteral({ '2fa': 1 }, 'js')).toBe("{ '2fa': 1 }")
+    expect(formatInlineLiteral({ $ref: 1, _a: 2 }, 'js')).toBe('{ $ref: 1, _a: 2 }')
+  })
+
+  // The cap at its edge: a value nested exactly as deep as the limit still
+  // serializes, and one level further collapses to `null` rather than to an
+  // ellipsis a `json` fence could not parse.
+  it('serializes exactly as deep as it says it can', () => {
+    const nest = (levels: number): unknown => (levels === 0 ? 'leaf' : { a: nest(levels - 1) })
+    expect(formatInlineLiteral(nest(32), 'json')).toContain('"leaf"')
+    expect(formatInlineLiteral(nest(33), 'json')).not.toContain('leaf')
+    expect(formatInlineLiteral(nest(33), 'json')).toContain('null')
+  })
 })

@@ -64,6 +64,31 @@ describe('reference-type', () => {
     expect(typeShowsEnum({ type: 'string' })).toBe(false)
   })
 
+  // A tuple names a different shape per position, and the label is the first
+  // position's — reading a later one described the wrong element.
+  it('labels a tuple array by its first position', () => {
+    expect(referenceType({ type: 'array', items: [{ type: 'string' }, { type: 'number' }] }, 'json')).toBe('string[]')
+  })
+
+  // `const` is one allowed value, so it is read the same way `enum` is — and
+  // before either type keyword, because a `const` of `"a"` says more than
+  // `string` does.
+  it('reads a const before the type it belongs to', () => {
+    expect(referenceType({ type: 'string', const: 'a' }, 'json')).toBe('"a"')
+    expect(referenceType({ type: 'string', enum: ['a'], const: 'b' }, 'json')).toBe('"a"')
+  })
+
+  // `allOf` is an intersection, not an alternative, but a `$ref` to a scalar
+  // wrapped in one is the only thing that says what the property is.
+  it('falls back to the allOf branches for a label', () => {
+    // An `enum`, so the fallback table renderer's own label (`string`) cannot
+    // stand in for the answer.
+    expect(referenceType({ allOf: [{ enum: ['x'] }] }, 'json')).toBe('"x"')
+    // The alternatives come first: a node with both is a union of the two
+    // spellings, and `anyOf` is the one that names them.
+    expect(referenceType({ anyOf: [{ type: 'number' }], allOf: [{ type: 'string' }] }, 'json')).toBe('number')
+  })
+
   // A union of a union printed the same word twice.
   it('flattens a nested union into one list', () => {
     const prop = { anyOf: [{ anyOf: [{ type: 'object' }, { type: 'string' }] }, { type: 'object' }] }

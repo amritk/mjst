@@ -31,4 +31,18 @@ describe('heading-text', () => {
   it('handles an empty name', () => {
     expect(headingText('')).toBe('`  `')
   })
+
+  // The characters a config key really uses, kept plain so the anchor a docs
+  // site generates is the readable `#base-url` a hand-written page would have.
+  it('leaves the punctuation a config key uses plain', () => {
+    for (const name of ['base_url', 'server.host', 'x-api-key', 'cost$', 'paths/get', 'user@host', 'a b']) {
+      expect(headingText(name), name).toBe(name)
+    }
+  })
+
+  // A leading `-` opens a list item, and a leading digit is fine.
+  it('wraps a name that starts with something markdown would read', () => {
+    expect(headingText('-flag')).toBe('`-flag`')
+    expect(headingText('2fa')).toBe('2fa')
+  })
 })

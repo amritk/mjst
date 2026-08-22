@@ -1022,6 +1022,22 @@ describe('generate-markdown', () => {
       expect(writeFileMock).not.toHaveBeenCalled()
     })
 
+    // Only a missing README means "safe to create one". Swallowing every read
+    // error let an existing-but-unreadable README be replaced wholesale by the
+    // bootstrap path — the opposite of the refusal above.
+    it('refuses to overwrite a README it cannot read', async () => {
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string' && path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+        const error = new Error('permission denied') as NodeJS.ErrnoException
+        error.code = 'EACCES'
+        throw error
+      })
+      writeFileMock.mockImplementation(async () => {})
+
+      await expect(generateMarkdown()).rejects.toThrow(/permission denied/)
+      expect(writeFileMock).not.toHaveBeenCalled()
+    })
+
     it('falls back to table-only when README does not exist', async () => {
       readFileMock.mockImplementation(async (path) => {
         if (typeof path === 'string' && path.includes('config.schema.json')) {

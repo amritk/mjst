@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { dereferenceSchema } from '#helpers/dereference'
 import { generateMarkdownFiles } from '#reference/generate-markdown-files'
 import type { GeneratedFile } from '#types/doc'
 
@@ -912,7 +913,18 @@ describe('generate-markdown-files', () => {
   it('refuses a schema nested past what can be read as documentation', () => {
     const deep = (levels: number): Record<string, unknown> =>
       levels === 0 ? { type: 'string' } : { type: 'object', properties: { child: deep(levels - 1) } }
-    expect(() => generateMarkdownFiles({ properties: { root: deep(2000) } })).toThrow(/nests more than/)
+    expect(() => generateMarkdownFiles({ properties: { root: deep(2000) } })).toThrow(/nests more than 512 levels/)
+    // And reads what it says it can: each level costs two nodes, so 200 levels
+    // is comfortably inside the cap and must render.
+    expect(only(generateMarkdownFiles({ properties: { root: deep(200) } }))).toContain('#### child')
+  })
+
+  // The cap at its edge. A plain key costs one level, so this counts the bound
+  // exactly: an off-by-one refuses a schema the message promises it can read.
+  it('reads a schema nested exactly as deep as the cap allows', () => {
+    const nest = (levels: number): Record<string, unknown> => (levels === 0 ? {} : { a: nest(levels - 1) })
+    expect(() => dereferenceSchema(nest(512))).not.toThrow()
+    expect(() => dereferenceSchema(nest(513))).toThrow(/nests more than 512 levels/)
   })
 
   // The check is `page !== context.page`, not "has a page": a property naming
@@ -1564,6 +1576,10 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    // Named first, or "no marker" would be satisfied by the fields never
+    // rendering at all.
+    expect(section(content, '### name')).toBe('### name\n\n')
+    expect(section(content, '### value')).toBe('### value\n')
     expect(content).not.toContain('**Required**')
   })
 
@@ -1996,6 +2012,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    expect(content).toContain('#### a')
     expect(content).not.toContain('**Required**')
   })
 
@@ -2095,6 +2112,10 @@ describe('generate-markdown-files', () => {
         $defs: { tok: { anyOf: [{ type: 'object', properties: { t: {} } }, { type: 'string' }] } },
       }),
     )
+    // Both alternatives' fields render — the vote is about the marker, not
+    // about whether they appear.
+    expect(content).toContain('### t')
+    expect(content).toContain('### user')
     expect(content).not.toContain('**Required**')
   })
 
@@ -2967,6 +2988,8 @@ describe('generate-markdown-files', () => {
         $defs: { token: { type: ['string', 'object'], properties: { t: {} } } },
       }),
     )
+    expect(content).toContain('### t')
+    expect(content).toContain('### user')
     expect(content).not.toContain('**Required**')
   })
 
@@ -3239,6 +3262,162 @@ describe('generate-markdown-files', () => {
     // The retyped branch requires nothing, so nothing under `kid` is required —
     // read as a scalar it would have been dropped and `a` marked instead.
     expect(section(content, '#### a')).not.toContain('**Required**')
+  })
+
+  // A row is one line: a line ending in a name, a type label or a default
+  // would split the row into more columns than the table has.
+  it('collapses a line ending inside a table cell code span', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          group: { type: 'object', properties: { 'a\nb': { type: 'string', description: 'D.' } } },
+        },
+      }),
+    )
+    expect(content).toContain('| `a b` | `string` | D. |')
+  })
+
+  // The case `firstParagraph` exists for, at its limit: every paragraph is a
+  // code block, so the row has nothing it can hold and the sample prints below.
+  it('leaves the row empty when the whole description is a code sample', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          group: { type: 'object', properties: { t: { type: 'string', description: '    <div>only</div>' } } },
+        },
+      }),
+    )
+    expect(content).toContain('| `t` | `string` |  |')
+    expect(content).toContain('\n    <div>only</div>')
+  })
+
+  // A property with nothing to say about its type gets an empty cell, not an
+  // empty code span.
+  it('leaves the type cell empty rather than rendering an empty code span', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: { group: { type: 'object', properties: { t: { description: 'D.' } } } },
+      }),
+    )
+    expect(content).toContain('| `t` |  | D. |')
+  })
+
+  // RFC 6901 unescapes `~1` before `~0`, so `~01` addresses the definition
+  // literally named `~1`. Reversed, it addresses `/` instead.
+  it('unescapes a json pointer in the order the spec fixes', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/~01' } },
+        $defs: { '~1': { type: 'string', description: 'Tilde one.' } },
+      }),
+    )
+    expect(content).toContain('Tilde one.')
+  })
+
+  // A `:` is legal in an `$anchor`, and a namespaced one is how a bundled
+  // schema keeps two documents' anchors apart.
+  it('resolves an anchor whose name holds a colon', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#ns:thing' } },
+        $defs: { thing: { $anchor: 'ns:thing', type: 'string', description: 'Anchored.' } },
+      }),
+    )
+    expect(content).toContain('Anchored.')
+  })
+
+  // A page declared for its file or its title still says what it is about; the
+  // root's own description is the fallback, not the winner.
+  it('lets a declared index page describe itself', () => {
+    const content = only(
+      generateMarkdownFiles({
+        description: 'Root prose.',
+        'x-doc': { pages: [{ id: 'index', file: 'index.md', description: 'Page prose.' }] },
+        properties: { a: { type: 'string' } },
+      }),
+    )
+    expect(content).toContain('Page prose.')
+    expect(content).not.toContain('Root prose.')
+  })
+
+  // `x-doc.sort` has to hold while the pages are being collected too, or a
+  // property carried to another page arrives in a different order than the one
+  // its parent asked for.
+  it('sorts properties carried to another page the way their parent asks', () => {
+    const files = generateMarkdownFiles({
+      'x-doc': { pages: [{ id: 'other', file: 'other.md', title: 'Other' }] },
+      properties: {
+        parent: {
+          type: 'object',
+          'x-doc': { sort: 'alphabetical' },
+          properties: {
+            zed: { type: 'string', 'x-doc': { page: 'other' } },
+            ant: { type: 'string', 'x-doc': { page: 'other' } },
+          },
+        },
+      },
+    })
+    const other = files.find((file) => file.filename === 'other.md')?.content ?? ''
+    expect(other.indexOf('## ant')).toBeLessThan(other.indexOf('## zed'))
+  })
+
+  // A branch that cannot be resolved says nothing about the shape, so it keeps
+  // its vote — dropping it from the intersection invents requirements.
+  it('lets a branch behind a broken reference keep its vote', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            anyOf: [{ allOf: [{ $ref: '#/$defs/missing' }] }, { required: ['tag'], properties: { tag: {} } }],
+            properties: {
+              tag: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/Node' },
+                  { type: 'object', required: ['tag'], properties: { tag: { type: 'string' } } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('#### tag')
+    expect(content).not.toContain('**Required**')
+  })
+
+  // The alternatives of a branch are resolved the way its own reference is: a
+  // union of one aliased scalar is a scalar, and reading it as an object let it
+  // strip the markers off the alternative beside it.
+  it('resolves a reference inside a branch alternative before it votes', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Str: { type: 'string' },
+          Tok: { anyOf: [{ $ref: '#/$defs/Str' }] },
+          Node: {
+            type: 'object',
+            anyOf: [{ $ref: '#/$defs/Tok' }, { required: ['tag'], properties: { tag: {} } }],
+            properties: {
+              tag: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/Node' },
+                  { type: 'object', required: ['tag'], properties: { tag: { type: 'string' } } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### tag')).toContain('**Required**')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

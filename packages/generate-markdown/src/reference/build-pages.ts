@@ -63,6 +63,12 @@ const collectEntries = (
     // Returning quietly would drop every page and section assignment below this
     // point — the silent omission the placement errors exist to prevent, and
     // the one failure mode where nothing about the output looks wrong.
+    //
+    // A backstop rather than a guard anyone reaches: the inliner counts every
+    // node against the same bound, and a property level costs it at least two,
+    // so it refuses first. It stays because what it protects against is the
+    // failure nobody would notice, and because the arithmetic that makes it
+    // unreachable is not something a later change would think to preserve.
     throw new Error(
       `Scanning the schema for page assignments passed ${MAX_SCAN_DEPTH} levels of nesting at ` +
         `"${formatPath(entries[0]?.path ?? [])}". Flatten the schema, or move the deeply nested properties ` +

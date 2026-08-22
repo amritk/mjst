@@ -151,6 +151,15 @@ describe('collect-properties', () => {
   it('refuses composition deeper than it can follow', () => {
     let node: SchemaProperty = { properties: { deepest: {} } }
     for (let level = 0; level <= MAX_SCHEMA_DEPTH + 1; level++) node = { allOf: [node] }
-    expect(() => collectProperties(node)).toThrow(/passed \d+ levels/)
+    // The number too, or a cap set to something useless reads the same.
+    expect(() => collectProperties(node)).toThrow(/composition passed 512 levels/)
+  })
+
+  // And exactly as deep as it says: an off-by-one here refuses a schema the
+  // message promises it can read.
+  it('follows composition exactly as deep as it claims to', () => {
+    let node: SchemaProperty = { properties: { deepest: {} } }
+    for (let level = 0; level < MAX_SCHEMA_DEPTH; level++) node = { allOf: [node] }
+    expect(names(node)).toEqual(['deepest'])
   })
 })

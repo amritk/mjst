@@ -43,4 +43,26 @@ describe('render-examples', () => {
   it('renders each example in order', () => {
     expect(renderExamples([{ code: 'a' }, { code: 'b' }], 'json')).toEqual(['```json\na\n```', '```json\nb\n```'])
   })
+
+  // A fence anywhere in the sample closes the block, not only one on its first
+  // line — the rest of the page then renders inside the fence that got away.
+  it('outruns a fence that starts partway down the sample', () => {
+    const blocks = renderExamples([{ code: 'const a = 1\n```\nstill code\n```' }], 'javascript')
+    expect(blocks[0]?.startsWith('````javascript\n')).toBe(true)
+    expect(blocks[0]?.endsWith('\n````')).toBe(true)
+  })
+
+  // `c++` and `c#` are language names, and dropping their punctuation labelled
+  // the block as a different language.
+  it('keeps the punctuation a language name uses', () => {
+    expect(renderExamples([{ code: 'int a;', language: 'c++' }], 'json')[0]).toContain('```c++')
+    expect(renderExamples([{ code: 'int a;', language: 'c#' }], 'json')[0]).toContain('```c#')
+  })
+
+  // `null` is a legitimate default to show, so presence of the key is what
+  // counts — an example with neither `code` nor `value` renders nothing.
+  it('prints a null value and skips an example with no value at all', () => {
+    expect(renderExamples([{ value: null }], 'json')[0]).toBe('```json\nnull\n```')
+    expect(renderExamples([{ caption: 'Nothing to show.' }], 'json')).toEqual([])
+  })
 })
