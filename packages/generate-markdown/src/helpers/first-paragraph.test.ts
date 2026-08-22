@@ -25,7 +25,22 @@ describe('first-paragraph', () => {
 
   it('trims the surrounding whitespace', () => {
     expect(firstParagraph('  One.  \n\nTwo.')).toBe('One.')
-    expect(remainingParagraphs('One.\n\n  Two.  ')).toBe('Two.')
+    expect(remainingParagraphs('One.\n\n Two. ')).toBe('Two.')
+  })
+
+  // Four spaces is what makes an indented code block code; trimming them turned
+  // a sample of HTML into live markup on the page.
+  it('keeps an indented code block indented, and whole', () => {
+    const value = 'The template.\n\n    <div>\n      hi\n\n      there\n    </div>\n\nUse it verbatim.'
+    expect(remainingParagraphs(value)).toBe('    <div>\n      hi\n\n      there\n    </div>\n\nUse it verbatim.')
+  })
+
+  // CommonMark closes a fence on a run at least as long as the opener, so a
+  // ``` line inside a ```` block is sample text.
+  it('closes a fence only on a run as long as the one that opened it', () => {
+    const value = 'Intro.\n````md\n```js\nconst a = 1\n\nconst b = 2\n```\n````'
+    expect(firstParagraph(value)).toBe(value)
+    expect(remainingParagraphs(value)).toBe('')
   })
 
   it('reads nothing after a single paragraph', () => {

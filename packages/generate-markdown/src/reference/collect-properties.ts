@@ -1,4 +1,4 @@
-import { MAX_SCHEMA_DEPTH, RECURSION_STUB } from '#helpers/dereference'
+import { MAX_SCHEMA_DEPTH, stubRequired } from '#helpers/dereference'
 import { asArray, asProperties, asSchema, isObject } from '#helpers/guards'
 import type { SchemaProperty } from '#types/schema'
 
@@ -57,11 +57,9 @@ const merge = (target: Record<string, SchemaProperty>, source: Readonly<Record<s
  * marker off the object form.
  */
 const couldBeObject = (node: SchemaProperty, depth = 0): boolean => {
-  // The stub a recursive `$ref` collapses to is this package's own truncation
-  // marker. Read as a schema it says "an object requiring nothing", and letting
-  // that into the intersection stripped the markers off every other branch of a
-  // recursive union.
-  if (RECURSION_STUB in node) return false
+  // A stub stands for an object definition, so it is one — it just votes with
+  // the requirements it carries rather than with the empty set it looks like.
+  if (stubRequired(node) !== undefined) return true
   if (depth > MAX_SCHEMA_DEPTH) return true
   const declared = typeof node.type === 'string' ? [node.type] : Array.isArray(node.type) ? node.type : undefined
   if (declared !== undefined && !declared.includes('object')) return false
@@ -72,7 +70,15 @@ const couldBeObject = (node: SchemaProperty, depth = 0): boolean => {
   // for the whole node — that is how a `$ref` to `allOf: [{ type: 'string' }]`
   // describes a string, and reading only the node's own `type` let it vote on
   // what an object alternative requires.
-  return asArray(node.allOf).every((branch) => couldBeObject(asSchema(branch), depth + 1))
+  if (!asArray(node.allOf).every((branch) => couldBeObject(asSchema(branch), depth + 1))) return false
+  // A union of alternatives is an object only if one of its alternatives is —
+  // `anyOf: [{ type: 'string' }, { type: 'number' }]` is a scalar however many
+  // ways it is spelled.
+  for (const keyword of [node.anyOf, node.oneOf]) {
+    const branches = asArray(keyword)
+    if (branches.length > 0 && !branches.some((branch) => couldBeObject(asSchema(branch), depth + 1))) return false
+  }
+  return true
 }
 
 /** The names every one of these sets holds. Empty when there are no sets. */
@@ -136,8 +142,15 @@ const collect = (
     const branches = asArray(keyword).map((branch) => asSchema(branch))
     const collected = branches.map((branch) => collect(branch, depth + 1))
     for (const branch of collected) merge(properties, branch.properties)
-    const describing = collected.filter((_, index) => couldBeObject(branches[index] ?? {}))
-    for (const name of intersect(describing.map((branch) => branch.required))) required.add(name)
+    const describing = branches
+      .map((branch, index) => {
+        // A truncated branch contributes what its definition requires; nothing
+        // else about it survived the collapse.
+        const truncated = stubRequired(branch)
+        return truncated !== undefined ? new Set(truncated) : (collected[index]?.required ?? new Set<string>())
+      })
+      .filter((_, index) => couldBeObject(branches[index] ?? {}))
+    for (const name of intersect(describing)) required.add(name)
   }
 
   for (const conditional of [node.then, node.else]) {

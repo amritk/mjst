@@ -28,6 +28,10 @@ TypeScript SDK target config.
 | `options` | `object` |  |  | TypeScript emitter options. |
 | `destinations` | `object` |  |  | GitHub destinations for generated output. |
 
+## packageName
+
+**Examples:** `"@acme/api"`
+
 ## destinations
 
 | Property | Type | Description |
@@ -56,3 +60,7 @@ Push generated output to a GitHub repository.
 | --- | --- | --- | --- | --- |
 | `repo` | `string` | ✅ |  | GitHub repository in `owner/name` form. |
 | `branch` | `string` |  | `"main"` | Default branch releases are promoted to. Generated output itself always goes to the fixed `scalar-generated` branch. |
+
+### repo
+
+**Examples:** `"acme/acme-typescript"`

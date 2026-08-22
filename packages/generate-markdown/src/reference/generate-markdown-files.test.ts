@@ -1891,6 +1891,170 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('The nested node.')
   })
 
+  // A ``` line inside a ```` block is sample text; closing on the character
+  // alone tore the block apart and let its second half open a fence that ran to
+  // the end of the page.
+  it('keeps a nested fence in a description whole', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          s: {
+            type: 'object',
+            properties: {
+              template: {
+                type: 'string',
+                description: '````md\n```js\nconst a = 1\n\nconst b = 2\n```\n````\n\nUse it verbatim.',
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('Use it verbatim.')
+    expect(content.split('\n').filter((line) => line.trim() === '```')).toHaveLength(0)
+  })
+
+  it('keeps an indented code block in a description indented', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          s: {
+            type: 'object',
+            properties: {
+              template: {
+                type: 'string',
+                description: 'The template.\n\n    <div>\n      hi\n\n      there\n    </div>\n\nUse it.',
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('    <div>')
+    expect(content).toContain('      there')
+  })
+
+  // The gate counts the child's own heading, and a child with `heading: false`
+  // pushes none — counting one dropped its whole block, table and all.
+  it('keeps the sub-block of a child that renders without a heading', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          theme: {
+            type: 'object',
+            'x-doc': { layout: 'table' },
+            properties: {
+              widget: {
+                type: 'object',
+                deprecated: true,
+                'x-doc': { heading: false, layout: 'table' },
+                properties: { size: { type: 'string', description: 'Size.' } },
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| `size` | `string` | Size. |')
+    expect(content).toContain('> **Deprecated**')
+  })
+
+  // Dropping an alternative from the intersection invents requirements as
+  // easily as reading it wrongly erases them, so the stub votes with what the
+  // definition it truncates requires.
+  it('does not invent a requirement from a truncated alternative', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: {
+            type: 'object',
+            properties: {
+              child: { anyOf: [{ $ref: '#/$defs/self' }, { type: 'object', properties: { a: {} }, required: ['a'] }] },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).not.toContain('**Required**')
+  })
+
+  it('keeps a requirement every alternative makes, one of them truncated', () => {
+    const variants = [{ $ref: '#/$defs/group' }, { $ref: '#/$defs/link' }]
+    const content = only(
+      generateMarkdownFiles({
+        properties: { item: { anyOf: variants } },
+        $defs: {
+          group: {
+            type: 'object',
+            required: ['kind'],
+            properties: { kind: {}, children: { type: 'array', items: { anyOf: variants } } },
+          },
+          link: { type: 'object', required: ['kind'], properties: { kind: {} } },
+        },
+      }),
+    )
+    expect((content.match(/\*\*Required\*\*/g) ?? []).length).toBeGreaterThanOrEqual(2)
+  })
+
+  // The marker spreads with every other key, and a ref site that declares its
+  // own fields is a real object however it was reached.
+  it('does not carry the truncation marker onto a branch that declares fields', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          p: { anyOf: [{ $ref: '#/$defs/alias', type: 'object', properties: { x: {} }, required: ['x'] }] },
+        },
+        $defs: {
+          alias: { $ref: '#/$defs/self' },
+          self: { type: 'object', properties: { self: { $ref: '#/$defs/self' } } },
+        },
+      }),
+    )
+    expect(content).toContain('**Required**')
+  })
+
+  // A row suppresses the derived block, and slicing the first example off
+  // anyway meant it appeared nowhere at all.
+  it('lists every example when a row suppresses the derived one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          theme: {
+            type: 'object',
+            properties: { widget: { type: 'string', description: 'Widget mode.', examples: ['compact', 'wide'] } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('**Examples:** `"compact"`, `"wide"`')
+  })
+
+  // However it is spelled, none of these can be an object.
+  it('lets no spelling of a scalar branch vote on what an object requires', () => {
+    for (const token of [
+      { type: 'string' },
+      { allOf: [{ type: 'string' }] },
+      { anyOf: [{ type: 'string' }, { type: 'number' }] },
+      { oneOf: [{ type: 'string' }] },
+    ]) {
+      const content = only(
+        generateMarkdownFiles({
+          properties: {
+            auth: {
+              anyOf: [{ $ref: '#/$defs/token' }, { type: 'object', properties: { user: {} }, required: ['user'] }],
+            },
+          },
+          $defs: { token },
+        }),
+      )
+      expect(content, JSON.stringify(token)).toContain('**Required**')
+    }
+  })
+
   it('matches the checked-in docs for the API reference fixture', () => {
     const files = generateMarkdownFiles(fixture('api-reference-config'))
     expect(files.map((file) => file.filename)).toEqual(['configuration.md'])

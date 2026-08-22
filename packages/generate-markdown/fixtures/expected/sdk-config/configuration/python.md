@@ -20,3 +20,11 @@ Python SDK target config.
 | `packageName` | `string` | ✅ |  | Importable module name for the generated Python package. |
 | `projectName` | `string` | ✅ |  | Distribution name published to PyPI. |
 | `skip` | `boolean` |  | `false` | Keep the config in place without generating this target. |
+
+## packageName
+
+**Examples:** `"acme_api"`
+
+## projectName
+
+**Examples:** `"acme-api"`

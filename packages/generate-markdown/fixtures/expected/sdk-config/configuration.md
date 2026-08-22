@@ -110,6 +110,10 @@ Set `skip: true` on a target to keep its config in place without generating it.
 | `packageName` | `string` |  | Import and package name for the generated package. |
 | `skip` | `boolean` | `false` | Keep the config in place without generating this target. |
 
+##### packageName
+
+**Examples:** `"@acme/api"`
+
 ### resources
 
 **Type:** `object`
@@ -148,6 +152,10 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 | `defaultTimeout` | `number` | `30000` | Request timeout in milliseconds. |
 | `defaultHeaders` | `object` |  | Headers every generated request sends. |
 | `defaultRetries` | `object` |  | Retry policy the generated runtime applies to failed requests. |
+
+#### defaultClientName
+
+**Examples:** `"Acme"`
 
 #### defaultTimeout
 
@@ -221,3 +229,7 @@ Named pagination schemes referenced by method-level pagination settings.
 | --- | --- | --- | --- |
 | `name` | `string` | ✅ | Name methods reference this scheme by. |
 | `type` | `"cursor" \| "cursorId" \| "cursorUrl" \| "offset" \| "pageNumber"` | ✅ | Which pagination strategy the generated helper implements. |
+
+#### name
+
+**Examples:** `"cursor"`

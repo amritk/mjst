@@ -1,4 +1,9 @@
 import { isObject } from '#helpers/guards'
+
+/** A list of names, defensively — `required` is parsed JSON like everything else. */
+const asStringArray = (value: unknown): readonly string[] =>
+  Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+
 import { DOC_KEY } from '#helpers/read-doc-meta'
 import type { ConfigSchema } from '#types/schema'
 
@@ -164,13 +169,28 @@ type Budget = { remaining: number }
 export const MAX_SCHEMA_DEPTH = 512
 
 /**
- * Marks the `{ type: 'object' }` a recursive `$ref` collapses to. It is this
- * walker's own truncation marker, not something the author wrote, and readers
- * of the inlined document have to be able to tell the difference: taken at face
- * value it is "an object with no fields and no requirements", which is a claim
- * about the schema that nothing in the schema makes.
+ * Marks the `{ type: 'object' }` a recursive `$ref` collapses to, and carries
+ * the one thing the collapse would otherwise throw away: what the definition it
+ * stands for requires.
+ *
+ * It is this walker's truncation marker, not something the author wrote, and
+ * readers of the inlined document have to tell the difference. Taken at face
+ * value the stub says "an object with no fields and no requirements", which is
+ * a claim nothing in the schema makes — and in a union it decided what the
+ * *other* alternatives require. Ignoring it instead only moved the error the
+ * other way: dropping an alternative from an intersection can invent
+ * requirements as easily as reading it wrongly can erase them. So it neither
+ * votes as an empty object nor abstains: it votes with the requirements of the
+ * definition it truncates.
  */
 export const RECURSION_STUB = Symbol('recursive reference')
+
+/** The `required` list of the definition a stub stands for. */
+export const stubRequired = (node: unknown): readonly string[] | undefined => {
+  if (!isObject(node)) return undefined
+  const marker = (node as Record<symbol, unknown>)[RECURSION_STUB]
+  return Array.isArray(marker) ? (marker as readonly string[]) : undefined
+}
 
 /**
  * Merges the `x-doc` keyword of a `$ref` site with the one on the definition it
@@ -274,22 +294,36 @@ export const dereference = (
   const { $ref: ref, ...siblings } = node
   if (typeof ref === 'string') {
     if (seen.has(ref)) {
-      // Recursive reference: stop here, keeping any description from the ref site.
-      return {
-        type: 'object',
-        ...(dereference(siblings, root, seen, budget, depth + 1) as object),
-        [RECURSION_STUB]: true,
+      // Recursive reference: stop here, keeping any description from the ref
+      // site — and the requirements of the definition being truncated, which is
+      // the only thing about it a reader of the stub still needs.
+      const target = resolvePointer(root, ref)
+      const required = isObject(target) ? asStringArray(target['required']) : []
+      const resolvedSiblings = dereference(siblings, root, seen, budget, depth + 1) as Record<string, unknown>
+      const stub: Record<string | symbol, unknown> = { type: 'object', ...resolvedSiblings }
+      // A ref site that declares its own shape is describing a real object, not
+      // a truncation, so the marker does not travel onto it.
+      if (resolvedSiblings['properties'] === undefined && resolvedSiblings['required'] === undefined) {
+        stub[RECURSION_STUB] = required
       }
+      return stub
     }
     const target = dereference(resolvePointer(root, ref), root, new Set(seen).add(ref), budget, depth + 1)
     const resolvedTarget = isObject(target) ? target : {}
     const resolvedSiblings = dereference(siblings, root, seen, budget, depth + 1) as Record<string, unknown>
-    return {
+    const merged: Record<string | symbol, unknown> = {
       ...resolvedTarget,
       ...resolvedSiblings,
       ...mergedApplicators(resolvedTarget, resolvedSiblings),
       ...mergedDoc(resolvedTarget, resolvedSiblings),
     }
+    // The marker spreads with everything else, and a ref site that declares its
+    // own fields is a real object however it was reached — an alias to a
+    // recursive definition must not make it abstain.
+    if (resolvedSiblings['properties'] !== undefined || resolvedSiblings['required'] !== undefined) {
+      delete merged[RECURSION_STUB]
+    }
+    return merged
   }
 
   const resolved: Record<string, unknown> = {}

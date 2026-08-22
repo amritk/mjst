@@ -111,7 +111,10 @@ export const renderProperty = (
   const derived = meta.examples.length === 0 ? deriveExample(prop, path) : undefined
   // Whatever the derived block already showed is not listed again: the reader
   // sees the first example as pasteable config, and the alternatives inline.
-  const listed = derived === undefined ? examples : examples.slice(1)
+  // The first example is only spoken for when a derived block will print it. A
+  // row suppresses that block, and slicing it off anyway meant the first
+  // example appeared nowhere at all.
+  const listed = derived === undefined || options.summarised ? examples : examples.slice(1)
   if (listed.length > 0) blocks.push(`**Examples:** ${codeList(listed, context.language)}`)
 
   const constraints = readConstraints(prop, context.language)
@@ -152,8 +155,11 @@ export const renderProperty = (
       // own children, but also a Deprecated callout, constraints, examples,
       // notes or the rest of its prose. Gating on children alone lost all of
       // those for every leaf option in a table.
+      // Compared against the child's own heading, not against one: a child with
+      // `heading: false` pushes none, so counting one dropped its whole block —
+      // table and all.
       const sub = renderProperty(child, level + (meta.heading ? 1 : 0), context, { summarised: true })
-      if (sub.length > 1) blocks.push(...sub)
+      if (sub.length > (readDocMeta(child.prop).heading ? 1 : 0)) blocks.push(...sub)
     }
     return blocks
   }
