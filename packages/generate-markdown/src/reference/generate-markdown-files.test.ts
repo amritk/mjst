@@ -967,6 +967,162 @@ describe('generate-markdown-files', () => {
     expect(content.indexOf('**Constraints:**')).toBeLessThan(content.indexOf('> A note.'))
   })
 
+  // Composition nests: an `allOf` of `anyOf`s, a $ref'd base that itself
+  // composes. Following it only one level down loses everything below.
+  it('follows composition nested several levels deep', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          a: {
+            allOf: [
+              { allOf: [{ properties: { deep: { type: 'string', description: 'Two levels down.' } } }] },
+              { anyOf: [{ allOf: [{ properties: { deeper: { type: 'string' } } }] }] },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content).toContain('## deep')
+    expect(content).toContain('## deeper')
+  })
+
+  // The container keyword can sit inside the union rather than on the node.
+  it('finds a container that only a union branch declares', () => {
+    const items = only(
+      generateMarkdownFiles({
+        properties: {
+          list: {
+            anyOf: [{ type: 'string' }, { type: 'array', items: { properties: { inner: { type: 'string' } } } }],
+          },
+        },
+      }),
+    )
+    expect(items).toContain('## inner')
+
+    const map = only(
+      generateMarkdownFiles({
+        properties: {
+          bag: {
+            anyOf: [
+              { type: 'boolean' },
+              { type: 'object', additionalProperties: { properties: { v: { type: 'string' } } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(map).toContain('## v')
+  })
+
+  it('reads a pattern-keyed map value shape', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          env: { type: 'object', patternProperties: { '^[A-Z]+$': { properties: { value: { type: 'string' } } } } },
+        },
+      }),
+    )
+    expect(content).toContain('## value')
+  })
+
+  // Two of three alternatives requiring a field does not make it required.
+  it('requires a field only when all three alternatives require it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          a: {
+            anyOf: [
+              { properties: { all: {}, most: {} }, required: ['all', 'most'] },
+              { properties: { all: {}, most: {} }, required: ['all', 'most'] },
+              { properties: { all: {}, most: {} }, required: ['all'] },
+            ],
+          },
+        },
+      }),
+    )
+    const section = (name: string) => content.slice(content.indexOf(`## ${name}`), content.indexOf(`## ${name}`) + 60)
+    expect(section('all')).toContain('**Required**')
+    expect(section('most')).not.toContain('**Required**')
+  })
+
+  // A single alternative is not an alternative: its requirements stand.
+  it('keeps the requirements of a lone anyOf branch', () => {
+    const content = only(
+      generateMarkdownFiles({ properties: { a: { anyOf: [{ properties: { x: {} }, required: ['x'] }] } } }),
+    )
+    expect(content).toContain('**Required**')
+  })
+
+  // Both halves of the applicator merge are load-bearing.
+  it('keeps the definition required list when the ref site adds its own', () => {
+    const content = only(
+      generateMarkdownFiles({
+        $defs: { base: { properties: { fromBase: {} }, required: ['fromBase'] } },
+        properties: {
+          a: { $ref: '#/$defs/base', properties: { fromSite: {} }, required: ['fromSite'] },
+        },
+      }),
+    )
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(2)
+  })
+
+  it('lets the ref site win a property the definition also declares', () => {
+    const content = only(
+      generateMarkdownFiles({
+        $defs: { base: { properties: { shared: { type: 'string', description: 'FROM THE DEFINITION' } } } },
+        properties: {
+          a: { $ref: '#/$defs/base', properties: { shared: { type: 'string', description: 'FROM THE REF SITE' } } },
+        },
+      }),
+    )
+    expect(content).toContain('FROM THE REF SITE')
+    expect(content).not.toContain('FROM THE DEFINITION')
+  })
+
+  // A node that declares both named properties and a container documents the
+  // names — and its derived examples must not gain a phantom map-key hop.
+  it('prefers a node own properties over its container keywords', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          a: {
+            type: 'object',
+            properties: { named: { type: 'string', examples: ['v'] } },
+            additionalProperties: { properties: { extra: { type: 'string' } } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('## named')
+    expect(content).not.toContain('<name>')
+    expect(content).toContain('"a": {\n    "named": "v"\n  }')
+  })
+
+  // RFC 6901 array indices have no leading zeros, so `01` addresses nothing.
+  it('refuses a non-canonical array index in a pointer', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/t/anyOf/01' } },
+        $defs: { t: { anyOf: [{ type: 'string' }, { type: 'number', description: 'WRONG BRANCH' }] } },
+      }),
+    )
+    expect(content).not.toContain('WRONG BRANCH')
+  })
+
+  // A code span's content is literal, so escaping a backslash would show it.
+  it('leaves a backslash alone inside a table code cell', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          outer: { type: 'object', properties: { a: { type: 'string', default: 'C:\\path' } } },
+        },
+      }),
+    )
+    expect(content).toContain('`"C:\\\\path"`')
+    expect(content).not.toContain('\\\\\\\\path')
+  })
+
   it('matches the checked-in docs for the API reference fixture', () => {
     const files = generateMarkdownFiles(fixture('api-reference-config'))
     expect(files.map((file) => file.filename)).toEqual(['configuration.md'])

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { ARRAY_ITEM, childEntries, childSchema, MAP_KEY, sortEntries } from '#reference/child-entries'
+import {
+  ARRAY_ITEM,
+  childEntries,
+  childSchema,
+  formatPath,
+  MAP_KEY,
+  MAP_KEY_PLACEHOLDER,
+  sortEntries,
+} from '#reference/child-entries'
 import type { DocEntry } from '#types/render'
 
 const names = (entries: readonly DocEntry[]): readonly string[] => entries.map((entry) => entry.name)
@@ -47,6 +55,13 @@ describe('child-entries', () => {
   it('records the array hop in a child path', () => {
     const prop = { type: 'array', items: { type: 'object', properties: { name: { type: 'string' } } } }
     expect(childEntries(prop, ['pagination'], 'schema')[0]?.path).toEqual(['pagination', ARRAY_ITEM, 'name'])
+  })
+
+  // The error messages and the derived examples both name the map hop, and a
+  // reader who sees `<name>` in one should see it in the other.
+  it('formats the array and map hops the way an example spells them', () => {
+    expect(formatPath(['a', ARRAY_ITEM, 'b'])).toBe('a.[].b')
+    expect(formatPath(['a', MAP_KEY, 'b'])).toBe(`a.${MAP_KEY_PLACEHOLDER}.b`)
   })
 
   it('drops hidden children', () => {

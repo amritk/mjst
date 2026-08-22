@@ -48,9 +48,9 @@ describe('read-doc-config', () => {
     expect(config.pages.map((page) => page.id)).toEqual([INDEX_PAGE_ID, 'b', 'a'])
   })
 
-  // A schema may declare the index explicitly to give it examples of its own;
-  // that should configure the index rather than add a second page.
-  it('merges an explicitly declared index page', () => {
+  // A schema may declare the index explicitly to give it a file or a title;
+  // that configures the index rather than adding a second page.
+  it('configures the index page rather than adding one', () => {
     const config = readDocConfig({
       title: 'Ignored',
       'x-doc': {
@@ -60,6 +60,26 @@ describe('read-doc-config', () => {
     expect(config.pages).toEqual([
       { id: INDEX_PAGE_ID, file: 'configuration.md', title: 'Configuration', examples: [{ code: 'a = 1' }] },
     ])
+  })
+
+  // Both sides carry examples here, which is what makes this a merge: taking
+  // either side alone would silently discard the other's.
+  it('merges the examples of a declared index page with the root ones', () => {
+    const config = readDocConfig({
+      'x-doc': {
+        example: 'from the root',
+        pages: [{ id: 'index', file: 'configuration.md', example: 'from the page' }],
+      },
+    })
+    expect(config.pages[0]?.examples).toEqual([{ code: 'from the root' }, { code: 'from the page' }])
+  })
+
+  // The page declaration is the more specific statement, so it wins.
+  it('prefers a declared index title over the x-doc title', () => {
+    const config = readDocConfig({
+      'x-doc': { title: 'From x-doc', pages: [{ id: 'index', file: 'a.md', title: 'From the page' }] },
+    })
+    expect(config.pages[0]?.title).toBe('From the page')
   })
 
   it('skips a page that cannot be written or referenced', () => {
