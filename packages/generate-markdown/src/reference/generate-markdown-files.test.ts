@@ -18,6 +18,23 @@ const goldenFiles = (name: string): readonly string[] =>
     .map((entry) => entry.split('\\').join('/'))
     .sort()
 
+/**
+ * One property's block: from its heading to the next heading at the same level
+ * or above.
+ *
+ * Slicing to the end of the document instead is how three assertions ended up
+ * proving nothing — a `**Required**` marker belonging to a later sibling
+ * satisfied every one of them.
+ */
+const section = (content: string, heading: string): string => {
+  const start = content.indexOf(heading)
+  expect(start, `no heading ${heading}`).toBeGreaterThanOrEqual(0)
+  const level = (/^#+/.exec(heading) ?? [''])[0].length
+  const rest = content.slice(start + heading.length)
+  const next = new RegExp(`^#{1,${level}} `, 'm').exec(rest)
+  return heading + (next === null ? rest : rest.slice(0, next.index))
+}
+
 const only = (files: readonly GeneratedFile[]): string => {
   expect(files).toHaveLength(1)
   return files[0]?.content ?? ''
@@ -2051,8 +2068,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    const shared = content.slice(content.indexOf('### shared'))
-    expect(shared).toContain('**Required**')
+    expect(section(content, '#### shared')).toContain('**Required**')
   })
 
   // A collapsed reference keeps what the ref site says it is.
@@ -2142,7 +2158,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content.slice(content.indexOf('### child'))).toContain('**Required**')
+    expect(section(content, '#### a')).toContain('**Required**')
   })
 
   it('records what a definition inherits through allOf', () => {
@@ -2161,7 +2177,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content.slice(content.indexOf('### child'))).toContain('**Required**')
+    expect(section(content, '#### a')).toContain('**Required**')
   })
 
   // The definition's list is what the collapse threw away; the ref site's own
@@ -2187,7 +2203,281 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content.slice(content.indexOf('#### z'))).toContain('**Required**')
+    expect(section(content, '#### z')).toContain('**Required**')
+  })
+
+  // Alternatives hold only what they *all* ask for. Reading them as "what any
+  // of them asks for" invents requirements on the truncation, which is the
+  // mirror of the error that made it record them in the first place.
+  it('records only what every alternative of a truncated definition requires', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { node: { $ref: '#/$defs/node' } },
+        $defs: {
+          node: {
+            type: 'object',
+            anyOf: [{ required: ['a', 'b'] }, { required: ['a'] }, { required: ['b'] }],
+            properties: {
+              a: {},
+              b: {},
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/node' },
+                  { type: 'object', required: ['a', 'b'], properties: { a: {}, b: {} } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    // No name is asked for by all three, so nothing on the page is required.
+    expect(content).not.toContain('**Required**')
+  })
+
+  // `oneOf` composes requirements the same way `anyOf` does, and it is the
+  // spelling a discriminated union uses — every variant asking for the tag.
+  it('records what a definition composes through oneOf', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { node: { $ref: '#/$defs/node' } },
+        $defs: {
+          node: {
+            type: 'object',
+            oneOf: [
+              { required: ['kind'], properties: { kind: {}, a: {} } },
+              { required: ['kind'], properties: { kind: {}, b: {} } },
+            ],
+            properties: {
+              kid: {
+                anyOf: [{ $ref: '#/$defs/node' }, { type: 'object', required: ['kind'], properties: { kind: {} } }],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### kind')).toContain('**Required**')
+  })
+
+  // A recursive ref site writing its own `required` is describing that use, so
+  // the definition's list is not substituted for it — nor added to it.
+  it('does not record a definition list on a ref site that writes its own required', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: {
+            type: 'object',
+            required: ['fromDefinition'],
+            properties: {
+              fromDefinition: {},
+              again: {
+                anyOf: [
+                  // Only `required` here, so the marker is suppressed for this
+                  // reason alone.
+                  { $ref: '#/$defs/self', required: ['own'] },
+                  { type: 'object', required: ['fromDefinition', 'own'], properties: { fromDefinition: {}, own: {} } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    // The root's own `fromDefinition`, and `own` under `again`. Not the nested
+    // `fromDefinition`: one alternative asks for it and the other does not.
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(2)
+    expect(section(content, '#### own')).toContain('**Required**')
+    expect(section(content, '#### fromDefinition')).not.toContain('**Required**')
+  })
+
+  it('does not record a definition list on a ref site that writes its own properties', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: {
+            type: 'object',
+            required: ['fromDefinition'],
+            properties: {
+              fromDefinition: {},
+              again: {
+                anyOf: [
+                  // Only `properties` here, for the same reason.
+                  { $ref: '#/$defs/self', properties: { extra: {} } },
+                  { type: 'object', required: ['fromDefinition'], properties: { fromDefinition: {}, extra: {} } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(1)
+    expect(section(content, '### fromDefinition')).toContain('**Required**')
+  })
+
+  /**
+   * The same two shapes one hop further out: an alias whose *target* collapsed,
+   * so the marker arrives by spreading rather than by being written. It has to
+   * come back off for either sibling keyword on its own.
+   */
+  const aliasedTruncation = (site: Record<string, unknown>, alternative: Record<string, unknown>): unknown => ({
+    properties: { root: { $ref: '#/$defs/self' } },
+    $defs: {
+      alias: { $ref: '#/$defs/self' },
+      self: {
+        type: 'object',
+        required: ['fromDefinition'],
+        properties: {
+          fromDefinition: {},
+          branch: { anyOf: [{ $ref: '#/$defs/alias', ...site }, alternative] },
+        },
+      },
+    },
+  })
+
+  it('drops the truncation marker from an alias whose ref site writes only a required list', () => {
+    const content = only(
+      generateMarkdownFiles(
+        aliasedTruncation(
+          { required: ['x'] },
+          { type: 'object', required: ['fromDefinition', 'x'], properties: { fromDefinition: {}, x: {} } },
+        ),
+      ),
+    )
+    // The root's own `fromDefinition` and `x` under `branch` — not the nested
+    // `fromDefinition`, which only one alternative asks for.
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(2)
+    expect(section(content, '#### x')).toContain('**Required**')
+  })
+
+  it('drops the truncation marker from an alias whose ref site writes only properties', () => {
+    const content = only(
+      generateMarkdownFiles(
+        aliasedTruncation(
+          { properties: { x: {} } },
+          { type: 'object', required: ['fromDefinition'], properties: { fromDefinition: {}, x: {} } },
+        ),
+      ),
+    )
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(1)
+    expect(section(content, '### fromDefinition')).toContain('**Required**')
+  })
+
+  // Two properties sharing one definition each print their own sentence: the
+  // definition's prose is what the truncation falls back to, never what it
+  // overrides the ref site with.
+  it('lets a truncated ref site prose beat the definition it stands for', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: {
+            type: 'object',
+            description: 'Definition prose.',
+            properties: { again: { $ref: '#/$defs/self', description: 'Ref site prose.' } },
+          },
+        },
+      }),
+    )
+    expect(section(content, '### again')).toContain('Ref site prose.')
+    expect(section(content, '### again')).not.toContain('Definition prose.')
+  })
+
+  // `x-doc` is a namespace, not a value: the truncation keeps the definition's
+  // documentation and the ref site says where *this* use is documented. Replacing
+  // the whole object drops the definition's notes the moment a ref site renames it.
+  it('merges a truncated definition doc keyword with the ref site one, key by key', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: {
+            type: 'object',
+            'x-doc': { title: 'Definition title', note: 'Definition note.' },
+            properties: { again: { $ref: '#/$defs/self', 'x-doc': { title: 'Ref site title' } } },
+          },
+        },
+      }),
+    )
+    // The heading proves the ref site wins per key; the note proves the rest of
+    // the definition's `x-doc` survived it.
+    expect(section(content, '### Ref site title')).toContain('> Definition note.')
+  })
+
+  // A ref site that retypes a truncation is still describing the definition's
+  // object, so it keeps its say in what the alternatives beside it require.
+  it('lets a retyped truncation vote on what an alternative requires', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: {
+            type: 'object',
+            required: ['a'],
+            properties: {
+              a: {},
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/self', type: 'string' },
+                  { type: 'object', required: ['a', 'b'], properties: { a: {}, b: {} } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    // `a` twice — the root's and the one under `kid`. `b` is asked for by one
+    // alternative only, and the retyped truncation is the other one.
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(2)
+    expect(section(content, '#### b')).not.toContain('**Required**')
+  })
+
+  // Reading what a truncation stands for follows `$ref` hops and composition,
+  // both of which a schema is free to write in a circle.
+  it('terminates on a definition that reaches itself through an alias', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/a' } },
+        $defs: { a: { $ref: '#/$defs/b' }, b: { $ref: '#/$defs/a' } },
+      }),
+    )
+    expect(content).toContain('## root')
+  })
+
+  it('terminates on a definition that composes itself through allOf', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/self' } },
+        $defs: {
+          self: { type: 'object', allOf: [{ $ref: '#/$defs/self' }], properties: { again: { $ref: '#/$defs/self' } } },
+        },
+      }),
+    )
+    expect(content).toContain('### again')
+  })
+
+  // A root reached through a `$ref` has no `x-doc` of its own. Inventing an
+  // empty one for it outranks the branch that carries the real one, and the
+  // whole page silently changes layout.
+  it('does not invent a doc keyword on a root reached through a ref', () => {
+    const content = only(
+      generateMarkdownFiles({
+        $ref: '#/$defs/base',
+        anyOf: [
+          {
+            type: 'object',
+            properties: { theme: { type: 'object', properties: { mode: { type: 'string', description: 'Mode.' } } } },
+            'x-doc': { layout: 'table' },
+          },
+        ],
+        $defs: { base: { type: 'object' } },
+      }),
+    )
+    expect(content).toContain('| `mode` | `string` | Mode. |')
   })
 
   // A row names the property in a cell several lines up, so the block below it
@@ -2275,7 +2565,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    const next = content.slice(content.indexOf('### next'))
+    const next = section(content, '### next')
     expect(next).toContain('**Type:** `NodeShape`')
     expect(next).toContain('A node in the tree.')
   })
