@@ -122,7 +122,12 @@ export const renderProperty = (
   // rest of it became page structure.
   for (const note of meta.notes) blocks.push(`> ${note.replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
 
-  blocks.push(...renderExamples(derived === undefined ? meta.examples : [derived], context.language))
+  // A derived example is this package's convenience, not the author's content:
+  // under a row it would give every leaf option in a table a heading and a
+  // fence, which is the opposite of what a table layout was chosen for. An
+  // example the author wrote is content, and stays.
+  const shown = derived === undefined ? meta.examples : options.summarised ? [] : [derived]
+  blocks.push(...renderExamples(shown, context.language))
   for (const footer of meta.footers) blocks.push(footer.trim())
 
   const layout = meta.layout ?? context.layout
@@ -143,8 +148,12 @@ export const renderProperty = (
     // subtree would be documented as the word `object` and nothing else.
     for (const child of children) {
       if (documentedElsewhere(child, context)) continue
-      if (childEntries(child.prop, child.path, meta.sort ?? context.sort).length === 0) continue
-      blocks.push(...renderProperty(child, level + (meta.heading ? 1 : 0), context, { summarised: true }))
+      // Emitted whenever the child has anything the row could not carry — its
+      // own children, but also a Deprecated callout, constraints, examples,
+      // notes or the rest of its prose. Gating on children alone lost all of
+      // those for every leaf option in a table.
+      const sub = renderProperty(child, level + (meta.heading ? 1 : 0), context, { summarised: true })
+      if (sub.length > 1) blocks.push(...sub)
     }
     return blocks
   }

@@ -51,11 +51,20 @@ const resolveAnchor = (node: unknown, anchor: string, depth = 0): unknown => {
   if (!isObject(node)) return undefined
   if (node['$anchor'] === anchor || node['$dynamicAnchor'] === anchor) return node
   for (const [key, value] of Object.entries(node)) {
-    // The same rule the inliner follows: a `default` or an `examples` entry is
+    // The same rules the inliner follows. A `default` or an `examples` entry is
     // documented *data*, and a sample that happens to hold an `$anchor` key is
-    // not a definition. Searching it let sample data win a reference, and the
-    // property that made the reference lost its type and its whole subtree.
+    // not a definition — searching it let sample data win a reference. But the
+    // keys of a `$defs` or a `properties` map are author-chosen names, so a
+    // definition called `example` is a definition, and skipping it by name made
+    // it unreachable.
     if (DATA_KEYWORDS.has(key)) continue
+    if (SCHEMA_MAP_KEYWORDS.has(key) && isObject(value)) {
+      for (const child of Object.values(value)) {
+        const found = resolveAnchor(child, anchor, depth + 1)
+        if (found !== undefined) return found
+      }
+      continue
+    }
     const found = resolveAnchor(value, anchor, depth + 1)
     if (found !== undefined) return found
   }
@@ -153,6 +162,15 @@ type Budget = { remaining: number }
  * naming nothing. Real config schemas nest tens of levels, not hundreds.
  */
 export const MAX_SCHEMA_DEPTH = 512
+
+/**
+ * Marks the `{ type: 'object' }` a recursive `$ref` collapses to. It is this
+ * walker's own truncation marker, not something the author wrote, and readers
+ * of the inlined document have to be able to tell the difference: taken at face
+ * value it is "an object with no fields and no requirements", which is a claim
+ * about the schema that nothing in the schema makes.
+ */
+export const RECURSION_STUB = Symbol('recursive reference')
 
 /**
  * Merges the `x-doc` keyword of a `$ref` site with the one on the definition it
@@ -257,7 +275,11 @@ export const dereference = (
   if (typeof ref === 'string') {
     if (seen.has(ref)) {
       // Recursive reference: stop here, keeping any description from the ref site.
-      return { type: 'object', ...(dereference(siblings, root, seen, budget, depth + 1) as object) }
+      return {
+        type: 'object',
+        ...(dereference(siblings, root, seen, budget, depth + 1) as object),
+        [RECURSION_STUB]: true,
+      }
     }
     const target = dereference(resolvePointer(root, ref), root, new Set(seen).add(ref), budget, depth + 1)
     const resolvedTarget = isObject(target) ? target : {}
@@ -289,4 +311,8 @@ export const dereference = (
  * one set of rules about what counts as a schema position.
  */
 export const dereferenceSchema = (parsed: Record<string, unknown>): ConfigSchema =>
-  dereference(parsed, parsed, new Set(), { remaining: MAX_INLINED_NODES }) as ConfigSchema
+  // `#` starts out seen: the walk is already inside the document it names, so a
+  // self-reference collapses to the stub the way `#/$defs/x` does on its second
+  // visit. Without that seeding the whole root expanded one extra time, and a
+  // property assigned to a page was documented on it twice.
+  dereference(parsed, parsed, new Set(['#', '#/']), { remaining: MAX_INLINED_NODES }) as ConfigSchema

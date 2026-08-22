@@ -1499,8 +1499,10 @@ describe('generate-markdown-files', () => {
   })
 
   // `#` is the empty JSON pointer — the document itself — and the spelling every
-  // self-recursive schema uses.
-  it('resolves a bare fragment to the document root', () => {
+  // self-recursive schema uses. The walk is already inside that document, so the
+  // reference collapses the way any repeated one does: the type still says what
+  // the entries are, and the fields are documented once, at the top.
+  it('reads a bare fragment as a reference to the document', () => {
     const content = only(
       generateMarkdownFiles({
         title: 'Menu',
@@ -1513,8 +1515,22 @@ describe('generate-markdown-files', () => {
       }),
     )
     expect(content).toContain('**Type:** `object[]`')
-    expect(content).toContain('### label')
+    expect(content.match(/## label/g)).toHaveLength(1)
     expect(content).toContain('Text shown in the menu.')
+  })
+
+  // The root expanded one extra time, so a property assigned to a page was
+  // documented on it twice — same heading, same anchor.
+  it('documents a page-assigned property once when the schema references itself', () => {
+    const files = generateMarkdownFiles({
+      'x-doc': { pages: [{ id: 'extra', file: 'extra.md', title: 'Extra' }] },
+      properties: {
+        settings: { type: 'object', 'x-doc': { page: 'extra' }, properties: { deep: { type: 'string' } } },
+        children: { type: 'array', items: { $ref: '#' } },
+      },
+    })
+    const extra = files.find((file) => file.filename === 'extra.md')?.content ?? ''
+    expect(extra.match(/## settings/g)).toHaveLength(1)
   })
 
   // "A map of strings, or this exact pair" — a document taking the free-form
@@ -1610,7 +1626,9 @@ describe('generate-markdown-files', () => {
       }),
     )
     expect(content).toContain('Target name.')
-    expect(content).not.toContain('NOT A SCHEMA - resolved')
+    // The sample value still renders as the property's default; what must not
+    // happen is `build` resolving to it.
+    expect(content).toContain('### name')
   })
 
   // An inheritance hierarchy reaches fourteen levels without trying, and the
@@ -1630,6 +1648,175 @@ describe('generate-markdown-files', () => {
       properties: { a: { type: 'string', 'x-doc': { page: 'extra' } } },
     })
     expect(files.map((file) => file.filename)).toContain('..extra.md')
+  })
+
+  // A blank line inside a fence is part of the sample, not a paragraph break.
+  // Splitting on it took the fence apart: one half was dropped and the other
+  // opened a fence that swallowed the rest of the page.
+  it('does not cut a fenced block in a description in half', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          s: {
+            type: 'object',
+            properties: {
+              theme: {
+                type: 'object',
+                description: 'Theme settings.\nExample:\n```json\n{\n  "dark": true,\n\n  "accent": "red"\n}\n```',
+                properties: { dark: { type: 'boolean', description: 'Dark.' } },
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content.match(/```/g)).toHaveLength(2)
+    expect(content).toContain('| `dark` | `boolean` | Dark. |')
+  })
+
+  // A leaf option has no children, and everything else it carries had nowhere
+  // else to go.
+  it('keeps a childless property deprecation, constraints and notes under a table', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          server: {
+            type: 'object',
+            properties: {
+              port: {
+                type: 'integer',
+                deprecated: true,
+                minimum: 1,
+                description: 'Port.\n\nUse `listen` instead.',
+                'x-doc': { notes: ['Removed in v3.'] },
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| `port` | `integer` | Port. |')
+    expect(content).toContain('> **Deprecated**')
+    expect(content).toContain('Use `listen` instead.')
+    expect(content).toContain('**Constraints:** `minimum: 1`')
+    expect(content).toContain('> Removed in v3.')
+  })
+
+  // A derived example is this package's convenience; under a row it would give
+  // every leaf in a table a heading and a fence.
+  it('does not derive an example for a leaf beneath a table row', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          server: { type: 'object', properties: { host: { type: 'string', examples: ['example.com'] } } },
+        },
+      }),
+    )
+    expect(content).not.toContain('```json')
+
+    const authored = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          server: {
+            type: 'object',
+            properties: { host: { type: 'string', 'x-doc': { example: 'host = "example.com"' } } },
+          },
+        },
+      }),
+    )
+    expect(authored).toContain('host = "example.com"')
+  })
+
+  // A definition named `example` is a definition: the keys of a `$defs` map are
+  // author-chosen names, not keywords.
+  it('resolves an $anchor on a definition whose name is a data keyword', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { sample: { $ref: '#ex', description: 'The sample.' } },
+        $defs: {
+          example: { $anchor: 'ex', type: 'object', properties: { id: { type: 'string', description: 'Sample id.' } } },
+        },
+      }),
+    )
+    expect(content).toContain('Sample id.')
+  })
+
+  it('reads the other spelling of the empty pointer too', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Menu',
+        properties: { children: { type: 'array', items: { $ref: '#/' } } },
+      }),
+    )
+    expect(content).toContain('**Type:** `object[]`')
+  })
+
+  // A `$defs` map whose key is a keyword name is still a map of definitions.
+  it('inlines a definition whose name collides with a keyword', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/default' } },
+        $defs: { default: { type: 'string', description: 'A definition named default.' } },
+      }),
+    )
+    expect(content).toContain('A definition named default.')
+  })
+
+  // `const` and `enum` hold documented values, so a $ref-shaped one is data.
+  it('leaves a ref-shaped value under const alone', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { const: { $ref: '#/$defs/other' }, description: 'A constant.' } },
+        $defs: { other: { type: 'string', description: 'WRONG' } },
+      }),
+    )
+    expect(content).toContain(
+      '"$ref": "#/components/schemas/User"'.replace('#/components/schemas/User', '#/$defs/other'),
+    )
+    expect(content).not.toContain('WRONG')
+  })
+
+  it('prints a null default in a row when another row fills the column', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          s: {
+            type: 'object',
+            properties: { a: { type: 'string', default: null }, b: { type: 'string', default: 'x' } },
+          },
+        },
+      }),
+    )
+    // The column exists because `b` fills it; `a`'s null belongs below, not in it.
+    expect(content).toContain('| `a` | `string` |  |')
+    expect(content).toContain('| `b` | `string` | `"x"` |')
+    expect(content).toContain('**Default:** `null`')
+  })
+
+  it('lets the caller override a file the schema declares', () => {
+    const files = generateMarkdownFiles(
+      { 'x-doc': { file: 'from-schema.md' }, properties: { a: {} } },
+      { file: 'from-caller.md' },
+    )
+    expect(files[0]?.filename).toBe('from-caller.md')
+  })
+
+  it('sorts one property children by its own rule', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          sorted: { type: 'object', 'x-doc': { sort: 'alphabetical' }, properties: { zebra: {}, apple: {} } },
+          unsorted: { type: 'object', properties: { zebra: {}, apple: {} } },
+        },
+      }),
+    )
+    expect(content.indexOf('### apple')).toBeLessThan(content.indexOf('### zebra'))
+    expect(content.lastIndexOf('### zebra')).toBeLessThan(content.lastIndexOf('### apple'))
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

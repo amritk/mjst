@@ -30,7 +30,15 @@ export const MAP_KEY_PLACEHOLDER = '<name>'
 
 /** Renders a path for a human — an error message, a derived example's keys. */
 export const formatPath = (path: readonly PathSegment[]): string =>
-  path.map((segment) => (segment === ARRAY_ITEM ? '[]' : segment === MAP_KEY ? MAP_KEY_PLACEHOLDER : segment)).join('.')
+  path
+    .map((segment) => {
+      if (segment === ARRAY_ITEM) return '[]'
+      if (segment === MAP_KEY) return MAP_KEY_PLACEHOLDER
+      // A tuple position says which position, or an error message about one of
+      // them points at the wrong shape.
+      return typeof segment === 'number' ? `[${segment}]` : segment
+    })
+    .join('.')
 
 /** One place a property's children come from, and the path hop that reaches it. */
 export type ChildSource = { readonly node: SchemaProperty; readonly hop: PathSegment | undefined }

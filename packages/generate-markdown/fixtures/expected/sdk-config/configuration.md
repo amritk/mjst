@@ -149,6 +149,10 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 | `defaultHeaders` | `object` |  | Headers every generated request sends. |
 | `defaultRetries` | `object` |  | Retry policy the generated runtime applies to failed requests. |
 
+#### defaultTimeout
+
+**Constraints:** `minimum: 0`
+
 #### defaultRetries
 
 | Property | Type | Default | Description |
@@ -156,6 +160,10 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 | `maxRetries` | `integer` | `2` | Attempts after the first failure. |
 | `initialDelaySeconds` | `number` | `1` | Delay before the first retry. |
 | `maxDelaySeconds` | `number` | `10` | Ceiling for the backoff delay. |
+
+##### maxRetries
+
+**Constraints:** `minimum: 0`
 
 ### environmentOrder
 

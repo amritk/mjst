@@ -1,4 +1,4 @@
-import { MAX_SCHEMA_DEPTH } from '#helpers/dereference'
+import { MAX_SCHEMA_DEPTH, RECURSION_STUB } from '#helpers/dereference'
 import { asArray, asProperties, asSchema, isObject } from '#helpers/guards'
 import type { SchemaProperty } from '#types/schema'
 
@@ -56,13 +56,23 @@ const merge = (target: Record<string, SchemaProperty>, source: Readonly<Record<s
  * `string | { … }`, whose empty requirement set would otherwise strip every
  * marker off the object form.
  */
-const couldBeObject = (node: SchemaProperty): boolean => {
+const couldBeObject = (node: SchemaProperty, depth = 0): boolean => {
+  // The stub a recursive `$ref` collapses to is this package's own truncation
+  // marker. Read as a schema it says "an object requiring nothing", and letting
+  // that into the intersection stripped the markers off every other branch of a
+  // recursive union.
+  if (RECURSION_STUB in node) return false
+  if (depth > MAX_SCHEMA_DEPTH) return true
   const declared = typeof node.type === 'string' ? [node.type] : Array.isArray(node.type) ? node.type : undefined
-  if (declared !== undefined) return declared.includes('object')
+  if (declared !== undefined && !declared.includes('object')) return false
   const values = asArray(node.enum)
-  if (values.length > 0) return values.some(isObject)
-  if (node.const !== undefined) return isObject(node.const)
-  return true
+  if (values.length > 0 && !values.some(isObject)) return false
+  if (node.const !== undefined && !isObject(node.const)) return false
+  // `allOf` branches all apply, so a branch that cannot be an object settles it
+  // for the whole node — that is how a `$ref` to `allOf: [{ type: 'string' }]`
+  // describes a string, and reading only the node's own `type` let it vote on
+  // what an object alternative requires.
+  return asArray(node.allOf).every((branch) => couldBeObject(asSchema(branch), depth + 1))
 }
 
 /** The names every one of these sets holds. Empty when there are no sets. */

@@ -77,6 +77,12 @@ describe('child-entries', () => {
     expect(formatPath(['a', MAP_KEY, 'b'])).toBe(`a.${MAP_KEY_PLACEHOLDER}.b`)
   })
 
+  // A tuple position names which position, or an error message about one of
+  // them would point at the wrong shape.
+  it('formats a tuple position by its index', () => {
+    expect(formatPath(['window', 1, 'to'])).toBe('window.[1].to')
+  })
+
   it('drops hidden children', () => {
     const prop = {
       type: 'object',
