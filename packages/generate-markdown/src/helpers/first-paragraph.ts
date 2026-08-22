@@ -34,7 +34,11 @@ const splitParagraphs = (value: string): readonly string[] => {
 
     if (fence === undefined && /^[ \t]*$/.test(line)) {
       const next = lines.slice(index + 1).find((entry) => !/^[ \t]*$/.test(entry))
-      const inIndentedBlock = current.some(isIndentedCode) && next !== undefined && isIndentedCode(next)
+      // The paragraph has to have *started* as an indented block. Asking
+      // whether any line in it is indented also caught a lazy continuation —
+      // an ordinary paragraph whose second line happens to be indented — and
+      // glued the code block after it into the same paragraph.
+      const inIndentedBlock = isIndentedCode(current[0] ?? '') && next !== undefined && isIndentedCode(next)
       if (!inIndentedBlock) {
         if (current.length > 0) paragraphs.push(current.join('\n'))
         current = []

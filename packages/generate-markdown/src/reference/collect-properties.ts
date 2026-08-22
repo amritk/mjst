@@ -144,10 +144,12 @@ const collect = (
     for (const branch of collected) merge(properties, branch.properties)
     const describing = branches
       .map((branch, index) => {
-        // A truncated branch contributes what its definition requires; nothing
-        // else about it survived the collapse.
+        // A truncated branch contributes what its definition requires — added
+        // to whatever the ref site itself asks for, since a sibling `allOf`
+        // there is a requirement the collapse never saw.
+        const own = collected[index]?.required ?? new Set<string>()
         const truncated = stubRequired(branch)
-        return truncated !== undefined ? new Set(truncated) : (collected[index]?.required ?? new Set<string>())
+        return truncated === undefined ? own : new Set([...truncated, ...own])
       })
       .filter((_, index) => couldBeObject(branches[index] ?? {}))
     for (const name of intersect(describing)) required.add(name)

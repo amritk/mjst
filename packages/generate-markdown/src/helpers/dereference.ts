@@ -193,6 +193,49 @@ export const stubRequired = (node: unknown): readonly string[] | undefined => {
 }
 
 /**
+ * Follows the `$ref` hops a definition is reached through, so the node a stub
+ * stands for is the one that actually describes something. A definition written
+ * as a one-line alias (`Alias: { $ref: Real }`) carries nothing of its own, and
+ * reading the alias gave the stub an empty picture of what it truncates.
+ */
+const resolveDefinition = (root: Record<string, unknown>, ref: string, depth = 0): unknown => {
+  const target = resolvePointer(root, ref)
+  if (!isObject(target) || depth > MAX_SCHEMA_DEPTH) return target
+  const next = target['$ref']
+  return typeof next === 'string' ? resolveDefinition(root, next, depth + 1) : target
+}
+
+/**
+ * What a definition requires, as its own keyword and as its composition says.
+ *
+ * A stub records this because the collapse throws the rest away, and a union
+ * containing one needs to know what the truncated alternative asks for — read
+ * the stub as requiring nothing and it strips the markers off the alternatives
+ * beside it. Requirements are as likely to arrive through an `allOf` (an
+ * inherited base) or to be shared by every `anyOf` branch as they are to sit on
+ * the definition itself, and reading only its own key found none of those.
+ */
+const requiredOf = (root: Record<string, unknown>, node: unknown, depth = 0): readonly string[] => {
+  if (!isObject(node) || depth > MAX_SCHEMA_DEPTH) return []
+  const names = new Set(asStringArray(node['required']))
+  const branchesOf = (keyword: unknown): readonly unknown[] =>
+    (Array.isArray(keyword) ? keyword : []).map((branch) =>
+      isObject(branch) && typeof branch['$ref'] === 'string' ? resolveDefinition(root, branch['$ref'], depth) : branch,
+    )
+  // Every `allOf` branch applies, so its requirements all hold.
+  for (const branch of branchesOf(node['allOf']))
+    for (const name of requiredOf(root, branch, depth + 1)) names.add(name)
+  // Alternatives hold only what they all ask for.
+  for (const keyword of ['anyOf', 'oneOf']) {
+    const branches = branchesOf(node[keyword]).map((branch) => requiredOf(root, branch, depth + 1))
+    const [first, ...rest] = branches
+    if (first === undefined) continue
+    for (const name of first) if (rest.every((other) => other.includes(name))) names.add(name)
+  }
+  return [...names]
+}
+
+/**
  * Merges the `x-doc` keyword of a `$ref` site with the one on the definition it
  * points at, rather than letting the ref site replace it wholesale.
  *
@@ -297,10 +340,21 @@ export const dereference = (
       // Recursive reference: stop here, keeping any description from the ref
       // site — and the requirements of the definition being truncated, which is
       // the only thing about it a reader of the stub still needs.
-      const target = resolvePointer(root, ref)
-      const required = isObject(target) ? asStringArray(target['required']) : []
+      const target = resolveDefinition(root, ref)
+      const required = requiredOf(root, target)
       const resolvedSiblings = dereference(siblings, root, seen, budget, depth + 1) as Record<string, unknown>
-      const stub: Record<string | symbol, unknown> = { type: 'object', ...resolvedSiblings }
+      // The truncation keeps what a reader still needs of the definition: what
+      // it is called and what it says about itself. Only its shape is dropped,
+      // because that is what is already on the page above.
+      const carried: Record<string, unknown> = {}
+      if (isObject(target)) {
+        if (typeof target['description'] === 'string') carried['description'] = target['description']
+        if (isObject(target[DOC_KEY])) carried[DOC_KEY] = target[DOC_KEY]
+      }
+      const stub: Record<string | symbol, unknown> = { type: 'object', ...carried, ...resolvedSiblings }
+      if (isObject(carried[DOC_KEY]) && isObject(resolvedSiblings[DOC_KEY])) {
+        stub[DOC_KEY] = { ...(carried[DOC_KEY] as object), ...(resolvedSiblings[DOC_KEY] as object) }
+      }
       // A ref site that declares its own shape is describing a real object, not
       // a truncation, so the marker does not travel onto it.
       if (resolvedSiblings['properties'] === undefined && resolvedSiblings['required'] === undefined) {

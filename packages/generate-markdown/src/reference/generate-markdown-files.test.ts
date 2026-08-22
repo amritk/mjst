@@ -2120,6 +2120,166 @@ describe('generate-markdown-files', () => {
     }
   })
 
+  // A definition written as a one-line alias carries nothing of its own, so
+  // reading the alias gave the truncation an empty picture of what it stands
+  // for — and the alternative beside it lost its marker.
+  it('records what an aliased definition requires', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { node: { $ref: '#/$defs/alias' } },
+        $defs: {
+          alias: { $ref: '#/$defs/real' },
+          real: {
+            type: 'object',
+            required: ['a'],
+            properties: {
+              a: { type: 'string' },
+              child: {
+                anyOf: [{ $ref: '#/$defs/alias' }, { type: 'object', required: ['a'], properties: { a: {} } }],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content.slice(content.indexOf('### child'))).toContain('**Required**')
+  })
+
+  it('records what a definition inherits through allOf', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { node: { $ref: '#/$defs/node' } },
+        $defs: {
+          base: { type: 'object', required: ['a'], properties: { a: { type: 'string' } } },
+          node: {
+            type: 'object',
+            allOf: [{ $ref: '#/$defs/base' }],
+            properties: {
+              child: { anyOf: [{ $ref: '#/$defs/node' }, { type: 'object', required: ['a'], properties: { a: {} } }] },
+            },
+          },
+        },
+      }),
+    )
+    expect(content.slice(content.indexOf('### child'))).toContain('**Required**')
+  })
+
+  // The definition's list is what the collapse threw away; the ref site's own
+  // composition is a requirement the collapse never saw.
+  it('adds a recursive ref site own composed requirement to the definition one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { node: { $ref: '#/$defs/node' } },
+        $defs: {
+          node: {
+            type: 'object',
+            required: ['a'],
+            properties: {
+              a: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/node', allOf: [{ required: ['z'], properties: { z: { type: 'string' } } }] },
+                  { type: 'object', required: ['a', 'z'], properties: { a: {}, z: {} } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content.slice(content.indexOf('#### z'))).toContain('**Required**')
+  })
+
+  // A row names the property in a cell several lines up, so the block below it
+  // needs a heading of its own however `x-doc.heading` reads — without one, the
+  // child's Deprecated callout landed under the parent's heading.
+  it('labels a sub-block even when the child asks for no heading', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          opts: {
+            type: 'object',
+            description: 'Options.',
+            'x-doc': { layout: 'table' },
+            properties: {
+              legacy: { type: 'string', description: 'Old.', deprecated: true, 'x-doc': { heading: false } },
+              current: { type: 'string', description: 'New.' },
+            },
+          },
+          after: { type: 'string' },
+        },
+      }),
+    )
+    expect(content.slice(0, content.indexOf('> **Deprecated**'))).toContain('### legacy')
+  })
+
+  it('labels each of two heading-less children under one table', () => {
+    const child = (name: string) => ({
+      type: 'object',
+      'x-doc': { heading: false, layout: 'table' },
+      properties: { [`${name}Field`]: { type: 'string', description: `${name}.` } },
+    })
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          outer: {
+            type: 'object',
+            'x-doc': { layout: 'table' },
+            properties: { alpha: child('alpha'), beta: child('beta') },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### alpha')
+    expect(content).toContain('### beta')
+    expect(content.indexOf('### alpha')).toBeLessThan(content.indexOf('| `betaField`'))
+  })
+
+  // A paragraph whose second line happens to be indented is a lazy
+  // continuation, not a code block, so the blank line after it still ends it.
+  it('does not fold a code block into a lazy continuation', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          opts: {
+            type: 'object',
+            properties: {
+              sample: {
+                type: 'string',
+                description: 'Wrap the value in\n    the same shape\n\n    <b>literal</b>\n\nThen restart.',
+              },
+            },
+          },
+        },
+      }),
+    )
+    const row = content.split('\n').find((line) => line.startsWith('| `sample')) ?? ''
+    expect(row).not.toContain('<b>literal</b>')
+    expect(content).toContain('    <b>literal</b>')
+  })
+
+  // The collapse drops the definition's shape, which is already on the page —
+  // not what it is called or what it says about itself.
+  it('keeps the prose and the doc keyword of a truncated definition', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/node' } },
+        $defs: {
+          node: {
+            type: 'object',
+            description: 'A node in the tree.',
+            'x-doc': { type: 'NodeShape' },
+            properties: { name: { type: 'string' }, next: { $ref: '#/$defs/node' } },
+          },
+        },
+      }),
+    )
+    const next = content.slice(content.indexOf('### next'))
+    expect(next).toContain('**Type:** `NodeShape`')
+    expect(next).toContain('A node in the tree.')
+  })
+
   it('matches the checked-in docs for the API reference fixture', () => {
     const files = generateMarkdownFiles(fixture('api-reference-config'))
     expect(files.map((file) => file.filename)).toEqual(['configuration.md'])

@@ -26,6 +26,13 @@ export type RenderPropertyOptions = {
    * The property has a table row directly above it. Its type, requiredness and
    * default are in that row, so the block below carries only what a row cannot
    * hold: the examples, the notes, and the table of its own children.
+   *
+   * A block in that position always gets a heading, whatever `x-doc.heading`
+   * says. `heading: false` means "the heading above already names this" — true
+   * of a page or a section, and false of a table row, which names it in a cell
+   * several lines up. Without one, a child's Deprecated callout read as the
+   * parent's, and two heading-less children produced three tables in a row with
+   * nothing to say which was whose.
    */
   readonly summarised?: boolean
 }
@@ -73,7 +80,8 @@ export const renderProperty = (
   const meta = readDocMeta(prop)
   const blocks: string[] = []
 
-  if (meta.heading) blocks.push(heading(level, headingText(meta.title ?? name)))
+  const titled = meta.heading || options.summarised === true
+  if (titled) blocks.push(heading(level, headingText(meta.title ?? name)))
   // Never inside the heading guard: `heading: false` drops the property's own
   // name and shape because the page or section above already carries them, and
   // neither of those says the property is on its way out.
@@ -133,6 +141,7 @@ export const renderProperty = (
   blocks.push(...renderExamples(shown, context.language))
   for (const footer of meta.footers) blocks.push(footer.trim())
 
+  const childLevelBase = titled ? level + 1 : level
   const layout = meta.layout ?? context.layout
   if (layout === 'none') return blocks
 
@@ -158,14 +167,14 @@ export const renderProperty = (
       // Compared against the child's own heading, not against one: a child with
       // `heading: false` pushes none, so counting one dropped its whole block —
       // table and all.
-      const sub = renderProperty(child, level + (meta.heading ? 1 : 0), context, { summarised: true })
-      if (sub.length > (readDocMeta(child.prop).heading ? 1 : 0)) blocks.push(...sub)
+      // Always labelled, so the gate is always "more than the heading".
+      const sub = renderProperty(child, childLevelBase, context, { summarised: true })
+      if (sub.length > 1) blocks.push(...sub)
     }
     return blocks
   }
   // With no heading of its own this property occupies its parent's level, so
   // its children stay where they would have been.
-  const childLevel = meta.heading ? level + 1 : level
-  for (const child of children) blocks.push(...renderProperty(child, childLevel, context))
+  for (const child of children) blocks.push(...renderProperty(child, childLevelBase, context))
   return blocks
 }
