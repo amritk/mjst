@@ -215,6 +215,9 @@ const readQuantifier = (source: string, i: number): { repetition: boolean; nulla
   return null
 }
 
+/** Payload characters of a well-formed `\u{...}` (hex) and `\p{...}` / `\P{...}` (a property name). */
+const BRACE_ESCAPE_PAYLOAD: Readonly<Record<string, RegExp>> = { u: /[0-9a-fA-F]/, p: /[\w=]/, P: /[\w=]/ }
+
 /**
  * How far past `\` an escape beginning at `i` reaches.
  *
@@ -224,21 +227,32 @@ const readQuantifier = (source: string, i: number): { repetition: boolean; nulla
  * swallowed the real `+` after it as a possessive marker. `^(\u{61}+)+$` is
  * `^(a+)+$` written out, and it was admitted while its ASCII twin was refused.
  *
- * The payload search is capped rather than run to the end of the source: an
- * unclosed `\u{` in a hostile pattern would otherwise cost a scan of everything
- * after it, once per occurrence.
+ * The payload has to be *checked*, not just skipped to the next `}`. A span the
+ * escape could not legally carry is not an escape at all under either compile
+ * mode: `\p{(a+)+}` is a `SyntaxError` under `u`, so `compilePattern` falls back
+ * to a non-Unicode compile, where `\p` is an identity escape for `p`, the braces
+ * are literals, and `(a+)+` in between is live syntax the engine runs. Skipping
+ * the span whole hid a textbook `(a+)+` — admitted, and 2^n: 448 ms on 28
+ * characters, 114 seconds on 36.
+ *
+ * Scanning only while the payload stays well-formed is also what makes the walk
+ * cheap without an arbitrary cap. A length cap was the first attempt and it
+ * reopened the bug it was added for: at exactly one character past the cap the
+ * scan gave up and fell back to two code units, so `\u{` + 62 zeros + `61}` —
+ * which really is `a` — again lost its quantifier. Here the scan stops at the
+ * first character the escape cannot contain, so its cost is bounded by the
+ * payload run itself, and payload runs do not overlap.
  */
 const escapeEnd = (source: string, i: number): number => {
-  const kind = source[i + 1]
-  if ((kind === 'u' || kind === 'p' || kind === 'P') && source[i + 2] === '{') {
-    const limit = Math.min(source.length, i + 3 + MAX_BRACE_ESCAPE)
-    for (let j = i + 3; j < limit; j++) if (source[j] === '}') return j + 1
+  const payload = BRACE_ESCAPE_PAYLOAD[source[i + 1] as string]
+  if (payload !== undefined && source[i + 2] === '{') {
+    let j = i + 3
+    while (j < source.length && payload.test(source[j] as string)) j++
+    // An empty payload (`\u{}`) is not well-formed either, hence `j > i + 3`.
+    if (j > i + 3 && source[j] === '}') return j + 1
   }
   return i + 2
 }
-
-/** Longest braced escape payload read by {@link escapeEnd}; `\p{Script=Katakana}` is far inside it. */
-const MAX_BRACE_ESCAPE = 64
 
 /**
  * Advances past a `[...]` character class, returning the index after the closing `]`.

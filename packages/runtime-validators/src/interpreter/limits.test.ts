@@ -231,6 +231,40 @@ describe('limits', () => {
     expect(typeof hasUnsafeRegex(`^(\\u{${'6'.repeat(500)}+)+$`)).toBe('boolean')
   })
 
+  it('only treats a braced escape as one atom when the payload could really be one', () => {
+    // A span the escape cannot legally carry is not an escape under either
+    // compile mode. `\p{(a+)+}` is a SyntaxError with `u`, so the runtime falls
+    // back to a non-Unicode compile where `\p` is an identity escape, the braces
+    // are literals, and `(a+)+` between them is live syntax. Skipping to the
+    // first `}` regardless swallowed it whole: admitted, and 448 ms on 28
+    // characters against 114 seconds on 36.
+    for (const unsafe of ['^\\p{(a+)+}$', '^\\u{(a+)+}$', '^\\P{(a+)+}$', '^\\p{(a|a)+}$', '^\\p{(a*)*}$']) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // Its twin spelled without the escape, which was always visible.
+    expect(hasUnsafeRegex('^p\\{(a+)+\\}$')).toBe(true)
+
+    // A length cap was the first attempt at bounding the payload scan, and it
+    // reopened the very bug it was meant to bound: one character past the cap
+    // the scan gave up and fell back to two code units, so this — which under
+    // `u` is exactly `^(a+)+$` — lost its quantifier again. Scanning only while
+    // the payload stays well-formed has no such edge.
+    expect(hasUnsafeRegex(`^(\\u{${'0'.repeat(62)}61}+)+$`)).toBe(true)
+    expect(hasUnsafeRegex(`^(\\u{${'0'.repeat(200)}61}+)+$`)).toBe(true)
+
+    // Well-formed payloads keep reading as one atom, quantifier and all.
+    for (const safe of [
+      '^\\u{61}+$',
+      '^\\p{L}+$',
+      '^\\p{Script=Latin}+$',
+      '^\\p{Script_Extensions=Greek}$',
+      '^\\u{1F600}$',
+      '^[\\u{61}-\\u{7A}]+$',
+    ]) {
+      expect(hasUnsafeRegex(safe), safe).toBe(false)
+    }
+  })
+
   it('refuses a body carrying a surrogate, which it reads a code unit at a time', () => {
     // The screen's tokenizers advance one UTF-16 code unit per atom, but the
     // runtime compiles with `u`, where a surrogate pair is a single atom and the
@@ -535,24 +569,38 @@ describe('limits', () => {
     // budget, and screening this one pattern took 294 ms — against 0.27 ms
     // before the exemption existed. Now the budget stops it, at about 15 ms.
     //
-    // The threshold has to sit *below* the bug it documents or it guards
-    // nothing: an earlier 2,000 ms bound left the exact 294 ms regression green.
-    // 150 ms is an order of magnitude above the median here and half the cost of
-    // the bug, and the median of five suppresses the occasional GC outlier that
-    // a single reading picks up.
+    // Measured as a *ratio* against the same shape with 26x fewer branches, not
+    // as a wall-clock bound. A bound has to sit below the bug to guard anything
+    // — an initial 2,000 ms left the exact 294 ms regression green — but once it
+    // is that tight it starts failing under the CPU contention of the full suite,
+    // which runs a dozen vitest instances at once. The ratio has neither problem:
+    // if the budget holds, cost is capped and barely moves with branch count
+    // (measured 1.3x); if the charge is per follower again, cost tracks the
+    // branch count (measured 23.2x, against 26.4x more branches). Contention
+    // scales both measurements together and cancels out.
     const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
-    const branches = Array.from({ length: 2_643 }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
-    const source = `^(\\.${literals}(${branches}))*$`
-
-    const timings: number[] = []
-    for (let run = 0; run < 5; run++) {
-      const started = performance.now()
-      // Genuinely unsafe — the point is only that answering costs bounded work.
-      expect(hasUnsafeRegex(source)).toBe(true)
-      timings.push(performance.now() - started)
+    const shape = (count: number): string => {
+      const branches = Array.from({ length: count }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
+      return `^(\\.${literals}(${branches}))*$`
     }
-    const median = timings.sort((a, b) => a - b)[2] as number
-    expect(median, `screening took ${median.toFixed(0)}ms`).toBeLessThan(150)
+    const median = (source: string): number => {
+      const timings: number[] = []
+      for (let run = 0; run < 5; run++) {
+        const started = performance.now()
+        // Genuinely unsafe — the point is only that answering costs bounded work.
+        expect(hasUnsafeRegex(source)).toBe(true)
+        timings.push(performance.now() - started)
+      }
+      return timings.sort((a, b) => a - b)[2] as number
+    }
+
+    const control = shape(100)
+    const attack = shape(2_643)
+    // Prime both: the first screen of each pays for JIT warm-up.
+    median(control)
+    median(attack)
+    const ratio = median(attack) / median(control)
+    expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(6)
   })
 
   it('screens a very wide alternation in bounded time', () => {
