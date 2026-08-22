@@ -3741,6 +3741,384 @@ describe('generate-markdown-files', () => {
     expect(content).not.toContain('**Deprecated**')
   })
 
+  // The cache holds an answer only when it did not lean on a reference still
+  // being read. Forgetting that in the alternatives loop caches a lie — a
+  // scalar that looked like an object while its partner was mid-read — and the
+  // lie then survives an intersection and marks a field a valid document may
+  // omit.
+  it('does not cache what a definition looked like mid-cycle', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { r: { $ref: '#/$defs/R' } },
+        $defs: {
+          A: { anyOf: [{ $ref: '#/$defs/B' }, { type: 'string' }] },
+          B: { allOf: [{ $ref: '#/$defs/A' }, { type: 'string' }] },
+          W1: { allOf: [{ $ref: '#/$defs/B' }], required: ['k'] },
+          W2: { anyOf: [{ $ref: '#/$defs/A' }], required: ['k'] },
+          R: {
+            oneOf: [{ $ref: '#/$defs/W1' }, { $ref: '#/$defs/W2' }],
+            properties: {
+              inner: { allOf: [{ $ref: '#/$defs/R' }, { properties: { k: { type: 'string' } } }] },
+              k: { type: 'string' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('#### k')
+    expect(content).not.toContain('**Required**')
+  })
+
+  // A cheap first alternative settles the union, so the expensive second one is
+  // never walked. Reading both spends an allowance the rest of the definition
+  // still needs, and what runs out of allowance answers `true` — so the scalar
+  // branch beside it stops being filtered and its **Required** marker is lost.
+  it('stops reading a union at the alternative that settles it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { r: { $ref: '#/$defs/R' } },
+        $defs: {
+          R: {
+            type: 'object',
+            anyOf: [
+              {
+                allOf: [
+                  { anyOf: [{ type: 'object' }, { allOf: Array.from({ length: 20_000 }, () => null) }] },
+                  { type: 'string' },
+                ],
+              },
+              { type: 'object', required: ['k'], properties: { k: {} } },
+            ],
+            properties: {
+              k: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/R' },
+                  { type: 'object', required: ['k'], properties: { k: { type: 'string' } } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### k')).toContain('**Required**')
+  })
+
+  // Every mutually recursive graph taints its whole ancestor chain, so nothing
+  // is cached and the allowance is all that fires. Refusing there refused a
+  // 727-byte schema outright; understating a marker is the wrong this package
+  // prefers, and it still leaves a page.
+  it('renders a mutually recursive graph the shape cache cannot hold', () => {
+    const $defs: Record<string, unknown> = {
+      Top: {
+        type: 'object',
+        description: 'A recursive node.',
+        properties: { self: { $ref: '#/$defs/Top' }, name: { type: 'string' } },
+        required: ['name'],
+        anyOf: [{ $ref: '#/$defs/D0' }, { type: 'object' }],
+      },
+      D6: { $ref: '#/$defs/Top' },
+    }
+    for (let index = 0; index < 6; index++) {
+      $defs[`D${index}`] = { allOf: [{ $ref: `#/$defs/D${index + 1}` }, { $ref: `#/$defs/D${index + 1}` }] }
+    }
+    const content = only(generateMarkdownFiles({ properties: { top: { $ref: '#/$defs/Top' } }, $defs }))
+    expect(section(content, '### name')).toContain('**Required**')
+    expect(content).toContain('### self')
+  })
+
+  // The label is a handful of words; a `$defs` graph that expands faster than
+  // the document it labels is not one. Without an allowance of its own this
+  // walker spent ninety seconds materialising a label, then died of an
+  // out-of-memory on the way to printing the error the inliner had ready.
+  it('does not build a type label bigger than the document', () => {
+    const $defs: Record<string, unknown> = {
+      L24: { type: 'string' },
+      R: {
+        anyOf: [{ type: 'object', properties: { self: { $ref: '#/$defs/R' } } }, { $ref: '#/$defs/L0' }],
+      },
+    }
+    for (let index = 0; index < 24; index++) {
+      $defs[`L${index}`] = { anyOf: [{ $ref: `#/$defs/L${index + 1}` }, { $ref: `#/$defs/L${index + 1}` }] }
+    }
+    expect(() => generateMarkdownFiles({ properties: { r: { $ref: '#/$defs/R' } }, $defs })).toThrow(
+      /more than 100000 nodes/,
+    )
+  })
+
+  // The list exists because a truncation left its constraints on the first
+  // occurrence only. Every keyword the constraints line can hold travels, not
+  // the two that happened to get a test.
+  it('carries every constraint a truncated definition declares', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/N' } },
+        $defs: {
+          N: {
+            type: 'object',
+            pattern: '^x',
+            minimum: 1,
+            maximum: 9,
+            exclusiveMinimum: 0,
+            exclusiveMaximum: 10,
+            multipleOf: 2,
+            minLength: 3,
+            maxLength: 30,
+            minItems: 4,
+            maxItems: 40,
+            uniqueItems: true,
+            format: 'uri',
+            properties: { kid: { $ref: '#/$defs/N' } },
+          },
+        },
+      }),
+    )
+    const kid = section(content, '### kid')
+    for (const fragment of [
+      'format: uri',
+      'pattern: ^x',
+      'minimum: 1',
+      'maximum: 9',
+      'exclusiveMinimum: 0',
+      'exclusiveMaximum: 10',
+      'multipleOf: 2',
+      'minLength: 3',
+      'maxLength: 30',
+      'minItems: 4',
+      'maxItems: 40',
+      'uniqueItems: true',
+    ]) {
+      expect(kid, fragment).toContain(fragment)
+    }
+  })
+
+  // Along the chain, nearest first: the alias's own constraint wins and the
+  // base's fills in what the alias left unsaid.
+  it('merges a truncated value keyword along the alias chain', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Alias' } },
+        $defs: {
+          Base: {
+            type: 'object',
+            minLength: 1,
+            maxLength: 9,
+            properties: { kid: { $ref: '#/$defs/Alias' } },
+          },
+          Alias: { $ref: '#/$defs/Base', minLength: 5 },
+        },
+      }),
+    )
+    const kid = section(content, '### kid')
+    expect(kid).toContain('minLength: 5')
+    expect(kid).toContain('maxLength: 9')
+  })
+
+  // The same precedence rule the inliner applies: a plain `description` at a
+  // hop is describing that hop, and outranks the `x-doc.description` it
+  // inherited.
+  it('lets an alias plain prose beat the base doc prose at a truncation', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Alias' } },
+        $defs: {
+          Base: {
+            type: 'object',
+            'x-doc': { description: 'Doc on the base.' },
+            properties: { kid: { $ref: '#/$defs/Alias' } },
+          },
+          Alias: { $ref: '#/$defs/Base', description: 'Plain on the alias.' },
+        },
+      }),
+    )
+    expect(section(content, '### kid')).toContain('Plain on the alias.')
+    expect(section(content, '### kid')).not.toContain('Doc on the base.')
+  })
+
+  // A branch whose reference cannot be resolved still says what the ref site
+  // said — dropping it loses a requirement the author wrote by hand.
+  it('keeps a broken branch ref site keywords', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            anyOf: [
+              { $ref: '#/$defs/missing', required: ['tag'] },
+              { required: ['tag'], properties: { tag: {} } },
+            ],
+            properties: {
+              tag: { type: 'string' },
+              kid: {
+                anyOf: [{ $ref: '#/$defs/Node' }, { type: 'object', required: ['tag'], properties: { tag: {} } }],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### tag')).toContain('**Required**')
+  })
+
+  // Every keyword a label can come from, on a truncation as on a full
+  // reference.
+  it('labels a truncation from oneOf and allOf as well as anyOf', () => {
+    const single = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/N' } },
+        $defs: { N: { allOf: [{ type: 'string' }], properties: { kid: { $ref: '#/$defs/N' } } } },
+      }),
+    )
+    expect(section(single, '### kid')).toContain('**Type:** `string`')
+    const alternatives = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/N' } },
+        $defs: {
+          N: { oneOf: [{ type: 'string' }, { type: 'number' }], properties: { kid: { $ref: '#/$defs/N' } } },
+        },
+      }),
+    )
+    expect(section(alternatives, '### kid')).toContain('**Type:** `string | number`')
+  })
+
+  // A branch that leads back onto the path contributes nothing, so a keyword
+  // whose branches are all cyclic contributes nothing either — and the next
+  // keyword gets its turn.
+  it('falls through to the next keyword when every branch of one is cyclic', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/N' } },
+        $defs: {
+          N: {
+            anyOf: [{ $ref: '#/$defs/N' }],
+            oneOf: [{ type: 'string' }],
+            properties: { kid: { $ref: '#/$defs/N' } },
+          },
+        },
+      }),
+    )
+    expect(section(content, '### kid')).toContain('**Type:** `string`')
+  })
+
+  // `anyOf` is order-insensitive, so the page must be too. The cache answers
+  // for a pointer, and a ref site that narrows one (`{ $ref: X, type: 'string' }`)
+  // asks a different question — keyed the same, whichever branch was written
+  // first decided the other for the rest of the document.
+  it('reads a union the same way whichever order its branches are written', () => {
+    const schema = (narrowedFirst: boolean) => ({
+      properties: { tree: { $ref: '#/$defs/Tree' } },
+      $defs: {
+        Shape: { type: 'object', required: ['needed'], properties: { needed: { type: 'string' } } },
+        Tree: {
+          type: 'object',
+          anyOf: narrowedFirst
+            ? [{ allOf: [{ $ref: '#/$defs/Shape', type: 'string' }] }, { allOf: [{ $ref: '#/$defs/Shape' }] }]
+            : [{ allOf: [{ $ref: '#/$defs/Shape' }] }, { allOf: [{ $ref: '#/$defs/Shape', type: 'string' }] }],
+          properties: {
+            needed: { type: 'string' },
+            kid: {
+              anyOf: [
+                { $ref: '#/$defs/Tree' },
+                { type: 'object', required: ['needed'], properties: { needed: { type: 'string' } } },
+              ],
+            },
+          },
+        },
+      },
+    })
+    expect(only(generateMarkdownFiles(schema(true)))).toBe(only(generateMarkdownFiles(schema(false))))
+    expect(section(only(generateMarkdownFiles(schema(true))), '#### needed')).toContain('**Required**')
+  })
+
+  // An intermediate alias's own keywords reach the inlined reading; jumping to
+  // the end of the chain kept them from the truncated one, so one pointer was
+  // documented two ways on one page.
+  it('keeps a required list an intermediate alias writes', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/Alias' } },
+        $defs: {
+          Base: {
+            type: 'object',
+            properties: {
+              fromAlias: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/Alias' },
+                  { type: 'object', required: ['fromAlias'], properties: { fromAlias: { type: 'string' } } },
+                ],
+              },
+            },
+          },
+          Alias: { $ref: '#/$defs/Base', required: ['fromAlias'] },
+        },
+      }),
+    )
+    expect(section(content, '### fromAlias')).toContain('**Required**')
+    expect(section(content, '#### fromAlias')).toContain('**Required**')
+  })
+
+  // `x-doc.type` beats every inferred label everywhere else, so a truncated
+  // array whose element names itself says so too.
+  it('keeps an element type name in a truncated array label', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/KidList' } },
+        $defs: {
+          KidList: { type: 'array', items: { $ref: '#/$defs/Tree' } },
+          Tree: {
+            type: 'object',
+            'x-doc': { type: 'Tree' },
+            properties: { kids: { $ref: '#/$defs/KidList' }, name: { type: 'string' } },
+          },
+        },
+      }),
+    )
+    expect(section(content, '## root')).toContain('**Type:** `Tree[]`')
+    expect(section(content, '### kids')).toContain('**Type:** `Tree[]`')
+  })
+
+  // A definition's examples describe its value, the way its default does — and
+  // carrying three of the four left a reader unable to tell "the definition has
+  // none" from "the renderer dropped it".
+  it('carries a truncated definition examples', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            examples: [{ id: 'x' }, { id: 'y' }],
+            properties: { id: { type: 'string' }, child: { $ref: '#/$defs/Node' } },
+          },
+        },
+      }),
+    )
+    expect(section(content, '### child')).toContain('**Examples:** `{"id": "y"}`')
+  })
+
+  // A title is prose, not a key: it has no row to be checked against, so the
+  // spelling rules a property name is held to do not apply — a heading became
+  // monospaced because someone left a space in a JSON string.
+  it('does not code-span a title an author wrote', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { ok: { type: 'string', 'x-doc': { title: 'Server settings ' } } },
+      }),
+    )
+    expect(content).toContain('## Server settings')
+    expect(content).not.toContain('`Server settings')
+  })
+
+  // A run of spaces is one space to a reader, so the heading and the row would
+  // spell the same key two ways.
+  it('code-spans a name with a run of spaces inside it', () => {
+    const content = only(generateMarkdownFiles({ properties: { 'a  b': { type: 'string' } } }))
+    expect(content).toContain('## `a  b`')
+  })
+
   it('matches the checked-in docs for the API reference fixture', () => {
     const files = generateMarkdownFiles(fixture('api-reference-config'))
     expect(files.map((file) => file.filename)).toEqual(['configuration.md'])

@@ -44,7 +44,7 @@ A recursive reference collapses where it repeats, labelled with the type its
 definition has and carrying that definition's documentation the way any other
 ref site does — its prose, its type label, its layout, its examples, whether it
 is hidden — plus what the definition says about the value itself (`deprecated`,
-`default`, every constraint keyword) and what it requires, so the alternative
+`default`, `examples`, every constraint keyword) and what it requires, so the alternative
 beside it keeps its **Required** markers. What stays behind is what places and announces an
 occurrence rather than describing it: `x-doc.page`, `section`, `title`,
 `heading` and `order`. A reference that resolves to the document itself — `#`,

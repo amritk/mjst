@@ -53,7 +53,9 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
     // A union item needs brackets — `string | number[]` would read as the wrong
     // thing, so it becomes `(string | number)[]`.
     if (item.length === 0) return 'array'
-    return item.includes(' | ') ? `(${item})[]` : `${item}[]`
+    // `Alpha & Beta[]` is an intersection with an array, not an array of an
+    // intersection — a different type, stated plainly.
+    return item.includes(' | ') || item.includes(' & ') ? `(${item})[]` : `${item}[]`
   }
   if (Array.isArray(prop.type)) {
     return unionOf(prop.type.filter((entry): entry is string => typeof entry === 'string'))
@@ -73,7 +75,11 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
         .map((variant) => referenceType(asSchema(variant), language, depth + 1))
         .filter((part) => part.length > 0),
     ),
-  ]
+    // A branch that is itself a union needs brackets, or `&` binds tighter than
+    // the `|` beside it and the label collapses back to the union it replaced:
+    // `string | number & string` reads as `string | (number & string)`, which
+    // is the answer this was written to stop giving.
+  ].map((part) => (part.includes(' | ') ? `(${part})` : part))
   if (parts.length > 0) return parts.join(' & ')
   return displayType(prop)
 }

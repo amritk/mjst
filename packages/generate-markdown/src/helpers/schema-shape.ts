@@ -58,7 +58,8 @@ export type ShapeContext = {
 /**
  * How many nodes one reading may look at while working out what a definition
  * can be. The cache makes a `$defs` graph linear; this is the backstop for the
- * cyclic one the cache cannot hold an answer for.
+ * cyclic one the cache cannot hold an answer for, and past it the reading
+ * answers `true` rather than refusing the document.
  */
 export const MAX_SHAPE_NODES = 10_000
 
@@ -105,12 +106,13 @@ const couldBe = (
   // rather than a guard anyone reaches — the inliner refuses a document this
   // deep before the reading starts — so it stays unexercised on purpose.
   if (depth > MAX_SCHEMA_DEPTH) return settled(true)
-  if (context !== undefined && context.budget.remaining-- <= 0) {
-    throw new Error(
-      `Reading what a recursive definition can be passed ${MAX_SHAPE_NODES} nodes. Its $defs compose in too many ` +
-        'ways to enumerate — flatten the composition, or the **Required** markers below it would be guesses.',
-    )
-  }
+  // Running out answers `true`, for the same reason a cycle does: keeping a
+  // branch in an intersection loses a **Required** marker, dropping one invents
+  // one, and losing is the safer way to be wrong. Throwing instead refused a
+  // 727-byte schema outright — every mutually recursive graph taints its whole
+  // ancestor chain, so nothing is cached and the allowance is all that fires.
+  // A page with a marker missing beats no page at all.
+  if (context !== undefined && context.budget.remaining-- <= 0) return settled(true)
   // A branch reached through a reference is whatever the definition says, with
   // whatever the ref site says on top: the `allOf`-wrapped `$ref` is how
   // OpenAPI 3.0 attaches a description to one, and read without following it a
@@ -124,13 +126,21 @@ const couldBe = (
     // because keeping a branch in an intersection loses a marker while dropping
     // one invents a marker, and the first is the safer way to be wrong.
     if (seen.has(ref)) return { answer: true, cyclic: true }
-    const cached = context.known.get(ref)
-    if (cached !== undefined) return settled(cached)
     const target = context.resolve(ref)
     if (!isObject(target)) return settled(true)
     const { $ref: _resolved, ...siblings } = node as Readonly<Record<string, unknown>>
+    // The cache answers for a pointer, so only a bare pointer may ask it.
+    // `{ $ref: X, type: 'string' }` and `{ $ref: X }` are different questions,
+    // and keying both on `X` let whichever was written first decide the other
+    // for the rest of the document — the order-dependence the taint rule was
+    // added to prevent, arriving by a different door.
+    const bare = Object.keys(siblings).length === 0
+    if (bare) {
+      const cached = context.known.get(ref)
+      if (cached !== undefined) return settled(cached)
+    }
     const verdict = couldBe(asSchema({ ...target, ...siblings }), context, new Set(seen).add(ref), depth + 1)
-    if (!verdict.cyclic) context.known.set(ref, verdict.answer)
+    if (bare && !verdict.cyclic) context.known.set(ref, verdict.answer)
     return verdict
   }
 

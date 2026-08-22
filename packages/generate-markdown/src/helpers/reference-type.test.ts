@@ -116,6 +116,23 @@ describe('reference-type', () => {
     expect(referenceType(arrays(9), 'json')).toBe('array[][][][][][][][]')
   })
 
+  // `&` binds tighter than the `|` beside it, so an intersection branch that is
+  // itself a union needs brackets or the label collapses back to a union.
+  it('brackets a union inside an intersection', () => {
+    expect(
+      referenceType({ allOf: [{ anyOf: [{ type: 'string' }, { type: 'number' }] }, { type: 'string' }] }, 'json'),
+    ).toBe('(string | number) & string')
+    expect(referenceType({ allOf: [{ enum: ['a', 'b'] }, { enum: ['b', 'c'] }] }, 'json')).toBe(
+      '("a" | "b") & ("b" | "c")',
+    )
+  })
+
+  // `Alpha & Beta[]` is an intersection with an array, not an array of one.
+  it('brackets an intersection used as an array element', () => {
+    const items = { allOf: [{ 'x-doc': { type: 'Alpha' } }, { 'x-doc': { type: 'Beta' } }] }
+    expect(referenceType({ type: 'array', items }, 'json')).toBe('(Alpha & Beta)[]')
+  })
+
   // Two things a part may hold that a naive split would take apart: an array
   // whose item is a union, and an enum literal with a pipe in it.
   it('does not take a bracketed item or a quoted literal apart', () => {

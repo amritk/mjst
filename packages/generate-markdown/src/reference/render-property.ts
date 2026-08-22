@@ -2,7 +2,7 @@ import { remainingParagraphs, trimDescription } from '#helpers/first-paragraph'
 import { formatInlineLiteral } from '#helpers/format-literal'
 import { asArray } from '#helpers/guards'
 import { heading } from '#helpers/heading'
-import { headingText } from '#helpers/heading-text'
+import { headingProse, headingText } from '#helpers/heading-text'
 import { inlineCode } from '#helpers/inline-code'
 import { readConstraints } from '#helpers/read-constraints'
 import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
@@ -81,7 +81,7 @@ export const renderProperty = (
   const blocks: string[] = []
 
   const titled = meta.heading || options.summarised === true
-  if (titled) blocks.push(heading(level, headingText(meta.title ?? name)))
+  if (titled) blocks.push(heading(level, meta.title === undefined ? headingText(name) : headingProse(meta.title)))
   // Never inside the heading guard: `heading: false` drops the property's own
   // name and shape because the page or section above already carries them, and
   // neither of those says the property is on its way out.

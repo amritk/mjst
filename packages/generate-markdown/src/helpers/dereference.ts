@@ -209,8 +209,16 @@ type Budget = { remaining: number; readonly required: Map<string, readonly strin
 const resolveDefinition = (root: Record<string, unknown>, ref: string, depth = 0): unknown => {
   const target = resolvePointer(root, ref)
   if (!isObject(target) || depth > MAX_SCHEMA_DEPTH) return target
-  const next = target['$ref']
-  return typeof next === 'string' ? resolveDefinition(root, next, depth + 1) : target
+  const { $ref: next, ...own } = target
+  if (typeof next !== 'string') return target
+  const base = resolveDefinition(root, next, depth + 1)
+  // Merged hop by hop, the way the inliner merges a `$ref` with its siblings.
+  // Jumping to the end of the chain threw away every keyword an intermediate
+  // alias wrote, so a `required` on `Alias: { $ref: Base, required: [...] }`
+  // reached the inlined reading and not the truncated one — one pointer, one
+  // page, two answers.
+  if (!isObject(base)) return own
+  return { ...base, ...own, ...mergedApplicators(base, own) }
 }
 
 /**
@@ -327,6 +335,7 @@ const requiredOf = (
 const CARRIED_VALUE_KEYS: readonly string[] = [
   'deprecated',
   'default',
+  'examples',
   'format',
   'pattern',
   'minimum',
@@ -340,6 +349,13 @@ const CARRIED_VALUE_KEYS: readonly string[] = [
   'maxItems',
   'uniqueItems',
 ]
+
+/**
+ * How many nodes a truncation's type label may look at. Small on purpose: a
+ * label is a handful of words, and everything past that is a `$defs` graph
+ * expanding faster than the document it labels.
+ */
+const MAX_SKELETON_NODES = 2_000
 
 /**
  * What a truncated definition *is*, with nothing about what it holds.
@@ -358,22 +374,34 @@ const typeSkeleton = (
   root: Record<string, unknown>,
   node: unknown,
   seen: ReadonlySet<string>,
+  budget: { remaining: number },
   depth = 0,
 ): Record<string, unknown> | undefined => {
   if (!isObject(node) || depth > MAX_SCHEMA_DEPTH) return undefined
+  // The one walker here that *builds* something: a definition reused at each of
+  // D levels expands to 2^D nodes, and it runs before the inliner's own
+  // allowance can refuse the document — so a 2 KB schema spent ninety seconds
+  // materialising a label and then died of an out-of-memory on the way to
+  // printing an error. Running out means the label falls back to `object`,
+  // which is what it was before there was a skeleton at all.
+  if (budget.remaining-- <= 0) return undefined
   const ref = node['$ref']
   if (typeof ref === 'string') {
     if (seen.has(ref)) return undefined
-    return typeSkeleton(root, resolveDefinition(root, ref), new Set(seen).add(ref), depth + 1)
+    return typeSkeleton(root, resolveDefinition(root, ref), new Set(seen).add(ref), budget, depth + 1)
   }
   const shape: Record<string, unknown> = {}
   for (const key of ['type', 'enum', 'const']) if (node[key] !== undefined) defineOwn(shape, key, node[key])
+  // 6. `x-doc.type` beats every inferred label everywhere else, so a truncated
+  // array whose element is named `Tree` says `Tree[]` and not `object[]`.
+  const doc = node[DOC_KEY]
+  if (isObject(doc) && typeof doc['type'] === 'string') defineOwn(shape, DOC_KEY, { type: doc['type'] })
   if (Object.keys(shape).length > 0) {
     // An array's label names its element, so the element's own skeleton comes
     // too — reduced like everything here, so it can add a label and never a
     // property. Without it a truncated `object[]` was labelled `array`, while
     // the full reference two headings up said `object[]`.
-    const items = typeSkeleton(root, node['items'], seen, depth + 1)
+    const items = typeSkeleton(root, node['items'], seen, budget, depth + 1)
     if (items !== undefined) shape['items'] = items
     return shape
   }
@@ -381,7 +409,7 @@ const typeSkeleton = (
     const branches = node[keyword]
     if (!Array.isArray(branches)) continue
     const reduced = branches
-      .map((branch) => typeSkeleton(root, branch, seen, depth + 1))
+      .map((branch) => typeSkeleton(root, branch, seen, budget, depth + 1))
       .filter((branch): branch is Record<string, unknown> => branch !== undefined)
     if (reduced.length > 0) return { [keyword]: reduced }
   }
@@ -570,7 +598,9 @@ export const dereference = (
       // about prose holds on both routes: a ref site writing its own
       // `description` is describing *this* use and wins over the definition's.
       const stub: Record<string | symbol, unknown> = {
-        ...(typeSkeleton(root, resolvePointer(root, ref), new Set([ref])) ?? { type: 'object' }),
+        ...(typeSkeleton(root, resolvePointer(root, ref), new Set([ref]), {
+          remaining: MAX_SKELETON_NODES,
+        }) ?? { type: 'object' }),
         ...carried,
         ...resolvedSiblings,
         ...mergedDoc(carried, resolvedSiblings),
