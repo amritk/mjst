@@ -114,7 +114,11 @@ export const buildPages = (schema: ConfigSchema, config: DocConfig): readonly Pa
   // spellings: two pages collided on disk and the first was overwritten with no
   // error at all. An empty path is the same problem in the other direction; it
   // resolved to the output directory itself and failed as a bare EISDIR.
-  const escaping = config.pages.find((page) => page.file.startsWith('..') || page.file.startsWith('/'))
+  // Tested by path segment, not by string prefix: `..extra.md` is an ordinary
+  // file name that lives right where it says it does.
+  const escaping = config.pages.find(
+    (page) => page.file === '..' || page.file.startsWith('../') || page.file.startsWith('/'),
+  )
   if (escaping !== undefined) {
     throw new Error(
       `The page "${escaping.id}" is written to "${escaping.file}", which is outside the output directory. ` +

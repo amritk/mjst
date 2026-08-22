@@ -37,7 +37,7 @@ code span and leave the rest of the value rendering as live markdown.
 Placement mistakes are refused rather than dropped: two pages sharing an id or
 resolving to the same file, two sections sharing an id, a page written outside
 the output directory or naming no file, and a schema nested past what the walk
-can read. A reference to an `$anchor` resolves instead of emptying the property
-that carried it.
+can read. A reference to an `$anchor`, or the empty pointer `#` a self-recursive schema
+uses, resolves instead of emptying the property that carried it.
 
 `generateMarkdown()` — the README table — is unchanged.

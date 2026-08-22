@@ -1,3 +1,4 @@
+import { MAX_SCHEMA_DEPTH } from '#helpers/dereference'
 import { asArray, asProperties, asSchema, isObject } from '#helpers/guards'
 import type { SchemaProperty } from '#types/schema'
 
@@ -16,11 +17,15 @@ export type CollectedProperties = {
 
 /**
  * How deep the collector follows composition while looking for named
- * properties. Composition nests (an `allOf` of `anyOf`s of `$ref`s), but not
- * this deeply in any real schema — the cap only fires on a document that has
- * already gone wrong, and the walk is over an already-dereferenced tree.
+ * properties — the same bound the inliner puts on the document it walks, so a
+ * schema that made it through inlining is never cut short here.
+ *
+ * It was twelve, and a fourteen-level `allOf` chain (which an inheritance
+ * hierarchy reaches without trying) lost its innermost fields with no error and
+ * no gap in the output. Every other cap in this package throws for exactly that
+ * reason; this one now does too.
  */
-const MAX_COMPOSITION_DEPTH = 12
+const MAX_COMPOSITION_DEPTH = MAX_SCHEMA_DEPTH
 
 /**
  * Assigns an own property, first declaration winning. Plain assignment sets the
@@ -34,6 +39,30 @@ const defineOwn = (target: Record<string, SchemaProperty>, key: string, value: S
 
 const merge = (target: Record<string, SchemaProperty>, source: Readonly<Record<string, SchemaProperty>>): void => {
   for (const [name, child] of Object.entries(source)) defineOwn(target, name, child)
+}
+
+/**
+ * True when a branch could describe an object, and so has a say in what an
+ * alternative requires.
+ *
+ * A branch that names no fields still constrains objects — `{ type: 'object',
+ * additionalProperties: { … } }` is the free-form half of "a map of strings, or
+ * this exact pair", and a document taking that half has none of the other
+ * half's required fields. Filtering on "declares a named property" dropped it
+ * from the intersection and asserted **Required** on fields a valid document is
+ * free to omit.
+ *
+ * What is excluded is a branch that cannot be an object at all: the `string` in
+ * `string | { … }`, whose empty requirement set would otherwise strip every
+ * marker off the object form.
+ */
+const couldBeObject = (node: SchemaProperty): boolean => {
+  const declared = typeof node.type === 'string' ? [node.type] : Array.isArray(node.type) ? node.type : undefined
+  if (declared !== undefined) return declared.includes('object')
+  const values = asArray(node.enum)
+  if (values.length > 0) return values.some(isObject)
+  if (node.const !== undefined) return isObject(node.const)
+  return true
 }
 
 /** The names every one of these sets holds. Empty when there are no sets. */
@@ -73,7 +102,12 @@ const collect = (
 ): { properties: Record<string, SchemaProperty>; required: Set<string> } => {
   const properties: Record<string, SchemaProperty> = {}
   const required = new Set<string>()
-  if (depth > MAX_COMPOSITION_DEPTH) return { properties, required }
+  if (depth > MAX_COMPOSITION_DEPTH) {
+    throw new Error(
+      `Following the schema's composition passed ${MAX_COMPOSITION_DEPTH} levels. Flatten the \`allOf\` chain, ` +
+        'or the properties below this point would be dropped without a word.',
+    )
+  }
 
   for (const [name, child] of Object.entries(asProperties(node.properties)))
     defineOwn(properties, name, asSchema(child))
@@ -86,9 +120,10 @@ const collect = (
   }
 
   for (const keyword of [node.anyOf, node.oneOf]) {
-    const branches = asArray(keyword).map((branch) => collect(asSchema(branch), depth + 1))
-    for (const branch of branches) merge(properties, branch.properties)
-    const describing = branches.filter((branch) => Object.keys(branch.properties).length > 0)
+    const branches = asArray(keyword).map((branch) => asSchema(branch))
+    const collected = branches.map((branch) => collect(branch, depth + 1))
+    for (const branch of collected) merge(properties, branch.properties)
+    const describing = collected.filter((_, index) => couldBeObject(branches[index] ?? {}))
     for (const name of intersect(describing.map((branch) => branch.required))) required.add(name)
   }
 

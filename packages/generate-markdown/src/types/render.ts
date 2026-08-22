@@ -24,11 +24,12 @@ export type RenderContext = {
 
 /**
  * One step of a property's path from the schema root. A string is a property
- * name; the two symbols are the array and map hops, which have no name of their
- * own but still have to be in the path for a derived example to come out in the
- * shape of the config file.
+ * name; the symbols are the array and map hops, which have no name of their own
+ * but still have to be in the path for a derived example to come out in the
+ * shape of the config file; a number is a tuple position, which has to be in it
+ * for the same reason and has to say *which* position.
  */
-export type PathSegment = string | symbol
+export type PathSegment = string | number | symbol
 
 /** One property, resolved against its parent, ready to render. */
 export type DocEntry = {

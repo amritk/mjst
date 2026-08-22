@@ -1,3 +1,4 @@
+import { remainingParagraphs } from '#helpers/first-paragraph'
 import { formatInlineLiteral } from '#helpers/format-literal'
 import { asArray } from '#helpers/guards'
 import { heading } from '#helpers/heading'
@@ -85,10 +86,16 @@ export const renderProperty = (
     if (required) blocks.push('**Required**')
   }
 
+  // Under a row, only the paragraph the row could hold is a restatement. The
+  // rest of the description has appeared nowhere else, and dropping it lost
+  // whole paragraphs of prose.
   const description = readDescription(prop).trim()
-  if (description.length > 0 && !options.summarised) blocks.push(description)
+  const prose = options.summarised ? remainingParagraphs(description) : description
+  if (prose.length > 0) blocks.push(prose)
 
-  if (prop.default !== undefined && !options.summarised) {
+  // Same rule for the default: the Default column skips a `null`, so a `null`
+  // default is the row's omission rather than its content.
+  if (prop.default !== undefined && (!options.summarised || prop.default === null)) {
     blocks.push(`**Default:** ${code(formatInlineLiteral(prop.default, context.language))}`)
   }
 

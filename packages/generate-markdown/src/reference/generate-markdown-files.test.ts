@@ -1473,6 +1473,165 @@ describe('generate-markdown-files', () => {
     }
   })
 
+  // Every JavaScript markdown renderer treats U+2028 and U+2029 as line
+  // terminators, so one in a title left the page with no heading and one in a
+  // description dropped the whole table body out of its table.
+  it('collapses the line separators only a JavaScript renderer sees', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Config\u2028Reference',
+        'x-doc': { layout: 'table' },
+        properties: {
+          server: {
+            type: 'object',
+            properties: {
+              host: { type: 'string', description: 'Hostname.\u2029Use 0.0.0.0.' },
+              port: { type: 'integer', description: 'Port.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('# Config Reference')
+    expect(content).toContain('| `host` | `string` | Hostname. Use 0.0.0.0. |')
+    expect(content).not.toContain('\u2028')
+    expect(content).not.toContain('\u2029')
+  })
+
+  // `#` is the empty JSON pointer — the document itself — and the spelling every
+  // self-recursive schema uses.
+  it('resolves a bare fragment to the document root', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Menu',
+        type: 'object',
+        required: ['label'],
+        properties: {
+          label: { type: 'string', description: 'Text shown in the menu.' },
+          children: { type: 'array', description: 'Nested entries.', items: { $ref: '#' } },
+        },
+      }),
+    )
+    expect(content).toContain('**Type:** `object[]`')
+    expect(content).toContain('### label')
+    expect(content).toContain('Text shown in the menu.')
+  })
+
+  // "A map of strings, or this exact pair" — a document taking the free-form
+  // half has none of the other half's fields, so neither is required.
+  it('lets a branch with no named fields keep the alternative optional', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          headers: {
+            oneOf: [
+              { type: 'object', additionalProperties: { type: 'string' } },
+              { type: 'object', properties: { name: {}, value: {} }, required: ['name', 'value'] },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content).not.toContain('**Required**')
+  })
+
+  // The row holds one paragraph and skips a `null` default, so neither the rest
+  // of the prose nor that default is a restatement of it.
+  it('keeps the prose and the null default a table row could not hold', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          server: {
+            type: 'object',
+            properties: {
+              tls: {
+                type: 'object',
+                default: null,
+                description: 'TLS settings.\n\nCertificates are read once at start-up.',
+                properties: { verify: { type: 'boolean' } },
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| `tls` | `object` | TLS settings. |')
+    expect(content).toContain('Certificates are read once at start-up.')
+    expect(content).toContain('**Default:** `null`')
+    // The first paragraph is in the row and is not repeated below it.
+    expect(content.match(/TLS settings\./g)).toHaveLength(1)
+  })
+
+  // The positions before it are other shapes with their own requirements, so a
+  // sample of this one alone would not validate.
+  it('derives no example for a tuple position past the first', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          window: {
+            type: 'array',
+            prefixItems: [
+              {
+                type: 'object',
+                required: ['from'],
+                properties: { from: { type: 'string', examples: ['2020-01-01'] } },
+              },
+              { type: 'object', required: ['to'], properties: { to: { type: 'string', examples: ['2020-12-31'] } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### from')
+    expect(content).toContain('"window": [\n    {\n      "from": "2020-01-01"\n    }\n  ]')
+    // Position one still shows its value — inline, where nothing claims it is a
+    // config you can paste.
+    expect(content).toContain('### to')
+    expect(content).toContain('**Examples:** `"2020-12-31"`')
+    expect(content.match(/```json/g)).toHaveLength(1)
+  })
+
+  // A sample that happens to hold an `$anchor` key is data, not a definition.
+  it('does not resolve an $anchor that lives inside sample data', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          presets: { type: 'object', default: { $anchor: 'target', description: 'NOT A SCHEMA' } },
+          build: { $ref: '#target', description: 'The build target.' },
+        },
+        $defs: {
+          target: {
+            $anchor: 'target',
+            type: 'object',
+            properties: { name: { type: 'string', description: 'Target name.' } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('Target name.')
+    expect(content).not.toContain('NOT A SCHEMA - resolved')
+  })
+
+  // An inheritance hierarchy reaches fourteen levels without trying, and the
+  // old cap dropped everything below twelve with no error and no gap.
+  it('follows a long allOf chain to its innermost fields', () => {
+    const chain: Record<string, unknown> = {}
+    for (let level = 0; level < 14; level++) chain[`L${level}`] = { allOf: [{ $ref: `#/$defs/L${level + 1}` }] }
+    chain['L14'] = { properties: { deepest: { type: 'string', description: 'The innermost field.' } } }
+    const content = only(generateMarkdownFiles({ properties: { thing: { $ref: '#/$defs/L0' } }, $defs: chain }))
+    expect(content).toContain('The innermost field.')
+  })
+
+  // `..extra.md` lives right where it says it does; only a `..` segment escapes.
+  it('allows a page file whose name merely begins with dots', () => {
+    const files = generateMarkdownFiles({
+      'x-doc': { pages: [{ id: 'extra', file: '..extra.md', title: 'Extra' }] },
+      properties: { a: { type: 'string', 'x-doc': { page: 'extra' } } },
+    })
+    expect(files.map((file) => file.filename)).toContain('..extra.md')
+  })
+
   it('matches the checked-in docs for the API reference fixture', () => {
     const files = generateMarkdownFiles(fixture('api-reference-config'))
     expect(files.map((file) => file.filename)).toEqual(['configuration.md'])

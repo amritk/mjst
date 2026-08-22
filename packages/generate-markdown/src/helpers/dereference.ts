@@ -50,7 +50,12 @@ const resolveAnchor = (node: unknown, anchor: string, depth = 0): unknown => {
   }
   if (!isObject(node)) return undefined
   if (node['$anchor'] === anchor || node['$dynamicAnchor'] === anchor) return node
-  for (const value of Object.values(node)) {
+  for (const [key, value] of Object.entries(node)) {
+    // The same rule the inliner follows: a `default` or an `examples` entry is
+    // documented *data*, and a sample that happens to hold an `$anchor` key is
+    // not a definition. Searching it let sample data win a reference, and the
+    // property that made the reference lost its type and its whole subtree.
+    if (DATA_KEYWORDS.has(key)) continue
     const found = resolveAnchor(value, anchor, depth + 1)
     if (found !== undefined) return found
   }
@@ -58,6 +63,11 @@ const resolveAnchor = (node: unknown, anchor: string, depth = 0): unknown => {
 }
 
 const resolvePointer = (root: Record<string, unknown>, ref: string): unknown => {
+  // `#` is the empty pointer, which addresses the document itself — the
+  // spelling every self-recursive schema uses (`items: { $ref: '#' }`). It
+  // matched neither branch below, so a recursive structure lost its whole
+  // shape and kept only its name.
+  if (ref === '#' || ref === '#/') return root
   // `#name` names an `$anchor`; `#/…` is a JSON pointer. Anything else is a
   // reference out of the document, which this resolver does not fetch.
   if (/^#[A-Za-z_][A-Za-z0-9_.:-]*$/.test(ref)) return resolveAnchor(root, ref.slice(1))

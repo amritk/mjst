@@ -19,8 +19,14 @@ import type { SchemaProperty } from '#types/schema'
 export const deriveExample = (prop: SchemaProperty, path: readonly PathSegment[]): DocExample | undefined => {
   const examples = asArray(prop.examples)
   if (examples.length === 0) return undefined
+  // A tuple position past the first cannot be shown on its own: the positions
+  // before it are other shapes with their own requirements, and inventing them
+  // would produce a sample that does not validate. Better no example than a
+  // wrong one.
+  if (path.some((segment) => typeof segment === 'number' && segment > 0)) return undefined
+
   const value = path.reduceRight<unknown>((nested, key) => {
-    if (key === ARRAY_ITEM) return [nested]
+    if (key === ARRAY_ITEM || key === 0) return [nested]
     // A map key has no name in the schema, so the sample shows the shape with a
     // placeholder rather than promoting a value's own field to a key.
     const name = key === MAP_KEY ? MAP_KEY_PLACEHOLDER : String(key)

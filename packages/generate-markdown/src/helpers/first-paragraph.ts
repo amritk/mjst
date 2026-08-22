@@ -9,3 +9,18 @@
  */
 export const firstParagraph = (value: string): string =>
   (value.replace(/\r\n?/g, '\n').split(/\n[ \t]*\n/)[0] ?? '').trim()
+
+/**
+ * Everything after the first paragraph.
+ *
+ * A table row holds one line, so it carries {@link firstParagraph} and no more.
+ * When the block below a row skips what the row already said, this is the part
+ * it must still print — those paragraphs have appeared nowhere else.
+ */
+export const remainingParagraphs = (value: string): string =>
+  value
+    .replace(/\r\n?/g, '\n')
+    .split(/\n[ \t]*\n/)
+    .slice(1)
+    .join('\n\n')
+    .trim()

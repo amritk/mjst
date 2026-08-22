@@ -69,14 +69,17 @@ export const childSources = (prop: SchemaProperty): readonly ChildSource[] => {
   for (const candidate of candidates) {
     // `prefixItems` and draft-07's array-form `items` both spell one schema per
     // index, and each index is a different shape.
-    const positional = [
-      ...asArray(candidate.prefixItems),
-      ...(Array.isArray(candidate.items) ? candidate.items : []),
-      ...(candidate.items !== undefined && !Array.isArray(candidate.items) ? [candidate.items] : []),
-    ]
-    for (const entry of positional) {
+    // A tuple's positions each get their own index. They used to share the hop
+    // of position zero, so position one's example was built at index zero —
+    // a sample that does not validate against the schema it was derived from.
+    const tuple = [...asArray(candidate.prefixItems), ...(Array.isArray(candidate.items) ? candidate.items : [])]
+    for (const [index, entry] of tuple.entries()) {
       const item = asSchema(entry)
-      if (hasProperties(item)) sources.push({ node: item, hop: ARRAY_ITEM })
+      if (hasProperties(item)) sources.push({ node: item, hop: index })
+    }
+    if (candidate.items !== undefined && !Array.isArray(candidate.items)) {
+      const items = asSchema(candidate.items)
+      if (hasProperties(items)) sources.push({ node: items, hop: ARRAY_ITEM })
     }
     for (const values of [candidate.additionalProperties, ...Object.values(asSchema(candidate.patternProperties))]) {
       if (isObject(values) && hasProperties(asSchema(values))) sources.push({ node: asSchema(values), hop: MAP_KEY })
