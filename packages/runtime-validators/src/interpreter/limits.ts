@@ -254,6 +254,14 @@ const NEGATED_CLASS_SHORTHANDS: Readonly<Record<string, RegExp>> = { D: /\d/, W:
 const LINE_TERMINATORS = new Set(['\n', '\r', '\u2028', '\u2029'])
 
 /**
+ * Half of a surrogate pair, i.e. a code unit that is only half a character under
+ * the `u` flag. Its presence means the code-unit-at-a-time reading in
+ * {@link readToken} and {@link readUnits} does not match what the runtime
+ * compiles \u2014 see {@link isAnchoredRepetition}, which refuses on it.
+ */
+const SURROGATE_CODE_UNIT = /[\uD800-\uDFFF]/
+
+/**
  * Whether `branch` consumes exactly one character and that character can be
  * `ch`. Only the forms we can decide exactly answer `true`; anything we cannot
  * model (a group, a multi-character branch, an unrecognized escape) answers
@@ -801,6 +809,17 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
  *    "separator pivot" test: the engine backtracks over derivations, so an
  *    iteration that matches its own substring k ways makes n iterations cost kⁿ
  *    even though every boundary is pinned.
+ *  - **No surrogate code unit in the body**, because both passes above read one
+ *    UTF-16 code unit per atom while the runtime compiles with `u`, where a
+ *    surrogate *pair* is a single atom and a quantifier binds to the pair. Under
+ *    the code-unit reading `😀*` looks like a mandatory high surrogate followed
+ *    by a repeated low one — a separator that is not there — so
+ *    `(\.😀*😀*😀*)*` presented as three runs neatly divided by mandatory units
+ *    and was admitted, while the regex actually compiled is three ambiguous runs
+ *    in a row: 1.2 seconds on 51 code units, where its ASCII twin
+ *    `(\.a*a*a*)*` is refused. Teaching the tokenizers to pair surrogates would
+ *    only move the mismatch, since the non-`u` fallback really does see two
+ *    atoms; refusing the exemption is right under both readings.
  *
  * What this does *not* claim is that the body is safe — see the module doc's
  * known gaps. Anything the body does wrong on its own (height >= 2 inside it, a
@@ -809,6 +828,7 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
  */
 const isAnchoredRepetition = (inner: RegionScan, budget: ScreenBudget): boolean => {
   if (inner.height < 1 || inner.branches.length !== 1) return false
+  if (SURROGATE_CODE_UNIT.test(inner.branches[0] as string)) return false
   const body = inner.branches[0] as string
   for (const end of ['front', 'back'] as const) {
     const anchor = anchorAt(body, end, budget)

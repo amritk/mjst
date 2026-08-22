@@ -202,6 +202,30 @@ describe('limits', () => {
     expect(hasUnsafeRegex('(\\/((?:[^\\/~])|(~[01]))*)*')).toBe(false)
   })
 
+  it('refuses a body carrying a surrogate, which it reads a code unit at a time', () => {
+    // The screen's tokenizers advance one UTF-16 code unit per atom, but the
+    // runtime compiles with `u`, where a surrogate pair is a single atom and the
+    // quantifier binds to the pair. Under the code-unit reading `<emoji>*` looks
+    // like a mandatory high surrogate followed by a repeated low one, so
+    // `(\.<emoji>*<emoji>*<emoji>*)*` presented as runs separated by mandatory
+    // units and was admitted — while the compiled regex is three ambiguous runs
+    // in a row, 1.2 seconds on 51 code units.
+    const emoji = '\u{1F600}'
+    for (const unsafe of [
+      `^(\\.${emoji}*${emoji}*${emoji}*)*$`,
+      `^(${emoji}*${emoji}*${emoji}*\\.)*$`,
+      `^(\\.${emoji}*${emoji}*)*$`,
+    ]) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // Its ASCII twin is the pattern the screen thought it was looking at, and it
+    // was already refused — the two must not disagree.
+    expect(hasUnsafeRegex('^(\\.a*a*a*)*$')).toBe(true)
+    // An astral character the body cannot repeat is no threat, but the guard is
+    // deliberately blunt: any surrogate in the body forfeits the exemption.
+    expect(hasUnsafeRegex(`^(\\.${emoji}\\w*)*$`)).toBe(true)
+  })
+
   it('decides a character class under both compiles the runtime might choose', () => {
     // `compilePattern` tries the `u` flag and falls back to a non-Unicode compile
     // when the whole source is invalid under it, so a class means whatever that
@@ -373,6 +397,9 @@ describe('limits', () => {
       ['[01]', '0'],
       ['[\\u{61}]', 'a'],
       ['u', 'u'],
+      // Two UTF-16 code units, one atom under `u` — the reading mismatch that
+      // let `(\.<emoji>*<emoji>*<emoji>*)*` through.
+      ['\u{1F600}', '\u{1F600}'],
     ]
     // Unbounded only, and every body gets at least one. That is what makes the
     // sweep a test of *this* exemption: without it the body has star height >= 1,
