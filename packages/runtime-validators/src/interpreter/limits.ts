@@ -122,11 +122,20 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // catastrophically means deciding language ambiguity, which no cheap syntactic
 // pass can do, so patterns that are genuinely exponential still get through.
 // Known gaps: multi-character ambiguous branches (`(a|aa)+`), ambiguity across
-// concatenated quantifiers (`a*a*$`), and two overlapping *classes* with no
-// literal side to pivot on (`([0-9]|\d)+`, `(\s|\n)+`). An anchored repetition
-// (rule 1's exemption) inherits every one of them for its body, since what the
-// exemption proves is only that the *outer* loop adds no ambiguity of its own:
-// `(\.(a|aa)*)*` is admitted, but so is the `\.(a|aa)*` it is built from.
+// concatenated quantifiers (`a*a*$`), two overlapping *classes* with no literal
+// side to pivot on (`([0-9]|\d)+`, `(\s|\n)+`), and a nullable body under
+// *bounded* quantifiers — `^((?:a){0,3}[^/]{0,3}\.)*$` never reaches star height
+// 2, since `{0,3}` is not a repetition, yet it runs 251 seconds on 49
+// characters. That last one is the widest of them: rule 1 counts only unbounded
+// quantifiers, so an attacker who spells the blow-up with bounded ones walks
+// past both rules.
+//
+// Rule 1's exemption is scoped accordingly: all it establishes is that the
+// *outer* loop adds no ambiguity of its own. It says nothing about the body,
+// which is why it is not granted on the strength of the anchor alone — see
+// {@link isAnchoredRepetition}, whose second condition is what keeps the gaps
+// above out of an exempted body. (`(\.(a|aa)*)*` is refused for exactly that
+// reason, even though its `.` anchor does force the split.)
 //
 // Rule 2 exists because star height alone missed a whole family: `^(a|a)+$` is
 // star height 1 yet takes over a second on a 29-character input, so the screen's
@@ -155,17 +164,27 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 /** `{n}` / `{n,}` / `{n,m}`, matched in place at an offset. Sticky, so `lastIndex` selects the offset. */
 const BOUNDED_QUANTIFIER = /\{(\d+)(,(\d*))?\}/y
 
-/** Reads a quantifier at `i`, returning whether it is an unbounded repetition and the index after it. */
-const readQuantifier = (source: string, i: number): { repetition: boolean; next: number } | null => {
+/**
+ * Reads a quantifier at `i`: whether it is an unbounded repetition, whether it
+ * lets the atom match nothing, and the index after it.
+ *
+ * `nullable` is reported here rather than re-derived by callers from the source
+ * character, which is how `a{0,}` — the long spelling of `a*` — came to be
+ * treated as mandatory by {@link readUnits}. That let `(\.a*b{0,}a*)*` past the
+ * screen: the two `a*` runs collide through the middle unit, but the walk that
+ * looks for the collision stopped at a unit it believed had to consume.
+ */
+const readQuantifier = (source: string, i: number): { repetition: boolean; nullable: boolean; next: number } | null => {
   const c = source[i]
   if (c === '*' || c === '+') {
     const j = i + 1
     // A trailing `?` (lazy) or `+` (possessive) is part of the quantifier.
-    return { repetition: true, next: source[j] === '?' || source[j] === '+' ? j + 1 : j }
+    const next = source[j] === '?' || source[j] === '+' ? j + 1 : j
+    return { repetition: true, nullable: c === '*', next }
   }
   if (c === '?') {
     const j = i + 1
-    return { repetition: false, next: source[j] === '?' || source[j] === '+' ? j + 1 : j }
+    return { repetition: false, nullable: true, next: source[j] === '?' || source[j] === '+' ? j + 1 : j }
   }
   if (c === '{') {
     // Sticky rather than `^…` against `source.slice(i)`: the slice would copy the
@@ -174,10 +193,14 @@ const readQuantifier = (source: string, i: number): { repetition: boolean; next:
     const m = BOUNDED_QUANTIFIER.exec(source)
     if (m) {
       // `{n,}` (comma, no max) is unbounded; `{n}` and `{n,m}` are bounded and do
-      // not drive exponential backtracking.
+      // not drive exponential backtracking. Either way a zero minimum is nullable.
       const unbounded = m[2] !== undefined && (m[3] === undefined || m[3] === '')
       const end = i + m[0].length
-      return { repetition: unbounded, next: source[end] === '?' || source[end] === '+' ? end + 1 : end }
+      return {
+        repetition: unbounded,
+        nullable: Number(m[1]) === 0,
+        next: source[end] === '?' || source[end] === '+' ? end + 1 : end,
+      }
     }
   }
   return null
@@ -354,13 +377,25 @@ const atomMayMatchChar = (atom: string, ch: string): boolean => {
     // `\b`, `\uXXXX`, `\p{…}`, a backreference: not modelled, so assume it can.
     return true
   }
-  // A character class cannot backtrack, so compiling and testing it is exact.
+  // A character class cannot backtrack, so compiling and testing it is exact —
+  // but only against the flags the class will really be compiled under, and this
+  // pass cannot know them. `compilePattern` (interpret.ts) tries `u` and falls
+  // back to a non-Unicode compile when the *whole* source is invalid under it, so
+  // a class that reads one way in isolation can read another way in the pattern
+  // it came from: `[\u{61}]` is `{a}` under `u` and `{u, {, 6, 1, }}` without,
+  // and one legacy escape anywhere else in the source decides which. Answering
+  // for both readings is what makes this independent of that decision — it takes
+  // one `\u{61}` misread to hand `(\.u*[\u{61}]*)*` an exemption it must not have.
   if (atom.startsWith('[') && skipClass(atom, 0) === atom.length) {
-    try {
-      return new RegExp(`^${atom}$`, 'u').test(ch)
-    } catch {
-      return true
+    for (const flags of ['u', '']) {
+      try {
+        if (new RegExp(`^${atom}$`, flags).test(ch)) return true
+      } catch {
+        // Undecidable under a reading the runtime might pick: assume it matches.
+        return true
+      }
     }
+    return false
   }
   return true
 }
@@ -369,12 +404,24 @@ const atomMayMatchChar = (atom: string, ch: string): boolean => {
  * Regex source characters that carry structure rather than consuming input, and
  * so cannot put an anchor character into a matched word.
  *
- * Skipping them in {@link noOtherAtomConsumes} is sound for a reason worth
- * stating: every one of them is in {@link REGEX_METACHARS}, and an anchor comes
- * from {@link singleLiteralChar}, which refuses a metachar. The anchor can
- * therefore never *be* one of these, so passing over them cannot pass over an
- * occurrence of it. (`.` is a metachar too but does consume, so it is an atom
- * here, not a skip.)
+ * Skipping them in {@link noOtherAtomConsumes} is sound because a *raw*
+ * occurrence of any of them is syntax — a group close, an alternation bar, an
+ * assertion, a quantifier — and syntax puts nothing into a matched word. A
+ * *literal* one is spelled `\x` or `[x]`, which {@link readToken} classifies as
+ * consuming and this pass therefore checks. (`.` is a metacharacter too, but it
+ * consumes, so it is an atom here rather than a skip.)
+ *
+ * The tempting shorter argument — "an anchor comes from
+ * {@link singleLiteralChar}, which refuses a metacharacter, so the anchor can
+ * never be one of these" — is **wrong**: that function refuses a metacharacter
+ * only in its one-character arm, and its escape arm answers `|` for `\|`. So
+ * `(\|[^|]*)*` really does anchor on one, and the skip has to survive on the
+ * argument above, which it does.
+ *
+ * The residual case is Annex B, where a `{` or `}` beginning no valid quantifier
+ * is a literal — raw, yet consuming. {@link readUnits} refuses any body carrying
+ * a raw metacharacter, and the exemption needs that pass to agree as well, so
+ * `(\{a*{)*` comes out rejected rather than mis-analysed.
  */
 const NON_CONSUMING_CHARS = new Set([')', '|', '^', '$', '*', '+', '?', '{', '}'])
 
@@ -518,11 +565,29 @@ const topLevelBranches = (source: string): string[] => {
 }
 
 /**
+ * Whether the group opening at `i` is a lookaround — `(?=`, `(?!`, `(?<=`, `(?<!`.
+ *
+ * These are the one group kind {@link readUnits} must never see through, because
+ * they consume nothing: a branch that is a lookaround matches the empty string,
+ * which is precisely the nullable-choice hazard the grammar exists to refuse.
+ * `groupInnerStart` steps over their markers like any other prefix, so without
+ * this test `(?!a)` unwrapped to a bare `a` — a zero-width branch recorded as a
+ * consuming atom, which made `((?!a)|b)+` look deterministic and handed
+ * `^(\.((?!a)|b)+)*$` an exemption worth 1.1 seconds on 49 characters.
+ */
+const isLookaround = (source: string, i: number): boolean => {
+  if (source[i] !== '(' || source[i + 1] !== '?') return false
+  const c = source[i + 2]
+  return c === '=' || c === '!' || (c === '<' && (source[i + 3] === '=' || source[i + 3] === '!'))
+}
+
+/**
  * Strips one fully-enclosing group, so the `([^\/~])` AsyncAPI writes its
- * alternation branches as reads as the `[^\/~]` it actually is.
+ * alternation branches as reads as the `[^\/~]` it actually is. A lookaround is
+ * left alone, so the `(` survives for {@link readUnits}'s guard to reject.
  */
 const unwrapGroup = (source: string): string =>
-  source.startsWith('(') && groupEnd(source, 0) === source.length
+  source.startsWith('(') && !isLookaround(source, 0) && groupEnd(source, 0) === source.length
     ? source.slice(groupInnerStart(source, 0), source.length - 1)
     : source
 
@@ -557,6 +622,9 @@ const readUnits = (body: string, budget: ScreenBudget): Unit[] | null => {
     const c = body[i] as string
 
     if (c === '(') {
+      // A lookaround consumes nothing, so reading it as a unit would credit the
+      // concatenation with characters no input has to supply. See isLookaround.
+      if (isLookaround(body, i)) return null
       const end = groupEnd(body, i)
       if (end === -1) return null
       const q = readQuantifier(body, end)
@@ -596,8 +664,12 @@ const readUnits = (body: string, budget: ScreenBudget): Unit[] | null => {
     const next = c === '[' ? skipClass(body, i) : c === '\\' ? i + 2 : i + 1
     const q = readQuantifier(body, next)
     if (q !== null && !q.repetition) return null
-    const repeats = q?.repetition === true
-    units.push({ atom: body.slice(i, next), firsts: [], repeats, nullable: repeats && body[next] === '*' })
+    units.push({
+      atom: body.slice(i, next),
+      firsts: [],
+      repeats: q?.repetition === true,
+      nullable: q?.nullable === true,
+    })
     i = q ? q.next : next
   }
   return units
@@ -666,11 +738,19 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
     // Walk forward to the first unit that must consume: everything nullable in
     // between could yield its position back to this one.
     for (let j = i + 1; j < units.length; j++) {
-      budget.anchorChars -= 1
-      if (budget.anchorChars < 0) return false
       const follower = units[j] as Unit
       const firsts = follower.atom === null ? follower.firsts : [follower.atom]
-      for (const first of firsts) if (!atomsAreDisjoint(unit.atom, first)) return false
+      for (const first of firsts) {
+        // Charged per comparison, not per follower. Each one can compile a
+        // `RegExp`, so debiting the walk once for a k-branch alternation
+        // undercounted the work by a factor of k: a 10.8 KB pattern of distinct
+        // literals in front of a 2,600-branch alternation forced ~300,000
+        // compiles for 20,000 budget — 294 ms, against 0.27 ms before this rule
+        // existed.
+        budget.anchorChars -= 1
+        if (budget.anchorChars < 0) return false
+        if (!atomsAreDisjoint(unit.atom, first)) return false
+      }
       if (!follower.nullable) break
     }
   }

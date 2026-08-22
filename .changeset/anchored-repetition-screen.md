@@ -36,8 +36,9 @@ and takes 94 ms on 22 characters where its body alone takes none.
 
 The screen remains a best-effort filter rather than a proof of safety, with the
 same known gaps, and it stays cheap on a hostile pattern: the new analysis is
-capped by its own shared budget, and a 180 KB adversarial source screens in
-about 11 ms.
+capped by its own shared budget, charged per character examined and per
+character-class comparison, and the worst adversarial source found screens in
+about 40 ms.
 
 `@amritk/generate-examples` only retargets a test fixture that had used
 `^(repeat+)+once$` to stand for a refused pattern — that one is admitted now,

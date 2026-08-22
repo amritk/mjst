@@ -158,6 +158,63 @@ describe('limits', () => {
     }
   })
 
+  it('reads a zero-minimum quantifier as nullable however it is spelled', () => {
+    // `{0,}` is `*` written out, and the collision walk has to see through it.
+    // Deciding nullability by testing the source character for `*` made
+    // `(\.a*b{0,}a*)*` look like it had a mandatory unit in the middle, so the
+    // walk stopped there and never compared the two `a*` runs — 11.6 seconds on
+    // 55 characters, admitted. Every one of these is the same pattern as the
+    // `*`-spelled version directly above it.
+    for (const unsafe of [
+      '^(\\.a*b{0,}a*)*$',
+      '^(\\.\\w*-{0,}\\w*)*$',
+      '^(/\\w*\\.{0,}\\w*)*$',
+      '^(\\w*-{0,}\\w*\\.)*$',
+      '^(\\.a{0,}a{0,})*$',
+    ]) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // Still admitted, because the runs really are disjoint — the fix is about
+    // reading `{0,}` correctly, not about refusing it.
+    expect(hasUnsafeRegex('^(\\.a{0,}b{0,}c*)*$')).toBe(false)
+  })
+
+  it('never reads a lookaround as a unit that consumes something', () => {
+    // A lookaround matches the empty string, so an alternation branch that is
+    // one is nullable — the exact hazard the grammar refuses. `groupInnerStart`
+    // steps over `(?!` like any other group prefix, so unwrapping a branch
+    // turned `(?!a)` into a bare `a` and the `(`-rejecting guard never saw it:
+    // `((?!a)|b)+` scored as deterministic, and the first three below were
+    // admitted at 1.1 seconds on 49 characters. The last one is the same lie
+    // told about a pattern that happens not to blow up, and must go too.
+    for (const unsafe of [
+      '^(\\.((?!a)|b)+)*$',
+      '^(\\.((?<!a)|b)+)*$',
+      '^(\\/((?!~)|[01])+)*$',
+      '^(\\.((?=a)|b)+)*$',
+      '^(\\.((?<=a)|b)+)*$',
+      '^(\\.a*(?=b))*$',
+    ]) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // A non-capturing or named wrapper is not a lookaround and still unwraps —
+    // this is how the AsyncAPI pointer pattern's `([^\/~])` branches are read.
+    expect(hasUnsafeRegex('(\\/((?:[^\\/~])|(~[01]))*)*')).toBe(false)
+  })
+
+  it('decides a character class under both compiles the runtime might choose', () => {
+    // `compilePattern` tries the `u` flag and falls back to a non-Unicode compile
+    // when the whole source is invalid under it, so a class means whatever that
+    // fallback decided — not what it means read on its own. `[\u{61}]` is `{a}`
+    // under `u` and `{u, {, 6, 1, }}` without, and the `\-` elsewhere in this
+    // source is what forces the second reading; probing only under `u` proved
+    // `u*` and `[\u{61}]*` disjoint and handed out an exemption worth 9.9
+    // seconds on 56 characters.
+    expect(hasUnsafeRegex('^\\-(\\.u*[\\u{61}]*)*$')).toBe(true)
+    // The same body without the escape hatch is genuinely disjoint either way.
+    expect(hasUnsafeRegex('^\\-(\\.u*[a]*)*$')).toBe(false)
+  })
+
   it('screens a pattern that is only reachable through a $ref into an unfamiliar container', () => {
     // OpenAPI parks its subschemas under `components/schemas` and reaches them by
     // `$ref`. A screen that walks a fixed list of subschema keywords never sees
@@ -204,8 +261,11 @@ describe('limits', () => {
 
   it('admits nothing that actually backtracks, measured rather than asserted', () => {
     // The booleans above encode today's answers; this encodes the property they
-    // are supposed to stand for, so a future refinement that widens the screen
-    // is caught by the clock even if nobody thinks to add its pattern above.
+    // are supposed to stand for, for the specific patterns that have mattered.
+    // It is a *fixed* corpus, so on its own it only catches a regression that
+    // lands on one of these — the `{0,}` hole below sat live and undetected
+    // while this test was green. The generated sweep in the next test is what
+    // covers the shapes nobody thought to list.
     //
     // Every entry is a pattern paired with an input built to make a backtracking
     // engine work: a long run the body can chew on, then one character that
@@ -236,6 +296,14 @@ describe('limits', () => {
       ['^(\\.(a|aa)*)*$', `.${run}!`],
       ['^(a+)+$', `${run}!`],
       ['^(a|a)+$', `${run}!`],
+      // Both of these were admitted once, and both are 3^(n/3): a zero-minimum
+      // quantifier read as mandatory, and a class probed under `u` that the
+      // runtime compiles without it.
+      ['^(\\.a*b{0,}a*)*$', `${'.aa'.repeat(13)}!`],
+      ['^\\-(\\.u*[\\u{61}]*)*$', `-${'.uu'.repeat(13)}!`],
+      // A lookaround branch, unwrapped into a fake consuming atom.
+      ['^(\\.((?!a)|b)+)*$', `${'.b'.repeat(20)}!`],
+      ['^(\\/((?!~)|[01])+)*$', `${'/0'.repeat(20)}!`],
     ]
 
     for (const [source, input] of corpus) {
@@ -251,6 +319,173 @@ describe('limits', () => {
         `${source} was admitted but took ${elapsed.toFixed(0)}ms on ${input.length} characters`,
       ).toBeLessThan(300)
     }
+  })
+
+  it('admits nothing that backtracks across a generated corpus, not only a listed one', () => {
+    // The property the fixed corpus above cannot carry: *whatever* the screen
+    // admits must be fast, including shapes nobody wrote down. Every hole found
+    // in this exemption so far — `{0,}` read as mandatory, a `u`-only class
+    // probe, a lookaround branch unwrapped into a consuming atom — was a shape
+    // absent from the hand-written list, so the alphabet below deliberately
+    // includes the pieces they were built from.
+    //
+    // Deterministic by construction: a fixed seed, a fixed alphabet, a fixed
+    // number of draws. No wall-clock or RNG dependence, so a failure here is
+    // always reproducible.
+    //
+    // It is a search, not a proof — it re-finds the `{0,}` hole unaided, but the
+    // lookaround and `u`-flag holes need constructions too specific to stumble
+    // on, which is what the named tests above are for. The two are complements:
+    // this one covers shapes nobody listed, those pin the ones we have paid for.
+    let state = 0x9e3779b9
+    const next = (bound: number): number => {
+      state = (state + 0x9e3779b9) >>> 0
+      let z = state
+      z = Math.imul(z ^ (z >>> 16), 0x21f0aaad) >>> 0
+      z = Math.imul(z ^ (z >>> 15), 0x735a2d97) >>> 0
+      return ((z ^ (z >>> 15)) >>> 0) % bound
+    }
+    const pick = <T>(xs: readonly T[]): T => xs[next(xs.length)] as T
+
+    // Each atom is paired with a character it matches, so the attack inputs can
+    // be built from the alphabet the generated pattern actually uses. Fixed
+    // strings do not work here: a body over `b` and `[01]` is never made to
+    // backtrack by a run of `a`s, and an earlier version of this sweep missed
+    // every collision it generated for exactly that reason.
+    const separators: readonly (readonly [string, string])[] = [
+      ['\\.', '.'],
+      ['\\/', '/'],
+      ['-', '-'],
+      [':', ':'],
+      ['@', '@'],
+    ]
+    const atoms: readonly (readonly [string, string])[] = [
+      ['a', 'a'],
+      ['b', 'b'],
+      ['\\w', 'w'],
+      ['\\d', '5'],
+      ['\\s', ' '],
+      ['\\W', '!'],
+      ['.', 'x'],
+      ['[a-y]', 'm'],
+      ['[^/]', 'z'],
+      ['[^~]', 'q'],
+      ['[01]', '0'],
+      ['[\\u{61}]', 'a'],
+      ['u', 'u'],
+    ]
+    // Unbounded only, and every body gets at least one. That is what makes the
+    // sweep a test of *this* exemption: without it the body has star height >= 1,
+    // so the outer `*` reaches 2 and the pattern can only be admitted by the
+    // exemption granting it. Bounded quantifiers are deliberately absent — they
+    // keep a body at height 0, where the baseline rule admits without ever
+    // consulting the exemption, and a nullable body under one
+    // (`^((?:a){0,3}[^/]{0,3}\.)*$`, 251 seconds on 49 characters) is a
+    // pre-existing gap of the screen, not something this rule is answerable for.
+    const repeats = ['*', '+', '{0,}', '{1,}', '{2,}']
+    const quantifiers = [...repeats, '']
+    const groups: readonly (readonly [string, string])[] = [
+      ['(?!a)', ''],
+      ['(?=a)', ''],
+      ['(?:a)', 'a'],
+      ['(a|aa)', 'a'],
+      ['(a|bc)', 'a'],
+      ['([^~]|~[01])', 'q'],
+    ]
+    /** A body, plus the characters its units can produce. */
+    const body = (): { source: string; alphabet: string[] } => {
+      // Draw the units from a *two-atom* pool rather than the whole alphabet, so
+      // the same atom recurs often. Collisions between two repeated units are
+      // the shape that breaks the exemption — `a*b{0,}a*` needs the outer two to
+      // match the same character — and picking freely from thirteen atoms makes
+      // that rare enough that the sweep would miss it.
+      const pool = [pick(atoms), pick(atoms)]
+      let source = ''
+      const alphabet: string[] = []
+      for (let i = 0, n = 2 + next(3); i < n; i++) {
+        // The first unit always repeats, so the body always reaches height 1.
+        const quantifier = i === 0 ? pick(repeats) : pick(quantifiers)
+        const [unit, sample] = next(6) === 0 ? pick(groups) : pick(pool)
+        source += `${unit}${quantifier}`
+        if (sample !== '') alphabet.push(sample)
+      }
+      return { source, alphabet }
+    }
+
+    /**
+     * Words the pattern very nearly matches, then one character that fails —
+     * which is what makes a backtracking engine explore every alternative.
+     * Measured short first: anything violent enough to hang the suite trips at
+     * the 24-character length and never reaches 48, while a subtler regression
+     * shows up at 48, where the `{0,}` hole ran 1.3 s.
+     */
+    const attacksFor = (separator: string, alphabet: readonly string[]): string[] => {
+      const inputs: string[] = []
+      for (const total of [24, 48]) {
+        for (const run of [1, 2, 3]) {
+          for (const filler of alphabet) {
+            const unit = separator + filler.repeat(run)
+            inputs.push(unit.repeat(Math.ceil(total / unit.length)).slice(0, total))
+          }
+        }
+        for (const filler of alphabet) inputs.push(filler.repeat(total))
+      }
+      // `~` ends every input: it is outside every atom's sample alphabet, so the
+      // match always fails and the engine always has to exhaust its options.
+      return inputs.map((input) => `${input}~`)
+    }
+
+    let admitted = 0
+    for (let i = 0; i < 1_500; i++) {
+      const [separator, separatorChar] = pick(separators)
+      const inner = body()
+      const source = next(2) === 0 ? `^(${separator}${inner.source})*$` : `^(${inner.source}${separator})*$`
+      // Compile the way the interpreter does — `u`, falling back — so the test
+      // measures the regex the validator would really run.
+      let regex: RegExp
+      try {
+        regex = new RegExp(source, 'u')
+      } catch {
+        try {
+          regex = new RegExp(source)
+        } catch {
+          continue
+        }
+      }
+      if (hasUnsafeRegex(source)) continue
+      admitted++
+      regex.test('warmup')
+      for (const input of attacksFor(separatorChar, inner.alphabet)) {
+        const started = performance.now()
+        regex.test(input)
+        const elapsed = performance.now() - started
+        expect(
+          elapsed,
+          `${source} was admitted but took ${elapsed.toFixed(0)}ms on ${input.length} characters`,
+        ).toBeLessThan(300)
+      }
+    }
+    // Guards the guard: if the generator ever stopped producing patterns the
+    // screen admits, every assertion above would pass vacuously.
+    expect(admitted).toBeGreaterThan(20)
+  })
+
+  it('screens an anchored body against a wide alternation in bounded time', () => {
+    // Rule 1's exemption compares each repeated atom against the first character
+    // of every branch that follows it, and each comparison can compile a
+    // `RegExp`. Charging the shared budget once per *follower* rather than once
+    // per *comparison* undercounted that by the branch count: distinct literals
+    // in front of a 2,600-branch alternation forced ~300,000 compiles for 20,000
+    // budget, and screening this one pattern took 294 ms — against 0.27 ms
+    // before the exemption existed. Now the budget stops it.
+    const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
+    const branches = Array.from({ length: 2_643 }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
+    const source = `^(\\.${literals}(${branches}))*$`
+
+    const started = performance.now()
+    // Genuinely unsafe — the point is only that answering costs bounded work.
+    expect(hasUnsafeRegex(source)).toBe(true)
+    expect(performance.now() - started).toBeLessThan(2_000)
   })
 
   it('screens a very wide alternation in bounded time', () => {
