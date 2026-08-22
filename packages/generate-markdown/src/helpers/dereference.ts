@@ -141,20 +141,29 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
 
 /**
  * The `x-doc` members a truncation does *not* take from the definition it
- * stands for: the two that say which page and which section a property is
- * documented on.
+ * stands for: the ones that describe where a property appears and how it is
+ * announced, rather than what it is.
  *
  * Everything else is documentation of the thing itself and travels with it, as
- * it does through any other `$ref`. These two are placement, and a truncation
- * has no shape to place — it is a name and a sentence standing in for a subtree
- * documented further up. Carried down, `x-doc.page` tore a truncated child out
- * of its parent and republished it on another file as a top-level heading with
- * nothing underneath it.
+ * it does through any other `$ref`. These five belong to the occurrence, and a
+ * truncation is an occurrence with nothing underneath it:
  *
- * A ref site is still free to write either one: what it says about *this* use
+ * - `page` and `section` tore a truncated child out of its parent and
+ *   republished it on another file as a top-level heading with nothing under it.
+ * - `heading: false` means "the heading above already names this, and the
+ *   children stand on their own". A truncation has no children, so the property
+ *   vanished outright and its sentence read as a second paragraph of its
+ *   sibling's prose.
+ * - `title` renamed every truncation of one definition to the same string:
+ *   three `### Node` headings on one page, three colliding anchors, and the
+ *   names the reader has to type nowhere in the document.
+ * - `order` sorts an occurrence among its siblings, which is the ref site's
+ *   business for the same reason.
+ *
+ * A ref site is still free to write any of them: what it says about *this* use
  * wins, the way it does for every other member.
  */
-const PLACEMENT_DOC_KEYS: ReadonlySet<string> = new Set(['page', 'section'])
+const PLACEMENT_DOC_KEYS: ReadonlySet<string> = new Set(['page', 'section', 'title', 'heading', 'order'])
 
 /**
  * How many schema nodes the inlined document may contain. Inlining is a tree
@@ -263,8 +272,14 @@ const requiredOf = (
   const names = new Set(asStringArray(node['required']))
   const branchesOf = (keyword: unknown): readonly Branch[] =>
     (Array.isArray(keyword) ? keyword : []).map((branch): Branch => {
-      const ref = isObject(branch) && typeof branch['$ref'] === 'string' ? branch['$ref'] : undefined
-      return ref === undefined ? { node: branch, ref } : { node: resolveDefinition(root, ref), ref }
+      if (!isObject(branch) || typeof branch['$ref'] !== 'string') return { node: branch, ref: undefined }
+      const { $ref: ref, ...rest } = branch
+      // The ref site's own keywords apply alongside the definition's, which is
+      // what the inliner does with them. Replacing the branch with the
+      // definition dropped a `required` written at the ref site, so the same
+      // union was documented one way inlined and another truncated.
+      const target = resolveDefinition(root, ref)
+      return { node: isObject(target) ? { ...target, ...rest } : rest, ref }
     })
   /** What a branch requires, or nothing when it leads back onto the path. */
   const requiredOfBranch = (branch: Branch): readonly string[] => {
@@ -289,13 +304,88 @@ const requiredOf = (
   return [...names]
 }
 
+/**
+ * What a truncated definition *is*, with nothing about what it holds.
+ *
+ * The stub used to say `type: 'object'` whatever it stood for, so a definition
+ * spelled `string | { not: Filter }` was labelled `object` at every recursive
+ * position — telling the reader a string is not valid there — and contributed a
+ * phantom `object` to the label of any union it sat in.
+ *
+ * Only the keywords that decide the **Type:** label are kept, and the branches
+ * are reduced the same way, so nothing here can put a property back on a node
+ * whose whole point is that its shape was dropped. A reference that leads back
+ * onto the path contributes nothing, which is what makes the label finite.
+ */
+const typeSkeleton = (
+  root: Record<string, unknown>,
+  node: unknown,
+  seen: ReadonlySet<string>,
+  depth = 0,
+): Record<string, unknown> | undefined => {
+  if (!isObject(node) || depth > MAX_SCHEMA_DEPTH) return undefined
+  const ref = node['$ref']
+  if (typeof ref === 'string') {
+    if (seen.has(ref)) return undefined
+    return typeSkeleton(root, resolveDefinition(root, ref), new Set(seen).add(ref), depth + 1)
+  }
+  const shape: Record<string, unknown> = {}
+  for (const key of ['type', 'enum', 'const']) if (node[key] !== undefined) defineOwn(shape, key, node[key])
+  if (Object.keys(shape).length > 0) return shape
+  for (const keyword of ['anyOf', 'oneOf', 'allOf']) {
+    const branches = node[keyword]
+    if (!Array.isArray(branches)) continue
+    const reduced = branches
+      .map((branch) => typeSkeleton(root, branch, seen, depth + 1))
+      .filter((branch): branch is Record<string, unknown> => branch !== undefined)
+    if (reduced.length > 0) return { [keyword]: reduced }
+  }
+  return undefined
+}
+
+/**
+ * The documentation a truncation carries from the definition it stands for,
+ * merged along the `$ref` chain the way the inliner merges it at every hop.
+ *
+ * Reading the end of the chain instead gave a truncation of `Alias` the prose
+ * and the title of `Base`, while a reference to the same `Alias` one level up
+ * carried `Alias`'s — the same pointer documented two ways on one page.
+ */
+const carriedDoc = (
+  root: Record<string, unknown>,
+  ref: string,
+  depth = 0,
+): { description?: string; doc?: Record<string, unknown> } => {
+  const node = resolvePointer(root, ref)
+  // The root is not a definition: its `x-doc` is the *page's* configuration —
+  // its title, its examples, its notes — and copied onto a property the page
+  // introduced itself a second time under the property's name.
+  if (!isObject(node) || node === root || depth > MAX_SCHEMA_DEPTH) return {}
+  const next = node['$ref']
+  const base = typeof next === 'string' ? carriedDoc(root, next, depth + 1) : {}
+  const own = isObject(node[DOC_KEY]) ? (node[DOC_KEY] as Record<string, unknown>) : undefined
+  const doc: Record<string, unknown> = { ...base.doc }
+  if (own !== undefined) for (const [key, value] of Object.entries(own)) defineOwn(doc, key, value)
+  const description = typeof node['description'] === 'string' ? node['description'] : base.description
+  // The same rule `mergedDoc` applies: a plain `description` at this hop is
+  // describing this node, and outranks the `x-doc.description` it inherited.
+  if (typeof node['description'] === 'string' && (own === undefined || !('description' in own))) {
+    delete doc['description']
+  }
+  for (const key of PLACEMENT_DOC_KEYS) delete doc[key]
+  return {
+    ...(description !== undefined && { description }),
+    ...(Object.keys(doc).length > 0 && { doc }),
+  }
+}
+
 /** {@link requiredOf} for one pointer, worked out once per walk. */
 const requiredOfRef = (root: Record<string, unknown>, ref: string, budget: Budget): readonly string[] => {
   const cached = budget.required.get(ref)
   if (cached !== undefined) return cached
   const reading: Reading = {
     remaining: MAX_REQUIRED_NODES,
-    shape: { resolve: (target) => resolveDefinition(root, target), known: new Map() },
+    shape: { resolve: (target) => resolveDefinition(root, target) },
   }
   const names = requiredOf(root, resolveDefinition(root, ref), new Set([ref]), reading)
   budget.required.set(ref, names)
@@ -403,37 +493,30 @@ export const dereference = (
 
   const { $ref: ref, ...siblings } = node
   if (typeof ref === 'string') {
-    if (seen.has(ref)) {
+    // The document itself, however the reference spells it. `#` and `#/` are
+    // seeded as seen; a plain-name fragment naming the root's own `$anchor` is
+    // the third spelling, and it expanded the whole document a second time
+    // under a property's name before anything noticed.
+    if (seen.has(ref) || resolvePointer(root, ref) === root) {
       // Recursive reference: stop here, keeping any description from the ref
       // site — and the requirements of the definition being truncated, which is
       // the only thing about it a reader of the stub still needs.
-      const target = resolveDefinition(root, ref)
       const required = requiredOfRef(root, ref, budget)
       const resolvedSiblings = dereference(siblings, root, seen, budget, depth + 1) as Record<string, unknown>
       // The truncation keeps the definition's documentation, the way any other
       // `$ref` site does — its prose, its type label, its layout, its examples,
       // whether it is hidden. Only its shape is dropped, because that is what is
       // already on the page above.
-      const carried: Record<string, unknown> = {}
-      // Except when the definition is the document itself. `$ref: '#'` is the
-      // spelling a self-recursive schema uses, and the root's `x-doc` is the
-      // *page's* configuration — its title, its examples, its notes. Copied onto
-      // a property, the page introduced itself a second time under the property's
-      // name.
-      if (isObject(target) && target !== root) {
-        if (typeof target['description'] === 'string') carried['description'] = target['description']
-        const doc = target[DOC_KEY]
-        if (isObject(doc)) {
-          const kept: Record<string, unknown> = {}
-          for (const [key, value] of Object.entries(doc)) if (!PLACEMENT_DOC_KEYS.has(key)) defineOwn(kept, key, value)
-          if (Object.keys(kept).length > 0) carried[DOC_KEY] = kept
-        }
+      const { description, doc } = carriedDoc(root, ref)
+      const carried: Record<string, unknown> = {
+        ...(description !== undefined && { description }),
+        ...(doc !== undefined && { [DOC_KEY]: doc }),
       }
       // Merged the way any other `$ref` site's `x-doc` is, so the one rule
       // about prose holds on both routes: a ref site writing its own
       // `description` is describing *this* use and wins over the definition's.
       const stub: Record<string | symbol, unknown> = {
-        type: 'object',
+        ...(typeSkeleton(root, resolvePointer(root, ref), new Set([ref])) ?? { type: 'object' }),
         ...carried,
         ...resolvedSiblings,
         ...mergedDoc(carried, resolvedSiblings),

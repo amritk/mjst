@@ -4,7 +4,16 @@ import { flattenRoot } from '#reference/flatten-root'
 describe('flatten-root', () => {
   it('leaves a plain object schema alone', () => {
     const schema = { properties: { a: { type: 'string' } }, required: ['a'] }
-    expect(flattenRoot(schema)).toBe(schema)
+    expect(flattenRoot(schema)).toStrictEqual(schema)
+  })
+
+  // `allOf: [{ $ref: Base }]` where the base only restates `required` is the
+  // OpenAPI inheritance idiom, and it names no property the root does not
+  // already list — so the early return handed the schema back untouched and
+  // every marker that arrived that way was dropped.
+  it('keeps a requirement a root composes in without naming a new field', () => {
+    const flattened = flattenRoot({ properties: { a: { type: 'string' } }, allOf: [{ required: ['a'] }] })
+    expect(flattened.required).toEqual(['a'])
   })
 
   // "A config with `versions`, or one without" is how a generated schema spells

@@ -40,16 +40,18 @@ the output directory or naming no file, and a schema nested past what the walk
 can read. A reference to an `$anchor`, or the empty pointer `#` a self-recursive schema
 uses, resolves instead of emptying the property that carried it.
 
-A recursive reference collapses where it repeats, carrying the definition's
-documentation the way any other ref site does — its prose, its type label, its
-layout, its examples, whether it is hidden — plus what it requires, so the
-alternative beside it keeps its **Required** markers. Only `x-doc.page` and
-`x-doc.section` stay behind: a truncation has no shape to move and would arrive
-on another page as a bare heading. `$ref: '#'` carries nothing — the root is not
-a definition, and its `x-doc` is the page's own configuration. Reading what a
-definition requires refuses to re-enter one already on the path and is worked
-out once per pointer, so a combinator language (`Filter` is `And` or `Or`, each
-inheriting `Filter`) renders instead of never finishing.
+A recursive reference collapses where it repeats, labelled with the type its
+definition has and carrying that definition's documentation the way any other
+ref site does — its prose, its type label, its layout, its examples, whether it
+is hidden — plus what it requires, so the alternative beside it keeps its
+**Required** markers. What stays behind is what places and announces an
+occurrence rather than describing it: `x-doc.page`, `section`, `title`,
+`heading` and `order`. A reference that resolves to the document itself — `#`,
+`#/`, or the root's own `$anchor` — carries nothing, the root being a page
+configuration rather than a definition. Reading what a definition requires
+refuses to re-enter one already on the path and is worked out once per pointer,
+so a combinator language (`Filter` is `And` or `Or`, each inheriting `Filter`)
+renders instead of never finishing.
 
 A table row is one line, so a code block never goes in one: a description
 opening with a fenced or indented sample gives the row its first paragraph of

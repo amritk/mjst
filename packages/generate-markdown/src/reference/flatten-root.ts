@@ -29,8 +29,15 @@ export const flattenRoot = (schema: ConfigSchema): ConfigSchema => {
   const ownNames = Object.keys(asProperties(schema.properties))
   const collectedNames = Object.keys(collected.properties)
 
-  // Nothing composed anything in: the root already is what it says it is.
-  if (collectedNames.length > 0 && collectedNames.length === ownNames.length) return schema
+  // Nothing composed a *name* in: the root already lists what it holds. It may
+  // still have composed a requirement — `allOf: [{ $ref: Base }]` where `Base`
+  // only restates `required` is the OpenAPI inheritance idiom — and returning
+  // the schema untouched dropped every marker that came in that way. Whether a
+  // field was marked then turned on whether some branch happened to introduce
+  // an extra name, which no reader could predict.
+  if (collectedNames.length > 0 && collectedNames.length === ownNames.length) {
+    return { ...schema, required: [...collected.required] }
+  }
 
   const container = collectedNames.length === 0 ? childSchema(schema as SchemaProperty) : undefined
   const { properties, required } =

@@ -64,6 +64,20 @@ describe('reference-type', () => {
     expect(typeShowsEnum({ type: 'string' })).toBe(false)
   })
 
+  // A union of a union printed the same word twice.
+  it('flattens a nested union into one list', () => {
+    const prop = { anyOf: [{ anyOf: [{ type: 'object' }, { type: 'string' }] }, { type: 'object' }] }
+    expect(referenceType(prop, 'json')).toBe('object | string')
+  })
+
+  // Two things a part may hold that a naive split would take apart: an array
+  // whose item is a union, and an enum literal with a pipe in it.
+  it('does not take a bracketed item or a quoted literal apart', () => {
+    const array = { anyOf: [{ type: 'array', items: { type: ['string', 'number'] } }, { type: 'null' }] }
+    expect(referenceType(array, 'json')).toBe('(string | number)[] | null')
+    expect(referenceType({ enum: ['a | b'] }, 'json')).toBe('"a | b"')
+  })
+
   it('survives a self-referential stub without recursing forever', () => {
     const recursive: Record<string, unknown> = { type: 'array' }
     recursive['items'] = recursive

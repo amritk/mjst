@@ -35,9 +35,13 @@ export const tableCell = (value: string): string => escapePipes(collapseLineEndi
  * need escaping — the row is split into columns before any inline parsing
  * happens — but nothing else does: a code span's content is literal.
  *
- * None of these is prose, so none of them goes through {@link firstParagraph}:
- * a name is one value however it is spelled. Passing them through it erased a
- * property called `\tindented` from its own table, because a leading tab reads
- * as an indented code block and a row cannot hold one.
+ * None of these is prose, so none of them goes through {@link firstParagraph},
+ * and none of them is trimmed: a name is one value however it is spelled.
+ * Reading it as prose erased a property called `\tindented` from its own table,
+ * because a leading tab reads as an indented code block and a row cannot hold
+ * one; trimming it renamed the same property to `indented`, which the schema
+ * does not declare — and left the row disagreeing with the heading the other
+ * layout gives it. `codeSpan` pads the span when the value has an edge space,
+ * so the whitespace survives being shown.
  */
-export const tableCode = (value: string): string => codeSpan(escapePipes(collapseLineEndings(value).trim()))
+export const tableCode = (value: string): string => codeSpan(escapePipes(collapseLineEndings(value)))

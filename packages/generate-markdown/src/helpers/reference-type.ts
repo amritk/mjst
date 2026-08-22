@@ -4,8 +4,21 @@ import { asArray, asSchema, isObject } from '#helpers/guards'
 import { readDocMeta } from '#helpers/read-doc-meta'
 import type { SchemaProperty } from '#types/schema'
 
-/** Joins type labels into a `a | b` union, dropping blanks and duplicates. */
-const unionOf = (parts: readonly string[]): string => [...new Set(parts.filter((part) => part.length > 0))].join(' | ')
+/**
+ * Joins type labels into a `a | b` union, dropping blanks and duplicates.
+ *
+ * A part that is itself a union is flattened first, or a union of a union
+ * printed the same word twice — `object | string | object` for two
+ * alternatives. Only a part with nothing to protect is split: a quoted enum
+ * literal may hold a ` | ` of its own, and a bracketed array item (`(string |
+ * number)[]`) means the opposite thing taken apart.
+ */
+const unionOf = (parts: readonly string[]): string =>
+  [
+    ...new Set(
+      parts.filter((part) => part.length > 0).flatMap((part) => (/["'()[\]]/.test(part) ? [part] : part.split(' | '))),
+    ),
+  ].join(' | ')
 
 /**
  * The **Type:** label for the prose reference style.

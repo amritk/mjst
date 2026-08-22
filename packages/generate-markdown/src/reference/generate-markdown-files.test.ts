@@ -3012,9 +3012,12 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    // The leading whitespace goes, as it does for every cell; the name does not.
-    expect(content).toContain('| `indented` | `string` | Tab-named. |')
-    expect(content).toContain('| `normal` | `Weird` | Fine. |')
+    // Whitespace and all: the row names the key the schema declares, and the
+    // code span is padded so an edge space survives being shown. Trimming it
+    // named a key that does not exist, and disagreed with the heading the
+    // other layout gives the same property.
+    expect(content).toContain('| ` \tindented ` | `string` | Tab-named. |')
+    expect(content).toContain('| `normal` | `     Weird ` | Fine. |')
   })
 
   // The same rule on the three other routes a description reaches the page by.
@@ -3039,6 +3042,203 @@ describe('generate-markdown-files', () => {
   it('drops the blank lines a description opens with', () => {
     const content = only(generateMarkdownFiles({ properties: { a: { type: 'string', description: '  \n\nProse.' } } }))
     expect(content).toContain('**Type:** `string`\n\nProse.')
+  })
+
+  // `heading: false` means "the heading above already names this, and the
+  // children stand on their own". A truncation has no children, so the property
+  // disappeared outright and its sentence read as a second paragraph of its
+  // sibling's prose.
+  it('does not let a definition drop the heading of a truncation', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { tree: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            'x-doc': { heading: false },
+            properties: {
+              name: { type: 'string', description: 'Name.' },
+              child: { $ref: '#/$defs/Node', description: 'The nested child node.' },
+            },
+          },
+        },
+      }),
+    )
+    // `tree` is a full reference, so it keeps the definition's `heading: false`
+    // and its children move up a level — that is what the keyword means, and
+    // what a truncation cannot do.
+    expect(section(content, '## child')).toContain('The nested child node.')
+  })
+
+  // Otherwise every truncation of one definition is headed the same string:
+  // colliding anchors, and the names the reader has to type nowhere on the page.
+  it('does not let a definition rename the truncations that stand for it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            'x-doc': { title: 'Node' },
+            properties: {
+              left: { $ref: '#/$defs/Node', description: 'Left child.' },
+              right: { $ref: '#/$defs/Node', description: 'Right child.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### left')
+    expect(content).toContain('### right')
+    expect(content.match(/### Node/g)).toBeNull()
+  })
+
+  // `order` sorts an occurrence among its siblings, which is the ref site's
+  // business for the same reason its heading is: carried down, one definition
+  // reordered every property that happened to truncate it.
+  it('does not let a definition reorder the truncations that stand for it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            'x-doc': { order: 0 },
+            properties: { aaa: { type: 'string' }, zzz: { $ref: '#/$defs/Node' } },
+          },
+        },
+      }),
+    )
+    expect(content.indexOf('### aaa')).toBeLessThan(content.indexOf('### zzz'))
+  })
+
+  // A definition written as a one-line alias documents itself; reading the end
+  // of the chain gave a truncation of `Alias` the prose of `Base`, while a
+  // reference to the same `Alias` one level up carried `Alias`'s.
+  it('carries the alias documentation a truncation was written with', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Alias' } },
+        $defs: {
+          Base: { type: 'object', description: 'Base prose.', properties: { again: { $ref: '#/$defs/Alias' } } },
+          Alias: { $ref: '#/$defs/Base', description: 'Alias prose.' },
+        },
+      }),
+    )
+    expect(section(content, '### again')).toContain('Alias prose.')
+    expect(section(content, '### again')).not.toContain('Base prose.')
+  })
+
+  // `allOf: [{ $ref: Base }]` at the root, where the base only restates
+  // `required`, names no property the root does not already list — and the
+  // early return handed the schema back with every marker it composed in
+  // dropped.
+  it('keeps a requirement the root composes in without naming a new field', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { type: 'string', description: 'A.' } },
+        allOf: [{ required: ['a'] }],
+      }),
+    )
+    expect(section(content, '## a')).toContain('**Required**')
+  })
+
+  // `#` and `#/` are seeded as seen; the root's own `$anchor` is the third
+  // spelling of the same node, and it expanded the whole document a second time
+  // under a property's name, page notes and all.
+  it('truncates a reference to the root written as its own anchor', () => {
+    const content = only(
+      generateMarkdownFiles({
+        $anchor: 'root',
+        title: 'Configuration',
+        'x-doc': { notes: ['A page-level note.'] },
+        properties: {
+          name: { type: 'string', description: 'Name.' },
+          nested: { $ref: '#root', description: 'A nested configuration.' },
+        },
+      }),
+    )
+    expect(section(content, '## nested')).toBe('## nested\n\n**Type:** `object`\n\nA nested configuration.\n')
+  })
+
+  // The ref site's keywords apply alongside the definition's, which is what the
+  // inliner does with them. Replacing the branch with the definition dropped a
+  // `required` written at the ref site, so one union was documented one way
+  // inlined and another truncated.
+  it('reads a required list written at a composition branch ref site', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { item: { $ref: '#/$defs/Item' } },
+        $defs: {
+          Base: { type: 'object', properties: { kind: { type: 'string', description: 'K.' } } },
+          Item: {
+            type: 'object',
+            allOf: [{ $ref: '#/$defs/Base', required: ['kind'] }],
+            properties: {
+              child: {
+                anyOf: [
+                  { $ref: '#/$defs/Item' },
+                  { type: 'object', required: ['kind'], properties: { kind: { type: 'string' } } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### kind')).toContain('**Required**')
+  })
+
+  // A truncation said `object` whatever it stood for, so a definition spelled
+  // `string | { … }` told the reader a string was not valid at every recursive
+  // position — and put a phantom `object` in the label of any union it sat in.
+  it('labels a truncation with the type its definition has', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { filter: { $ref: '#/$defs/Filter' } },
+        $defs: {
+          Filter: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'object', properties: { not: { $ref: '#/$defs/Filter', description: 'Negated.' } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(section(content, '### not')).toContain('**Type:** `string | object`')
+  })
+
+  // A ref site that declares its own shape is describing that shape, whatever
+  // the definition it points at is — reading the definition alone judged
+  // `{ $ref: Scalar, type: 'object' }` a scalar and dropped it from the
+  // intersection, which invents requirements rather than losing them.
+  it('lets a branch ref site type decide whether it votes as an object', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { node: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Scalar: { type: 'string' },
+          Node: {
+            type: 'object',
+            required: ['a'],
+            properties: {
+              a: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/Node' },
+                  { $ref: '#/$defs/Scalar', type: 'object', properties: { a: {}, b: {} } },
+                  { type: 'object', required: ['a', 'b'], properties: { a: {}, b: {} } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    // The retyped branch requires nothing, so nothing under `kid` is required —
+    // read as a scalar it would have been dropped and `a` marked instead.
+    expect(section(content, '#### a')).not.toContain('**Required**')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

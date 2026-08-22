@@ -36,18 +36,12 @@ export const stubRequired = (node: unknown): readonly string[] | undefined => {
 
 /**
  * What {@link couldBeObject} needs to read a document that still has `$ref`s in
- * it — how to resolve one, and the answers already worked out.
+ * it: how to resolve one.
  *
  * Only the inliner passes this; the collector reads an already-inlined
- * document, where every reference has been replaced by what it pointed at. The
- * answers are cached because whether a pointer describes an object depends only
- * on the document and the pointer, and a `$defs` graph asked the same question
- * of the same pointer thousands of times — nineteen seconds of one test.
+ * document, where every reference has been replaced by what it pointed at.
  */
-export type ShapeContext = {
-  readonly resolve: (ref: string) => unknown
-  readonly known: Map<string, boolean>
-}
+export type ShapeContext = { readonly resolve: (ref: string) => unknown }
 
 /**
  * True when a branch could describe an object, and so has a say in what an
@@ -69,26 +63,33 @@ export type ShapeContext = {
  * They used to disagree, and the same union was documented two ways on one
  * page depending on which route reached it.
  */
-export const couldBeObject = (node: SchemaProperty, context?: ShapeContext, depth = 0): boolean => {
+const couldBe = (
+  node: SchemaProperty,
+  context: ShapeContext | undefined,
+  seen: ReadonlySet<string>,
+  depth: number,
+): boolean => {
   // A stub stands for an object definition, so it is one — it just votes with
   // the requirements it carries rather than with the empty set it looks like.
   if (stubRequired(node) !== undefined) return true
   if (depth > MAX_SCHEMA_DEPTH) return true
-  // A branch reached through a reference is whatever the definition says: the
-  // `allOf`-wrapped `$ref` is how OpenAPI 3.0 attaches a description to one,
-  // and read without following it a scalar definition looks like an object —
-  // which is exactly the vote this function exists to refuse.
+  // A branch reached through a reference is whatever the definition says, with
+  // whatever the ref site says on top: the `allOf`-wrapped `$ref` is how
+  // OpenAPI 3.0 attaches a description to one, and read without following it a
+  // scalar definition looks like an object — which is exactly the vote this
+  // function exists to refuse. Read without the ref site's own keywords it
+  // answers for the wrong node, which is the same error pointing the other way.
   const ref = (node as Readonly<Record<string, unknown>>)['$ref']
   if (context !== undefined && typeof ref === 'string') {
-    // A reference already being read cannot settle the question by itself: a
-    // definition that is an object only if it is an object is one.
-    const known = context.known.get(ref)
-    if (known !== undefined) return known
-    context.known.set(ref, true)
+    // A reference already on the path cannot settle the question by itself: a
+    // definition that is an object only if it is an object is taken to be one,
+    // because keeping a branch in an intersection loses a marker while dropping
+    // one invents a marker, and the first is the safer way to be wrong.
+    if (seen.has(ref)) return true
     const target = context.resolve(ref)
-    const answer = isObject(target) ? couldBeObject(asSchema(target), context, depth + 1) : true
-    context.known.set(ref, answer)
-    return answer
+    if (!isObject(target)) return true
+    const { $ref: _resolved, ...siblings } = node as Readonly<Record<string, unknown>>
+    return couldBe(asSchema({ ...target, ...siblings }), context, new Set(seen).add(ref), depth + 1)
   }
   const declared = typeof node.type === 'string' ? [node.type] : Array.isArray(node.type) ? node.type : undefined
   if (declared !== undefined && !declared.includes('object')) return false
@@ -99,14 +100,18 @@ export const couldBeObject = (node: SchemaProperty, context?: ShapeContext, dept
   // for the whole node — that is how a `$ref` to `allOf: [{ type: 'string' }]`
   // describes a string, and reading only the node's own `type` let it vote on
   // what an object alternative requires.
-  if (!asArray(node.allOf).every((branch) => couldBeObject(asSchema(branch), context, depth + 1))) return false
+  if (!asArray(node.allOf).every((branch) => couldBe(asSchema(branch), context, seen, depth + 1))) return false
   // A union of alternatives is an object only if one of its alternatives is —
   // `anyOf: [{ type: 'string' }, { type: 'number' }]` is a scalar however many
   // ways it is spelled.
   for (const keyword of [node.anyOf, node.oneOf]) {
     const branches = asArray(keyword)
-    if (branches.length > 0 && !branches.some((branch) => couldBeObject(asSchema(branch), context, depth + 1)))
+    if (branches.length > 0 && !branches.some((branch) => couldBe(asSchema(branch), context, seen, depth + 1)))
       return false
   }
   return true
 }
+
+/** {@link couldBe}, from the top. */
+export const couldBeObject = (node: SchemaProperty, context?: ShapeContext): boolean =>
+  couldBe(node, context, new Set(), 0)
