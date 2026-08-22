@@ -17,7 +17,7 @@ export { aasTagsUnique } from './aas-tags-unique'
 export { asyncApiChannelParameters } from './asyncapi-channel-parameters'
 export { asyncApiChannelServers } from './asyncapi-channel-servers'
 export { asyncApiDocumentSchema } from './asyncapi-document-schema'
-export { asyncApiHeadersObject } from './asyncapi-headers-object'
+export { asyncApiHeadersObject, type IAsyncApiHeadersOptions } from './asyncapi-headers-object'
 export { asyncApiMessageExamples } from './asyncapi-message-examples'
 export { asyncApiMessageIdUnique } from './asyncapi-message-id-unique'
 export { asyncApiOperationIdUnique } from './asyncapi-operation-id-unique'
@@ -32,7 +32,7 @@ export const aasFunctions: FunctionRegistry = {
   asyncApiChannelParameters,
   asyncApiChannelServers,
   asyncApiDocumentSchema: asyncApiDocumentSchema as RulesetFunction,
-  asyncApiHeadersObject,
+  asyncApiHeadersObject: asyncApiHeadersObject as RulesetFunction,
   asyncApiMessageExamples,
   asyncApiMessageIdUnique,
   asyncApiOperationIdUnique,

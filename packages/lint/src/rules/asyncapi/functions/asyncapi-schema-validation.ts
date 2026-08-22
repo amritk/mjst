@@ -30,7 +30,7 @@ export const asyncApiSchemaValidation: RulesetFunction<unknown, IAsyncApiSchemaV
   for (const target of targets) {
     const findings = schemaFunction(
       target.value,
-      { schema: input, allErrors: true },
+      { schema: input, allErrors: true, skipUnusableSchema: true },
       { ...context, path: [...context.path, ...target.path] },
     )
     if (findings) results.push(...findings)

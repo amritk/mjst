@@ -57,7 +57,10 @@ export const serverVariables: RulesetFunction<unknown, IServerVariablesOptions |
   const variables = isObject(server['variables']) ? server['variables'] : {}
   const results: IFunctionResult[] = []
 
-  for (const template of templates) {
+  // Over the distinct names: the same variable written in both `host` and
+  // `pathname` — the normal way to write it — is one undefined variable, and
+  // iterating the raw list reported it once per occurrence, byte-identically.
+  for (const template of templateNames) {
     // `Object.hasOwn`, not `in`: variable names come from the document's server
     // URL, so a `{constructor}` template matched `Object.prototype` and its
     // missing variable went unreported.

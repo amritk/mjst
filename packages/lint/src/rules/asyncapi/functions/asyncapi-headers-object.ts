@@ -15,7 +15,22 @@ const MESSAGE = 'Headers schema type must be "object"'
  * that way the check moves inside `schema`, and headers written in some other
  * schema language are left alone, exactly as a non-AsyncAPI payload is.
  */
-export const asyncApiHeadersObject: RulesetFunction = (headers, _options, context): IFunctionResult[] => {
+/** Options for {@link asyncApiHeadersObject}. */
+export type IAsyncApiHeadersOptions = {
+  /**
+   * Whether `headers` may be a Multi Format Schema Object (`{ schemaFormat,
+   * schema }`). That shape is 3.0 only — in 2.x `headers` is a Schema Object and
+   * nothing else, so accepting the wrapper there let a `schema` key switch the
+   * check off entirely on a document that never had one.
+   */
+  multiFormat?: boolean
+}
+
+export const asyncApiHeadersObject: RulesetFunction<unknown, IAsyncApiHeadersOptions | undefined> = (
+  headers,
+  options,
+  context,
+): IFunctionResult[] => {
   // A boolean is a valid JSON Schema — and `false` rejects every message that
   // carries headers at all, which is never what an author meant. The structural
   // meta-schema accepts it, so this rule is the only thing that reports it.
@@ -25,10 +40,13 @@ export const asyncApiHeadersObject: RulesetFunction = (headers, _options, contex
   // target is where the type lives, so there is nothing to judge.
   if (typeof headers['$ref'] === 'string') return []
 
-  if (Object.hasOwn(headers, 'schema')) {
+  if (options?.multiFormat === true && Object.hasOwn(headers, 'schema')) {
     if (!isAsyncApiSchemaFormat(headers['schemaFormat'])) return []
     const inner = headers['schema']
-    if (isObject(inner) && inner['type'] === 'object') return []
+    if (!isObject(inner)) return [{ message: MESSAGE, path: [...context.path, 'schema'] }]
+    // The wrapped schema can be a reference for the same reason the unwrapped one
+    // can; the target is where the type lives.
+    if (typeof inner['$ref'] === 'string' || inner['type'] === 'object') return []
     return [{ message: MESSAGE, path: [...context.path, 'schema'] }]
   }
 

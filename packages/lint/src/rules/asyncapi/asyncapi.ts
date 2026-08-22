@@ -239,7 +239,7 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-operation-security': {
     description: 'Operation security must reference a defined security scheme.',
     formats: ['aas2'],
-    given: `${V2_OPERATIONS}.security[*]`,
+    given: [`${V2_OPERATIONS}.security[*]`, `${V2_COMPONENT_OPERATIONS}.security[*]`],
     severity: 'error',
     then: { function: 'asyncApiSecurity', functionOptions: { objectType: 'Operation' } },
   },
@@ -336,7 +336,7 @@ const v2Rules: Record<string, RuleEntry> = {
   'asyncapi-server-security': {
     description: 'Server security must reference a defined security scheme.',
     formats: ['aas2'],
-    given: '$.servers[*].security[*]',
+    given: ['$.servers[*].security[*]', '$.components.servers[*].security[*]'],
     severity: 'error',
     then: { function: 'asyncApiSecurity', functionOptions: { objectType: 'Server' } },
   },
@@ -463,7 +463,7 @@ const v3Rules: Record<string, RuleEntry> = {
     formats: ['aas3'],
     given: V3_ALL_MESSAGES.map((given) => `${given}.headers`),
     severity: 'error',
-    then: { function: 'asyncApiHeadersObject' },
+    then: { function: 'asyncApiHeadersObject', functionOptions: { multiFormat: true } },
   },
   'asyncapi-3-operation-description': {
     description: 'Operation must have a description.',
@@ -475,7 +475,7 @@ const v3Rules: Record<string, RuleEntry> = {
     description: 'Operation security must reference a defined security scheme.',
     formats: ['aas3'],
     resolved: false,
-    given: '$.operations[*].security[*]',
+    given: ['$.operations[*].security[*]', '$.components.operations[*].security[*]'],
     severity: 'error',
     then: { function: 'asyncApiSecurity', functionOptions: { objectType: 'Operation' } },
   },

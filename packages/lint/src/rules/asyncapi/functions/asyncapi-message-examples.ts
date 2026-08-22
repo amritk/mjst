@@ -53,7 +53,7 @@ export const asyncApiMessageExamples: RulesetFunction = (input, _options, contex
       if (part === 'payload' && !payloadIsSchema) continue
       const findings = schemaFunction(
         example[part],
-        { schema: isObject(message[part]) ? message[part] : {}, allErrors: true },
+        { schema: isObject(message[part]) ? message[part] : {}, allErrors: true, skipUnusableSchema: true },
         { ...context, path: [...context.path, ...origin, index, part] },
       )
       if (findings) results.push(...findings)

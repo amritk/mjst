@@ -23,8 +23,14 @@ describe('asyncapi fixtures', () => {
   for (const fixture of fixtures) {
     it(`lints ${fixture.name} without throwing, with ranged findings`, async () => {
       const findings = await lint(fixture.source, { ruleset: allRules, resolve })
+      const lines = fixture.source.split('\n')
       for (const finding of findings) {
-        expect(finding.range.start.line, finding.code as string).toBeGreaterThanOrEqual(0)
+        // `start.line >= 0` would be unfalsifiable — lines are 0-based and never
+        // negative, so zeroing every range left this green. Assert the range is
+        // inside the file and spans something instead.
+        expect(finding.range.start.line, finding.code as string).toBeLessThan(lines.length)
+        expect(finding.range.end.line, finding.code as string).toBeGreaterThanOrEqual(finding.range.start.line)
+        expect(finding.range.end.character, finding.code as string).toBeGreaterThan(0)
         expect(typeof finding.code).toBe('string')
       }
     })
@@ -38,8 +44,18 @@ describe('asyncapi fixtures', () => {
       const structural = fixture.name.startsWith('v3.0/') ? 'asyncapi-3-document-unresolved' : 'asyncapi-schema'
       const findings = await lint(fixture.source, { ruleset: allRules, resolve })
       // Published examples are structurally valid, so the structural rule is
-      // silent on them — that is the assertion, not merely "no crash".
+      // silent on them.
       expect(findings.filter((finding) => finding.code === structural)).toEqual([])
+
+      // Silence alone proves nothing: it is also what a rule that never ran
+      // produces, and switching structural validation off entirely used to leave
+      // this green. Break the document and require the same rule to speak.
+      const broken = JSON.stringify({ ...fixture.document, channels: 'not-a-map' })
+      const onBroken = await lint(broken, { ruleset: allRules, resolve })
+      expect(
+        onBroken.map((finding) => finding.code),
+        fixture.name,
+      ).toContain(structural)
     })
   }
 

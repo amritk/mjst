@@ -748,3 +748,194 @@ describe('server variable wording per major', () => {
     expect(await messagesFor(v3)).toContain('Server variable "unused" is not used in the address')
   })
 })
+
+describe('every tags-uniqueness location', () => {
+  const duplicate = [{ name: 'dup' }, { name: 'dup' }]
+
+  const V2_TAG_LOCATIONS: { name: string; doc: Record<string, unknown> }[] = [
+    { name: 'root tags', doc: { tags: duplicate } },
+    { name: 'servers', doc: { servers: { s: { url: 'wss://a', protocol: 'wss', tags: duplicate } } } },
+    {
+      name: 'components.servers',
+      doc: { components: { servers: { s: { url: 'wss://a', protocol: 'wss', tags: duplicate } } } },
+    },
+    { name: 'operation', doc: { channels: { c: { subscribe: { operationId: 'o', tags: duplicate } } } } },
+    {
+      name: 'operation trait',
+      doc: { channels: { c: { subscribe: { operationId: 'o', traits: [{ tags: duplicate }] } } } },
+    },
+    { name: 'components.operationTraits', doc: { components: { operationTraits: { t: { tags: duplicate } } } } },
+    {
+      name: 'components.channels operation',
+      doc: { components: { channels: { c: { subscribe: { operationId: 'o', tags: duplicate } } } } },
+    },
+    { name: 'message', doc: { channels: { c: { subscribe: { operationId: 'o', message: { tags: duplicate } } } } } },
+    { name: 'components.messages', doc: { components: { messages: { m: { tags: duplicate } } } } },
+  ]
+
+  for (const location of V2_TAG_LOCATIONS) {
+    it(`finds duplicate 2.x tags at ${location.name}`, async () => {
+      const doc = { asyncapi: '2.6.0', info: { title: 'T', version: '1.0.0' }, ...location.doc }
+      expect((await codesFor(doc)).has('asyncapi-tags-uniqueness')).toBe(true)
+    })
+  }
+
+  for (const location of [
+    { name: 'info.tags', doc: { info: { title: 'T', version: '1.0.0', tags: duplicate } } },
+    { name: 'servers', doc: { servers: { s: { host: 'a', protocol: 'ws', tags: duplicate } } } },
+    { name: 'operations', doc: { operations: { o: { action: 'send', tags: duplicate } } } },
+    { name: 'components.operationTraits', doc: { components: { operationTraits: { t: { tags: duplicate } } } } },
+  ]) {
+    it(`finds duplicate 3.0 tags at ${location.name}`, async () => {
+      const doc = { asyncapi: '3.0.0', info: { title: 'T', version: '1.0.0' }, ...location.doc }
+      expect((await codesFor(doc)).has('asyncapi-3-tags-uniqueness')).toBe(true)
+    })
+  }
+})
+
+describe('schemas the linter cannot resolve', () => {
+  const withPayload = (payload: unknown, examples: unknown): Record<string, unknown> => ({
+    asyncapi: '2.6.0',
+    info: { title: 'T', version: '1.0.0' },
+    channels: {
+      c: { subscribe: { operationId: 'o', description: 'd', message: { messageId: 'm', payload, examples } } },
+    },
+    components: { schemas: { User: { type: 'object', properties: { id: { type: 'string' } } } } },
+  })
+
+  it('says nothing about an example whose schema is a $ref it cannot follow', async () => {
+    // Two ways to get there, both ordinary: no resolver was injected (the
+    // README's own example), or the reference crosses into another file. The
+    // validator's complaint is about this package's API, not the document.
+    const internal = withPayload({ $ref: '#/components/schemas/User' }, [{ payload: { id: 'a' } }])
+    expect((await codesFor(internal)).has('asyncapi-message-examples')).toBe(false)
+
+    const crossFile = withPayload({ $ref: './schemas/user.yaml#/User' }, [{ payload: { id: 'a' } }])
+    expect((await codesFor(crossFile, { resolve: true })).has('asyncapi-message-examples')).toBe(false)
+  })
+
+  it('still reports an example that genuinely fails a schema it can follow', async () => {
+    const doc = withPayload({ type: 'object', properties: { id: { type: 'string' } } }, [{ payload: { id: 42 } }])
+    expect((await codesFor(doc)).has('asyncapi-message-examples')).toBe(true)
+  })
+
+  it('says nothing about a default or example under an unfollowable $ref', async () => {
+    const doc = {
+      asyncapi: '2.6.0',
+      info: { title: 'T', version: '1.0.0' },
+      channels: {},
+      components: {
+        schemas: {
+          S: {
+            type: 'object',
+            properties: { a: { $ref: './other.yaml#/A' } },
+            default: { a: 1 },
+            examples: [{ a: 2 }],
+          },
+        },
+      },
+    }
+    const codes = await codesFor(doc, { resolve: true })
+    expect(codes.has('asyncapi-schema-default')).toBe(false)
+    expect(codes.has('asyncapi-schema-examples')).toBe(false)
+  })
+})
+
+describe('headers, per major', () => {
+  it('does not let a 2.x headers object opt out by spelling a key "schema"', async () => {
+    // The Multi Format Schema Object is 3.0 only. Accepting the wrapper in 2.x
+    // meant a typeless headers object switched the check off by naming a key
+    // that major does not define.
+    const doc = {
+      asyncapi: '2.6.0',
+      info: { title: 'T', version: '1.0.0' },
+      channels: {
+        c: { subscribe: { operationId: 'o', message: { payload: {}, headers: { schema: { type: 'object' } } } } },
+      },
+    }
+    expect((await codesFor(doc)).has('asyncapi-headers-schema-type-object')).toBe(true)
+  })
+
+  it('accepts a 3.0 wrapped headers schema written as a $ref', async () => {
+    const doc = {
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      channels: {
+        c: {
+          address: 'a',
+          messages: {
+            m: {
+              headers: {
+                schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+                schema: { $ref: '#/components/schemas/H' },
+              },
+              payload: {},
+            },
+          },
+        },
+      },
+      components: { schemas: { H: { type: 'object' } } },
+    }
+    expect((await codesFor(doc)).has('asyncapi-3-headers-schema-type-object')).toBe(false)
+  })
+})
+
+describe('security in reusable locations', () => {
+  it('checks security wherever the ruleset already looks for the object it hangs off', async () => {
+    const cases: { name: string; doc: Record<string, unknown>; code: string }[] = [
+      {
+        name: '2.x components.channels operation',
+        code: 'asyncapi-operation-security',
+        doc: {
+          asyncapi: '2.6.0',
+          info: { title: 'T', version: '1.0.0' },
+          channels: {},
+          components: {
+            channels: { r: { subscribe: { operationId: 'o', security: [{ ghost: [] }], message: { payload: {} } } } },
+            securitySchemes: { real: { type: 'userPassword' } },
+          },
+        },
+      },
+      {
+        name: '2.x components.servers',
+        code: 'asyncapi-server-security',
+        doc: {
+          asyncapi: '2.6.0',
+          info: { title: 'T', version: '1.0.0' },
+          channels: {},
+          components: {
+            servers: { s: { url: 'wss://a', protocol: 'wss', security: [{ ghost: [] }] } },
+            securitySchemes: { real: { type: 'userPassword' } },
+          },
+        },
+      },
+      {
+        name: '3.0 components.operations',
+        code: 'asyncapi-3-operation-security',
+        doc: {
+          asyncapi: '3.0.0',
+          info: { title: 'T', version: '1.0.0' },
+          channels: {},
+          components: {
+            operations: { r: { action: 'send', security: [{ $ref: '#/components/securitySchemes/ghost' }] } },
+            securitySchemes: { real: { type: 'userPassword' } },
+          },
+        },
+      },
+    ]
+    for (const scenario of cases) {
+      expect((await codesFor(scenario.doc)).has(scenario.code), scenario.name).toBe(true)
+    }
+  })
+
+  it('reports a variable repeated across host and pathname once', async () => {
+    const doc = {
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      servers: { s: { host: '{stage}.api.test', pathname: '/{stage}/ws', protocol: 'ws' } },
+      channels: {},
+    }
+    const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules })
+    expect(findings.filter((finding) => finding.code === 'asyncapi-3-server-variables')).toHaveLength(1)
+  })
+})

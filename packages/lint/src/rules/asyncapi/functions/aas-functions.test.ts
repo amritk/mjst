@@ -435,6 +435,38 @@ describe('asyncApiMessageExamples', () => {
     expect(run(asyncApiMessageExamples, input, null, contextFor({}))).toEqual([])
   })
 
+  it('reports against the array the merge actually took, not the message', () => {
+    // Traits are merged with JSON Merge Patch, which replaces an array wholesale,
+    // so the effective `examples` belong to the last trait declaring one. Index
+    // `i` of the merged array has no relation to index `i` of the message's own,
+    // and reporting against `context.path` blamed a bystander example.
+    const input = {
+      payload: { type: 'string' },
+      examples: [{ payload: 'fine' }],
+      traits: [{ examples: [{ payload: 1 }, { payload: 2 }] }],
+    }
+    const found = asyncApiMessageExamples(input, null as never, contextFor({}, ['m'])) ?? []
+    expect(found.map((finding) => finding.path)).toEqual([
+      ['m', 'traits', 0, 'examples', 0, 'payload'],
+      ['m', 'traits', 0, 'examples', 1, 'payload'],
+    ])
+  })
+
+  it('reports against the message when no trait supplies examples', () => {
+    const input = { payload: { type: 'string' }, examples: [{ payload: 1 }], traits: [{ summary: 's' }] }
+    const found = asyncApiMessageExamples(input, null as never, contextFor({}, ['m'])) ?? []
+    expect(found.map((finding) => finding.path)).toEqual([['m', 'examples', 0, 'payload']])
+  })
+
+  it('prefers the last trait that declares examples', () => {
+    const input = {
+      payload: { type: 'string' },
+      traits: [{ examples: [{ payload: 1 }] }, { examples: [{ payload: 2 }] }],
+    }
+    const found = asyncApiMessageExamples(input, null as never, contextFor({}, ['m'])) ?? []
+    expect(found.map((finding) => finding.path)).toEqual([['m', 'traits', 1, 'examples', 0, 'payload']])
+  })
+
   it('judges the example against the schema a trait contributes', () => {
     const input = {
       traits: [{ payload: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } }],
