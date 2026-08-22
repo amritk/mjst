@@ -17,7 +17,20 @@
 
 ## Overview
 
-`@amritk/generate-markdown` renders a configuration reference table from a `config.schema.json` file and writes the result to `README.md`. It exists so the documentation for a CLI's flags can be regenerated from the schema itself, keeping the two in sync.
+`@amritk/generate-markdown` turns a `config.schema.json` into documentation, so
+the docs for a config cannot drift from the schema that validates it. It renders
+two shapes:
+
+| Shape | Entry point | Output |
+| --- | --- | --- |
+| **Config table** | `generateMarkdown()` | One HTML `<table>`, spliced into an existing `README.md` between marker comments |
+| **Prose reference** | `generateMarkdownFiles(schema, options?)` | A heading, a **Type:**, the description and an example per property — across as many markdown files as the schema declares |
+
+The table is the compact form for a CLI's flags. The prose reference is the form
+a hand-written configuration guide takes, and it is documented under
+[Prose reference](#prose-reference) below.
+
+### Config table
 
 For every property it reads the standard JSON Schema keywords:
 
@@ -469,11 +482,276 @@ Generated markdown:
 
 ---
 
+## Prose reference
+
+`generateMarkdownFiles` renders the shape a hand-written configuration guide
+takes: one heading per property, a **Type:** line, the description as real
+markdown, and a code example you can paste. Everything it says comes from the
+schema, and it splits across as many files as the schema asks for.
+
+```ts
+import { generateMarkdownFiles } from '@amritk/generate-markdown'
+
+const files = generateMarkdownFiles(schema, { language: 'javascript' })
+// [{ filename: 'configuration.md', content: '# Configuration…' }, …]
+```
+
+<details>
+<summary><strong>Input schema</strong></summary>
+
+```json
+{
+  "title": "Configuration",
+  "description": "Pass a universal configuration object to fine-tune your API reference.",
+  "x-doc": {
+    "file": "configuration.md",
+    "language": "javascript",
+    "layout": "none",
+    "sections": [
+      { "id": "properties", "title": "Properties", "sort": "alphabetical" }
+    ]
+  },
+  "properties": {
+    "darkMode": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether dark mode is on or off initially (light mode).",
+      "examples": [true],
+      "x-doc": { "section": "properties" }
+    },
+    "documentDownloadType": {
+      "enum": ["json", "yaml", "both", "none"],
+      "default": "both",
+      "description": "Sets the file type of the document to download.",
+      "examples": ["json"],
+      "x-doc": {
+        "section": "properties",
+        "footer": "Set it to `none` to hide the download button."
+      }
+    }
+  }
+}
+```
+
+</details>
+
+Generated markdown:
+
+````md
+# Configuration
+
+Pass a universal configuration object to fine-tune your API reference.
+
+## Properties
+
+### darkMode
+
+**Type:** `boolean`
+
+Whether dark mode is on or off initially (light mode).
+
+**Default:** `false`
+
+```javascript
+{
+  darkMode: true
+}
+```
+
+### documentDownloadType
+
+**Type:** `'json' | 'yaml' | 'both' | 'none'`
+
+Sets the file type of the document to download.
+
+**Default:** `'both'`
+
+```javascript
+{
+  documentDownloadType: 'json'
+}
+```
+
+Set it to `none` to hide the download button.
+````
+
+Two things there are worth pointing at. The **Type:** of an `enum` is the
+literal union, because the allowed values *are* the type a reader needs — so
+there is no separate "Allowed values" line repeating them. And neither property
+declares a code example: both were derived from `examples`, wrapped back into
+the shape of the config file. A property nested at `targets.typescript.packageName`
+derives `{ targets: { typescript: { packageName: '@acme/api' } } }`, which is
+something you can paste.
+
+### The `x-doc` keyword
+
+Everything documentation-only lives under one vendor extension, so it never
+gets mistaken for something that changes validation.
+
+On the **root schema**:
+
+| Member | Type | What it does |
+| --- | --- | --- |
+| `file` | `string` | Output path of the index page. Defaults to `index.md`. Paths are normalised, so `a.md` and `./a.md` are the same page. |
+| `title` | `string` | Page title, when the schema's own `title` is not the one you want. |
+| `description` | `string` | Prose under the page title, when it should differ from the schema's `description`. |
+| `language` | `string` | Fence language for examples, and the dialect values are written in — `json` (default) quotes keys, `javascript` does not. |
+| `layout` | `'headings' \| 'table' \| 'none'` | Default layout for nested properties. Defaults to `headings`. |
+| `sort` | `'schema' \| 'alphabetical'` | Default property order. Defaults to `schema`. |
+| `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
+| `sections` | `{ id, title?, description?, page?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. |
+| `example` / `examples` | see below | Code blocks under the page title. |
+
+On a **property** (and on any `$defs` entry a property references):
+
+| Member | Type | What it does |
+| --- | --- | --- |
+| `page` | `string` | Documents the property on that page instead of this one. |
+| `section` | `string` | Documents it under that section. |
+| `type` | `string` | Overrides the **Type:** label — for `AuthenticationConfiguration`, or `(heading: Heading) => string`, which JSON Schema cannot spell. |
+| `title` | `string` | Overrides the heading text. |
+| `heading` | `boolean` | `false` drops the heading and the **Type:** / **Required** markers, for the property that *is* the page or the section. Its children move up a level. The **Deprecated** callout, allowed values, examples and prose all stay — they are not restatements of the heading. |
+| `layout` | `'headings' \| 'table' \| 'none'` | How this property's children are documented. |
+| `sort` | `'schema' \| 'alphabetical'` | Order of this property's children. |
+| `order` | `number` | Sorts ahead of properties with a higher (or no) order. |
+| `hidden` | `boolean` | Keeps an internal option out of the docs entirely. |
+| `description` | `string` | Prose for the docs, when it should differ from the schema's `description`. |
+| `example` / `examples` | see below | Code blocks under the description. |
+| `note` / `notes` | `string` or `string[]` | Blockquotes above the examples. |
+| `footer` / `footers` | `string` or `string[]` | Markdown after the examples — the "and when you pass `direct`…" paragraph that only makes sense once the sample has been seen. |
+
+An **example** is either a code string, or an object:
+
+| Member | Type | What it does |
+| --- | --- | --- |
+| `code` | `string` | Literal code. |
+| `value` | any JSON | Serialized into the fence's language — a JSON schema can hold a JSON example without escaping it into a string first. |
+| `language` | `string` | Fence language, when it differs from the page's. |
+| `caption` | `string` | A line of prose above the fence. |
+
+### Which JSON Schema keywords it reads
+
+| Keyword | Where it lands |
+| --- | --- |
+| `title`, `description` | The page title, and each property's prose (full markdown, not just the first paragraph). A property name is rendered as a code span unless it is plain enough to survive a heading; an `x-doc.title` is prose and is not, having no row to be checked against |
+| `type`, `enum`, `const`, `anyOf` / `oneOf` / `allOf`, `items` | The **Type:** label — `string[]`, `'json' \| 'yaml'`, `string \| null` |
+| `default` | **Default:**, written in the page's language |
+| `examples` | The derived code example (the first one), plus **Examples:** for the rest. A tuple position past the first gets the inline list only — the positions before it are other shapes, and inventing them would produce a sample that does not validate |
+| `required` | **Required** on the property it names |
+| `deprecated` | A **Deprecated** callout above everything else |
+| `format`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `minItems`, `maxItems`, `uniqueItems` | **Constraints:** |
+| `properties`, `allOf`, `anyOf` / `oneOf`, `then` / `else`, `dependentSchemas` | The children. `allOf` branches all apply, so they contribute properties *and* requirements; alternatives and conditionals contribute properties only, and a field is required only when every alternative requires it. In the **Type:** label `allOf` reads as an intersection (`a & b`) and the alternatives as a union (`a \| b`); a branch that is itself a union is bracketed, so `(string \| number) & string` cannot be misread as the union it replaced |
+| `items`, `prefixItems`, `additionalProperties`, `patternProperties` | The children of a container — an array documents its item shape (every tuple position), a map documents its value shape (every pattern) under a `<name>` key. A container whose values are another container is followed as far as it goes, so a matrix or a list of maps documents the fields at the bottom of it. A node with named properties *and* a container documents both |
+| `$ref` / `$defs` / `$anchor` | Inlined before rendering — a JSON pointer (`#/$defs/x`), the empty pointer (`#`, the document itself, as a self-recursive schema writes it), or a plain-name fragment naming an `$anchor` (`#x`); a reference out of the document is not fetched. A sibling keyword at the ref site wins — except `properties` and `required`, which merge with the definition's (both applicators apply), and `x-doc`, which merges per key so a ref site can assign a page without discarding the definition's examples. A ref site's own `description` still wins over the definition's `x-doc.description` |
+| A recursive `$ref` | Collapsed where it repeats, so generation terminates. The truncation is labelled with the type its definition has (a `string \| { … }` definition stays `string \| object`, an `object[]` stays `object[]`), carries that definition's documentation the way any other ref site does — its prose, its `x-doc` type, layout, examples, whether it is hidden — carries what the definition says about the value itself (`deprecated`, `default`, `examples`, and every constraint keyword), and carries what it requires, so an alternative beside it keeps its **Required** markers. Five members stay behind, because they place and announce an occurrence rather than describe it, and a truncation is an occurrence with nothing underneath: `x-doc.page`, `section`, `title`, `heading` and `order`. A reference that resolves to the document itself — `#`, `#/`, or the root's own `$anchor` — carries nothing, the root being a page configuration rather than a definition. Reading what a definition requires follows a branch's ref-site keywords as well as its definition, refuses to re-enter a definition already on the path, and is worked out once per pointer. Past 512 levels of composition it stops with an error; past 10,000 nodes it reports nothing rather than refusing the page, so a `$defs` that composes in more ways than can be enumerated costs a **Required** marker and not the document |
+| root `anyOf` / `oneOf` / `allOf` | Flattened into one property list, requirements included — an `allOf` branch that only restates `required` still marks the fields it names. A property reached through alternatives is only marked required when every branch that could be an object requires it |
+
+Each property renders in a fixed order, so a page reads as a reference rather
+than a pile of keywords: heading → **Deprecated** → **Type:** → **Required** →
+description → **Default:** → **Allowed values:** → **Examples:** →
+**Constraints:** → notes → code examples → footers → children.
+
+A page holds one top-level heading: its title. A schema with no `title` (and no
+`x-doc.title`, and no `title` option) has no `#` — its properties still start at
+`##`, because promoting them would give a twelve-option config twelve `#`
+headings, which docs sites read as twelve pages. Under a `table` layout, a child
+that has a shape of its own gets a heading and a table below the row, carrying
+only what the row cannot: the rest of its description (the row holds the first
+paragraph), a `null` default (the column skips those), its allowed values,
+constraints, notes and examples, and its own children. A row is one line, so a
+code block never goes in one: a description opening with a fenced or indented
+sample gives the row its first paragraph of prose instead, and the sample itself
+prints below the row with its indentation intact.
+
+### Splitting across files
+
+A property assigned to a page is documented there and nowhere else. In a table
+layout its row survives on the parent's page, linked across to the file it moved
+to — so a reader still sees every option in one place:
+
+```json
+{
+  "x-doc": {
+    "file": "configuration.md",
+    "layout": "table",
+    "pages": [
+      { "id": "typescript", "file": "configuration/typescript.md", "title": "TypeScript" }
+    ]
+  },
+  "properties": {
+    "targets": {
+      "type": "object",
+      "properties": {
+        "typescript": {
+          "$ref": "#/$defs/typescriptTarget",
+          "x-doc": { "page": "typescript", "heading": false }
+        }
+      }
+    }
+  }
+}
+```
+
+That writes `configuration.md` (with a `typescript` row linking to
+`configuration/typescript.md`) and `configuration/typescript.md` (titled
+*TypeScript*, holding the target's options).
+
+Placement mistakes are errors rather than silent omissions — a typo in
+`x-doc.page` would otherwise drop a property out of the docs, and nothing about
+the output would look wrong. Generation refuses when:
+
+- a property names a page or a section the root never declares;
+- a property's `x-doc.page` disagrees with the page its section renders on;
+- two pages share an id, or resolve to the same file, or two sections share an id;
+- a page is written outside the output directory, or names no file at all;
+- the schema nests more than 512 levels deep, or follows composition that far,
+  which no reader can follow and which is deep enough to exhaust the stack.
+
+### Working examples
+
+Two realistic schemas and the markdown they generate are checked in:
+
+- [`fixtures/api-reference-config.schema.json`](./fixtures/api-reference-config.schema.json) → [one page](./fixtures/expected/api-reference-config/configuration.md)
+- [`fixtures/sdk-config.schema.json`](./fixtures/sdk-config.schema.json) → [three pages](./fixtures/expected/sdk-config/)
+
+The tests compare the generator against those files. After a deliberate change,
+`bun run generate-fixtures` refreshes them — and the diff shows exactly how
+every adopter's docs would change.
+
+---
+
 ## API
 
 ### `generateMarkdown(): Promise<void>`
 
 No arguments. Reads from `${cwd}/config.schema.json` and writes to `${cwd}/README.md`.
+
+### `generateMarkdownFiles(schema: unknown, options?: MarkdownOptions): readonly GeneratedFile[]`
+
+Renders the prose reference. Takes the parsed schema, returns
+`{ filename, content }` pairs — no filesystem access, so a caller can diff them
+in CI or write them wherever the docs live.
+
+`options` overrides what the schema declares, for callers that want the same
+schema written somewhere else: `file`, `title`, `language`, `layout`, `sort`,
+`headingLevel`.
+
+### `generateDocs(options?: GenerateDocsOptions): Promise<readonly GeneratedFile[]>`
+
+The same thing against the filesystem: reads `schemaPath` (default
+`${cwd}/config.schema.json`), writes every page under `outDir` (default `${cwd}`),
+creating directories as needed, and returns what it wrote. A page whose file
+would land outside `outDir` is refused rather than written.
+
+### `renderConfigTable(schema: ConfigSchema): string`
+
+The config table on its own, as a string. `$refs` must already be inlined —
+`dereferenceSchema` does that.
+
+### `dereferenceSchema(schema: Record<string, unknown>): unknown`
+
+Inlines every `$ref` against the document's own `$defs`, the way both renderers
+do before rendering.
 
 ---
 

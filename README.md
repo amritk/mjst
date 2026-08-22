@@ -54,7 +54,7 @@ The CLI (`mjst`) is the primary entry point; everything above is also published 
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
 | [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
-| [`@amritk/generate-markdown`](./packages/generate-markdown) | Renders a configuration-reference table from a `config.schema.json` into a README |
+| [`@amritk/generate-markdown`](./packages/generate-markdown) | Renders a config schema as documentation — a README table, or a multi-page prose reference |
 | [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, Valibot, Effect) into JSON Schema |
 | [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
 | [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |

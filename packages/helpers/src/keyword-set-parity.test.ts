@@ -42,7 +42,7 @@ const COPIES: ReadonlyArray<{ file: string; data: string; maps?: string }> = [
     maps: 'SCHEMA_MAPS',
   },
   {
-    file: '../../generate-markdown/src/index.ts',
+    file: '../../generate-markdown/src/helpers/dereference.ts',
     data: 'DATA_KEYWORDS',
     maps: 'SCHEMA_MAP_KEYWORDS',
   },

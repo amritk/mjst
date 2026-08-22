@@ -1,0 +1,459 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/sdk-config.schema.json",
+  "title": "Configuration",
+  "description": "SDK generation is driven by a single config object that describes the SDK name, version, target outputs, environments, resource tree, client settings, and publishing behavior.\n\nUse the config to keep SDK behavior predictable across generated targets. The top-level `targets` map controls which artifacts are generated, while `resources` controls the public client shape.",
+  "type": "object",
+  "x-doc": {
+    "file": "configuration.md",
+    "language": "json",
+    "layout": "table",
+    "example": {
+      "caption": "A minimal config:",
+      "value": {
+        "name": "Acme API",
+        "environments": {
+          "production": "https://api.acme.com"
+        },
+        "environmentOrder": ["production"],
+        "targets": {
+          "typescript": {
+            "packageName": "@acme/api"
+          }
+        },
+        "resources": {}
+      }
+    },
+    "pages": [
+      {
+        "id": "typescript",
+        "file": "configuration/typescript.md",
+        "title": "TypeScript",
+        "description": "Add `typescript` under `targets` to generate a TypeScript SDK package."
+      },
+      {
+        "id": "python",
+        "file": "configuration/python.md",
+        "title": "Python",
+        "description": "Add `python` under `targets` to generate a Python SDK package."
+      }
+    ],
+    "sections": [
+      {
+        "id": "identity",
+        "title": "Identity",
+        "description": "What the generated SDK calls itself, everywhere it has to name something."
+      },
+      {
+        "id": "output",
+        "title": "Output",
+        "description": "Which artifacts are generated, and what shape the public client takes."
+      },
+      {
+        "id": "runtime",
+        "title": "Runtime Behavior",
+        "description": "How the generated client behaves once somebody installs it.",
+        "sort": "alphabetical"
+      },
+      {
+        "id": "emitter",
+        "title": "Emitter Options",
+        "description": "How the TypeScript emitter names things.",
+        "page": "typescript"
+      },
+      {
+        "id": "destinations",
+        "title": "Destinations",
+        "description": "Use `destinations.production` to push generated output to a GitHub repository.",
+        "page": "typescript"
+      }
+    ]
+  },
+  "required": ["name", "version", "targets", "environments", "environmentOrder"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable SDK or product name used for generated package metadata and client naming.",
+      "examples": ["Acme API"],
+      "x-doc": {
+        "section": "identity",
+        "order": 1
+      }
+    },
+    "version": {
+      "type": "string",
+      "description": "Base SDK version. A target-level version overrides this for a specific artifact.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "examples": ["1.4.0"],
+      "x-doc": {
+        "section": "identity",
+        "order": 2
+      }
+    },
+    "internalBuildId": {
+      "type": "string",
+      "description": "Set by the build pipeline. Not something a user writes.",
+      "x-doc": {
+        "hidden": true
+      }
+    },
+    "legacyName": {
+      "type": "string",
+      "deprecated": true,
+      "description": "Former spelling of `name`.",
+      "x-doc": {
+        "section": "identity",
+        "note": "Remove it \u2014 `name` has replaced it and the two cannot both be set."
+      }
+    },
+    "targets": {
+      "type": "object",
+      "description": "Per-language packaging, publishing, and emitter options keyed by target id. Add a key for every artifact you want generated.",
+      "x-doc": {
+        "section": "output",
+        "example": {
+          "value": {
+            "targets": {
+              "typescript": {
+                "packageName": "@acme/api",
+                "packageManager": "pnpm"
+              },
+              "python": {
+                "packageName": "acme_api",
+                "projectName": "acme-api"
+              }
+            }
+          }
+        },
+        "footer": "Set `skip: true` on a target to keep its config in place without generating it."
+      },
+      "properties": {
+        "typescript": {
+          "$ref": "#/$defs/typescriptTarget",
+          "description": "TypeScript SDK target config."
+        },
+        "python": {
+          "$ref": "#/$defs/pythonTarget",
+          "description": "Python SDK target config."
+        },
+        "go": {
+          "$ref": "#/$defs/baseTarget",
+          "description": "Go SDK target config."
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "description": "Resource tree that defines the generated client and resource shape.",
+      "x-doc": {
+        "section": "output",
+        "layout": "none",
+        "example": {
+          "value": {
+            "resources": {
+              "users": {
+                "methods": {
+                  "list": "get /users",
+                  "create": "post /users"
+                },
+                "models": {
+                  "User": "User"
+                }
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/resource"
+      }
+    },
+    "environments": {
+      "type": "object",
+      "description": "Named base URLs the generated client can switch between.",
+      "additionalProperties": {
+        "type": "string",
+        "format": "uri"
+      },
+      "x-doc": {
+        "section": "runtime",
+        "example": {
+          "value": {
+            "environments": {
+              "production": "https://api.acme.com",
+              "sandbox": "https://sandbox.acme.com"
+            },
+            "environmentOrder": ["production", "sandbox"]
+          }
+        }
+      }
+    },
+    "environmentOrder": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "description": "Insertion order of environments. The first entry is the SDK default.",
+      "x-doc": {
+        "section": "runtime"
+      }
+    },
+    "clientSettings": {
+      "$ref": "#/$defs/clientSettings",
+      "description": "SDK-wide client constructor settings for auth, retries, timeouts, and headers.",
+      "x-doc": {
+        "section": "runtime"
+      }
+    },
+    "pagination": {
+      "type": "array",
+      "description": "Named pagination schemes referenced by method-level pagination settings.",
+      "x-doc": {
+        "section": "runtime"
+      },
+      "items": {
+        "type": "object",
+        "required": ["name", "type"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name methods reference this scheme by.",
+            "examples": ["cursor"]
+          },
+          "type": {
+            "enum": ["cursor", "cursorId", "cursorUrl", "offset", "pageNumber"],
+            "description": "Which pagination strategy the generated helper implements."
+          }
+        }
+      }
+    },
+    "ignoredEndpoints": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^(delete|get|head|options|patch|post|put|trace) .+$"
+      },
+      "description": "`\"<verb> <path>\"` endpoints to drop from generation entirely.",
+      "examples": [["get /me", "post /internal/reindex"]],
+      "x-doc": {
+        "section": "runtime"
+      }
+    }
+  },
+  "$defs": {
+    "baseTarget": {
+      "type": "object",
+      "properties": {
+        "packageName": {
+          "type": "string",
+          "description": "Import and package name for the generated package.",
+          "examples": ["@acme/api"]
+        },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the config in place without generating this target."
+        }
+      }
+    },
+    "typescriptTarget": {
+      "type": "object",
+      "required": ["packageName"],
+      "x-doc": {
+        "page": "typescript",
+        "example": {
+          "value": {
+            "targets": {
+              "typescript": {
+                "packageName": "@acme/api",
+                "packageManager": "pnpm",
+                "destinations": {
+                  "production": {
+                    "repo": "acme/acme-typescript"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "heading": false,
+        "layout": "table"
+      },
+      "properties": {
+        "packageName": {
+          "type": "string",
+          "description": "Import and package name for the generated TypeScript package.",
+          "examples": ["@acme/api"]
+        },
+        "packageManager": {
+          "enum": ["npm", "pnpm", "yarn", "bun"],
+          "default": "npm",
+          "description": "Package manager preference for generated package metadata."
+        },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the config in place without generating this target."
+        },
+        "options": {
+          "type": "object",
+          "description": "TypeScript emitter options.",
+          "x-doc": {
+            "section": "emitter",
+            "heading": false,
+            "layout": "table",
+            "footer": "`propertyCasing: 'sdk'` also generates a wire\u2194SDK remap, so request and response bodies stay correct on the network."
+          },
+          "properties": {
+            "propertyCasing": {
+              "enum": ["wire", "sdk"],
+              "default": "wire",
+              "description": "How generated properties and parameters are named. `wire` preserves the OpenAPI names, so `order_by` stays `order_by`; `sdk` emits the idiomatic `orderBy`."
+            }
+          }
+        },
+        "destinations": {
+          "type": "object",
+          "description": "GitHub destinations for generated output.",
+          "x-doc": {
+            "layout": "table"
+          },
+          "properties": {
+            "production": {
+              "$ref": "#/$defs/gitDestination",
+              "x-doc": {
+                "section": "destinations",
+                "heading": false,
+                "layout": "table"
+              }
+            }
+          }
+        }
+      }
+    },
+    "pythonTarget": {
+      "type": "object",
+      "required": ["packageName", "projectName"],
+      "x-doc": {
+        "page": "python",
+        "example": {
+          "value": {
+            "targets": {
+              "python": {
+                "packageName": "acme_api",
+                "projectName": "acme-api"
+              }
+            }
+          }
+        },
+        "heading": false,
+        "layout": "table"
+      },
+      "properties": {
+        "packageName": {
+          "type": "string",
+          "description": "Importable module name for the generated Python package.",
+          "examples": ["acme_api"]
+        },
+        "projectName": {
+          "type": "string",
+          "description": "Distribution name published to PyPI.",
+          "examples": ["acme-api"]
+        },
+        "skip": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the config in place without generating this target."
+        }
+      }
+    },
+    "gitDestination": {
+      "type": "object",
+      "required": ["repo"],
+      "description": "Push generated output to a GitHub repository.",
+      "x-doc": {
+        "layout": "table"
+      },
+      "properties": {
+        "repo": {
+          "type": "string",
+          "description": "GitHub repository in `owner/name` form.",
+          "examples": ["acme/acme-typescript"]
+        },
+        "branch": {
+          "type": "string",
+          "default": "main",
+          "description": "Default branch releases are promoted to. Generated output itself always goes to the fixed `scalar-generated` branch."
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "properties": {
+        "methods": {
+          "type": "object",
+          "description": "Generated methods, keyed by the name they take on the client.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "subresources": {
+          "type": "object",
+          "description": "Nested resources, same shape as this one.",
+          "additionalProperties": {
+            "$ref": "#/$defs/resource"
+          }
+        }
+      }
+    },
+    "clientSettings": {
+      "type": "object",
+      "x-doc": {
+        "layout": "table"
+      },
+      "properties": {
+        "defaultClientName": {
+          "type": "string",
+          "description": "Class name of the generated client.",
+          "examples": ["Acme"]
+        },
+        "defaultTimeout": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 0,
+          "description": "Request timeout in milliseconds."
+        },
+        "defaultHeaders": {
+          "type": "object",
+          "description": "Headers every generated request sends.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "defaultRetries": {
+          "type": "object",
+          "description": "Retry policy the generated runtime applies to failed requests.",
+          "properties": {
+            "maxRetries": {
+              "type": "integer",
+              "default": 2,
+              "minimum": 0,
+              "description": "Attempts after the first failure."
+            },
+            "initialDelaySeconds": {
+              "type": "number",
+              "default": 1,
+              "description": "Delay before the first retry."
+            },
+            "maxDelaySeconds": {
+              "type": "number",
+              "default": 10,
+              "description": "Ceiling for the backoff delay."
+            }
+          }
+        }
+      }
+    }
+  }
+}
