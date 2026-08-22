@@ -49,6 +49,12 @@ split two ways. Second, the body derives each word exactly once — checked over
 deliberately small grammar (no `?`, no `{n,m}`, a repeated atom may not run into
 what follows it, a trailing alternation must be settled by its first character).
 
+The waived level also comes back if anything repeats the exempted group. What the
+exemption establishes holds for one pass over the loop; `(BODY)*` still matches
+the empty string however unambiguous BODY is, so a second quantifier around it
+composes those matches — and a *bounded* one does too, which is the case that
+looks harmless. `^((-a*)*){0,50}$` is 2^n.
+
 The second condition is the one that is easy to miss, and omitting it is not
 safe: a backtracking engine explores derivations, not splits, so a body that
 matches its own substring k ways costs k^n over n repetitions even with every

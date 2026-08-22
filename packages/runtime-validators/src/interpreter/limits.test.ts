@@ -202,6 +202,32 @@ describe('limits', () => {
     expect(hasUnsafeRegex('(\\/((?:[^\\/~])|(~[01]))*)*')).toBe(false)
   })
 
+  it('gives back the waived level when something repeats the exempted group', () => {
+    // The exemption proves one pass over the loop derives each word one way. It
+    // does not make `(BODY)*` safe to nest, because that matches the empty string
+    // however unambiguous BODY is — so a second quantifier around it enumerates
+    // compositions. `^((-a*)*){0,50}$` waived the inner level and the outer
+    // `{0,50}`, being bounded, contributed none of its own, leaving the whole
+    // pattern at height 1: admitted, and 2^n — 1.7 seconds on 26 characters.
+    // Bounded is the trap; an unbounded wrapper was already flagged.
+    for (const unsafe of [
+      '^((-a*)*){0,50}$',
+      '^((\\.a+)*){0,50}$',
+      '^((\\.a+)*){20}$',
+      '^((\\.a+)*){1,8}$',
+      // The AsyncAPI dotted-identifier body with a length bound around it.
+      '^((\\.[A-Za-z_][A-Za-z0-9_]*)*){0,20}$',
+      // And the wrappers that were caught before, which must stay caught.
+      '^((\\.a+)*)*$',
+      '^((\\.a+)*){2,}$',
+    ]) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // The same body with nothing repeating it is the exemption's whole purpose.
+    expect(hasUnsafeRegex('^(-a*)*$')).toBe(false)
+    expect(hasUnsafeRegex('^(\\.[A-Za-z_][A-Za-z0-9_]*)*$')).toBe(false)
+  })
+
   it('reads an empty character class the way ECMAScript does, not the way POSIX does', () => {
     // `[]` is the *empty* class and `[^]` is *any character* — the `]` closes the
     // class in both. Honouring the POSIX "a leading `]` is a literal member" rule

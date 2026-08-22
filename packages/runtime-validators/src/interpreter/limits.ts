@@ -416,6 +416,14 @@ type RegionScan = {
   ambiguous: boolean
   /** Whether the region nests groups past {@link MAX_GROUP_DEPTH}, so it was never fully read. */
   tooDeep: boolean
+  /**
+   * Whether an {@link isAnchoredRepetition} exemption anywhere inside understates
+   * this region's height. A repetition the exemption cleared still matches the
+   * empty string, so a second quantifier *around* it composes those matches even
+   * when it is bounded — the level has to come back before this region is itself
+   * repeated. See the add-back in {@link scanRegion}.
+   */
+  exempted: boolean
   /** The region's own top-level alternation branches, so a quantifier on it can be judged. */
   branches: string[]
   /** Index just past the region (at the unmatched `)`, or the end of the source). */
@@ -934,6 +942,7 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
   let branchHeight = 0 // max over the atoms of the branch being scanned
   let ambiguous = false
   let tooDeep = false
+  let exempted = false
   const branches: string[] = []
   let branchStart = i
   let pos = i
@@ -955,12 +964,13 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
       if (depth >= MAX_GROUP_DEPTH) {
         // Stop descending rather than overflow the stack. The pattern is
         // reported unanalysable, which fails it — see MAX_GROUP_DEPTH.
-        return { height, ambiguous, tooDeep: true, branches, next: source.length }
+        return { height, ambiguous, tooDeep: true, exempted, branches, next: source.length }
       }
       inner = scanRegion(source, groupInnerStart(source, pos), depth + 1, budget)
       atomHeight = inner.height
       if (inner.ambiguous) ambiguous = true
       if (inner.tooDeep) tooDeep = true
+      if (inner.exempted) exempted = true
       after = source[inner.next] === ')' ? inner.next + 1 : inner.next
     } else if (c === '[') {
       after = skipClass(source, pos)
@@ -971,11 +981,20 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
     }
     const q = readQuantifier(source, after)
     if (q) {
+      // An exemption granted *inside* this atom is only good for one pass over
+      // it. `(BODY)*` matches the empty string however unambiguous BODY is, so
+      // repeating it again enumerates compositions — `^((-a*)*){0,50}$` is 2^n
+      // and was admitted, because the inner `*` had its level waived and the
+      // outer `{0,50}`, being bounded, added none of its own. Any quantifier at
+      // all restores the waived level; `?` is over-served by that and nobody
+      // writes it.
+      if (inner?.exempted === true) atomHeight += 1
       if (q.repetition) {
         // A repetition whose body is separator-anchored forces one split per
         // input, so it nests without adding anything to backtrack over and does
         // not count toward star height. See {@link isAnchoredRepetition}.
-        if (inner === null || !isAnchoredRepetition(inner, budget)) atomHeight += 1
+        if (inner !== null && isAnchoredRepetition(inner, budget)) exempted = true
+        else atomHeight += 1
         // Only an *unbounded* repetition turns an ambiguous alternation into
         // exponential backtracking: `(a|a){1,10}` tops out at 2^10 parses.
         if (inner !== null && hasAmbiguousAlternation(inner.branches, budget)) ambiguous = true
@@ -987,7 +1006,7 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
   }
   branches.push(source.slice(branchStart, pos))
   if (branchHeight > height) height = branchHeight
-  return { height, ambiguous, tooDeep, branches, next: pos }
+  return { height, ambiguous, tooDeep, exempted, branches, next: pos }
 }
 
 /**
