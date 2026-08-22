@@ -13,6 +13,16 @@ Schemas that previously threw at `validate()` time, or needed
 across 1.5 million generated patterns the exemption never turned an accepted
 pattern into a rejected one.
 
+**One such loop per concatenation.** Two of them side by side keep being refused,
+because two nullable loops compose — see below — and the rule does not try to work
+out whether a particular pair can. So `^\d+(\.\d+)*$` builds where it used to
+throw, while `^\d+(\.\d+)*(-[a-z]+)*$` still throws, even though its two loops
+have disjoint separators and it is in fact linear. Both were refused before this
+release, so nothing regresses; but if you were hoping a semver or host-and-port
+pattern would start building, it will not. `allowUnsafePatterns` remains the
+escape hatch, and a rule that proved the two loops' alphabets disjoint would be
+the way to lift it.
+
 **Two parser fixes ride along, and they do newly reject a narrow set.** Both were
 pre-existing bugs that let a genuinely exponential pattern through:
 
@@ -55,7 +65,7 @@ the empty string however unambiguous BODY is. A quantifier around it composes
 those matches — a *bounded* one too, which is the case that looks harmless, and
 `^((-a*)*){0,50}$` is 2^n. So does simply writing the loop twice in a row:
 nothing pins which copy owns which word, and `^(-a*)*(-a*)*…$` with eight of them
-is degree-7 polynomial, 5.6 seconds on 43 characters. One loop is the case the
+is degree-8 polynomial, 5.6 seconds on 43 characters. One loop is the case the
 exemption is for; two is where it stops holding.
 
 The second condition is the one that is easy to miss, and omitting it is not

@@ -1024,7 +1024,7 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
   branches.push(source.slice(branchStart, pos))
   // Two exempted loops written side by side compose exactly the way one under a
   // quantifier does, and for the same reason: each is nullable, so nothing pins
-  // which loop owns which word. `^(-a*)*(-a*)*…$` with eight of them is degree-7
+  // which loop owns which word. `^(-a*)*(-a*)*…$` with eight of them is degree-8
   // polynomial — 5.6 seconds on 43 characters — and every one of those loops was
   // refused outright before the exemption existed. One is the case the exemption
   // is for; two is where it stops holding.

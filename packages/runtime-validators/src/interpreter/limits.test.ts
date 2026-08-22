@@ -207,7 +207,8 @@ describe('limits', () => {
     // instead of nesting. Each loop takes the exemption on its own merits, so
     // each scores height 1 and the pattern scores 1 — but each is nullable, so
     // nothing pins which loop owns which word, and w words spread over k loops
-    // C(w+k-1, k-1) ways. Eight of them is degree-7 polynomial: 5.6 seconds on
+    // C(w+k-1, k-1) ways — and each of those costs a walk, so the runtime is one
+    // degree higher than the count. Eight of them is degree-8 polynomial: 5.6 seconds on
     // 43 characters, from a 50-byte pattern, and every one of those loops was
     // refused outright before the exemption existed.
     const sequence = (count: number, body: string): string => `^${`(${body})*`.repeat(count)}$`
@@ -224,6 +225,17 @@ describe('limits', () => {
     // One is the case the exemption exists for, and stays admitted.
     expect(hasUnsafeRegex(sequence(1, '-a*'))).toBe(false)
     expect(hasUnsafeRegex(sequence(1, '\\.[A-Za-z_][A-Za-z0-9_]*'))).toBe(false)
+
+    // The count is per alternation branch, and both halves of that need pinning
+    // — deleting either the add-back at `|` or the reset at `|` left the whole
+    // suite green. Two loops inside one branch must still be caught...
+    expect(hasUnsafeRegex('(?:(-a*)*(-b*)*|c)')).toBe(true)
+    expect(hasUnsafeRegex('^(?:(\\.\\w+)*(-\\w+)*|x)$')).toBe(true)
+    // ...and one loop in each of two branches must not be, since only one of
+    // them ever runs. Without the reset the count carries across the `|` and
+    // these are refused for a composition that cannot happen.
+    expect(hasUnsafeRegex('^(\\.\\w+)*$|^(\\/\\w+)*$')).toBe(false)
+    expect(hasUnsafeRegex('^(?:(\\.\\w+)*|(\\/\\w+)*)$')).toBe(false)
   })
 
   it('gives back the waived level when something repeats the exempted group', () => {
