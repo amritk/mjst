@@ -16,9 +16,12 @@ const ruleset = createAsyncApiRuleset() // recommended rules, like `spectral:asy
 const findings = await lint(document, { ruleset })
 ```
 
-54 rules, named to match Spectral's so an existing `.spectral.yml` that
-re-severities individual rules keeps working — the one Spectral rule with no
-counterpart here is `asyncapi-3-document-resolved`, for the reason below. 43 of
+56 rules. The names match Spectral's, so an existing `.spectral.yml` that
+re-severities individual rules keeps working; the one Spectral rule with no
+counterpart here is `asyncapi-3-document-resolved`, for the reason below, and
+two have no Spectral counterpart at all — `asyncapi-3-server-security` and
+`asyncapi-3-server-variables`, which close a gap where the 3.0 Server Object's
+`security` and `variables` were checked in 2.x and nowhere in 3.0. 45 of
 them are gated by format,
 with the 3.x-only rules under an `asyncapi-3-` prefix, because 3.0 moved
 operations to the top level and tags under `info` — a 2.x document never picks up
@@ -55,7 +58,7 @@ Three things worth knowing:
   its declaration and nowhere else. A rule that validates schema *content* —
   payloads, headers, examples — must see the dereferenced tree, or a
   `$ref`'d schema is an opaque `{$ref: …}` it cannot judge (and, briefly, wrongly
-  flagged). `ruleset-manifest.test.ts` pins the choice for all 54 rules alongside
+  flagged). `ruleset-manifest.test.ts` pins the choice for all 56 rules alongside
   severity and gating.
 - **The structural rules skip a version they have no schema for.** A future
   `2.7.0` document keeps getting the style rules, but is never judged against

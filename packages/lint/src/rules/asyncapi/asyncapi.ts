@@ -491,6 +491,26 @@ const v3Rules: Record<string, RuleEntry> = {
       functionOptions: { match: '^application/vnd\\.aai\\.asyncapi([+;])' },
     },
   },
+  'asyncapi-3-server-security': {
+    // 3.0 keeps `security` on the Server Object, in the same
+    // Reference-or-inline-scheme shape `asyncapi-3-operation-security` checks.
+    description: 'Server security must reference a defined security scheme.',
+    formats: ['aas3'],
+    resolved: false,
+    given: '$.servers[*].security[*]',
+    severity: 'error',
+    then: { function: 'asyncApiSecurity', functionOptions: { objectType: 'Server' } },
+  },
+  'asyncapi-3-server-variables': {
+    // The 2.x rule reads `url`; 3.0 splits the address into `host` and
+    // `pathname`, which the shared check now understands.
+    description: 'Server variables must be defined, and none may be redundant.',
+    formats: ['aas3'],
+    resolved: false,
+    given: ['$.servers[*]', '$.components.servers[*]'],
+    severity: 'error',
+    then: { function: 'aasServerVariables' },
+  },
   'asyncapi-3-server-no-empty-variable': {
     // 3.0 split the 2.x `url` into `host` and `pathname`, and either may be
     // templated.

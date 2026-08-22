@@ -31,6 +31,8 @@ const MANIFEST: Record<string, string> = {
   'asyncapi-3-server-no-empty-variable': '1 rec resolved aas3',
   'asyncapi-3-server-no-trailing-slash': '1 rec resolved aas3',
   'asyncapi-3-server-not-example-com': '1 opt resolved aas3',
+  'asyncapi-3-server-security': '0 rec unresolved aas3',
+  'asyncapi-3-server-variables': '0 rec unresolved aas3',
   'asyncapi-3-tag-description': '1 opt resolved aas3',
   'asyncapi-3-tags': '1 rec resolved aas3',
   'asyncapi-3-tags-alphabetical': '1 opt resolved aas3',
@@ -99,8 +101,8 @@ describe('the shipped ruleset', () => {
   })
 
   it('ships the rule count the changeset advertises', () => {
-    expect(all.rules).toHaveLength(54)
-    expect(recommended.size).toBe(46)
+    expect(all.rules).toHaveLength(56)
+    expect(recommended.size).toBe(48)
   })
 
   it('names every 3.x-only rule with the asyncapi-3- prefix, and no other rule', () => {

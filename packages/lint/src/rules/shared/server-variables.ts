@@ -3,19 +3,32 @@ import { isObject } from './helpers'
 
 /**
  * Validates a Server Object's `variables`, mirroring Spectral's `serverVariables`:
- * every `{template}` in the URL must have a matching variable and vice versa, and
- * each defined variable must have a `default`, a non-empty `enum` when present,
- * and a `default` that is listed in that `enum`.
+ * every `{template}` in the address must have a matching variable and vice
+ * versa, and each defined variable must have a `default`, a non-empty `enum`
+ * when present, and a `default` that is listed in that `enum`.
  *
- * OpenAPI and AsyncAPI 2.x model the Server Object the same way (a templated
- * `url` plus a `variables` map), so both rulesets run this one implementation —
- * see `oasServerVariables` and `aasServerVariables`.
+ * All three specs model the Server Object the same way — a templated address
+ * plus a `variables` map — differing only in which field carries the address
+ * (see {@link TEMPLATED_FIELDS}), so they run this one implementation. See
+ * `oasServerVariables` and `aasServerVariables`.
  */
+/**
+ * The fields of a Server Object that may carry `{variable}` templates. OpenAPI
+ * and AsyncAPI 2.x put the whole address in `url`; AsyncAPI 3.0 split it into
+ * `host` and `pathname`, either of which may be templated.
+ */
+const TEMPLATED_FIELDS = ['url', 'host', 'pathname'] as const
+
 export const serverVariables: RulesetFunction = (server, _options, context) => {
-  if (!isObject(server) || typeof server['url'] !== 'string') return []
-  // A `Set` alongside the list: the URL's template count and the `variables` map
-  // are both document-sized, so a linear membership scan per variable was quadratic.
-  const templates = [...server['url'].matchAll(/\{([^}]+)\}/g)].map((m) => m[1] as string)
+  if (!isObject(server)) return []
+  const templated = TEMPLATED_FIELDS.map((field) => server[field]).filter(
+    (value): value is string => typeof value === 'string',
+  )
+  if (templated.length === 0) return []
+  // A `Set` alongside the list: the address's template count and the `variables`
+  // map are both document-sized, so a linear membership scan per variable was
+  // quadratic.
+  const templates = templated.flatMap((value) => [...value.matchAll(/\{([^}]+)\}/g)].map((m) => m[1] as string))
   const templateNames = new Set(templates)
   const variables = isObject(server['variables']) ? server['variables'] : {}
   const results: IFunctionResult[] = []
@@ -32,7 +45,7 @@ export const serverVariables: RulesetFunction = (server, _options, context) => {
   for (const [name, variable] of Object.entries(variables)) {
     if (!templateNames.has(name)) {
       results.push({
-        message: `Server variable "${name}" is not used in the URL`,
+        message: `Server variable "${name}" is not used in the address`,
         path: [...context.path, 'variables', name],
       })
     }

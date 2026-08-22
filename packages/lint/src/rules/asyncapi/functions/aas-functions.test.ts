@@ -177,9 +177,18 @@ describe('asyncApiChannelParameters', () => {
     ])
   })
 
-  it('says nothing when there is no parameters object to check', () => {
-    expect(run(asyncApiChannelParameters, { address: 'user/{id}' }, null, contextFor({}))).toEqual([])
+  it('reports an undescribed parameter when there is no parameters object at all', () => {
+    // Requiring the key to exist first meant `parameters: {}` was reported and
+    // omitting it entirely was not — the same undescribed parameter, silent in
+    // the form an author is far likelier to write.
+    expect(run(asyncApiChannelParameters, { address: 'user/{id}' }, null, contextFor({}))).toEqual([
+      'Channel parameters must be described: id',
+    ])
+    // Nothing to say about an untemplated address, or a non-channel.
+    expect(run(asyncApiChannelParameters, { address: 'user/signedup' }, null, contextFor({}))).toEqual([])
     expect(run(asyncApiChannelParameters, 'not-a-channel', null, contextFor({}))).toEqual([])
+    // A `parameters` that is not a map is a shape the structural rules report.
+    expect(run(asyncApiChannelParameters, { address: 'user/{id}', parameters: [] }, null, contextFor({}))).toEqual([])
   })
 
   it('does not read a component channel key as an address', () => {

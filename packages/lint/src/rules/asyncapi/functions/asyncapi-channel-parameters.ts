@@ -38,8 +38,13 @@ const channelAddress = (
  */
 export const asyncApiChannelParameters: RulesetFunction = (channel, _options, context): IFunctionResult[] => {
   if (!isObject(channel)) return []
-  const parameters = channel['parameters']
-  if (!isObject(parameters)) return []
+  // An absent `parameters` object is treated as an empty one. Requiring the key
+  // to exist before checking meant `parameters: {}` was reported and omitting it
+  // entirely was not — the same undescribed parameter, silent in the form an
+  // author is far more likely to write.
+  const declaredParameters = channel['parameters']
+  if (declaredParameters !== undefined && !isObject(declaredParameters)) return []
+  const parameters = isObject(declaredParameters) ? declaredParameters : {}
 
   const address = channelAddress(channel, context.path, context.document.data)
   if (address === undefined) return []

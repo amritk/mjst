@@ -5,8 +5,7 @@ import { loadAsyncApiFixtures } from '../../../../../fixtures/asyncapi/load-fixt
 import { type LintResolver, lint } from '../../core'
 import { asyncapi, createAsyncApiRuleset } from './index'
 
-// Robustness smoke test: run the whole preset (every rule, including the broad
-// recursive-descent payload/example givens) against the vendored real-world
+// Robustness smoke test: run the whole preset against the vendored real-world
 // documents. This guards against a rule throwing or mis-behaving on real
 // specs, and confirms findings always carry a concrete source range.
 const allRules = createAsyncApiRuleset({ extends: [[asyncapi, 'all']] })

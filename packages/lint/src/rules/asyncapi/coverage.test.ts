@@ -390,12 +390,27 @@ describe('reusable channels and pointer escapes', () => {
     ...extra,
   })
 
-  it('checks the servers of a channel written under components', async () => {
-    const doc = v3({
-      channels: { c: { $ref: '#/components/channels/cc' } },
-      components: { channels: { cc: { address: 'a/b', servers: [{ $ref: '#/servers/nope' }] } } },
+  it('lets a reusable 3.0 channel point at a server anywhere', async () => {
+    // Channel Object `servers`, AsyncAPI 3.0: a root channel "MUST point to a
+    // subset of server definitions located in the root Servers Object, and MUST
+    // NOT point to … the Components Object", but a channel in the Components
+    // Object "MAY point to a Server Object in any location". Reporting the
+    // second was an error-severity finding on a document the spec allows.
+    const reusable = v3({
+      channels: { c: { address: 'a', servers: [{ $ref: '#/servers/a b' }] } },
+      components: {
+        servers: { staging: { host: 'staging.test', protocol: 'kafka' } },
+        channels: { R: { address: 'b', servers: [{ $ref: '#/components/servers/staging' }] } },
+      },
     })
-    expect((await codesFor(doc, { resolve: true })).has('asyncapi-3-channel-servers')).toBe(true)
+    expect((await codesFor(reusable, { resolve: true })).has('asyncapi-3-channel-servers')).toBe(false)
+
+    // A root channel pointing outside `#/servers` is still an error.
+    const root = v3({
+      channels: { c: { address: 'a', servers: [{ $ref: '#/components/servers/staging' }] } },
+      components: { servers: { staging: { host: 'staging.test', protocol: 'kafka' } } },
+    })
+    expect((await codesFor(root, { resolve: true })).has('asyncapi-3-channel-servers')).toBe(true)
   })
 
   it('resolves a percent-encoded server pointer', async () => {
@@ -566,5 +581,64 @@ describe('references inside a message', () => {
     })
     const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules, resolve })
     expect(findings.filter((finding) => finding.code === 'asyncapi-channel-servers')).toHaveLength(1)
+  })
+})
+
+describe('the 3.0 Server Object', () => {
+  const v3 = (servers: Record<string, unknown>, components: Record<string, unknown> = {}): Record<string, unknown> => ({
+    asyncapi: '3.0.0',
+    info: { title: 'T', version: '1.0.0' },
+    servers,
+    channels: {},
+    ...(Object.keys(components).length > 0 ? { components } : {}),
+  })
+
+  it('checks server security against the declared schemes', async () => {
+    // 3.0 keeps `security` on the Server Object; only the operation-level rule
+    // existed, so a dangling scheme reference on a server was unreported.
+    const dangling = v3(
+      { p: { host: 'a.test', protocol: 'ws', security: [{ $ref: '#/components/securitySchemes/ghost' }] } },
+      { securitySchemes: { real: { type: 'userPassword' } } },
+    )
+    expect((await codesFor(dangling)).has('asyncapi-3-server-security')).toBe(true)
+
+    const declared = v3(
+      { p: { host: 'a.test', protocol: 'ws', security: [{ $ref: '#/components/securitySchemes/real' }] } },
+      { securitySchemes: { real: { type: 'userPassword' } } },
+    )
+    expect((await codesFor(declared)).has('asyncapi-3-server-security')).toBe(false)
+  })
+
+  it('checks variables against templates in host and pathname', async () => {
+    // 3.0 split the 2.x `url` into `host` and `pathname`; the shared check only
+    // knew about `url`, so 3.0 server variables went unchecked entirely.
+    const wrong = v3({
+      p: { host: '{stage}.api.test', pathname: '/{ws}', protocol: 'ws', variables: { unused: { default: 'x' } } },
+    })
+    const codes = await codesFor(wrong)
+    expect(codes.has('asyncapi-3-server-variables')).toBe(true)
+
+    const right = v3({
+      p: {
+        host: '{stage}.api.test',
+        pathname: '/{ws}',
+        protocol: 'ws',
+        variables: { stage: { default: 'dev' }, ws: { default: 'events' } },
+      },
+    })
+    expect((await codesFor(right)).has('asyncapi-3-server-variables')).toBe(false)
+  })
+
+  it('reports a templated 2.x channel with no parameters object at all', async () => {
+    const doc = {
+      asyncapi: '2.6.0',
+      info: { title: 'T', version: '1.0.0' },
+      channels: {
+        'user/{userId}': {
+          subscribe: { operationId: 'o', description: 'd', message: { messageId: 'm', payload: { type: 'object' } } },
+        },
+      },
+    }
+    expect((await codesFor(doc)).has('asyncapi-channel-parameters')).toBe(true)
   })
 })
