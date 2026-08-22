@@ -123,7 +123,9 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // pass can do, so patterns that are genuinely exponential still get through.
 // Known gaps: multi-character ambiguous branches (`(a|aa)+`), ambiguity across
 // concatenated quantifiers (`a*a*$`), two overlapping *classes* with no literal
-// side to pivot on (`([0-9]|\d)+`, `(\s|\n)+`), and a nullable body under
+// side to pivot on (`([0-9]|\d)+`, `(\s|\n)+`), two *spellings* of one character
+// that rule 2 cannot equate (`(\u{0061}|\u{61})+` is `(a|a)+`), and a nullable
+// body under
 // *bounded* quantifiers — `^((?:a){0,3}[^/]{0,3}\.)*$` never reaches star height
 // 2, since `{0,3}` is not a repetition, yet it runs 251 seconds on 49
 // characters. That last one is the widest of them: rule 1 counts only unbounded
@@ -206,12 +208,46 @@ const readQuantifier = (source: string, i: number): { repetition: boolean; nulla
   return null
 }
 
-/** Advances past a `[...]` character class, returning the index after the closing `]`. */
+/**
+ * How far past `\` an escape beginning at `i` reaches.
+ *
+ * Two code units for almost everything, but `\u{...}`, `\p{...}` and `\P{...}`
+ * carry a braced payload, and stopping after `\u` left the `{61}` of `\u{61}`
+ * looking like a *bounded* quantifier to {@link readQuantifier} — which then
+ * swallowed the real `+` after it as a possessive marker. `^(\u{61}+)+$` is
+ * `^(a+)+$` written out, and it was admitted while its ASCII twin was refused.
+ *
+ * The payload search is capped rather than run to the end of the source: an
+ * unclosed `\u{` in a hostile pattern would otherwise cost a scan of everything
+ * after it, once per occurrence.
+ */
+const escapeEnd = (source: string, i: number): number => {
+  const kind = source[i + 1]
+  if ((kind === 'u' || kind === 'p' || kind === 'P') && source[i + 2] === '{') {
+    const limit = Math.min(source.length, i + 3 + MAX_BRACE_ESCAPE)
+    for (let j = i + 3; j < limit; j++) if (source[j] === '}') return j + 1
+  }
+  return i + 2
+}
+
+/** Longest braced escape payload read by {@link escapeEnd}; `\p{Script=Katakana}` is far inside it. */
+const MAX_BRACE_ESCAPE = 64
+
+/**
+ * Advances past a `[...]` character class, returning the index after the closing `]`.
+ *
+ * There is deliberately no "a leading `]` is a literal member" rule here. That is
+ * POSIX; ECMAScript has no such thing — `[]` is the *empty* class and `[^]` is
+ * *any character*, with the `]` closing the class in both. Honouring the POSIX
+ * reading made `[^]` swallow everything up to the next `]` in the whole pattern
+ * into one bogus atom, so `^[^]*(a+)+$` hid a textbook `(a+)+` from the screen
+ * and was admitted — 4 seconds on 28 characters, where the screen-visible twin
+ * `^[^a]*(a+)+$` is refused.
+ */
 const skipClass = (source: string, i: number): number => {
   let j = i + 1
   if (source[j] === '^') j++
-  if (source[j] === ']') j++ // a leading `]` is a literal member
-  while (j < source.length && source[j] !== ']') j += source[j] === '\\' ? 2 : 1
+  while (j < source.length && source[j] !== ']') j = source[j] === '\\' ? escapeEnd(source, j) : j + 1
   return j + 1
 }
 
@@ -444,7 +480,7 @@ const readToken = (body: string, i: number): { consuming: boolean; next: number 
   // is what lets the sweeps stay flat instead of modelling the group tree.
   if (c === '(') return { consuming: false, next: groupInnerStart(body, i) }
   if (NON_CONSUMING_CHARS.has(c)) return { consuming: false, next: i + 1 }
-  return { consuming: true, next: c === '[' ? skipClass(body, i) : c === '\\' ? i + 2 : i + 1 }
+  return { consuming: true, next: c === '[' ? skipClass(body, i) : c === '\\' ? escapeEnd(body, i) : i + 1 }
 }
 
 /**
@@ -470,7 +506,7 @@ const anchorAt = (
   if (end === 'front') {
     const first = body[0]
     if (first === undefined) return null
-    const to = first === '\\' ? 2 : 1
+    const to = first === '\\' ? escapeEnd(body, 0) : 1
     const char = singleLiteralChar(body.slice(0, to))
     if (char === null || readQuantifier(body, to) !== null) return null
     return { char, from: 0, to }
@@ -530,7 +566,7 @@ const groupEnd = (source: string, i: number): number => {
   while (j < source.length) {
     const c = source[j]
     if (c === '\\') {
-      j += 2
+      j = escapeEnd(source, j)
       continue
     }
     if (c === '[') {
@@ -553,7 +589,7 @@ const topLevelBranches = (source: string): string[] => {
   while (j < source.length) {
     const c = source[j]
     if (c === '\\') {
-      j += 2
+      j = escapeEnd(source, j)
       continue
     }
     if (c === '[') {
@@ -655,7 +691,7 @@ const readUnits = (body: string, budget: ScreenBudget): Unit[] | null => {
           if (budget.anchorChars < 0) return null
           const b = branch[j] as string
           if (b !== '.' && b !== '[' && b !== '\\' && REGEX_METACHARS.includes(b)) return null
-          const next = b === '[' ? skipClass(branch, j) : b === '\\' ? j + 2 : j + 1
+          const next = b === '[' ? skipClass(branch, j) : b === '\\' ? escapeEnd(branch, j) : j + 1
           if (readQuantifier(branch, next) !== null) return null
           first ??= branch.slice(j, next)
           j = next
@@ -669,7 +705,7 @@ const readUnits = (body: string, budget: ScreenBudget): Unit[] | null => {
     }
 
     if (c !== '.' && c !== '[' && c !== '\\' && REGEX_METACHARS.includes(c)) return null
-    const next = c === '[' ? skipClass(body, i) : c === '\\' ? i + 2 : i + 1
+    const next = c === '[' ? skipClass(body, i) : c === '\\' ? escapeEnd(body, i) : i + 1
     const q = readQuantifier(body, next)
     if (q !== null && !q.repetition) return null
     units.push({
@@ -894,7 +930,7 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
     } else if (c === '[') {
       after = skipClass(source, pos)
     } else if (c === '\\') {
-      after = pos + 2
+      after = escapeEnd(source, pos)
     } else {
       after = pos + 1
     }

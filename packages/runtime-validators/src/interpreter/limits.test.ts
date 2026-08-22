@@ -202,6 +202,35 @@ describe('limits', () => {
     expect(hasUnsafeRegex('(\\/((?:[^\\/~])|(~[01]))*)*')).toBe(false)
   })
 
+  it('reads an empty character class the way ECMAScript does, not the way POSIX does', () => {
+    // `[]` is the *empty* class and `[^]` is *any character* — the `]` closes the
+    // class in both. Honouring the POSIX "a leading `]` is a literal member" rule
+    // made the scan run on to the next `]` anywhere in the pattern, swallowing
+    // everything between into one bogus atom: `^[^]*(a+)+$` hid a textbook
+    // `(a+)+` and was admitted, at 4 seconds on 28 characters.
+    for (const unsafe of ['^[^]*(a+)+$', '^([^]+x)+$', '^abc[^]def(x+)+$', '^[]*(a+)+$']) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    // The twin the screen could always see, for comparison.
+    expect(hasUnsafeRegex('^[^a]*(a+)+$')).toBe(true)
+    // A `]` immediately after the class is an ordinary literal, not part of it.
+    expect(hasUnsafeRegex('^[a]]*$')).toBe(false)
+  })
+
+  it('reads a braced escape as one atom, so its quantifier is not lost', () => {
+    // `\u{61}`, `\p{L}` and `\P{L}` carry a braced payload. Advancing two code
+    // units past the `\` left `{61}` looking like a bounded quantifier, and
+    // `readQuantifier` then swallowed the real `+` after it as a possessive
+    // marker — so `^(\u{61}+)+$`, which *is* `^(a+)+$`, lost a level of star
+    // height and was admitted while its ASCII twin was refused.
+    for (const unsafe of ['^(\\u{61}+)+$', '^(\\u{61}*)*$', '^(\\p{L}+)+$', '^(\\P{L}+)+$']) {
+      expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
+    }
+    expect(hasUnsafeRegex('^(a+)+$')).toBe(true)
+    // An unclosed brace escape must not send the scan off the end of the source.
+    expect(typeof hasUnsafeRegex(`^(\\u{${'6'.repeat(500)}+)+$`)).toBe('boolean')
+  })
+
   it('refuses a body carrying a surrogate, which it reads a code unit at a time', () => {
     // The screen's tokenizers advance one UTF-16 code unit per atom, but the
     // runtime compiles with `u`, where a surrogate pair is a single atom and the

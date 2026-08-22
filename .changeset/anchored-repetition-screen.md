@@ -9,8 +9,20 @@ The ReDoS screen now admits separator-delimited repetitions it used to reject.
 `(<body><sep>)*` — a dotted identifier chain, a slash-delimited pointer, a
 comma-separated list — is no longer refused as "nested unbounded quantifiers".
 Schemas that previously threw at `validate()` time, or needed
-`limits: { allowUnsafePatterns: true }`, now build. Nothing that used to be
-accepted is rejected: the change is one-directional.
+`limits: { allowUnsafePatterns: true }`, now build. That part is one-directional:
+across 1.5 million generated patterns the exemption never turned an accepted
+pattern into a rejected one.
+
+Two parser fixes that ride along **do** newly reject a narrow set, all of them
+genuinely unsafe. The class scanner had been applying the POSIX "a leading `]` is
+a literal member" rule, which ECMAScript does not have — `[]` is the empty class
+and `[^]` is any character — so a `[^]` swallowed the rest of the pattern into
+one atom and hid whatever followed: `^[^]*(a+)+$` contains a textbook `(a+)+` and
+was accepted, at 4 seconds on 28 characters. And a braced escape (`\u{61}`,
+`\p{L}`) was read as two code units, leaving `{61}` to be taken for a bounded
+quantifier that then swallowed the real `+`, so `^(\u{61}+)+$` — which *is*
+`^(a+)+$` — lost a level of star height. Both were pre-existing. Ordinary uses of
+`[^]`, `[]`, `\u{...}` and `\p{...}` are unaffected.
 
 `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` and
 `^\$message\.(header|payload)#(\/(([^\/~])|(~[01]))*)*` — both from the official
