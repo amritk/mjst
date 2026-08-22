@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { isInsideDirectory } from '#helpers/inside-directory'
 import { generateMarkdownFiles } from '#reference/generate-markdown-files'
 import type { GeneratedFile, MarkdownOptions } from '#types/doc'
 
@@ -45,12 +46,9 @@ export const generateDocs = async (options: GenerateDocsOptions = {}): Promise<r
     // The filenames come from the schema, so they are input: `../../etc/passwd`
     // (or an absolute path) must not be able to write outside the output
     // directory the caller chose.
-    // Compared by path segment, not by string prefix: `..extra.md` is an
-    // ordinary file name that lives right where it says it does, and the page
-    // model already accepts it.
-    const inside = relative(targetDir, target)
-    const climbs = inside === '..' || inside.startsWith(`..${sep}`) || inside.startsWith('../')
-    if (isAbsolute(file.filename) || climbs || isAbsolute(inside)) {
+    // The page model refuses these already; this is the last check before a
+    // write, for a file that reaches here another way.
+    if (!isInsideDirectory(targetDir, file.filename)) {
       throw new Error(
         `The page file "${file.filename}" resolves outside the output directory. Use a path relative to it.`,
       )

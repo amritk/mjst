@@ -46,11 +46,31 @@ describe('collect-properties', () => {
     const byConst = { anyOf: [{ const: 'x' }, { type: 'object', properties: { a: {} }, required: ['a'] }] }
     expect(required(byConst)).toEqual(['a'])
 
-    // `["object","null"]` is the ordinary nullable-object spelling, and it can.
+    // `["object","null"]` is the ordinary nullable-object spelling, and it can
+    // be an object — so it votes, and the alternative is not required.
     const nullable = {
       anyOf: [{ type: ['object', 'null'] }, { type: 'object', properties: { a: {} }, required: ['a'] }],
     }
     expect(required(nullable)).toEqual([])
+
+    // The same spelling of a type that cannot: read as "no declared type" this
+    // would vote, and strip the marker off the object alternative.
+    const nullableString = {
+      anyOf: [{ type: ['string', 'null'] }, { type: 'object', properties: { a: {} }, required: ['a'] }],
+    }
+    expect(required(nullableString)).toEqual(['a'])
+  })
+
+  // A mixed enum can be an object, so it votes like any other object branch.
+  it('lets an enum that admits an object vote', () => {
+    const node = {
+      anyOf: [{ enum: [{ mode: 'x' }, 'off'] }, { type: 'object', properties: { a: {} }, required: ['a'] }],
+    }
+    expect(required(node)).toEqual([])
+  })
+
+  it('ignores a required entry that is not a name', () => {
+    expect(required({ properties: { a: {} }, required: ['a', 1, null] } as never)).toEqual(['a'])
   })
 
   // A branch that names no fields still constrains objects: a document taking
@@ -108,6 +128,16 @@ describe('collect-properties', () => {
     }
     expect(names(node)).toEqual(['a', 'b', 'c', 'd'])
     expect(required(node)).toEqual([])
+  })
+
+  // Draft-07's spelling of `dependentSchemas`, whose value is either a schema
+  // or a list of property names — the list has no properties to contribute.
+  it('reads the schema form of draft-07 dependencies and skips the list form', () => {
+    const node = {
+      properties: { a: {} },
+      dependencies: { a: { properties: { b: {} } }, c: ['a'] },
+    }
+    expect(names(node as never)).toEqual(['a', 'b'])
   })
 
   it('answers whether anything is documented below a node', () => {

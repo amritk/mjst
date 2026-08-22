@@ -105,6 +105,9 @@ const intersect = (sets: readonly ReadonlySet<string>[]): ReadonlySet<string> =>
  *   the markers off every field of the object form.
  * - `then` / `else` / `dependentSchemas` add properties that apply under a
  *   condition. Same treatment as the alternatives: shown, never required.
+ *   Draft-07 spells the last one `dependencies`, whose value is either a
+ *   schema (same meaning) or a list of property names (no properties of its
+ *   own); the array form contributes nothing and is skipped.
  */
 const collect = (
   node: SchemaProperty,
@@ -140,7 +143,11 @@ const collect = (
   for (const conditional of [node.then, node.else]) {
     if (isObject(conditional)) merge(properties, collect(asSchema(conditional), depth + 1).properties)
   }
-  for (const dependent of Object.values(asProperties(node.dependentSchemas))) {
+  for (const dependent of [
+    ...Object.values(asProperties(node.dependentSchemas)),
+    ...Object.values(asProperties(node.dependencies)),
+  ]) {
+    if (!isObject(dependent)) continue
     merge(properties, collect(asSchema(dependent), depth + 1).properties)
   }
 

@@ -1671,8 +1671,14 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content.match(/```/g)).toHaveLength(2)
+    // The whole sample stays in the cell it belongs to. Counting fences proves
+    // nothing — cut or uncut there are two runs of backticks; what matters is
+    // that neither half leaked out of the row into the page.
+    const row = content.split('\n').find((line) => line.startsWith('| `theme`')) ?? ''
+    expect(row).toContain('"dark": true')
+    expect(row).toContain('"accent": "red"')
     expect(content).toContain('| `dark` | `boolean` | Dark. |')
+    expect(content.split('\n').filter((line) => /^\s*```/.test(line))).toHaveLength(0)
   })
 
   // A leaf option has no children, and everything else it carries had nowhere
@@ -1746,13 +1752,18 @@ describe('generate-markdown-files', () => {
   })
 
   it('reads the other spelling of the empty pointer too', () => {
-    const content = only(
-      generateMarkdownFiles({
-        title: 'Menu',
-        properties: { children: { type: 'array', items: { $ref: '#/' } } },
-      }),
-    )
-    expect(content).toContain('**Type:** `object[]`')
+    const files = generateMarkdownFiles({
+      title: 'Menu',
+      'x-doc': { pages: [{ id: 'extra', file: 'extra.md', title: 'Extra' }] },
+      properties: {
+        settings: { type: 'object', 'x-doc': { page: 'extra' }, properties: { deep: { type: 'string' } } },
+        children: { type: 'array', items: { $ref: '#/' } },
+      },
+    })
+    expect(files[0]?.content).toContain('**Type:** `object[]`')
+    // Like `#`, it is a reference to the document the walk is already inside.
+    const extra = files.find((file) => file.filename === 'extra.md')?.content ?? ''
+    expect(extra.match(/## settings/g)).toHaveLength(1)
   })
 
   // A `$defs` map whose key is a keyword name is still a map of definitions.
@@ -1817,6 +1828,67 @@ describe('generate-markdown-files', () => {
     )
     expect(content.indexOf('### apple')).toBeLessThan(content.indexOf('### zebra'))
     expect(content.lastIndexOf('### zebra')).toBeLessThan(content.lastIndexOf('### apple'))
+  })
+
+  it('reads a ref-shaped value under enum as the value it is', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { enum: [{ $ref: '#/$defs/other' }], description: 'One allowed value.' } },
+        $defs: { other: { type: 'string', description: 'WRONG' } },
+      }),
+    )
+    expect(content).toContain('#/$defs/other')
+    expect(content).not.toContain('WRONG')
+  })
+
+  // The keys of these maps are author-chosen names, so a definition or a
+  // property called `default` is not the `default` keyword.
+  it('steps over every name-keyed map when inlining', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          // Each map is keyed by a name that is also a keyword, which is the
+          // whole reason these maps are stepped over rather than walked.
+          patterned: { type: 'object', patternProperties: { default: { $ref: '#/$defs/named' } } },
+          dependent: { type: 'object', dependentSchemas: { enum: { $ref: '#/$defs/named' } } },
+          legacy: { type: 'object', dependencies: { const: { $ref: '#/$defs/named' } } },
+          old: { $ref: '#/definitions/example' },
+        },
+        $defs: { named: { type: 'object', properties: { fromDefs: { type: 'string' } } } },
+        definitions: { example: { type: 'string', description: 'From definitions.' } },
+      }),
+    )
+    expect(content.match(/### fromDefs/g)).toHaveLength(3)
+    expect(content).toContain('From definitions.')
+  })
+
+  it('resolves an $anchor inside a map whose key is a keyword name', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          profiles: { type: 'object', properties: { default: { $anchor: 'profile', type: 'string' } } },
+          active: { $ref: '#profile', description: 'The active profile.' },
+        },
+      }),
+    )
+    expect(content).toContain('## active')
+    expect(content).toContain('**Type:** `string`')
+  })
+
+  // A recursive reference keeps what the ref site said about it.
+  it('keeps a ref-site sibling on a collapsed recursive reference', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/node' } },
+        $defs: {
+          node: {
+            type: 'object',
+            properties: { child: { $ref: '#/$defs/node', description: 'The nested node.' } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('The nested node.')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

@@ -29,6 +29,8 @@ export type SchemaProperty = {
   readonly then?: SchemaProperty
   readonly else?: SchemaProperty
   readonly dependentSchemas?: Readonly<Record<string, SchemaProperty>>
+  /** Draft-07's spelling. A schema value means `dependentSchemas`; an array of names does not. */
+  readonly dependencies?: Readonly<Record<string, SchemaProperty | readonly string[]>>
   readonly patternProperties?: Readonly<Record<string, SchemaProperty>>
   readonly 'x-cli-flag'?: string
   readonly 'x-icon'?: string

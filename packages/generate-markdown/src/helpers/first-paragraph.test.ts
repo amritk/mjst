@@ -37,4 +37,48 @@ describe('first-paragraph', () => {
   it('keeps the remaining paragraphs separated', () => {
     expect(remainingParagraphs('One.\n\nTwo.\n\nThree.')).toBe('Two.\n\nThree.')
   })
+
+  // A blank line inside a fence is part of the sample. Splitting on it took the
+  // fence apart, and printing the second half opened one that never closed.
+  it('keeps a fenced block whole', () => {
+    const value = 'Intro.\n```json\n{\n  "a": 1,\n\n  "b": 2\n}\n```'
+    expect(firstParagraph(value)).toBe(value)
+    expect(remainingParagraphs(value)).toBe('')
+  })
+
+  it('keeps a tilde fence whole', () => {
+    const value = 'Intro.\n~~~\nline\n\nline\n~~~'
+    expect(firstParagraph(value)).toBe(value)
+  })
+
+  // A fence closes on its own character: a `~~~` line inside a backtick fence
+  // is sample text, not the end of the block.
+  it('does not close a backtick fence with a tilde one', () => {
+    const value = 'Intro.\n```\n~~~\n\nstill inside\n```'
+    expect(firstParagraph(value)).toBe(value)
+  })
+
+  it('reads a fence that opens the description', () => {
+    const value = '```\na\n\nb\n```\n\nAfter.'
+    expect(firstParagraph(value)).toBe('```\na\n\nb\n```')
+    expect(remainingParagraphs(value)).toBe('After.')
+  })
+
+  // Four spaces makes an indented code block, not a fence, so the line does not
+  // open one and the blank line after it still ends the paragraph.
+  it('does not open a fence from an indented code block', () => {
+    expect(firstParagraph('Intro.\n    ```\n\nAfter.')).toBe('Intro.\n    ```')
+    expect(remainingParagraphs('Intro.\n    ```\n\nAfter.')).toBe('After.')
+  })
+
+  it('needs three markers to open a fence', () => {
+    expect(remainingParagraphs('Intro ``code``.\n\nAfter.')).toBe('After.')
+  })
+
+  // An unclosed fence runs to the end, so nothing after it is a new paragraph.
+  it('runs an unclosed fence to the end', () => {
+    const value = 'Intro.\n```\nstill inside\n\nstill inside'
+    expect(firstParagraph(value)).toBe(value)
+    expect(remainingParagraphs(value)).toBe('')
+  })
 })
