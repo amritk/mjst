@@ -198,7 +198,11 @@ export const MAX_INLINED_NODES = 100_000
  * seconds of that for a 3 KB schema — and then failed on the node allowance
  * anyway, so the whole 75 seconds bought an error message.
  */
-type Budget = { remaining: number; readonly required: Map<string, readonly string[]> }
+type Budget = {
+  remaining: number
+  readonly required: Map<string, readonly string[]>
+  readonly skeleton: Map<string, Record<string, unknown> | undefined>
+}
 
 /**
  * Follows the `$ref` hops a definition is reached through, so the node a stub
@@ -276,13 +280,12 @@ const requiredOf = (
         'nothing composed that deep can be read as documentation.',
     )
   }
-  if (budget.remaining-- <= 0) {
-    throw new Error(
-      `Reading what a recursive definition requires passed ${MAX_REQUIRED_NODES} nodes. Its $defs compose in ` +
-        'too many ways to enumerate — flatten the composition, or the **Required** markers below it would be ' +
-        'guesses.',
-    )
-  }
+  // Running out reports nothing, which understates: a marker this could not
+  // work out is a marker missing, and a marker missing beats refusing the page.
+  // The depth bound above still throws — that one says the schema is nested
+  // past what anything here can read, which is a different claim from "this
+  // composes in more ways than I will enumerate".
+  if (budget.remaining-- <= 0) return []
   const names = new Set(asStringArray(node['required']))
   const branchesOf = (keyword: unknown): readonly Branch[] =>
     (Array.isArray(keyword) ? keyword : []).map((branch): Branch => {
@@ -374,7 +377,7 @@ const typeSkeleton = (
   root: Record<string, unknown>,
   node: unknown,
   seen: ReadonlySet<string>,
-  budget: { remaining: number },
+  budget: { remaining: number; exhausted: boolean },
   depth = 0,
 ): Record<string, unknown> | undefined => {
   if (!isObject(node) || depth > MAX_SCHEMA_DEPTH) return undefined
@@ -384,11 +387,23 @@ const typeSkeleton = (
   // materialising a label and then died of an out-of-memory on the way to
   // printing an error. Running out means the label falls back to `object`,
   // which is what it was before there was a skeleton at all.
-  if (budget.remaining-- <= 0) return undefined
+  if (budget.remaining-- <= 0) {
+    // The whole label falls back, not the branches that happened to fit: a
+    // union cut off partway is a *narrower* claim than the schema makes, which
+    // is a confident lie rather than the `object` the fallback promises.
+    budget.exhausted = true
+    return undefined
+  }
   const ref = node['$ref']
   if (typeof ref === 'string') {
     if (seen.has(ref)) return undefined
-    return typeSkeleton(root, resolveDefinition(root, ref), new Set(seen).add(ref), budget, depth + 1)
+    // The ref site's own keywords apply over the definition's, the way the
+    // inliner applies them — read without those, one pointer was labelled
+    // `Elem[]` where it was inlined and `object[]` where it was truncated.
+    const { $ref: _resolved, ...rest } = node
+    const target = resolveDefinition(root, ref)
+    const merged = isObject(target) ? { ...target, ...rest } : rest
+    return typeSkeleton(root, merged, new Set(seen).add(ref), budget, depth + 1)
   }
   const shape: Record<string, unknown> = {}
   for (const key of ['type', 'enum', 'const']) if (node[key] !== undefined) defineOwn(shape, key, node[key])
@@ -454,6 +469,28 @@ const carriedDoc = (
     ...(Object.keys(doc).length > 0 && { doc }),
     ...(Object.keys(value).length > 0 && { value }),
   }
+}
+
+/**
+ * {@link typeSkeleton} for one pointer, worked out once per walk.
+ *
+ * The label a pointer gets depends only on the document and the pointer, and
+ * the allowance bounds *one* reading — but the number of truncation sites is
+ * itself exponential, so a 1 KB schema spent eleven seconds working out the
+ * same handful of labels over and over. This is the same cache `requiredOf`
+ * has, for the same reason.
+ */
+const skeletonOfRef = (
+  root: Record<string, unknown>,
+  ref: string,
+  budget: Budget,
+): Record<string, unknown> | undefined => {
+  if (budget.skeleton.has(ref)) return budget.skeleton.get(ref)
+  const reading = { remaining: MAX_SKELETON_NODES, exhausted: false }
+  const skeleton = typeSkeleton(root, resolvePointer(root, ref), new Set([ref]), reading)
+  const answer = reading.exhausted ? undefined : skeleton
+  budget.skeleton.set(ref, answer)
+  return answer
 }
 
 /** {@link requiredOf} for one pointer, worked out once per walk. */
@@ -598,9 +635,7 @@ export const dereference = (
       // about prose holds on both routes: a ref site writing its own
       // `description` is describing *this* use and wins over the definition's.
       const stub: Record<string | symbol, unknown> = {
-        ...(typeSkeleton(root, resolvePointer(root, ref), new Set([ref]), {
-          remaining: MAX_SKELETON_NODES,
-        }) ?? { type: 'object' }),
+        ...(skeletonOfRef(root, ref, budget) ?? { type: 'object' }),
         ...carried,
         ...resolvedSiblings,
         ...mergedDoc(carried, resolvedSiblings),
@@ -656,4 +691,5 @@ export const dereferenceSchema = (parsed: Record<string, unknown>): ConfigSchema
   dereference(parsed, parsed, new Set(['#', '#/']), {
     remaining: MAX_INLINED_NODES,
     required: new Map(),
+    skeleton: new Map(),
   }) as ConfigSchema

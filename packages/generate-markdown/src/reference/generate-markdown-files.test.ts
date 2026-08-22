@@ -2634,10 +2634,41 @@ describe('generate-markdown-files', () => {
   })
 
   // Refusing to re-enter a definition already on the path is what makes the
-  // reading terminate; this is the backstop for the schema that terminates and
-  // still takes longer than anyone will wait. Silence would leave the reader
-  // with **Required** markers that are guesses.
-  it('refuses a schema whose definitions compose in too many ways to read', () => {
+  // reading terminate; the allowance is the backstop for the schema that
+  // terminates and still takes longer than anyone will wait. Running out
+  // reports nothing rather than refusing — a marker missing beats no page, the
+  // same trade the shape reader makes.
+  it('understates rather than refusing a definition that composes too many ways', () => {
+    const branches = Array.from({ length: 12_000 }, () => ({ required: ['k'] }))
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/N' } },
+        $defs: {
+          N: {
+            type: 'object',
+            anyOf: branches,
+            properties: {
+              k: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/N' },
+                  { type: 'object', required: ['k'], properties: { k: { type: 'string' } } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    // The page is written. Every branch asks for `k`, which the collector reads
+    // in full at the top; the truncation gave up partway and says nothing.
+    expect(section(content, '### k')).toContain('**Required**')
+    expect(section(content, '#### k')).not.toContain('**Required**')
+  })
+
+  // What refuses a `$defs` that composes in too many ways is the inliner: the
+  // document it would have to expand is the thing that cannot be written.
+  it('still refuses a schema too big to inline', () => {
     const names = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
     const $defs = Object.fromEntries(
       names.map((name) => [
@@ -2650,10 +2681,8 @@ describe('generate-markdown-files', () => {
         },
       ]),
     )
-    // The number too: an allowance the reader cannot see is one nobody can
-    // tell has been set to something useless.
     expect(() => generateMarkdownFiles({ properties: { root: { $ref: '#/$defs/a' } }, $defs })).toThrow(
-      /passed 10000 nodes.*compose in too many ways/s,
+      /more than 100000 nodes/,
     )
   })
 
@@ -4123,6 +4152,116 @@ describe('generate-markdown-files', () => {
   it('code-spans a name with a run of spaces inside it', () => {
     const content = only(generateMarkdownFiles({ properties: { 'a  b': { type: 'string' } } }))
     expect(content).toContain('## `a  b`')
+  })
+
+  // The label a pointer gets depends only on the document and the pointer, and
+  // the allowance bounds one reading — but the number of truncation sites is
+  // itself exponential, so a 1 KB schema spent eleven seconds working out the
+  // same handful of labels over and over.
+  it('works out each definition type label once', () => {
+    const $defs: Record<string, unknown> = {
+      L9: { type: 'object', required: ['leaf'], properties: { leaf: { $ref: '#/$defs/L0' } } },
+    }
+    for (let index = 0; index < 9; index++) {
+      $defs[`L${index}`] = { anyOf: [{ $ref: `#/$defs/L${index + 1}` }, { $ref: `#/$defs/L${index + 1}` }] }
+    }
+    const properties = Object.fromEntries(
+      Array.from({ length: 8 }, (_, index) => [`p${index}`, { $ref: '#/$defs/L0' }]),
+    )
+    // The timeout is the assertion here, so it is set locally: the suite's own
+    // is thirty seconds, which this passes either way. Two thirds of a second
+    // once per pointer, sixteen once per site.
+    expect(only(generateMarkdownFiles({ properties, $defs }))).toContain('## p7')
+  }, 5_000)
+
+  // Running out means the label falls back to `object`, which is what it was
+  // before there was a skeleton at all. Keeping the branches that happened to
+  // fit makes a *narrower* claim than the schema does — a confident lie rather
+  // than a fallback, and one that disagrees with the same pointer three lines
+  // up the page.
+  it('falls back to object rather than to a narrowed union', () => {
+    const branches: unknown[] = Array.from({ length: 2050 }, () => ({ type: 'string' }))
+    branches.push({ type: 'number' }, { type: 'object', properties: { sub: { $ref: '#/$defs/U' } } })
+    const content = only(
+      generateMarkdownFiles({ properties: { root: { $ref: '#/$defs/U' } }, $defs: { U: { anyOf: branches } } }),
+    )
+    expect(section(content, '## root')).toContain('**Type:** `string | number | object`')
+    expect(section(content, '### sub')).toContain('**Type:** `object`')
+  })
+
+  // A trailing run of `#` is a heading's closing sequence, so a title of `#`
+  // produced an empty heading — a property missing from every table of
+  // contents, with nothing in the markdown that looks wrong.
+  it('does not let a title be eaten by the heading closing sequence', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          a: { type: 'string', 'x-doc': { title: '#' } },
+          b: { type: 'string', 'x-doc': { title: 'Advanced #' } },
+        },
+      }),
+    )
+    expect(content).toContain('## \\#\n')
+    expect(content).toContain('## Advanced \\#\n')
+  })
+
+  // A title of whitespace is not a title.
+  it('falls back to the property name when a title says nothing', () => {
+    const content = only(generateMarkdownFiles({ properties: { theme: { type: 'string', 'x-doc': { title: '  ' } } } }))
+    expect(content).toContain('## theme')
+  })
+
+  // A page and a section title go the same way — a page titled `#` produced an
+  // empty `#` heading for a whole file.
+  it('does not let a page or section title be eaten either', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { title: 'Config #', sections: [{ id: 'later', title: 'Later #' }] },
+        properties: { a: { type: 'string', 'x-doc': { section: 'later' } } },
+      }),
+    )
+    expect(content).toContain('# Config \\#\n')
+    expect(content).toContain('## Later \\#\n')
+  })
+
+  // A container whose values are another container is the same question one
+  // level down. Stopping at the first level documented the outer shape and
+  // dropped every field inside it without a word — the silent omission AI.md
+  // calls the one failure mode to avoid.
+  it('documents the children of a container inside a container', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          grid: {
+            type: 'array',
+            items: { type: 'array', items: { type: 'object', properties: { cell: { type: 'string' } } } },
+          },
+          envs: {
+            type: 'array',
+            items: { type: 'object', additionalProperties: { type: 'object', properties: { z: { type: 'number' } } } },
+          },
+        },
+      }),
+    )
+    expect(section(content, '### cell')).toContain('**Type:** `string`')
+    expect(section(content, '### z')).toContain('**Type:** `number`')
+  })
+
+  // The ref site's own keywords apply over the definition's, the way the
+  // inliner applies them — read without those, one pointer was labelled
+  // `Elem[]` where it was inlined and `object[]` where it was truncated.
+  it('keeps a branch ref site type label at a truncation', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/List' } },
+        $defs: {
+          List: { type: 'array', items: { $ref: '#/$defs/Elem', 'x-doc': { type: 'Elem' } } },
+          Elem: { type: 'object', properties: { sub: { $ref: '#/$defs/List' } } },
+        },
+      }),
+    )
+    expect(section(content, '## root')).toContain('**Type:** `Elem[]`')
+    expect(section(content, '### sub')).toContain('**Type:** `Elem[]`')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

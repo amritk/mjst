@@ -1,6 +1,6 @@
-import { collapseLineEndings } from '#helpers/escape-html'
 import { trimDescription } from '#helpers/first-paragraph'
 import { heading } from '#helpers/heading'
+import { headingProse } from '#helpers/heading-text'
 import { renderExamples } from '#reference/render-examples'
 import { renderProperty } from '#reference/render-property'
 import type { DocConfig } from '#types/doc'
@@ -36,14 +36,14 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
   // than a page whose first heading is `##`: a docs site takes the single `#`
   // as the page title, and every linter counts more than one as an error. A
   // schema that wants that heading gives itself a `title`.
-  if (model.page.title !== undefined) blocks.push(heading(level, collapseLineEndings(model.page.title)))
+  if (model.page.title !== undefined) blocks.push(heading(level, headingProse(model.page.title)))
   if (model.page.description !== undefined) blocks.push(trimDescription(model.page.description))
   blocks.push(...renderExamples(model.page.examples, config.language))
 
   for (const entry of model.entries) blocks.push(...renderProperty(entry, level + 1, context))
 
   for (const { section, entries } of model.sections) {
-    if (section.title !== undefined) blocks.push(heading(level + 1, collapseLineEndings(section.title)))
+    if (section.title !== undefined) blocks.push(heading(level + 1, headingProse(section.title)))
     if (section.description !== undefined) blocks.push(trimDescription(section.description))
     blocks.push(...renderExamples(section.examples, config.language))
     for (const entry of entries) blocks.push(...renderProperty(entry, level + 2, context))

@@ -35,4 +35,12 @@ export const headingText = (name: string): string => {
  * collapsed, because one would end the heading and let the rest of the title
  * open a heading, a list or a fence of its own.
  */
-export const headingProse = (title: string): string => collapseLineEndings(title)
+export const headingProse = (title: string): string => {
+  const collapsed = collapseLineEndings(title).replace(/\s+$/, '')
+  // The other way an ATX heading rewrites its own text: a trailing run of `#`
+  // is its closing sequence, so `Advanced #` was headed `Advanced` and a title
+  // of `#` produced an empty heading — a property missing from every table of
+  // contents, with nothing in the markdown that looks wrong. Escaping the run
+  // keeps the title prose, which is the point of rendering it this way at all.
+  return collapsed.replace(/#+$/, (run) => `\\${run}`)
+}

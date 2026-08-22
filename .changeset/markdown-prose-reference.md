@@ -20,6 +20,10 @@ overrides a label JSON Schema cannot spell (`(heading: Heading) => string`),
 schema supplies no example, one is derived from `examples` and wrapped back into
 the shape of the config file.
 
+A container whose values are another container is followed as far as it goes,
+so a matrix, a list of maps, or a map of arrays documents the fields at the
+bottom of it rather than stopping at the outer shape.
+
 Children come from every applicator that names one, not just `properties`:
 `allOf` branches merge (properties and requirements both), `anyOf`/`oneOf`/
 `then`/`else`/`dependentSchemas` contribute properties without requirements, and

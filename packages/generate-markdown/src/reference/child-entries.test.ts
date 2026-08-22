@@ -23,18 +23,18 @@ const entry = (name: string, prop: Record<string, unknown> = {}): DocEntry => ({
 describe('child-entries', () => {
   it('reads children straight off an object', () => {
     const prop = { type: 'object', properties: { a: { type: 'string' } } }
-    expect(childSchema(prop)).toEqual({ node: prop, hop: undefined })
+    expect(childSchema(prop)).toEqual({ node: prop, hops: [] })
   })
 
   // `pagination: [{ name, type }]` documents `name` and `type`, not the array.
   it('reads children off the item schema of an array', () => {
     const items = { type: 'object', properties: { name: { type: 'string' } } }
-    expect(childSchema({ type: 'array', items })).toEqual({ node: items, hop: ARRAY_ITEM })
+    expect(childSchema({ type: 'array', items })).toEqual({ node: items, hops: [ARRAY_ITEM] })
   })
 
   it('reads children off additionalProperties for a map-like object', () => {
     const values = { type: 'object', properties: { url: { type: 'string' } } }
-    expect(childSchema({ type: 'object', additionalProperties: values })).toEqual({ node: values, hop: MAP_KEY })
+    expect(childSchema({ type: 'object', additionalProperties: values })).toEqual({ node: values, hops: [MAP_KEY] })
   })
 
   // Several sources can describe one node's children; `childSchema` is the
@@ -43,10 +43,10 @@ describe('child-entries', () => {
     const items = { type: 'object', properties: { fromItems: {} } }
     const prop = { type: 'array', properties: { own: {} }, items }
     expect(childSources(prop)).toEqual([
-      { node: prop, hop: undefined },
-      { node: items, hop: ARRAY_ITEM },
+      { node: prop, hops: [] },
+      { node: items, hops: [ARRAY_ITEM] },
     ])
-    expect(childSchema(prop)).toEqual({ node: prop, hop: undefined })
+    expect(childSchema(prop)).toEqual({ node: prop, hops: [] })
   })
 
   it('reads no children from a scalar', () => {

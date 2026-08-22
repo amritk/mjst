@@ -5,24 +5,47 @@ import { readDocMeta } from '#helpers/read-doc-meta'
 import type { SchemaProperty } from '#types/schema'
 
 /**
+ * Splits a rendered label at its top level, on the separator given.
+ *
+ * Scanning rather than matching, because ` | ` means one thing between two
+ * types and another inside a quoted enum literal (`'a | b'`) or a bracketed
+ * array item (`(string | number)[]`). A substring test read both as unions: it
+ * bracketed a single literal into a group, and split one that dedupe then ate
+ * half of.
+ */
+const splitTopLevel = (label: string, separator: string): readonly string[] => {
+  const parts: string[] = []
+  let depth = 0
+  let quote: string | undefined
+  let start = 0
+  for (let index = 0; index < label.length; index++) {
+    const character = label[index]
+    if (quote !== undefined) {
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === '"' || character === "'") quote = character
+    else if (character === '(' || character === '[') depth += 1
+    else if (character === ')' || character === ']') depth -= 1
+    else if (depth === 0 && label.startsWith(separator, index)) {
+      parts.push(label.slice(start, index))
+      index += separator.length - 1
+      start = index + 1
+    }
+  }
+  parts.push(label.slice(start))
+  return parts
+}
+
+/**
  * Joins type labels into a `a | b` union, dropping blanks and duplicates.
  *
  * A part that is itself a union is flattened first, or a union of a union
  * printed the same word twice — `object | string | object` for two
- * alternatives. Only a part with nothing to protect is split: a quoted enum
- * literal may hold a ` | ` of its own, and a bracketed array item (`(string |
- * number)[]`) means the opposite thing taken apart.
- *
- * Splitting is only ever *visible* through the dedupe — the join is the split's
- * inverse otherwise — so the quotes are what this really protects, a bracketed
- * label carrying both `(` and `[`.
+ * alternatives.
  */
 const unionOf = (parts: readonly string[]): string =>
-  [
-    ...new Set(
-      parts.filter((part) => part.length > 0).flatMap((part) => (/["'()[\]]/.test(part) ? [part] : part.split(' | '))),
-    ),
-  ].join(' | ')
+  [...new Set(parts.filter((part) => part.length > 0).flatMap((part) => splitTopLevel(part, ' | ')))].join(' | ')
 
 /**
  * The **Type:** label for the prose reference style.
@@ -59,7 +82,8 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
     if (item.length === 0) return 'array'
     // `Alpha & Beta[]` is an intersection with an array, not an array of an
     // intersection — a different type, stated plainly.
-    return item.includes(' | ') || item.includes(' & ') ? `(${item})[]` : `${item}[]`
+    const grouped = splitTopLevel(item, ' | ').length > 1 || splitTopLevel(item, ' & ').length > 1
+    return grouped ? `(${item})[]` : `${item}[]`
   }
   if (Array.isArray(prop.type)) {
     return unionOf(prop.type.filter((entry): entry is string => typeof entry === 'string'))
@@ -83,7 +107,7 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
     // the `|` beside it and the label collapses back to the union it replaced:
     // `string | number & string` reads as `string | (number & string)`, which
     // is the answer this was written to stop giving.
-  ].map((part) => (part.includes(' | ') ? `(${part})` : part))
+  ].map((part) => (splitTopLevel(part, ' | ').length > 1 ? `(${part})` : part))
   if (parts.length > 0) return parts.join(' & ')
   return displayType(prop)
 }

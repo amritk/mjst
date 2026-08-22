@@ -40,8 +40,15 @@ export const formatPath = (path: readonly PathSegment[]): string =>
     })
     .join('.')
 
-/** One place a property's children come from, and the path hop that reaches it. */
-export type ChildSource = { readonly node: SchemaProperty; readonly hop: PathSegment | undefined }
+/**
+ * How many container levels deep the search for children goes. A matrix is two,
+ * a map of arrays of maps is three; past a handful the shape is not something a
+ * reference page can lay out anyway.
+ */
+const MAX_CONTAINER_DEPTH = 8
+
+/** One place a property's children come from, and the path hops that reach it. */
+export type ChildSource = { readonly node: SchemaProperty; readonly hops: readonly PathSegment[] }
 
 /**
  * Every place a property's children come from, in the order a reader meets
@@ -63,9 +70,28 @@ export type ChildSource = { readonly node: SchemaProperty; readonly hop: PathSeg
  * `properties` check, because a container's contents are just as likely to sit
  * behind a `$ref` to a `boolean | object` union as they are to be spelled out.
  */
-export const childSources = (prop: SchemaProperty): readonly ChildSource[] => {
+export const childSources = (prop: SchemaProperty, depth = 0, own = true): readonly ChildSource[] => {
   const sources: ChildSource[] = []
-  if (hasProperties(prop)) sources.push({ node: prop, hop: undefined })
+  if (depth > MAX_CONTAINER_DEPTH) return sources
+  if (own && hasProperties(prop)) sources.push({ node: prop, hops: [] })
+
+  /**
+   * A container's contents, one hop in. A container whose values are another
+   * container is the same question one level down — an array of maps, a map of
+   * arrays, a matrix — and stopping at the first level documented the outer
+   * shape and dropped every field inside it without a word.
+   */
+  const contained = (node: SchemaProperty, hop: PathSegment): void => {
+    // Asked once: `childSources` would ask again on the way in, and this runs
+    // for every value of every map and every item of every array.
+    if (hasProperties(node)) {
+      sources.push({ node, hops: [hop] })
+      return
+    }
+    for (const inner of childSources(node, depth + 1, false)) {
+      sources.push({ node: inner.node, hops: [hop, ...inner.hops] })
+    }
+  }
 
   // The container keywords can sit on the node, or on a branch of it — a
   // `$ref` to "an array of X, or a string" keeps the item schema one level
@@ -81,23 +107,19 @@ export const childSources = (prop: SchemaProperty): readonly ChildSource[] => {
     // of position zero, so position one's example was built at index zero —
     // a sample that does not validate against the schema it was derived from.
     const tuple = [...asArray(candidate.prefixItems), ...(Array.isArray(candidate.items) ? candidate.items : [])]
-    for (const [index, entry] of tuple.entries()) {
-      const item = asSchema(entry)
-      if (hasProperties(item)) sources.push({ node: item, hop: index })
-    }
+    for (const [index, entry] of tuple.entries()) contained(asSchema(entry), index)
     if (candidate.items !== undefined && !Array.isArray(candidate.items)) {
-      const items = asSchema(candidate.items)
-      if (hasProperties(items)) sources.push({ node: items, hop: ARRAY_ITEM })
+      contained(asSchema(candidate.items), ARRAY_ITEM)
     }
     for (const values of [candidate.additionalProperties, ...Object.values(asSchema(candidate.patternProperties))]) {
-      if (isObject(values) && hasProperties(asSchema(values))) sources.push({ node: asSchema(values), hop: MAP_KEY })
+      if (isObject(values)) contained(asSchema(values), MAP_KEY)
     }
   }
   return sources
 }
 
 /** The first source a property's children come from. */
-export const childSchema = (prop: SchemaProperty): ChildSource => childSources(prop)[0] ?? { node: {}, hop: undefined }
+export const childSchema = (prop: SchemaProperty): ChildSource => childSources(prop)[0] ?? { node: {}, hops: [] }
 
 /**
  * Orders properties for rendering. `x-doc.order` wins wherever it is set — that
@@ -136,9 +158,9 @@ export const childEntries = (
 ): readonly DocEntry[] => {
   const seen = new Set<string>()
   const entries: DocEntry[] = []
-  for (const { node, hop } of childSources(prop)) {
+  for (const { node, hops } of childSources(prop)) {
     const { properties, required } = collectProperties(node)
-    const basePath = hop === undefined ? path : [...path, hop]
+    const basePath = [...path, ...hops]
     for (const [name, child] of Object.entries(properties)) {
       // A name declared by two sources is one field: the first description of
       // it wins, the way it does across composition branches.

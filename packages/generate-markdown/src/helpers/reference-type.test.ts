@@ -149,6 +149,17 @@ describe('reference-type', () => {
     expect(referenceType({ anyOf: [{ type: 'string' }], oneOf: [{ type: 'number' }] }, 'json')).toBe('string')
   })
 
+  // A part that is already bracketed is one type, and a quoted literal that
+  // holds a pipe is one value — bracketing either spells it as a group.
+  it('brackets only a branch that is a union at its top level', () => {
+    const arrayOfUnion = { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'number' }] } }
+    expect(referenceType({ allOf: [arrayOfUnion, { type: 'object' }] }, 'json')).toBe('(string | number)[] & object')
+    expect(referenceType({ allOf: [{ const: 'a | b' }, { type: 'string' }] }, 'json')).toBe('"a | b" & string')
+    // The same rule for an array's element: a literal holding a pipe is one
+    // value, and bracketing it spells it as a group of two.
+    expect(referenceType({ type: 'array', items: { const: 'a | b' } }, 'json')).toBe('"a | b"[]')
+  })
+
   // `Alpha & Beta[]` is an intersection with an array, not an array of one.
   it('brackets an intersection used as an array element', () => {
     const items = { allOf: [{ 'x-doc': { type: 'Alpha' } }, { 'x-doc': { type: 'Beta' } }] }
