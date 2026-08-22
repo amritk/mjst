@@ -40,6 +40,18 @@ describe('heading-text', () => {
     }
   })
 
+  // Every character a config key may carry and still be read as itself. One
+  // missing from the set turns a readable heading into a code span, which
+  // changes the anchor a docs site generates for it.
+  it('keeps every character a plain name may end with', () => {
+    for (const name of ['ab-', 'ab.', 'ab_', 'ab/', 'ab@', 'ab$']) expect(headingText(name), name).toBe(name)
+  })
+
+  // The first character is narrower: `_ab` and `-ab` both open something.
+  it('wraps a name that starts with punctuation', () => {
+    expect(headingText('_ab')).toBe('`_ab`')
+  })
+
   // A leading `-` opens a list item, and a leading digit is fine.
   it('wraps a name that starts with something markdown would read', () => {
     expect(headingText('-flag')).toBe('`-flag`')

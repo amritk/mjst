@@ -31,4 +31,18 @@ describe('link-destination', () => {
     expect(linkDestination('a\nb')).toBe('a%0Ab')
     expect(linkDestination('é.md')).toBe('%C3%A9.md')
   })
+
+  // Every character a file name may carry unencoded. Encoding one of these
+  // breaks a link that was working; the list is the behaviour.
+  it('leaves every character a path may hold', () => {
+    const safe = "ABCXYZabcxyz0189-._~!$&'*+,;=:@/"
+    expect(linkDestination(safe)).toBe(safe)
+  })
+
+  // Split by code unit rather than code point, a surrogate pair becomes two
+  // lone surrogates and `TextEncoder` replaces each with U+FFFD — the link
+  // then points at a file nobody wrote.
+  it('encodes a character outside the basic plane as one character', () => {
+    expect(linkDestination('emoji😀.md')).toBe('emoji%F0%9F%98%80.md')
+  })
 })

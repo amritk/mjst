@@ -10,6 +10,9 @@ describe('code-span', () => {
   // the delimiter has to be longer than anything inside.
   it('outruns the longest backtick run inside the value', () => {
     expect(codeSpan('a ` b')).toBe('``a ` b``')
+    // The *longest* run, not the first: reading only the first left the value
+    // able to close its own span.
+    expect(codeSpan('a`b```c')).toBe('````a`b```c````')
     expect(codeSpan('a ``` b')).toBe('````a ``` b````')
     // Padded only when the value's own edge would be eaten.
     expect(codeSpan('`quoted`')).toBe('`` `quoted` ``')

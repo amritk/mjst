@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
+import { asExamples, readDescription, readDocMeta } from '#helpers/read-doc-meta'
 
 describe('read-doc-meta', () => {
   it('reads an empty meta from a node without x-doc', () => {
@@ -97,5 +97,39 @@ describe('read-doc-meta', () => {
     )
     expect(readDescription({ description: 'From the schema' })).toBe('From the schema')
     expect(readDescription({ description: 42 })).toBe('')
+  })
+
+  // Every member of the fixed sets, because a property opting *back out* of a
+  // page-level setting is the only way one of them shows: a page that asked
+  // for `table` and a property that asks for `headings` again.
+  it('reads every layout and sort name it accepts', () => {
+    for (const layout of ['headings', 'table', 'none'] as const) {
+      expect(readDocMeta({ 'x-doc': { layout } }).layout, layout).toBe(layout)
+    }
+    for (const sort of ['schema', 'alphabetical'] as const) {
+      expect(readDocMeta({ 'x-doc': { sort } }).sort, sort).toBe(sort)
+    }
+    const unknown = readDocMeta({ 'x-doc': { layout: 'grid', sort: 'random' } })
+    expect(unknown.layout).toBeUndefined()
+    expect(unknown.sort).toBeUndefined()
+  })
+
+  // Both spellings, merged rather than one winning — the same rule notes and
+  // examples follow, so a schema that grows a second footer need not rewrite
+  // the first.
+  it('merges both spellings of the footer keyword, singular first', () => {
+    expect(readDocMeta({ 'x-doc': { footer: 'One.', footers: ['Two.', 'Three.'] } }).footers).toEqual([
+      'One.',
+      'Two.',
+      'Three.',
+    ])
+  })
+
+  // An example's `value` has to be the example's own: an inherited one is the
+  // prototype's, and JSON cannot produce it.
+  it('reads only an own value from an example', () => {
+    const inherited = Object.create({ value: 'from the prototype' }) as Record<string, unknown>
+    inherited['caption'] = 'A caption.'
+    expect(asExamples([inherited])).toEqual([])
   })
 })

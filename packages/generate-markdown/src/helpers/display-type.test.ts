@@ -42,4 +42,22 @@ describe('display-type', () => {
     expect(displayType({ items: { type: 'string' } })).toBe('array')
     expect(displayType({})).toBe('')
   })
+
+  // The keywords are read in the order a reader meets them, and `allOf` is
+  // read at all — a `$ref` wrapped in one is often the only thing that says
+  // what a property is.
+  it('reads every composition keyword, alternatives first', () => {
+    expect(displayType({ allOf: [{ type: 'string' }] })).toBe('string')
+    expect(displayType({ anyOf: [{ type: 'string' }], oneOf: [{ type: 'number' }] })).toBe('string')
+  })
+
+  // `enum` before `const`, the same order the prose label reads them in.
+  it('prefers the enum to the const when a node declares both', () => {
+    expect(displayType({ enum: ['a'], const: 1 })).toBe('string')
+  })
+
+  // A `type` array is parsed JSON: an entry that is not a string is not a type.
+  it('ignores an entry in a type array that is not a name', () => {
+    expect(displayType({ type: ['string', 5, null] as never })).toBe('string')
+  })
 })

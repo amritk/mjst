@@ -341,6 +341,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    expect(content).toContain('### apple')
     expect(content.indexOf('### apple')).toBeLessThan(content.indexOf('### zebra'))
   })
 
@@ -411,6 +412,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    expect(content).toContain('## Emitter Options')
     expect(content.indexOf('## Emitter Options')).toBeLessThan(content.indexOf('### options'))
     // `options` renders once, in its section — not a second time under `target`.
     expect(content.split('### options')).toHaveLength(2)
@@ -998,6 +1000,7 @@ describe('generate-markdown-files', () => {
         properties: { a: { type: 'string', minLength: 1, 'x-doc': { note: 'A note.' } } },
       }),
     )
+    expect(content).toContain('**Constraints:**')
     expect(content.indexOf('**Constraints:**')).toBeLessThan(content.indexOf('> A note.'))
   })
 
@@ -1127,6 +1130,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    expect(content).toContain('### named')
     expect(content.indexOf('### named')).toBeLessThan(content.indexOf('### extra'))
     expect(content).toContain('"a": {\n    "named": "v"\n  }')
   })
@@ -1858,6 +1862,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    expect(content).toContain('### apple')
     expect(content.indexOf('### apple')).toBeLessThan(content.indexOf('### zebra'))
     expect(content.lastIndexOf('### zebra')).toBeLessThan(content.lastIndexOf('### apple'))
   })
@@ -2544,6 +2549,7 @@ describe('generate-markdown-files', () => {
     )
     expect(content).toContain('### alpha')
     expect(content).toContain('### beta')
+    expect(content).toContain('### alpha')
     expect(content.indexOf('### alpha')).toBeLessThan(content.indexOf('| `betaField`'))
   })
 
@@ -4139,7 +4145,10 @@ describe('generate-markdown-files', () => {
 
   // A golden left behind by a page that no longer exists would otherwise sit
   // there looking like documentation somebody still generates.
-  it('generates every golden page that is checked in', () => {
+  // The page *set*, which the two content comparisons above do not check: a
+  // page that stops being emitted, or one that appears from nowhere, leaves
+  // both of them green.
+  it('emits exactly the set of golden pages that is checked in', () => {
     for (const name of ['api-reference-config', 'sdk-config'] as const) {
       const generated = generateMarkdownFiles(fixture(name))
         .map((file) => file.filename)

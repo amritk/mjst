@@ -38,4 +38,11 @@ describe('inside-directory', () => {
     expect(isInsideDirectory('/out', '.')).toBe(false)
     expect(isInsideDirectory('/out', 'x/..')).toBe(false)
   })
+
+  // An absolute path is not inside anything the caller named, whatever
+  // `relative()` makes of it.
+  it('refuses an absolute path outright', () => {
+    expect(isInsideDirectory('/out', '/etc/passwd')).toBe(false)
+    expect(isInsideDirectory('/out', '/out/a.md')).toBe(false)
+  })
 })

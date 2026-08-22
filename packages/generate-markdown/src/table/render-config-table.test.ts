@@ -93,4 +93,46 @@ describe('render-config-table', () => {
     })
     expect(html).toContain('</table>\n\n<a id="config-server">')
   })
+
+  // A column of blanks tells the reader nothing and costs them width — and a
+  // column that is rendered but not counted leaves every colspan short.
+  it('drops the type column when nothing has a type to show', () => {
+    const html = renderConfigTable({ properties: { a: { description: 'A.' } } })
+    expect(html).not.toContain('<th>Type</th>')
+    expect(detailRow(html)).toContain('colspan="1"')
+  })
+
+  // The columns read left to right in the order the header names them.
+  it('puts the CLI flag column before the type column', () => {
+    const html = renderConfigTable({ properties: { a: { type: 'string', 'x-cli-flag': '--a' } } })
+    expect(html.indexOf('<th>CLI Flag</th>')).toBeGreaterThan(0)
+    expect(html.indexOf('<th>CLI Flag</th>')).toBeLessThan(html.indexOf('<th>Type</th>'))
+  })
+
+  // A type label is schema text like any other — `type` is parsed JSON, not a
+  // validated keyword — and a raw `<` in a cell is live markup.
+  it('escapes a type label before putting it in a cell', () => {
+    const html = renderConfigTable({ properties: { a: { type: 'a<b&c' } } })
+    expect(html).toContain('<code>a&lt;b&amp;c</code>')
+  })
+
+  // A raw newline ends the `<table>`'s HTML block mid-row, and every tag after
+  // it renders as literal text.
+  it('joins the detail cell lines without a line ending', () => {
+    const html = renderConfigTable({ properties: { a: { type: 'string', description: 'A.', enum: ['x'] } } })
+    expect(detailRow(html)).toContain('A.<br><strong>Allowed:</strong>')
+  })
+
+  // An array is not an object, and reading one as a property map gave the
+  // table a row named `0`.
+  it('ignores a properties keyword that is not a map', () => {
+    expect(renderConfigTable({ properties: [{ type: 'string' }] as never })).not.toContain('<code>0</code>')
+  })
+
+  // An empty `properties: {}` has nothing to link to, and the link led to an
+  // empty detail table.
+  it('does not link a property whose object has no fields', () => {
+    const html = renderConfigTable({ properties: { a: { type: 'object', properties: {} } } })
+    expect(html).not.toContain('href="#config-a"')
+  })
 })

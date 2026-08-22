@@ -96,9 +96,19 @@ describe('reference-type', () => {
   })
 
   // A pipe inside a quoted literal is part of the value; split on it, the
-  // dedupe swallows one of the halves.
+  // dedupe swallows one of the halves. Both dialects quote, so both need
+  // protecting.
   it('does not split a union member that carries its own pipe', () => {
     expect(referenceType({ enum: [' | ', 'z'] }, 'json')).toBe('" | " | "z"')
+    expect(referenceType({ enum: ['a | b', 'a | c'] }, 'javascript')).toBe("'a | b' | 'a | c'")
+  })
+
+  // A bracketed member is one type however many pipes it holds — an authored
+  // `x-doc.type` is the usual way one arrives.
+  it('does not split a bracketed member', () => {
+    expect(referenceType({ anyOf: [{ 'x-doc': { type: '(a | b)' } }, { 'x-doc': { type: '[c | d]' } }] }, 'json')).toBe(
+      '(a | b) | [c | d]',
+    )
   })
 
   // A branch with nothing to say contributes nothing, not a blank member with
@@ -125,6 +135,18 @@ describe('reference-type', () => {
     expect(referenceType({ allOf: [{ enum: ['a', 'b'] }, { enum: ['b', 'c'] }] }, 'json')).toBe(
       '("a" | "b") & ("b" | "c")',
     )
+  })
+
+  // A branch with nothing to say contributes nothing to an intersection either,
+  // not a blank operand with a separator hanging off it.
+  it('drops an intersection branch that has no label', () => {
+    expect(referenceType({ allOf: [{ type: 'string' }, {}] }, 'json')).toBe('string')
+  })
+
+  // A node with both keywords reads `anyOf` first, the same order every other
+  // reader of this schema uses.
+  it('reads anyOf before oneOf', () => {
+    expect(referenceType({ anyOf: [{ type: 'string' }], oneOf: [{ type: 'number' }] }, 'json')).toBe('string')
   })
 
   // `Alpha & Beta[]` is an intersection with an array, not an array of one.

@@ -12,6 +12,10 @@ import type { SchemaProperty } from '#types/schema'
  * alternatives. Only a part with nothing to protect is split: a quoted enum
  * literal may hold a ` | ` of its own, and a bracketed array item (`(string |
  * number)[]`) means the opposite thing taken apart.
+ *
+ * Splitting is only ever *visible* through the dedupe — the join is the split's
+ * inverse otherwise — so the quotes are what this really protects, a bracketed
+ * label carrying both `(` and `[`.
  */
 const unionOf = (parts: readonly string[]): string =>
   [

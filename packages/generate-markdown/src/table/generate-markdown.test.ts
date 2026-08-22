@@ -1156,6 +1156,20 @@ describe('generate-markdown', () => {
       expect(table).toContain('&lt;!-- config-table-start --&gt;')
     })
 
+    // Either marker on its own is enough to make the next run splice against
+    // this run's output: checking only one of them left the other live.
+    it('refuses to write when the start marker reaches the heading', async () => {
+      mockFs({
+        title: 'T',
+        properties: {
+          'evil <!-- config-table-start --> name': { type: 'object', properties: { x: { type: 'string' } } },
+        },
+      })
+
+      await expect(generateMarkdown()).rejects.toThrow(/would corrupt README\.md/)
+      expect(writeFileMock).not.toHaveBeenCalled()
+    })
+
     it('refuses to write when a marker reaches the heading, which is not HTML', async () => {
       // The `####` heading is a markdown code span, so its content is literal —
       // escaping it there would double-escape and display the wrong name. The
