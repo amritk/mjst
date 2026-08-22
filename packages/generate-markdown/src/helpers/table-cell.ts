@@ -3,27 +3,36 @@ import { collapseLineEndings } from '#helpers/escape-html'
 import { firstParagraph } from '#helpers/first-paragraph'
 
 /**
- * Escapes text for a GitHub-flavored markdown table cell. A row is one line and
- * its columns are split on unescaped pipes, so both a line ending and a `|` in
- * the schema's own text would silently reshape the table.
+ * Escapes the pipes that would split a table row into more columns than it has,
+ * and only those.
  *
- * Backslashes are escaped before pipes, and that order is the whole point: a
- * schema that already writes `\|` (how an author spells a literal pipe in prose
- * — describing an `'a' \| 'b'` union, say) turned into `\\|`, which is an
- * escaped backslash followed by a *live* column separator. The row grew a
- * column, and everything after the pipe fell off the end of the table.
+ * A pipe already escaped by the author is left alone. Counting the backslashes
+ * in front of it is what tells the two apart: an even run means the pipe is
+ * live and needs escaping, an odd run means the author already escaped it and
+ * adding another would produce a literal backslash followed by a live pipe.
+ *
+ * Escaping the backslashes themselves would be wrong here — a description cell
+ * is parsed as inline markdown, so `\*` is how an author writes a literal
+ * asterisk, and doubling that backslash turns the asterisks into emphasis and
+ * shows the reader a stray `\`.
  */
-export const tableCell = (value: string): string =>
-  collapseLineEndings(firstParagraph(value)).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').trim()
+const escapePipes = (value: string): string =>
+  value.replace(/(\\*)\|/g, (_match, slashes: string) => (slashes.length % 2 === 0 ? `${slashes}\\|` : `${slashes}|`))
+
+/**
+ * Escapes text for a GitHub-flavored markdown table cell. A row is one line and
+ * its columns are split on unescaped pipes, so both a line ending and a live `|`
+ * in the schema's own text would silently reshape the table.
+ */
+export const tableCell = (value: string): string => escapePipes(collapseLineEndings(firstParagraph(value))).trim()
 
 /**
  * A value rendered as a code span inside a table cell.
  *
- * Unlike {@link tableCell} this leaves backslashes alone — a code span's
- * content is literal, so escaping them would show the escapes — but pipes still
- * need it, because the row is split into columns before any inline parsing
- * happens. The span itself is built by `codeSpan`, so a backtick in the value
- * cannot close it early and spill the remainder into the cell as live markdown.
+ * The span is built by `codeSpan`, so a backtick in the value cannot close it
+ * early and spill the remainder into the cell as live markdown. Pipes still
+ * need escaping — the row is split into columns before any inline parsing
+ * happens — but nothing else does: a code span's content is literal.
  */
 export const tableCode = (value: string): string =>
-  codeSpan(collapseLineEndings(firstParagraph(value)).trim().replace(/\|/g, '\\|'))
+  codeSpan(escapePipes(collapseLineEndings(firstParagraph(value)).trim()))

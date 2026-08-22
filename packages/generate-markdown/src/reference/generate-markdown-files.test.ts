@@ -71,7 +71,7 @@ describe('generate-markdown-files', () => {
     )
     expect(content).toBe(
       [
-        '# darkMode',
+        '## darkMode',
         '',
         '**Type:** `boolean`',
         '',
@@ -96,7 +96,7 @@ describe('generate-markdown-files', () => {
 
   it('marks a deprecated property before anything else', () => {
     const content = only(generateMarkdownFiles({ properties: { spec: { type: 'object', deprecated: true } } }))
-    expect(content).toContain('# spec\n\n> **Deprecated**\n\n**Type:** `object`')
+    expect(content).toContain('## spec\n\n> **Deprecated**\n\n**Type:** `object`')
   })
 
   it('renders an enum as a literal union without repeating it as allowed values', () => {
@@ -148,7 +148,7 @@ describe('generate-markdown-files', () => {
     )
     expect(content).toBe(
       [
-        '# a',
+        '## a',
         '',
         '**Type:** `string`',
         '',
@@ -200,7 +200,7 @@ describe('generate-markdown-files', () => {
         properties: { shown: { type: 'string' }, secret: { type: 'string', 'x-doc': { hidden: true } } },
       }),
     )
-    expect(content).toContain('# shown')
+    expect(content).toContain('## shown')
     expect(content).not.toContain('secret')
   })
 
@@ -212,8 +212,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('# server')
-    expect(content).toContain('## host')
+    expect(content).toContain('## server')
+    expect(content).toContain('### host')
   })
 
   it('renders children as a table when the property asks for one', () => {
@@ -310,7 +310,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toBe('# Minimal config\n\nStart here.\n\n```json\n{\n  "a": 1\n}\n```\n')
+    expect(content).toBe('## Minimal config\n\nStart here.\n\n```json\n{\n  "a": 1\n}\n```\n')
   })
 
   it('sorts a section alphabetically when it asks for it', () => {
@@ -323,7 +323,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content.indexOf('## apple')).toBeLessThan(content.indexOf('## zebra'))
+    expect(content.indexOf('### apple')).toBeLessThan(content.indexOf('### zebra'))
   })
 
   it('splits a nested property into its own page', () => {
@@ -372,11 +372,11 @@ describe('generate-markdown-files', () => {
         },
       },
     })
-    expect(files[0]?.content).toContain('## go')
+    expect(files[0]?.content).toContain('### go')
     expect(files[0]?.content).not.toContain('typescript')
     // The page declares no title of its own, so the property it holds is the
     // page's top-level heading.
-    expect(files[1]?.content).toContain('# typescript')
+    expect(files[1]?.content).toContain('## typescript')
   })
 
   it('keeps a property with its own section out of the parent listing', () => {
@@ -393,9 +393,9 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content.indexOf('# Emitter Options')).toBeLessThan(content.indexOf('## options'))
+    expect(content.indexOf('## Emitter Options')).toBeLessThan(content.indexOf('### options'))
     // `options` renders once, in its section — not a second time under `target`.
-    expect(content.split('## options')).toHaveLength(2)
+    expect(content.split('### options')).toHaveLength(2)
   })
 
   it('inlines $refs before rendering, with the ref site winning on description', () => {
@@ -408,8 +408,8 @@ describe('generate-markdown-files', () => {
         $defs: { host: { type: 'string', description: 'A hostname.', examples: ['example.com'] } },
       }),
     )
-    expect(content).toContain('# server\n\n**Type:** `string`\n\nThe API server.')
-    expect(content).toContain('# fallback\n\n**Type:** `string`\n\nA hostname.')
+    expect(content).toContain('## server\n\n**Type:** `string`\n\nThe API server.')
+    expect(content).toContain('## fallback\n\n**Type:** `string`\n\nA hostname.')
   })
 
   it('documents the item shape of an array of objects', () => {
@@ -428,7 +428,7 @@ describe('generate-markdown-files', () => {
       }),
     )
     expect(content).toContain('**Type:** `object[]`')
-    expect(content).toContain('## name')
+    expect(content).toContain('### name')
     // The example is wrapped back into the array it lives in.
     expect(content).toContain('"pagination": [\n    {\n      "name": "cursor"\n    }\n  ]')
   })
@@ -449,7 +449,7 @@ describe('generate-markdown-files', () => {
       }),
     )
     expect(content).toContain('**Type:** `boolean | object`')
-    expect(content).toContain('## authMethod')
+    expect(content).toContain('### authMethod')
   })
 
   // The definition documents what is true wherever it is used; the ref site adds
@@ -482,7 +482,7 @@ describe('generate-markdown-files', () => {
         $defs: { thing: { type: 'string', 'x-doc': { type: 'Thing', note: 'Careful.' } } },
       }),
     )
-    expect(content).toContain('# Renamed')
+    expect(content).toContain('## Renamed')
     expect(content).toContain('**Type:** `Thing`')
     expect(content).toContain('> Careful.')
   })
@@ -498,7 +498,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## path')
+    expect(content).toContain('### path')
   })
 
   // Dereferencing collapses the cycle to a stub, so the walk has to end.
@@ -517,8 +517,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('# resource')
-    expect(content).toContain('## children')
+    expect(content).toContain('## resource')
+    expect(content).toContain('### children')
   })
 
   // A property four levels down on a page whose title is `#` would ask for
@@ -620,7 +620,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `a` | `string` | either a\\\\\\|b or c |')
+    expect(content).toContain('| `a` | `string` | either a\\|b or c |')
   })
 
   // A destination with a space stopped being a link at all; one with a `)`
@@ -664,8 +664,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## host')
-    expect(content).toContain('## port')
+    expect(content).toContain('### host')
+    expect(content).toContain('### port')
     expect(content).toContain('**Required**')
   })
 
@@ -682,8 +682,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## token')
-    expect(content).toContain('## user')
+    expect(content).toContain('### token')
+    expect(content).toContain('### user')
     expect(content).not.toContain('**Required**')
   })
 
@@ -700,8 +700,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## onlyForX')
-    expect(content).toContain('## alsoNeeded')
+    expect(content).toContain('### onlyForX')
+    expect(content).toContain('### alsoNeeded')
   })
 
   it('looks through a union under additionalProperties', () => {
@@ -715,7 +715,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## path')
+    expect(content).toContain('### path')
   })
 
   it('documents every position of a tuple', () => {
@@ -726,7 +726,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## b')
+    expect(content).toContain('### b')
   })
 
   // A table row can say a child is an object; it cannot say what is in it.
@@ -808,8 +808,8 @@ describe('generate-markdown-files', () => {
         properties: { a: { $ref: '#/$defs/base', properties: { foo: { type: 'string' } } } },
       }),
     )
-    expect(content).toContain('## bar')
-    expect(content).toContain('## foo')
+    expect(content).toContain('### bar')
+    expect(content).toContain('### foo')
   })
 
   // Flattening has to happen after inlining, or a root that reaches its branches
@@ -866,9 +866,14 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('```json')
   })
 
-  // An untitled page has no `#` for its properties to sit under.
-  it('starts an untitled page at the top heading level', () => {
-    expect(only(generateMarkdownFiles({ properties: { a: { type: 'string' } } }))).toBe('# a\n\n**Type:** `string`\n')
+  // A page holds one top-level heading: its title. Promoting properties when a
+  // schema declares no title gave a twelve-option config twelve `#` headings,
+  // which every linter counts as an error and a docs site reads as twelve
+  // pages. A schema that wants that heading gives itself a `title`.
+  it('keeps one top-level heading per page, titled or not', () => {
+    expect(only(generateMarkdownFiles({ properties: { a: { type: 'string' } } }))).toBe('## a\n\n**Type:** `string`\n')
+    const titled = only(generateMarkdownFiles({ title: 'C', properties: { a: { type: 'string' }, b: {} } }))
+    expect(titled.split('\n').filter((line) => /^# /.test(line))).toHaveLength(1)
   })
 
   // A property nested past the scan cap used to vanish from every file with no
@@ -982,8 +987,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## deep')
-    expect(content).toContain('## deeper')
+    expect(content).toContain('### deep')
+    expect(content).toContain('### deeper')
   })
 
   // The container keyword can sit inside the union rather than on the node.
@@ -997,7 +1002,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(items).toContain('## inner')
+    expect(items).toContain('### inner')
 
     const map = only(
       generateMarkdownFiles({
@@ -1011,7 +1016,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(map).toContain('## v')
+    expect(map).toContain('### v')
   })
 
   it('reads a pattern-keyed map value shape', () => {
@@ -1022,7 +1027,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## value')
+    expect(content).toContain('### value')
   })
 
   // Two of three alternatives requiring a field does not make it required.
@@ -1040,7 +1045,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    const section = (name: string) => content.slice(content.indexOf(`## ${name}`), content.indexOf(`## ${name}`) + 60)
+    const section = (name: string) => content.slice(content.indexOf(`### ${name}`), content.indexOf(`### ${name}`) + 60)
     expect(section('all')).toContain('**Required**')
     expect(section('most')).not.toContain('**Required**')
   })
@@ -1093,7 +1098,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('## named')
+    expect(content).toContain('### named')
     expect(content).not.toContain('<name>')
     expect(content).toContain('"a": {\n    "named": "v"\n  }')
   })
@@ -1121,6 +1126,186 @@ describe('generate-markdown-files', () => {
     )
     expect(content).toContain('`"C:\\\\path"`')
     expect(content).not.toContain('\\\\\\\\path')
+  })
+
+  // A description cell is parsed as inline markdown, so `\*` is how an author
+  // writes a literal asterisk. Escaping the backslash turned the asterisks into
+  // emphasis and showed the reader a stray backslash.
+  it('leaves an author markdown escape intact in a table cell', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          s: { type: 'object', properties: { pat: { type: 'string', description: 'Literal \\*stars\\* here.' } } },
+        },
+      }),
+    )
+    expect(content).toContain('| `pat` | `string` | Literal \\*stars\\* here. |')
+  })
+
+  // `string | { … }` is the other half of the union idiom: the scalar branch
+  // declares nothing, and letting its empty requirement set into the
+  // intersection stripped the markers off every field of the object form.
+  it('keeps the requirements of the object form of a scalar-or-object union', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          logo: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'object', properties: { darkMode: {}, lightMode: {} }, required: ['darkMode', 'lightMode'] },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content.match(/\*\*Required\*\*/g)).toHaveLength(2)
+  })
+
+  // Every position of a tuple is a different shape.
+  it('documents every position of a tuple, not just the first', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          pair: {
+            type: 'array',
+            prefixItems: [
+              { type: 'object', properties: { first: { type: 'string' } } },
+              { type: 'object', properties: { second: { type: 'string' } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### first')
+    expect(content).toContain('### second')
+  })
+
+  it('documents known fields and the shape of the custom ones', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          theme: {
+            type: 'object',
+            properties: { known: { type: 'string' } },
+            additionalProperties: { type: 'object', properties: { custom: { type: 'string' } } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### known')
+    expect(content).toContain('### custom')
+  })
+
+  it('documents the value shape of every pattern a map is keyed by', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          env: {
+            type: 'object',
+            patternProperties: { '^A$': { properties: { fromA: {} } }, '^B$': { properties: { fromB: {} } } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### fromA')
+    expect(content).toContain('### fromB')
+  })
+
+  // CommonMark counts a bare CR as a line ending, so a note holding one escaped
+  // its blockquote and the rest became page structure.
+  it('keeps a note with a bare carriage return inside its blockquote', () => {
+    const content = only(
+      generateMarkdownFiles({ properties: { a: { type: 'string', 'x-doc': { note: 'safe\r## INJECTED' } } } }),
+    )
+    expect(content).toContain('> safe\n> ## INJECTED')
+    expect(content).not.toContain('\r')
+  })
+
+  it('collapses a line ending in an example caption', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { type: 'string', 'x-doc': { example: { code: 'x', caption: 'cap\n## INJECTED' } } } },
+      }),
+    )
+    expect(content).toContain('cap ## INJECTED')
+    expect(content).not.toContain('\n## INJECTED')
+  })
+
+  // A property that keeps its name and loses its type, its prose and its whole
+  // subtree looks documented and is not.
+  it('resolves a reference to an $anchor', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#node' } },
+        $defs: {
+          node: {
+            $anchor: 'node',
+            type: 'object',
+            description: 'the node',
+            properties: { anchored: { type: 'string' } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('the node')
+    expect(content).toContain('### anchored')
+  })
+
+  it('refuses a page that climbs out of the output directory and back in', () => {
+    expect(() =>
+      generateMarkdownFiles({
+        'x-doc': {
+          file: 'index.md',
+          pages: [
+            { id: 'one', file: 'a.md' },
+            { id: 'two', file: '../out/a.md' },
+          ],
+        },
+        properties: {},
+      }),
+    ).toThrow(/outside the output directory/)
+  })
+
+  it('refuses a page whose path names no file', () => {
+    expect(() => generateMarkdownFiles({ 'x-doc': { pages: [{ id: 'p', file: '.' }] }, properties: {} })).toThrow(
+      /no file to be written to/,
+    )
+  })
+
+  it('refuses two sections that share an id', () => {
+    expect(() =>
+      generateMarkdownFiles({
+        'x-doc': {
+          sections: [
+            { id: 's', title: 'One' },
+            { id: 's', title: 'Two' },
+          ],
+        },
+        properties: { a: { type: 'string', 'x-doc': { section: 's' } } },
+      }),
+    ).toThrow(/Two sections share the id "s"/)
+  })
+
+  // The row above states the type, the requiredness and the default; the block
+  // below adds only what a row cannot hold.
+  it('does not repeat a table row in the block beneath it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          a: {
+            type: 'object',
+            properties: {
+              b: { type: 'object', description: 'B.', properties: { c: { type: 'string', description: 'C.' } } },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| `b` | `object` | B. |')
+    expect(content.match(/B\./g)).toHaveLength(1)
+    expect(content).toContain('| `c` | `string` | C. |')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

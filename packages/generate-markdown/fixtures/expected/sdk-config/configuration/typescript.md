@@ -30,10 +30,6 @@ TypeScript SDK target config.
 
 ## destinations
 
-**Type:** `object`
-
-GitHub destinations for generated output.
-
 | Property | Type | Description |
 | --- | --- | --- |
 | `production` | `object` | Push generated output to a GitHub repository. |

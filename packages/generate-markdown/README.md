@@ -641,14 +641,21 @@ An **example** is either a code string, or an object:
 | `deprecated` | A **Deprecated** callout above everything else |
 | `format`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `minItems`, `maxItems`, `uniqueItems` | **Constraints:** |
 | `properties`, `allOf`, `anyOf` / `oneOf`, `then` / `else`, `dependentSchemas` | The children. `allOf` branches all apply, so they contribute properties *and* requirements; alternatives and conditionals contribute properties only, and a field is required only when every alternative requires it |
-| `items`, `prefixItems`, `additionalProperties`, `patternProperties` | The children of a container — an array documents its item shape (every tuple position), a map documents its value shape under a `<name>` key |
-| `$ref` / `$defs` | Inlined before rendering. A sibling keyword at the ref site wins — except `properties` and `required`, which merge with the definition's (both applicators apply), and `x-doc`, which merges per key so a ref site can assign a page without discarding the definition's examples. A ref site's own `description` still wins over the definition's `x-doc.description` |
+| `items`, `prefixItems`, `additionalProperties`, `patternProperties` | The children of a container — an array documents its item shape (every tuple position), a map documents its value shape (every pattern) under a `<name>` key. A node with named properties *and* a container documents both |
+| `$ref` / `$defs` / `$anchor` | Inlined before rendering — a JSON pointer (`#/$defs/x`) or a plain-name fragment naming an `$anchor` (`#x`); a reference out of the document is not fetched. A sibling keyword at the ref site wins — except `properties` and `required`, which merge with the definition's (both applicators apply), and `x-doc`, which merges per key so a ref site can assign a page without discarding the definition's examples. A ref site's own `description` still wins over the definition's `x-doc.description` |
 | root `anyOf` / `oneOf` / `allOf` | Flattened into one property list. A property is only marked required when every branch that declares it requires it |
 
 Each property renders in a fixed order, so a page reads as a reference rather
 than a pile of keywords: heading → **Deprecated** → **Type:** → **Required** →
 description → **Default:** → **Allowed values:** → **Examples:** →
 **Constraints:** → notes → code examples → footers → children.
+
+A page holds one top-level heading: its title. A schema with no `title` (and no
+`x-doc.title`, and no `title` option) has no `#` — its properties still start at
+`##`, because promoting them would give a twelve-option config twelve `#`
+headings, which docs sites read as twelve pages. Under a `table` layout, a child
+that has a shape of its own gets a heading and a table below the row, carrying
+only what the row cannot: its examples, its notes, and its own children.
 
 ### Splitting across files
 
@@ -689,7 +696,8 @@ the output would look wrong. Generation refuses when:
 
 - a property names a page or a section the root never declares;
 - a property's `x-doc.page` disagrees with the page its section renders on;
-- two pages share an id, or resolve to the same file;
+- two pages share an id, or resolve to the same file, or two sections share an id;
+- a page is written outside the output directory, or names no file at all;
 - the schema nests more than 512 levels deep, which no reader can follow and
   which is deep enough to exhaust the stack.
 

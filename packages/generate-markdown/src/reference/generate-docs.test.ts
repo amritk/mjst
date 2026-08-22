@@ -91,18 +91,46 @@ describe('generate-docs', () => {
     expect(written()[0]?.[0]).toBe(`${process.cwd()}/documentation/index.md`)
   })
 
-  // The filenames come from the schema, which makes them input.
+  // The filenames come from the schema, which makes them input. The page model
+  // refuses these before anything is written; the path check in `generateDocs`
+  // stays as the last line of defence for a page that reaches it another way.
   it('refuses a page that would be written outside the output directory', async () => {
     mockSchema({ 'x-doc': { file: '../../etc/passwd' } })
 
-    await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/resolves outside the output directory/)
+    await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/outside the output directory/)
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
   it('refuses an absolute page path', async () => {
     mockSchema({ 'x-doc': { file: '/etc/passwd' } })
 
-    await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/resolves outside the output directory/)
+    await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/outside the output directory/)
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
+  // `../out/a.md` climbs out of the output directory and back into it, so it
+  // resolves onto a file another page already owns — and the first page was
+  // overwritten with no error.
+  it('refuses a page that climbs out of the output directory and back in', async () => {
+    mockSchema({
+      'x-doc': {
+        file: 'index.md',
+        pages: [
+          { id: 'one', file: 'a.md', title: 'One' },
+          { id: 'two', file: '../out/a.md', title: 'Two' },
+        ],
+      },
+      properties: {},
+    })
+
+    await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/outside the output directory/)
+    expect(writeFileMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a page whose path names no file', async () => {
+    mockSchema({ 'x-doc': { pages: [{ id: 'p', file: '.', title: 'P' }] }, properties: {} })
+
+    await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/has no file to be written to/)
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 

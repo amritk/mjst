@@ -55,10 +55,15 @@ const intersect = (sets: readonly ReadonlySet<string>[]): ReadonlySet<string> =>
  *   first branch dropped whichever half the author wrote second.
  * - `anyOf` / `oneOf` branches are alternatives. A reader still needs to see
  *   every field that might apply, so their properties are all collected — but a
- *   field is only required if *every* alternative requires it. A document that
- *   satisfies the branch not asking for it is still valid, so marking it
- *   required would be a lie (this is exactly the `versions`-or-`navigation`
- *   shape a generated root `anyOf` produces).
+ *   field is only required if every alternative *that describes an object*
+ *   requires it. A document satisfying an alternative that does not ask for the
+ *   field is still valid, so marking it required would be a lie — that is the
+ *   `versions`-or-`navigation` shape a generated root `anyOf` produces.
+ *
+ *   Only the object-describing branches count, because `string | { … }` is the
+ *   other half of the same idiom: the scalar branch declares no properties at
+ *   all, and letting its empty requirement set into the intersection stripped
+ *   the markers off every field of the object form.
  * - `then` / `else` / `dependentSchemas` add properties that apply under a
  *   condition. Same treatment as the alternatives: shown, never required.
  */
@@ -83,9 +88,8 @@ const collect = (
   for (const keyword of [node.anyOf, node.oneOf]) {
     const branches = asArray(keyword).map((branch) => collect(asSchema(branch), depth + 1))
     for (const branch of branches) merge(properties, branch.properties)
-    if (branches.length > 0) {
-      for (const name of intersect(branches.map((branch) => branch.required))) required.add(name)
-    }
+    const describing = branches.filter((branch) => Object.keys(branch.properties).length > 0)
+    for (const name of intersect(describing.map((branch) => branch.required))) required.add(name)
   }
 
   for (const conditional of [node.then, node.else]) {

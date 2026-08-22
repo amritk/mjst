@@ -32,24 +32,32 @@ export const MAP_KEY_PLACEHOLDER = '<name>'
 export const formatPath = (path: readonly PathSegment[]): string =>
   path.map((segment) => (segment === ARRAY_ITEM ? '[]' : segment === MAP_KEY ? MAP_KEY_PLACEHOLDER : segment)).join('.')
 
+/** One place a property's children come from, and the path hop that reaches it. */
+export type ChildSource = { readonly node: SchemaProperty; readonly hop: PathSegment | undefined }
+
 /**
- * The node whose properties describe a property's children, and the path hop
- * that gets there.
+ * Every place a property's children come from, in the order a reader meets
+ * them.
  *
- * A node's own named properties win. Failing that it is a container, and the
- * shape lives one level down: in the item schema of an array (`pagination:
+ * A node's own named properties come first. Then the containers, because a
+ * shape can live one level down: in the item schema of an array (`pagination:
  * [{ name, type }]` documents `name` and `type`, not the array), or in the
  * value schema of a map (`environments`, `resources`, and every other
  * `additionalProperties` bag).
  *
+ * All of them, not the first of them. A node with `properties` *and*
+ * `additionalProperties` documents its known fields and the shape of the custom
+ * ones; a tuple documents every position; a map keyed by two patterns documents
+ * both value shapes. Returning only the first source dropped whichever the
+ * author wrote second, with nothing in the output to say so.
+ *
  * Each candidate is tested with {@link hasProperties} rather than a bare
- * `properties` check, because the container's contents are just as likely to be
+ * `properties` check, because a container's contents are just as likely to sit
  * behind a `$ref` to a `boolean | object` union as they are to be spelled out.
  */
-export const childSchema = (
-  prop: SchemaProperty,
-): { readonly node: SchemaProperty; readonly hop: PathSegment | undefined } => {
-  if (hasProperties(prop)) return { node: prop, hop: undefined }
+export const childSources = (prop: SchemaProperty): readonly ChildSource[] => {
+  const sources: ChildSource[] = []
+  if (hasProperties(prop)) sources.push({ node: prop, hop: undefined })
 
   // The container keywords can sit on the node, or on a branch of it — a
   // `$ref` to "an array of X, or a string" keeps the item schema one level
@@ -59,8 +67,8 @@ export const childSchema = (
     ...[prop.allOf, prop.anyOf, prop.oneOf].flatMap((keyword) => asArray(keyword).map(asSchema)),
   ]
   for (const candidate of candidates) {
-    // A tuple documents every position, not just the first: `prefixItems` and
-    // draft-07's array-form `items` both spell one schema per index.
+    // `prefixItems` and draft-07's array-form `items` both spell one schema per
+    // index, and each index is a different shape.
     const positional = [
       ...asArray(candidate.prefixItems),
       ...(Array.isArray(candidate.items) ? candidate.items : []),
@@ -68,14 +76,17 @@ export const childSchema = (
     ]
     for (const entry of positional) {
       const item = asSchema(entry)
-      if (hasProperties(item)) return { node: item, hop: ARRAY_ITEM }
+      if (hasProperties(item)) sources.push({ node: item, hop: ARRAY_ITEM })
     }
     for (const values of [candidate.additionalProperties, ...Object.values(asSchema(candidate.patternProperties))]) {
-      if (isObject(values) && hasProperties(asSchema(values))) return { node: asSchema(values), hop: MAP_KEY }
+      if (isObject(values) && hasProperties(asSchema(values))) sources.push({ node: asSchema(values), hop: MAP_KEY })
     }
   }
-  return { node: {}, hop: undefined }
+  return sources
 }
+
+/** The first source a property's children come from. */
+export const childSchema = (prop: SchemaProperty): ChildSource => childSources(prop)[0] ?? { node: {}, hop: undefined }
 
 /**
  * Orders properties for rendering. `x-doc.order` wins wherever it is set — that
@@ -112,16 +123,21 @@ export const childEntries = (
   path: readonly PathSegment[],
   sort: DocSort,
 ): readonly DocEntry[] => {
-  const { node, hop } = childSchema(prop)
-  const { properties, required } = collectProperties(node)
-  const basePath = hop === undefined ? path : [...path, hop]
-  const entries = Object.entries(properties)
-    .map(([name, child]) => ({
-      name,
-      prop: asSchema(child),
-      path: [...basePath, name],
-      required: required.has(name),
-    }))
-    .filter(({ prop: child }) => !readDocMeta(child).hidden)
-  return sortEntries(entries, sort)
+  const seen = new Set<string>()
+  const entries: DocEntry[] = []
+  for (const { node, hop } of childSources(prop)) {
+    const { properties, required } = collectProperties(node)
+    const basePath = hop === undefined ? path : [...path, hop]
+    for (const [name, child] of Object.entries(properties)) {
+      // A name declared by two sources is one field: the first description of
+      // it wins, the way it does across composition branches.
+      if (seen.has(name)) continue
+      seen.add(name)
+      entries.push({ name, prop: asSchema(child), path: [...basePath, name], required: required.has(name) })
+    }
+  }
+  return sortEntries(
+    entries.filter(({ prop: child }) => !readDocMeta(child).hidden),
+    sort,
+  )
 }

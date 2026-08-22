@@ -19,6 +19,16 @@ import type { DocEntry, RenderContext } from '#types/render'
  */
 const code = (value: string): string => inlineCode(value)
 
+/** How a property is rendered when its surroundings already say part of it. */
+export type RenderPropertyOptions = {
+  /**
+   * The property has a table row directly above it. Its type, requiredness and
+   * default are in that row, so the block below carries only what a row cannot
+   * hold: the examples, the notes, and the table of its own children.
+   */
+  readonly summarised?: boolean
+}
+
 /**
  * True when the property is rendered somewhere other than under its parent —
  * on another page, or in a section of its own further down this one.
@@ -52,7 +62,12 @@ const codeList = (values: readonly unknown[], language: string): string =>
  * Returns blocks rather than one string so the caller controls the blank lines
  * between them (and can splice in its own).
  */
-export const renderProperty = (entry: DocEntry, level: number, context: RenderContext): readonly string[] => {
+export const renderProperty = (
+  entry: DocEntry,
+  level: number,
+  context: RenderContext,
+  options: RenderPropertyOptions = {},
+): readonly string[] => {
   const { name, prop, path, required } = entry
   const meta = readDocMeta(prop)
   const blocks: string[] = []
@@ -62,16 +77,18 @@ export const renderProperty = (entry: DocEntry, level: number, context: RenderCo
   // name and shape because the page or section above already carries them, and
   // neither of those says the property is on its way out.
   if (prop.deprecated === true) blocks.push('> **Deprecated**')
-  if (meta.heading) {
+  // `summarised` means a table row directly above already states the shape, so
+  // repeating it here would print the same three facts twice.
+  if (meta.heading && !options.summarised) {
     const type = referenceType(prop, context.language)
     if (type.length > 0) blocks.push(`**Type:** ${code(type)}`)
     if (required) blocks.push('**Required**')
   }
 
   const description = readDescription(prop).trim()
-  if (description.length > 0) blocks.push(description)
+  if (description.length > 0 && !options.summarised) blocks.push(description)
 
-  if (prop.default !== undefined) {
+  if (prop.default !== undefined && !options.summarised) {
     blocks.push(`**Default:** ${code(formatInlineLiteral(prop.default, context.language))}`)
   }
 
@@ -93,7 +110,10 @@ export const renderProperty = (entry: DocEntry, level: number, context: RenderCo
   const constraints = readConstraints(prop, context.language)
   if (constraints.length > 0) blocks.push(`**Constraints:** ${constraints.map(code).join(', ')}`)
 
-  for (const note of meta.notes) blocks.push(`> ${note.replace(/\n/g, '\n> ')}`)
+  // Every line of a note has to carry the `>` marker, and CommonMark counts a
+  // bare CR as a line ending: a note holding one escaped the blockquote and the
+  // rest of it became page structure.
+  for (const note of meta.notes) blocks.push(`> ${note.replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
 
   blocks.push(...renderExamples(derived === undefined ? meta.examples : [derived], context.language))
   for (const footer of meta.footers) blocks.push(footer.trim())
@@ -117,7 +137,7 @@ export const renderProperty = (entry: DocEntry, level: number, context: RenderCo
     for (const child of children) {
       if (documentedElsewhere(child, context)) continue
       if (childEntries(child.prop, child.path, meta.sort ?? context.sort).length === 0) continue
-      blocks.push(...renderProperty(child, level + (meta.heading ? 1 : 0), context))
+      blocks.push(...renderProperty(child, level + (meta.heading ? 1 : 0), context, { summarised: true }))
     }
     return blocks
   }

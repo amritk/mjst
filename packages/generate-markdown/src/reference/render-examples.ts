@@ -1,3 +1,4 @@
+import { collapseLineEndings } from '#helpers/escape-html'
 import { formatLiteral } from '#helpers/format-literal'
 import type { DocExample } from '#types/doc'
 
@@ -46,5 +47,8 @@ export const renderExamples = (examples: readonly DocExample[], language: string
     if (code === undefined) return []
     const fence = fenceFor(code)
     const block = `${fence}${fenceLanguage}\n${code.replace(/\n+$/, '')}\n${fence}`
-    return example.caption !== undefined ? [example.caption, block] : [block]
+    // A caption is the one line of prose above the fence. A line ending in one
+    // ends that paragraph and lets the rest of the caption open a heading or a
+    // list of its own.
+    return example.caption !== undefined ? [collapseLineEndings(example.caption), block] : [block]
   })

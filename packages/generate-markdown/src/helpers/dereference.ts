@@ -32,7 +32,35 @@ const decodeSegment = (segment: string): string => {
  * anything had polluted `Object.prototype` — let an arbitrary `#/<name>` resolve
  * to the injected value instead of being reported as unresolvable.
  */
+/**
+ * Finds the node a plain-name fragment (`#node`) names, by looking for the
+ * `$anchor` that declares it. 2020-12 lets a definition name itself this way,
+ * and a reference to one used to resolve to nothing at all — the property kept
+ * its name and lost its type, its prose and its whole subtree, which looks like
+ * a documented property and is not one.
+ */
+const resolveAnchor = (node: unknown, anchor: string, depth = 0): unknown => {
+  if (depth > MAX_SCHEMA_DEPTH) return undefined
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const found = resolveAnchor(item, anchor, depth + 1)
+      if (found !== undefined) return found
+    }
+    return undefined
+  }
+  if (!isObject(node)) return undefined
+  if (node['$anchor'] === anchor || node['$dynamicAnchor'] === anchor) return node
+  for (const value of Object.values(node)) {
+    const found = resolveAnchor(value, anchor, depth + 1)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 const resolvePointer = (root: Record<string, unknown>, ref: string): unknown => {
+  // `#name` names an `$anchor`; `#/…` is a JSON pointer. Anything else is a
+  // reference out of the document, which this resolver does not fetch.
+  if (/^#[A-Za-z_][A-Za-z0-9_.:-]*$/.test(ref)) return resolveAnchor(root, ref.slice(1))
   if (!ref.startsWith('#/')) return undefined
   const segments = ref.slice(2).split('/').map(decodeSegment)
   let current: unknown = root

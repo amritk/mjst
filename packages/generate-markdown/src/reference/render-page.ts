@@ -28,23 +28,24 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
   // A title is schema text like any other. A line ending inside one ends the
   // heading and lets the rest of the title open a heading, a list or a fence of
   // its own — a fabricated section in the reader's table of contents.
-  // Levels follow the headings that are actually emitted. A schema with no
-  // title has no `#` for its properties to sit under, and starting them at `##`
-  // left the file with no top-level heading at all.
-  const titled = model.page.title !== undefined
+  // Levels are fixed by the page's own structure, not by which headings the
+  // schema happened to fill in. A page holds one top-level heading — its title
+  // — and everything else sits below it. Promoting properties when the title is
+  // missing gave a twelve-option schema twelve `#` headings, which is worse
+  // than a page whose first heading is `##`: a docs site takes the single `#`
+  // as the page title, and every linter counts more than one as an error. A
+  // schema that wants that heading gives itself a `title`.
   if (model.page.title !== undefined) blocks.push(heading(level, collapseLineEndings(model.page.title)))
   if (model.page.description !== undefined) blocks.push(model.page.description.trim())
   blocks.push(...renderExamples(model.page.examples, config.language))
 
-  const entryLevel = titled ? level + 1 : level
-  for (const entry of model.entries) blocks.push(...renderProperty(entry, entryLevel, context))
+  for (const entry of model.entries) blocks.push(...renderProperty(entry, level + 1, context))
 
   for (const { section, entries } of model.sections) {
-    if (section.title !== undefined) blocks.push(heading(entryLevel, collapseLineEndings(section.title)))
+    if (section.title !== undefined) blocks.push(heading(level + 1, collapseLineEndings(section.title)))
     if (section.description !== undefined) blocks.push(section.description.trim())
     blocks.push(...renderExamples(section.examples, config.language))
-    const sectionEntryLevel = section.title !== undefined ? entryLevel + 1 : entryLevel
-    for (const entry of entries) blocks.push(...renderProperty(entry, sectionEntryLevel, context))
+    for (const entry of entries) blocks.push(...renderProperty(entry, level + 2, context))
   }
 
   return `${blocks.filter((block) => block.length > 0).join('\n\n')}\n`

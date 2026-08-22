@@ -105,10 +105,6 @@ Set `skip: true` on a target to keep its config in place without generating it.
 
 #### go
 
-**Type:** `object`
-
-Go SDK target config.
-
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
 | `packageName` | `string` |  | Import and package name for the generated package. |
@@ -154,10 +150,6 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 | `defaultRetries` | `object` |  | Retry policy the generated runtime applies to failed requests. |
 
 #### defaultRetries
-
-**Type:** `object`
-
-Retry policy the generated runtime applies to failed requests.
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
