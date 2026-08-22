@@ -1062,9 +1062,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    const section = (name: string) => content.slice(content.indexOf(`### ${name}`), content.indexOf(`### ${name}`) + 60)
-    expect(section('all')).toContain('**Required**')
-    expect(section('most')).not.toContain('**Required**')
+    expect(section(content, '### all')).toContain('**Required**')
+    expect(section(content, '### most')).not.toContain('**Required**')
   })
 
   // A single alternative is not an alternative: its requirements stand.
@@ -2546,8 +2545,10 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    const row = content.split('\n').find((line) => line.startsWith('| `sample')) ?? ''
-    expect(row).not.toContain('<b>literal</b>')
+    const row = content.split('\n').find((line) => line.startsWith('| `sample'))
+    // Named first: a negative assertion about a row that never rendered would
+    // pass for the wrong reason, and so would the block below it.
+    expect(row).toBe('| `sample` | `string` | Wrap the value in     the same shape |')
     expect(content).toContain('    <b>literal</b>')
   })
 
@@ -2600,6 +2601,8 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('### and')
     expect(content).toContain('### or')
     // Neither branch requires what the other does, so neither field is marked.
+    // That much the collector would say on its own; what this test is for is
+    // that the render happens at all.
     expect(content).not.toContain('**Required**')
   })
 
@@ -2620,8 +2623,10 @@ describe('generate-markdown-files', () => {
         },
       ]),
     )
+    // The number too: an allowance the reader cannot see is one nobody can
+    // tell has been set to something useless.
     expect(() => generateMarkdownFiles({ properties: { root: { $ref: '#/$defs/a' } }, $defs })).toThrow(
-      /compose in too many ways/,
+      /passed 10000 nodes.*compose in too many ways/s,
     )
   })
 
@@ -2663,6 +2668,9 @@ describe('generate-markdown-files', () => {
     const index = files.find((file) => file.filename === 'index.md')?.content ?? ''
     const nodes = files.find((file) => file.filename === 'nodes.md')?.content ?? ''
     expect(index).toContain('### child')
+    // The page is written, and empty: without this the `?? ''` fallback would
+    // satisfy the next line on its own.
+    expect(nodes).toBe('# Nodes\n')
     expect(nodes).not.toContain('child')
   })
 
@@ -2740,6 +2748,297 @@ describe('generate-markdown-files', () => {
     )
     expect(content).toContain('| `template` | `string` | Paste it verbatim. |')
     expect(content).toContain('\n    <div class="x">sample</div>')
+  })
+
+  /** A definition that documents itself, and a property that truncates it. */
+  const truncating = (doc: Record<string, unknown>, site: Record<string, unknown>): unknown => ({
+    title: 'Config',
+    properties: { root: { $ref: '#/$defs/Node' } },
+    $defs: {
+      Node: {
+        type: 'object',
+        'x-doc': doc,
+        properties: {
+          name: { type: 'string', description: 'Name.' },
+          child: { $ref: '#/$defs/Node', description: 'Nested node.', ...site },
+        },
+      },
+    },
+  })
+
+  // A truncation is documented the way any other `$ref` site is. Reading it as
+  // a special case cost the definition's layout the moment the ref site added a
+  // field of its own — and `{ $ref: Base, properties: … }` is the extension
+  // idiom, not an edge case.
+  it('keeps the definition layout on a truncation that declares its own fields', () => {
+    const content = only(
+      generateMarkdownFiles(
+        truncating({ layout: 'table' }, { properties: { extra: { type: 'string', description: 'Extra.' } } }),
+      ),
+    )
+    expect(section(content, '### child')).toContain('| `extra` | `string` | Extra. |')
+  })
+
+  // `hidden` is the one member whose failure mode is publishing an option the
+  // schema said to keep out of the docs.
+  it('keeps a definition hidden where a truncation reaches it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Config',
+        properties: { cache: { $ref: '#/$defs/Cache', 'x-doc': { hidden: false }, description: 'Cache settings.' } },
+        $defs: {
+          Cache: {
+            type: 'object',
+            'x-doc': { hidden: true, layout: 'table' },
+            properties: {
+              ttl: { type: 'number', description: 'Seconds.' },
+              fallback: { $ref: '#/$defs/Cache', description: 'Fallback cache.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| `ttl` | `number` | Seconds. |')
+    expect(content).not.toContain('fallback')
+  })
+
+  it('keeps the definition example on a truncation', () => {
+    const content = only(
+      generateMarkdownFiles(truncating({ example: { value: { name: 'n1' }, caption: 'A node looks like this.' } }, {})),
+    )
+    expect(section(content, '### child')).toContain('A node looks like this.')
+  })
+
+  // Where a property is documented is the ref site's to say — a truncation has
+  // no shape to move, so it would arrive as a bare heading.
+  it('does not move a truncated child into the section its definition names', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { sections: [{ id: 'later', title: 'Later' }] },
+        properties: { alt: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            'x-doc': { section: 'later' },
+            properties: { label: { type: 'string' }, child: { $ref: '#/$defs/Node' } },
+          },
+        },
+      }),
+    )
+    expect(section(content, '### alt')).toContain('#### child')
+  })
+
+  // The document root is not a definition: its `x-doc` is the page's own
+  // configuration, and `$ref: '#'` used to reprint the page's introduction,
+  // notes and footer under the property's name.
+  it('takes nothing from the page onto a self-referencing property', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Configuration',
+        'x-doc': {
+          description: 'Everything on this page configures the reference.',
+          notes: ['Root note.'],
+          footer: 'Read the migration guide before upgrading.',
+        },
+        properties: { theme: { type: 'string', description: 'The theme.' }, sibling: { $ref: '#' } },
+      }),
+    )
+    expect(section(content, '## sibling')).toBe('## sibling\n\n**Type:** `object`\n')
+    expect(content.match(/Everything on this page configures the reference\./g)).toHaveLength(1)
+  })
+
+  // A chain of one-line alias definitions is not a cycle, so nothing cuts it —
+  // and a code generator emits them by the thousand. The node allowance counts
+  // nodes, not frames, so the reading recursed until the stack gave out and
+  // said only `RangeError`, on whichever runtime happened to have the smaller
+  // stack.
+  it('refuses an alias chain deeper than the composition can be followed', () => {
+    const $defs: Record<string, unknown> = {
+      // `properties` before `allOf`: the truncation inside it is reached — and
+      // reads the chain — before the inliner ever descends the chain itself.
+      Node: { type: 'object', properties: { next: { $ref: '#/$defs/Node' } }, allOf: [{ $ref: '#/$defs/L0' }] },
+    }
+    for (let index = 0; index < 900; index++) {
+      $defs[`L${index}`] = index === 899 ? { type: 'object' } : { allOf: [{ $ref: `#/$defs/L${index + 1}` }] }
+    }
+    expect(() => generateMarkdownFiles({ properties: { a: { $ref: '#/$defs/Node' } }, $defs })).toThrow(
+      /composition passed 512 levels/,
+    )
+  })
+
+  // The allowance has to be large enough for a schema that legitimately
+  // composes: three hundred bases is a lot, and it is not an error.
+  it('reads a definition that composes three hundred bases', () => {
+    const $defs: Record<string, unknown> = {}
+    const allOf: unknown[] = []
+    for (let index = 0; index < 300; index++) {
+      $defs[`D${index}`] = { type: 'object', ...(index === 0 && { required: ['deep'] }) }
+      allOf.push({ $ref: `#/$defs/D${index}` })
+    }
+    $defs['Node'] = {
+      type: 'object',
+      allOf,
+      properties: { deep: { type: 'string' }, next: { $ref: '#/$defs/Node' } },
+    }
+    const content = only(generateMarkdownFiles({ properties: { node: { $ref: '#/$defs/Node' } }, $defs }))
+    expect(section(content, '### deep')).toContain('**Required**')
+  })
+
+  // Working out what a definition requires depends only on the document and the
+  // pointer, so it is worked out once. Repeating it at every truncation took 75
+  // seconds on a 3 KB schema — and then failed on the node allowance anyway, so
+  // the whole 75 seconds bought an error message.
+  it('reads what each definition requires once', () => {
+    const $defs: Record<string, unknown> = {}
+    for (let index = 0; index < 9; index++) {
+      $defs[`E${index}`] = { allOf: [{ $ref: `#/$defs/E${index + 1}` }, { $ref: `#/$defs/E${index + 1}` }] }
+    }
+    $defs['E9'] = { type: 'object' }
+    const fan = (target: string) =>
+      Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`p${index}`, { $ref: `#/$defs/${target}` }]))
+    $defs['A'] = { type: 'object', allOf: [{ $ref: '#/$defs/E0' }], properties: fan('B') }
+    $defs['B'] = { type: 'object', properties: fan('C') }
+    $defs['C'] = { type: 'object', properties: fan('A') }
+    // The schema is too big to inline, which is the error it should reach —
+    // quickly. Read once per pointer this takes a fifth of a second; read once
+    // per truncation the test times out long before the message arrives.
+    expect(() =>
+      generateMarkdownFiles({ 'x-doc': { layout: 'none' }, properties: { root: { $ref: '#/$defs/A' } }, $defs }),
+    ).toThrow(/more than 100000 nodes/)
+  })
+
+  // `#/` addresses the document as surely as `#` does, and a truncation that
+  // cannot resolve it loses everything the definition said, requirements first.
+  it('resolves the other spelling of the empty pointer at a truncation', () => {
+    const content = only(
+      generateMarkdownFiles({
+        required: ['a'],
+        properties: {
+          a: { type: 'string' },
+          kid: { anyOf: [{ $ref: '#/' }, { type: 'object', required: ['a'], properties: { a: {} } }] },
+        },
+      }),
+    )
+    expect(section(content, '### a')).toContain('**Required**')
+  })
+
+  // A branch reached through a reference is whatever the definition says. The
+  // `allOf`-wrapped `$ref` is how OpenAPI 3.0 attaches prose to one, and read
+  // without following it a `string` definition looked like an object — the one
+  // vote this filter exists to refuse.
+  it('follows a reference before letting a branch vote on what an alternative requires', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Rules',
+        properties: { nested: { $ref: '#/$defs/Group' } },
+        $defs: {
+          RuleId: { type: 'string' },
+          RuleIdRef: { description: 'Prose about the id.', allOf: [{ $ref: '#/$defs/RuleId' }] },
+          Group: {
+            type: 'object',
+            properties: { inner: { $ref: '#/$defs/Rule' } },
+            anyOf: [
+              { $ref: '#/$defs/RuleIdRef' },
+              { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+            ],
+          },
+          Rule: {
+            type: 'object',
+            anyOf: [
+              { $ref: '#/$defs/Group' },
+              { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+            ],
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### id')).toContain('**Required**')
+  })
+
+  // `type: ['string', 'object']` says the same thing as `['object', 'string']`.
+  it('reads a union whose object form is not the first type it names', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          auth: {
+            anyOf: [{ $ref: '#/$defs/token' }, { type: 'object', required: ['user'], properties: { user: {} } }],
+          },
+        },
+        $defs: { token: { type: ['string', 'object'], properties: { t: {} } } },
+      }),
+    )
+    expect(content).not.toContain('**Required**')
+  })
+
+  // A truncated branch carries its requirements in the marker rather than in
+  // `required`, and `allOf: [{ $ref: Base }, { properties: … }]` is where a
+  // recursive base gets truncated — the inheritance idiom of every
+  // OpenAPI-derived schema.
+  it('records what a truncated allOf branch requires', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            required: ['id'],
+            properties: {
+              id: { type: 'string' },
+              child: { allOf: [{ $ref: '#/$defs/Node' }, { properties: { id: { type: 'string' } } }] },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### id')).toContain('**Required**')
+  })
+
+  // A name is one value however it is spelled: passing it through the
+  // paragraph reader erased a property called `\tindented` from its own table,
+  // because a leading tab reads as an indented code block and a row cannot
+  // hold one.
+  it('keeps a property name that reads as a code block in its own row', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          ui: {
+            type: 'object',
+            'x-doc': { layout: 'table' },
+            properties: {
+              '\tindented': { type: 'string', description: 'Tab-named.' },
+              normal: { type: 'string', description: 'Fine.', 'x-doc': { type: '    Weird' } },
+            },
+          },
+        },
+      }),
+    )
+    // The leading whitespace goes, as it does for every cell; the name does not.
+    expect(content).toContain('| `indented` | `string` | Tab-named. |')
+    expect(content).toContain('| `normal` | `Weird` | Fine. |')
+  })
+
+  // The same rule on the three other routes a description reaches the page by.
+  it('keeps a code sample indented in a page, section and footer description', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': {
+          title: 'Cfg',
+          description: '    <div>page sample</div>\n\nThe page.',
+          sections: [{ id: 'later', title: 'Later', description: '    <div>section sample</div>\n\nThe section.' }],
+        },
+        properties: {
+          a: { type: 'string', 'x-doc': { section: 'later', footer: '    <div>footer sample</div>' } },
+        },
+      }),
+    )
+    for (const sample of ['page', 'section', 'footer']) expect(content).toContain(`\n    <div>${sample} sample</div>`)
+  })
+
+  // A description opening with blank lines is not a paragraph of its own, and
+  // printing them left a hole between the type line and the prose.
+  it('drops the blank lines a description opens with', () => {
+    const content = only(generateMarkdownFiles({ properties: { a: { type: 'string', description: '  \n\nProse.' } } }))
+    expect(content).toContain('**Type:** `string`\n\nProse.')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {

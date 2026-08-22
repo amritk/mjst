@@ -114,6 +114,14 @@ describe('first-paragraph', () => {
     expect(remainingParagraphs(value)).toBe('```\na\n\nb\n```')
   })
 
+  // Up to three spaces still opens a fence — four is where it becomes an
+  // indented code block instead.
+  it('reads a fence indented by three spaces', () => {
+    const value = '   ```\na\n\nb\n```\n\nAfter.'
+    expect(firstParagraph(value)).toBe('After.')
+    expect(remainingParagraphs(value)).toBe('```\na\n\nb\n```')
+  })
+
   // Four spaces makes an indented code block, not a fence, so the line does not
   // open one and the blank line after it still ends the paragraph.
   it('does not open a fence from an indented code block', () => {

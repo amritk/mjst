@@ -1,5 +1,5 @@
 import { asSchema, isObject } from '#helpers/guards'
-import { couldBeObject, MAX_SCHEMA_DEPTH, RECURSION_STUB } from '#helpers/schema-shape'
+import { couldBeObject, MAX_SCHEMA_DEPTH, RECURSION_STUB, type ShapeContext } from '#helpers/schema-shape'
 
 /** A list of names, defensively — `required` is parsed JSON like everything else. */
 const asStringArray = (value: unknown): readonly string[] =>
@@ -140,23 +140,21 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * The `x-doc` members a truncation keeps from the definition it stands for.
+ * The `x-doc` members a truncation does *not* take from the definition it
+ * stands for: the two that say which page and which section a property is
+ * documented on.
  *
- * A whitelist, because the alternative was copying the whole keyword and every
- * member of it that means "where this is documented" then belonged to the wrong
- * node. `x-doc.page` on a definition tore its truncated child out of its parent
- * and republished it as a top-level heading on another file; and `$ref: '#'` —
- * the spelling every self-recursive schema uses — made the *root* the
- * definition, so a property called `parent` was headed with the page's title
- * and followed by the page's own example a second time.
+ * Everything else is documentation of the thing itself and travels with it, as
+ * it does through any other `$ref`. These two are placement, and a truncation
+ * has no shape to place — it is a name and a sentence standing in for a subtree
+ * documented further up. Carried down, `x-doc.page` tore a truncated child out
+ * of its parent and republished it on another file as a top-level heading with
+ * nothing underneath it.
  *
- * What is left is what a reader of a truncation still needs: what it is, and
- * what it says about itself. Where it goes, what it is called and how it sorts
- * are the ref site's to say. Its examples are not repeated either — the shape
- * is already documented in full further up the page, which is why this is a
- * truncation at all.
+ * A ref site is still free to write either one: what it says about *this* use
+ * wins, the way it does for every other member.
  */
-const TRUNCATED_DOC_KEYS: readonly string[] = ['description', 'type', 'note', 'notes', 'footer', 'footers']
+const PLACEMENT_DOC_KEYS: ReadonlySet<string> = new Set(['page', 'section'])
 
 /**
  * How many schema nodes the inlined document may contain. Inlining is a tree
@@ -172,12 +170,20 @@ const TRUNCATED_DOC_KEYS: readonly string[] = ['description', 'type', 'note', 'n
 export const MAX_INLINED_NODES = 100_000
 
 /**
- * The remaining node allowance for one {@link dereference} walk. Mutable because
- * the budget is shared across every branch of the expansion — the cost that
- * matters is the total size of the inlined document, not the depth of any one
- * path through it.
+ * What one {@link dereference} walk carries: the remaining node allowance, and
+ * what each truncated `$ref` requires.
+ *
+ * The allowance is mutable because it is shared across every branch of the
+ * expansion — the cost that matters is the total size of the inlined document,
+ * not the depth of any one path through it.
+ *
+ * The requirements are cached because working them out is a pure function of
+ * the document and the pointer, and a definition reached by a hundred
+ * truncations was being read a hundred times. A layered `$defs` graph took 75
+ * seconds of that for a 3 KB schema — and then failed on the node allowance
+ * anyway, so the whole 75 seconds bought an error message.
  */
-type Budget = { remaining: number }
+type Budget = { remaining: number; readonly required: Map<string, readonly string[]> }
 
 /**
  * Follows the `$ref` hops a definition is reached through, so the node a stub
@@ -206,6 +212,9 @@ const resolveDefinition = (root: Record<string, unknown>, ref: string, depth = 0
  */
 const MAX_REQUIRED_NODES = 10_000
 
+/** The node allowance and the resolved-shape answers one reading shares. */
+type Reading = { remaining: number; readonly shape: ShapeContext }
+
 /** One branch of a composition keyword, and the `$ref` it was reached through. */
 type Branch = { readonly node: unknown; readonly ref: string | undefined }
 
@@ -229,9 +238,21 @@ const requiredOf = (
   root: Record<string, unknown>,
   node: unknown,
   seen: ReadonlySet<string>,
-  budget: Budget,
+  budget: Reading,
+  depth = 0,
 ): readonly string[] => {
   if (!isObject(node)) return []
+  // A chain of one-line alias definitions is not a cycle, so `seen` never cuts
+  // it — and a code generator emits those by the thousand. The node allowance
+  // counts nodes, not frames, so without this the walk recursed until the stack
+  // gave out and said only `RangeError`. Which runtime it gave out on decided
+  // whether anyone saw it at all.
+  if (depth > MAX_SCHEMA_DEPTH) {
+    throw new Error(
+      `Following the schema's composition passed ${MAX_SCHEMA_DEPTH} levels. Flatten the \`allOf\` chain — ` +
+        'nothing composed that deep can be read as documentation.',
+    )
+  }
   if (budget.remaining-- <= 0) {
     throw new Error(
       `Reading what a recursive definition requires passed ${MAX_REQUIRED_NODES} nodes. Its $defs compose in ` +
@@ -247,9 +268,9 @@ const requiredOf = (
     })
   /** What a branch requires, or nothing when it leads back onto the path. */
   const requiredOfBranch = (branch: Branch): readonly string[] => {
-    if (branch.ref === undefined) return requiredOf(root, branch.node, seen, budget)
+    if (branch.ref === undefined) return requiredOf(root, branch.node, seen, budget, depth + 1)
     if (seen.has(branch.ref)) return []
-    return requiredOf(root, branch.node, new Set(seen).add(branch.ref), budget)
+    return requiredOf(root, branch.node, new Set(seen).add(branch.ref), budget, depth + 1)
   }
 
   // Every `allOf` branch applies, so its requirements all hold.
@@ -260,12 +281,25 @@ const requiredOf = (
   // the inlined document; applying it here too is what keeps one union from
   // being documented two ways on one page.
   for (const keyword of ['anyOf', 'oneOf']) {
-    const branches = branchesOf(node[keyword]).filter((branch) => couldBeObject(asSchema(branch.node)))
+    const branches = branchesOf(node[keyword]).filter((branch) => couldBeObject(asSchema(branch.node), budget.shape))
     const [first, ...rest] = branches.map(requiredOfBranch)
     if (first === undefined) continue
     for (const name of first) if (rest.every((other) => other.includes(name))) names.add(name)
   }
   return [...names]
+}
+
+/** {@link requiredOf} for one pointer, worked out once per walk. */
+const requiredOfRef = (root: Record<string, unknown>, ref: string, budget: Budget): readonly string[] => {
+  const cached = budget.required.get(ref)
+  if (cached !== undefined) return cached
+  const reading: Reading = {
+    remaining: MAX_REQUIRED_NODES,
+    shape: { resolve: (target) => resolveDefinition(root, target), known: new Map() },
+  }
+  const names = requiredOf(root, resolveDefinition(root, ref), new Set([ref]), reading)
+  budget.required.set(ref, names)
+  return names
 }
 
 /**
@@ -374,18 +408,24 @@ export const dereference = (
       // site — and the requirements of the definition being truncated, which is
       // the only thing about it a reader of the stub still needs.
       const target = resolveDefinition(root, ref)
-      const required = requiredOf(root, target, new Set([ref]), { remaining: MAX_REQUIRED_NODES })
+      const required = requiredOfRef(root, ref, budget)
       const resolvedSiblings = dereference(siblings, root, seen, budget, depth + 1) as Record<string, unknown>
-      // The truncation keeps what a reader still needs of the definition: what
-      // it is and what it says about itself. Only its shape is dropped, because
-      // that is what is already on the page above.
+      // The truncation keeps the definition's documentation, the way any other
+      // `$ref` site does — its prose, its type label, its layout, its examples,
+      // whether it is hidden. Only its shape is dropped, because that is what is
+      // already on the page above.
       const carried: Record<string, unknown> = {}
-      if (isObject(target)) {
+      // Except when the definition is the document itself. `$ref: '#'` is the
+      // spelling a self-recursive schema uses, and the root's `x-doc` is the
+      // *page's* configuration — its title, its examples, its notes. Copied onto
+      // a property, the page introduced itself a second time under the property's
+      // name.
+      if (isObject(target) && target !== root) {
         if (typeof target['description'] === 'string') carried['description'] = target['description']
         const doc = target[DOC_KEY]
         if (isObject(doc)) {
           const kept: Record<string, unknown> = {}
-          for (const key of TRUNCATED_DOC_KEYS) if (Object.hasOwn(doc, key)) kept[key] = doc[key]
+          for (const [key, value] of Object.entries(doc)) if (!PLACEMENT_DOC_KEYS.has(key)) defineOwn(kept, key, value)
           if (Object.keys(kept).length > 0) carried[DOC_KEY] = kept
         }
       }
@@ -446,4 +486,7 @@ export const dereferenceSchema = (parsed: Record<string, unknown>): ConfigSchema
   // self-reference collapses to the stub the way `#/$defs/x` does on its second
   // visit. Without that seeding the whole root expanded one extra time, and a
   // property assigned to a page was documented on it twice.
-  dereference(parsed, parsed, new Set(['#', '#/']), { remaining: MAX_INLINED_NODES }) as ConfigSchema
+  dereference(parsed, parsed, new Set(['#', '#/']), {
+    remaining: MAX_INLINED_NODES,
+    required: new Map(),
+  }) as ConfigSchema

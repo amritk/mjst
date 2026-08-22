@@ -96,6 +96,12 @@ const collect = (
     const collected = collect(asSchema(branch), depth + 1)
     merge(properties, collected.properties)
     for (const name of collected.required) required.add(name)
+    // A truncated branch carries its requirements in the marker rather than in
+    // `required`, and `allOf: [{ $ref: Base }, { properties: … }]` — the
+    // inheritance idiom of every OpenAPI-derived schema — is exactly where a
+    // recursive `Base` gets truncated. Reading only `required` dropped the
+    // markers off every field the base asked for.
+    for (const name of stubRequired(branch) ?? []) required.add(name)
   }
 
   for (const keyword of [node.anyOf, node.oneOf]) {
