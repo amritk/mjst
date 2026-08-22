@@ -3420,6 +3420,139 @@ describe('generate-markdown-files', () => {
     expect(section(content, '#### tag')).toContain('**Required**')
   })
 
+  // Whether a pointer describes an object depends only on the pointer, so it is
+  // answered once. Read as a tree instead of a graph, a layered `$defs` cost
+  // four times as much per level — six and a half minutes on a 3 KB schema, to
+  // print an error.
+  it('reads what each definition can be once', () => {
+    const $defs: Record<string, unknown> = {
+      Node: {
+        type: 'object',
+        properties: { self: { $ref: '#/$defs/Node' } },
+        anyOf: [{ $ref: '#/$defs/L0' }, { $ref: '#/$defs/L0' }],
+      },
+    }
+    for (let index = 0; index < 20; index++) {
+      $defs[`L${index}`] = { anyOf: [{ $ref: `#/$defs/L${index + 1}` }, { $ref: `#/$defs/L${index + 1}` }] }
+    }
+    $defs['L20'] = { type: 'string' }
+    // The schema is too big to inline, which is the error it should reach —
+    // quickly. Read once per pointer this is a quarter of a second; read once
+    // per path the test times out long before the message arrives.
+    expect(() => generateMarkdownFiles({ properties: { x: { $ref: '#/$defs/Node' } }, $defs })).toThrow(
+      /more than 100000 nodes/,
+    )
+  })
+
+  // An ATX heading strips a trailing space, so a property called `"trail "` was
+  // headed `trail` while its own row spelled it in full — one page naming a key
+  // two ways, neither checkable against the schema.
+  it('does not let a heading strip the whitespace a property name carries', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          parent: {
+            type: 'object',
+            properties: { 'trail ': { type: 'string', description: 'Trailing space name.', examples: ['x'] } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| ` trail  ` | `string` | Trailing space name. |')
+    expect(content).toContain('### ` trail  `')
+  })
+
+  // A ref site's keywords apply *alongside* the definition's, which is what the
+  // inliner does with them. A plain spread let the ref site's `required`
+  // replace the definition's, so one union was read one way inlined and another
+  // truncated — the error the merge was added to fix, pointing the other way.
+  it('unions a branch ref site required list with the definition one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { x: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Base: { type: 'object', required: ['a'], properties: { a: { type: 'string' } } },
+          Node: {
+            type: 'object',
+            allOf: [{ $ref: '#/$defs/Base', required: ['b'] }],
+            properties: {
+              a: { type: 'string' },
+              b: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/Node' },
+                  {
+                    type: 'object',
+                    required: ['a', 'b'],
+                    properties: { a: { type: 'string' }, b: { type: 'string' } },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    // The truncated reading and the inlined one agree: both names are required.
+    expect(section(content, '#### a')).toContain('**Required**')
+    expect(section(content, '#### b')).toContain('**Required**')
+  })
+
+  // The collapse drops the definition's fields, because those are on the page
+  // above. Everything it says about the value itself stays — otherwise every
+  // recursive position of a deprecated definition told the reader it was not.
+  it('carries what a truncated definition says about its own value', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { a: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Node: {
+            type: 'object',
+            description: 'A node.',
+            deprecated: true,
+            default: { x: 1 },
+            format: 'uri',
+            minLength: 3,
+            properties: { kid: { $ref: '#/$defs/Node' } },
+          },
+        },
+      }),
+    )
+    const kid = section(content, '### kid')
+    expect(kid).toContain('> **Deprecated**')
+    expect(kid).toContain('**Default:**')
+    expect(kid).toContain('**Constraints:** `format: uri`, `minLength: 3`')
+  })
+
+  // `allOf` means every branch applies. Labelled `a | b` it told the reader
+  // either would do.
+  it('labels an allOf as an intersection rather than a union', () => {
+    const content = only(
+      generateMarkdownFiles({ properties: { both: { allOf: [{ type: 'object' }, { type: 'string' }] } } }),
+    )
+    expect(content).toContain('**Type:** `object & string`')
+  })
+
+  // An array's label names its element, and the truncation kept the array and
+  // dropped the element — so one definition was `object[]` at its first
+  // occurrence and `array` at every other.
+  it('keeps the element type in a truncated array label', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { arr: { $ref: '#/$defs/List' } },
+        $defs: {
+          List: {
+            type: 'array',
+            items: { type: 'object', properties: { more: { $ref: '#/$defs/List' } } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('## arr')
+    expect(section(content, '### more')).toContain('**Type:** `object[]`')
+  })
+
   it('matches the checked-in docs for the API reference fixture', () => {
     const files = generateMarkdownFiles(fixture('api-reference-config'))
     expect(files.map((file) => file.filename)).toEqual(['configuration.md'])

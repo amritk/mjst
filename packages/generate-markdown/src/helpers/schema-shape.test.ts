@@ -4,6 +4,8 @@ import { couldBeObject, type ShapeContext } from '#helpers/schema-shape'
 /** Resolves `#/$defs/<name>` against a document, the way the inliner does. */
 const contextFor = (defs: Record<string, unknown>): ShapeContext => ({
   resolve: (ref) => defs[ref.replace('#/$defs/', '')],
+  known: new Map(),
+  budget: { remaining: 10_000 },
 })
 
 describe('schema-shape', () => {

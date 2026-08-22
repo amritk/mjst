@@ -36,12 +36,40 @@ export const stubRequired = (node: unknown): readonly string[] | undefined => {
 
 /**
  * What {@link couldBeObject} needs to read a document that still has `$ref`s in
- * it: how to resolve one.
+ * it: how to resolve one, the answers already worked out, and an allowance.
  *
  * Only the inliner passes this; the collector reads an already-inlined
  * document, where every reference has been replaced by what it pointed at.
+ *
+ * The answers are cached because whether a pointer describes an object depends
+ * only on the document and the pointer — so a `$defs` graph read as a tree
+ * instead of a graph is pure waste, and a layered one cost four times as much
+ * per level: six and a half minutes on a 3 KB schema, to print an error. Only
+ * an answer that did not lean on a cycle is cached, so the cache cannot make
+ * the verdict depend on the order the walk asks. The allowance is the backstop
+ * for the cyclic graph that defeats the cache.
  */
-export type ShapeContext = { readonly resolve: (ref: string) => unknown }
+export type ShapeContext = {
+  readonly resolve: (ref: string) => unknown
+  readonly known: Map<string, boolean>
+  readonly budget: { remaining: number }
+}
+
+/**
+ * How many nodes one reading may look at while working out what a definition
+ * can be. The cache makes a `$defs` graph linear; this is the backstop for the
+ * cyclic one the cache cannot hold an answer for.
+ */
+export const MAX_SHAPE_NODES = 10_000
+
+/**
+ * An answer, and whether it leaned on a reference that was still being read —
+ * which makes it true of the path that reached it rather than of the pointer.
+ */
+type Verdict = { readonly answer: boolean; readonly cyclic: boolean }
+
+/** An answer that holds wherever the node appears. */
+const settled = (answer: boolean): Verdict => ({ answer, cyclic: false })
 
 /**
  * True when a branch could describe an object, and so has a say in what an
@@ -68,11 +96,17 @@ const couldBe = (
   context: ShapeContext | undefined,
   seen: ReadonlySet<string>,
   depth: number,
-): boolean => {
+): Verdict => {
   // A stub stands for an object definition, so it is one — it just votes with
   // the requirements it carries rather than with the empty set it looks like.
-  if (stubRequired(node) !== undefined) return true
-  if (depth > MAX_SCHEMA_DEPTH) return true
+  if (stubRequired(node) !== undefined) return settled(true)
+  if (depth > MAX_SCHEMA_DEPTH) return settled(true)
+  if (context !== undefined && context.budget.remaining-- <= 0) {
+    throw new Error(
+      `Reading what a recursive definition can be passed ${MAX_SHAPE_NODES} nodes. Its $defs compose in too many ` +
+        'ways to enumerate — flatten the composition, or the **Required** markers below it would be guesses.',
+    )
+  }
   // A branch reached through a reference is whatever the definition says, with
   // whatever the ref site says on top: the `allOf`-wrapped `$ref` is how
   // OpenAPI 3.0 attaches a description to one, and read without following it a
@@ -85,33 +119,53 @@ const couldBe = (
     // definition that is an object only if it is an object is taken to be one,
     // because keeping a branch in an intersection loses a marker while dropping
     // one invents a marker, and the first is the safer way to be wrong.
-    if (seen.has(ref)) return true
+    if (seen.has(ref)) return { answer: true, cyclic: true }
+    const cached = context.known.get(ref)
+    if (cached !== undefined) return settled(cached)
     const target = context.resolve(ref)
-    if (!isObject(target)) return true
+    if (!isObject(target)) return settled(true)
     const { $ref: _resolved, ...siblings } = node as Readonly<Record<string, unknown>>
-    return couldBe(asSchema({ ...target, ...siblings }), context, new Set(seen).add(ref), depth + 1)
+    const verdict = couldBe(asSchema({ ...target, ...siblings }), context, new Set(seen).add(ref), depth + 1)
+    if (!verdict.cyclic) context.known.set(ref, verdict.answer)
+    return verdict
   }
+
   const declared = typeof node.type === 'string' ? [node.type] : Array.isArray(node.type) ? node.type : undefined
-  if (declared !== undefined && !declared.includes('object')) return false
+  if (declared !== undefined && !declared.includes('object')) return settled(false)
   const values = asArray(node.enum)
-  if (values.length > 0 && !values.some(isObject)) return false
-  if (node.const !== undefined && !isObject(node.const)) return false
+  if (values.length > 0 && !values.some(isObject)) return settled(false)
+  if (node.const !== undefined && !isObject(node.const)) return settled(false)
+
+  let cyclic = false
   // `allOf` branches all apply, so a branch that cannot be an object settles it
   // for the whole node — that is how a `$ref` to `allOf: [{ type: 'string' }]`
   // describes a string, and reading only the node's own `type` let it vote on
   // what an object alternative requires.
-  if (!asArray(node.allOf).every((branch) => couldBe(asSchema(branch), context, seen, depth + 1))) return false
+  for (const branch of asArray(node.allOf)) {
+    const verdict = couldBe(asSchema(branch), context, seen, depth + 1)
+    cyclic = cyclic || verdict.cyclic
+    if (!verdict.answer) return { answer: false, cyclic }
+  }
   // A union of alternatives is an object only if one of its alternatives is —
   // `anyOf: [{ type: 'string' }, { type: 'number' }]` is a scalar however many
   // ways it is spelled.
   for (const keyword of [node.anyOf, node.oneOf]) {
     const branches = asArray(keyword)
-    if (branches.length > 0 && !branches.some((branch) => couldBe(asSchema(branch), context, seen, depth + 1)))
-      return false
+    if (branches.length === 0) continue
+    let admits = false
+    for (const branch of branches) {
+      const verdict = couldBe(asSchema(branch), context, seen, depth + 1)
+      cyclic = cyclic || verdict.cyclic
+      if (verdict.answer) {
+        admits = true
+        break
+      }
+    }
+    if (!admits) return { answer: false, cyclic }
   }
-  return true
+  return { answer: true, cyclic }
 }
 
 /** {@link couldBe}, from the top. */
 export const couldBeObject = (node: SchemaProperty, context?: ShapeContext): boolean =>
-  couldBe(node, context, new Set(), 0)
+  couldBe(node, context, new Set(), 0).answer

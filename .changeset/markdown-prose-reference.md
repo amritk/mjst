@@ -43,8 +43,9 @@ uses, resolves instead of emptying the property that carried it.
 A recursive reference collapses where it repeats, labelled with the type its
 definition has and carrying that definition's documentation the way any other
 ref site does — its prose, its type label, its layout, its examples, whether it
-is hidden — plus what it requires, so the alternative beside it keeps its
-**Required** markers. What stays behind is what places and announces an
+is hidden — plus what the definition says about the value itself (`deprecated`,
+`default`, every constraint keyword) and what it requires, so the alternative
+beside it keeps its **Required** markers. What stays behind is what places and announces an
 occurrence rather than describing it: `x-doc.page`, `section`, `title`,
 `heading` and `order`. A reference that resolves to the document itself — `#`,
 `#/`, or the root's own `$anchor` — carries nothing, the root being a page
@@ -57,5 +58,9 @@ A table row is one line, so a code block never goes in one: a description
 opening with a fenced or indented sample gives the row its first paragraph of
 prose, and the sample prints below the row with its indentation intact — it used
 to reach the reader de-indented, as live markup, and nowhere else on the page.
+
+In the **Type:** label an `allOf` reads as an intersection (`a & b`) rather than
+as a union, and a page file is percent-encoded as a path — `#` and `?` in a file
+name are encoded rather than left to read as a fragment and a query.
 
 `generateMarkdown()` — the README table — is unchanged.

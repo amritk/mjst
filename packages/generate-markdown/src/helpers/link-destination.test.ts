@@ -6,10 +6,17 @@ describe('link-destination', () => {
     expect(linkDestination('configuration/typescript.md')).toBe('configuration/typescript.md')
   })
 
-  // A fragment and a hyphen are what a cross-page anchor is made of; encoding
-  // either one breaks every link the generator writes.
-  it('keeps the characters an anchor link is built from', () => {
-    expect(linkDestination('guides/sdk-config.md#base-url')).toBe('guides/sdk-config.md#base-url')
+  // A hyphen is in half the file names a docs site has; encoding it breaks
+  // every link the generator writes.
+  it('keeps a hyphen in a file name', () => {
+    expect(linkDestination('guides/sdk-config.md')).toBe('guides/sdk-config.md')
+  })
+
+  // What this encodes is always a file, never a URL reference. A page written
+  // to `c#d.md` linked as `c#d.md` points at a file `c` with a fragment.
+  it('encodes a fragment or query character in a file name', () => {
+    expect(linkDestination('c#d.md')).toBe('c%23d.md')
+    expect(linkDestination('e?f.md')).toBe('e%3Ff.md')
   })
 
   // A space stops the destination being a link at all, and `)` closes it early

@@ -15,6 +15,14 @@ import { firstParagraph } from '#helpers/first-paragraph'
  * is parsed as inline markdown, so `\*` is how an author writes a literal
  * asterisk, and doubling that backslash turns the asterisks into emphasis and
  * shows the reader a stray `\`.
+ *
+ * A property named with a backslash *and* a pipe (`a\|b`) has no faithful
+ * spelling in a GFM row, and neither has a fix: the row is split on `|` before
+ * any inline parsing, `\|` is the only escape that split recognises, and a code
+ * span processes no escapes of its own — so `\|` shows the reader `a|b`, and
+ * `\\|` splits the row. Losing the backslash is the version that leaves a
+ * readable table, and the property's own heading (outside any row) still
+ * spells it in full.
  */
 const escapePipes = (value: string): string =>
   value.replace(/(\\*)\|/g, (_match, slashes: string) => (slashes.length % 2 === 0 ? `${slashes}\\|` : `${slashes}|`))

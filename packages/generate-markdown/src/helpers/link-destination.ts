@@ -6,9 +6,12 @@
  * after it became a second, schema-chosen link in the middle of the table.
  *
  * Page files come from `x-doc.pages[].file`, so they are input like everything
- * else here.
+ * else here — and a file is all this ever encodes, never a URL reference. `#`
+ * and `?` are safe in a reference and wrong in a path: a page written to
+ * `c#d.md` was linked as the file `c` with a fragment `d.md`, so the link the
+ * generator wrote pointed at nothing it had written.
  */
-const SAFE = /[A-Za-z0-9\-._~!$&'*+,;=:@/#?]/
+const SAFE = /[A-Za-z0-9\-._~!$&'*+,;=:@/]/
 
 /**
  * Percent-encodes one character. `encodeURIComponent` is not enough on its own:

@@ -59,10 +59,22 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
     return unionOf(prop.type.filter((entry): entry is string => typeof entry === 'string'))
   }
 
-  for (const variants of [prop.anyOf, prop.oneOf, prop.allOf]) {
+  for (const variants of [prop.anyOf, prop.oneOf]) {
     const union = unionOf(asArray(variants).map((variant) => referenceType(asSchema(variant), language, depth + 1)))
     if (union.length > 0) return union
   }
+  // `allOf` means every branch applies, so its label is an intersection: `a & b`
+  // and not `a | b`, which told the reader either would do. The one-branch
+  // OpenAPI idiom — a `$ref` wrapped to carry a description — reads the same
+  // either way, which is how it went unnoticed.
+  const parts = [
+    ...new Set(
+      asArray(prop.allOf)
+        .map((variant) => referenceType(asSchema(variant), language, depth + 1))
+        .filter((part) => part.length > 0),
+    ),
+  ]
+  if (parts.length > 0) return parts.join(' & ')
   return displayType(prop)
 }
 

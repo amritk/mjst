@@ -1,5 +1,11 @@
 import { asSchema, isObject } from '#helpers/guards'
-import { couldBeObject, MAX_SCHEMA_DEPTH, RECURSION_STUB, type ShapeContext } from '#helpers/schema-shape'
+import {
+  couldBeObject,
+  MAX_SCHEMA_DEPTH,
+  MAX_SHAPE_NODES,
+  RECURSION_STUB,
+  type ShapeContext,
+} from '#helpers/schema-shape'
 
 /** A list of names, defensively — `required` is parsed JSON like everything else. */
 const asStringArray = (value: unknown): readonly string[] =>
@@ -279,7 +285,12 @@ const requiredOf = (
       // definition dropped a `required` written at the ref site, so the same
       // union was documented one way inlined and another truncated.
       const target = resolveDefinition(root, ref)
-      return { node: isObject(target) ? { ...target, ...rest } : rest, ref }
+      if (!isObject(target)) return { node: rest, ref }
+      // Merged the way the inliner merges them, `properties` and `required`
+      // included: a plain spread let the ref site's `required` *replace* the
+      // definition's, so the same union was read one way inlined and another
+      // truncated — the error this merge was added to fix, pointing the other way.
+      return { node: { ...target, ...rest, ...mergedApplicators(target, rest) }, ref }
     })
   /** What a branch requires, or nothing when it leads back onto the path. */
   const requiredOfBranch = (branch: Branch): readonly string[] => {
@@ -303,6 +314,32 @@ const requiredOf = (
   }
   return [...names]
 }
+
+/**
+ * The keywords a truncation keeps from the definition because they describe the
+ * value rather than its shape.
+ *
+ * The collapse is entitled to drop what is already on the page above — the
+ * definition's fields — and nothing else. Dropping these told the reader that
+ * every recursive position of a deprecated definition was not deprecated, and
+ * left its default and its constraints on the first occurrence only.
+ */
+const CARRIED_VALUE_KEYS: readonly string[] = [
+  'deprecated',
+  'default',
+  'format',
+  'pattern',
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'minLength',
+  'maxLength',
+  'minItems',
+  'maxItems',
+  'uniqueItems',
+]
 
 /**
  * What a truncated definition *is*, with nothing about what it holds.
@@ -331,7 +368,15 @@ const typeSkeleton = (
   }
   const shape: Record<string, unknown> = {}
   for (const key of ['type', 'enum', 'const']) if (node[key] !== undefined) defineOwn(shape, key, node[key])
-  if (Object.keys(shape).length > 0) return shape
+  if (Object.keys(shape).length > 0) {
+    // An array's label names its element, so the element's own skeleton comes
+    // too — reduced like everything here, so it can add a label and never a
+    // property. Without it a truncated `object[]` was labelled `array`, while
+    // the full reference two headings up said `object[]`.
+    const items = typeSkeleton(root, node['items'], seen, depth + 1)
+    if (items !== undefined) shape['items'] = items
+    return shape
+  }
   for (const keyword of ['anyOf', 'oneOf', 'allOf']) {
     const branches = node[keyword]
     if (!Array.isArray(branches)) continue
@@ -355,14 +400,17 @@ const carriedDoc = (
   root: Record<string, unknown>,
   ref: string,
   depth = 0,
-): { description?: string; doc?: Record<string, unknown> } => {
+): { description?: string; doc?: Record<string, unknown>; value?: Record<string, unknown> } => {
   const node = resolvePointer(root, ref)
   // The root is not a definition: its `x-doc` is the *page's* configuration —
   // its title, its examples, its notes — and copied onto a property the page
   // introduced itself a second time under the property's name.
   if (!isObject(node) || node === root || depth > MAX_SCHEMA_DEPTH) return {}
   const next = node['$ref']
-  const base = typeof next === 'string' ? carriedDoc(root, next, depth + 1) : {}
+  const base: { description?: string; doc?: Record<string, unknown>; value?: Record<string, unknown> } =
+    typeof next === 'string' ? carriedDoc(root, next, depth + 1) : {}
+  const value: Record<string, unknown> = { ...base.value }
+  for (const key of CARRIED_VALUE_KEYS) if (node[key] !== undefined) defineOwn(value, key, node[key])
   const own = isObject(node[DOC_KEY]) ? (node[DOC_KEY] as Record<string, unknown>) : undefined
   const doc: Record<string, unknown> = { ...base.doc }
   if (own !== undefined) for (const [key, value] of Object.entries(own)) defineOwn(doc, key, value)
@@ -376,6 +424,7 @@ const carriedDoc = (
   return {
     ...(description !== undefined && { description }),
     ...(Object.keys(doc).length > 0 && { doc }),
+    ...(Object.keys(value).length > 0 && { value }),
   }
 }
 
@@ -385,7 +434,11 @@ const requiredOfRef = (root: Record<string, unknown>, ref: string, budget: Budge
   if (cached !== undefined) return cached
   const reading: Reading = {
     remaining: MAX_REQUIRED_NODES,
-    shape: { resolve: (target) => resolveDefinition(root, target) },
+    shape: {
+      resolve: (target) => resolveDefinition(root, target),
+      known: new Map(),
+      budget: { remaining: MAX_SHAPE_NODES },
+    },
   }
   const names = requiredOf(root, resolveDefinition(root, ref), new Set([ref]), reading)
   budget.required.set(ref, names)
@@ -507,8 +560,9 @@ export const dereference = (
       // `$ref` site does — its prose, its type label, its layout, its examples,
       // whether it is hidden. Only its shape is dropped, because that is what is
       // already on the page above.
-      const { description, doc } = carriedDoc(root, ref)
+      const { description, doc, value } = carriedDoc(root, ref)
       const carried: Record<string, unknown> = {
+        ...value,
         ...(description !== undefined && { description }),
         ...(doc !== undefined && { [DOC_KEY]: doc }),
       }
