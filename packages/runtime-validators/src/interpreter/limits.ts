@@ -168,7 +168,10 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // its budget is spent per branch *pair*, while each comparison may compile a
 // character class, so a 176 KB alternation of literals and long classes screens
 // in ~200 ms and a 632 KB one in ~730 ms. That predates rule 1's exemption and is
-// unchanged by it — the exemption's own worst case is under 10 ms.
+// unchanged by it — the exemption's own cost plateaus around 15 ms once its
+// budget is spent. That is higher than the span charging alone suggests because
+// `atomMayMatchChar` compiles a class under *both* flag readings, so one charged
+// span buys two compiles.
 
 /** `{n}` / `{n,}` / `{n,m}`, matched in place at an offset. Sticky, so `lastIndex` selects the offset. */
 const BOUNDED_QUANTIFIER = /\{(\d+)(,(\d*))?\}/y
@@ -819,9 +822,10 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
         // of distinct literals in front of a 2,600-branch alternation forced
         // ~300,000 compiles for 20,000 budget — 294 ms, against 0.27 ms before
         // this rule existed. Charging one unit each then left the *length* of a
-        // compiled class free, so 120 comparisons against a single
-        // 12,500-character class bought three million characters of compilation
-        // for 120 budget. The span is what the compiler actually reads.
+        // compiled class free, so 105 comparisons against a single
+        // 12,500-character class bought 2.6 million characters of compilation for
+        // 7,136 budget — 29 ms, against 0.5 ms once the span is charged. The span
+        // is what the compiler actually reads.
         budget.anchorChars -= unit.atom.length + first.length
         if (budget.anchorChars < 0) return false
         if (!atomsAreDisjoint(unit.atom, first)) return false

@@ -61,7 +61,7 @@ and takes 94 ms on 22 characters where its body alone takes none.
 The screen remains a best-effort filter rather than a proof of safety, with the
 same known gaps. The new analysis is capped by its own shared budget, charged by
 span for every character it examines and every character-class comparison it
-makes, and the worst source found against *it* screens in under 10 ms. That is
+makes, and its cost against a hostile source plateaus around 15 ms. That is
 not a claim about the screen as a whole: the pre-existing ambiguous-alternation
 rule spends its budget per branch
 pair while each comparison may compile a character class, so a 176 KB alternation

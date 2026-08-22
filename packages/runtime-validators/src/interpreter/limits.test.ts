@@ -559,10 +559,12 @@ describe('limits', () => {
       }
     }
     // Guards the guard: if the generator ever stopped producing patterns the
-    // screen admits, every assertion above would pass vacuously. 930 are admitted
-    // as written, so this floor is loose enough to survive ordinary drift and
-    // tight enough to notice a collapse — which a slacker one would not.
-    expect(admitted).toBeGreaterThan(200)
+    // screen admits, every assertion above would pass vacuously. 212 are admitted
+    // as written — measured by instrumenting this test, not by replaying the
+    // generator elsewhere, which is how an earlier comment came to claim 930. A
+    // floor of 200 left 5.7% of headroom, close enough that ordinary drift would
+    // trip it: adding the surrogate refusal alone moved this count 566 -> 212.
+    expect(admitted).toBeGreaterThan(100)
   })
 
   it('screens an anchored body against a wide alternation in bounded time', () => {
@@ -580,9 +582,14 @@ describe('limits', () => {
     // is that tight it starts failing under the CPU contention of the full suite,
     // which runs a dozen vitest instances at once. The ratio has neither problem:
     // if the budget holds, cost is capped and barely moves with branch count
-    // (measured 1.3x); if the charge is per follower again, cost tracks the
-    // branch count (measured 23.2x, against 26.4x more branches). Contention
+    // (measured 2.4x); if the charge is per follower again, cost tracks the
+    // branch count (measured 21-25x, against 26.4x more branches). Contention
     // scales both measurements together and cancels out.
+    //
+    // The threshold sits at 10 rather than nearer the 2.4x: charging comparisons
+    // by span later cut the *control's* cost without lowering the attack's
+    // budget-capped ceiling, which doubled this ratio and halved the margin. 10
+    // keeps roughly 4x of room on both sides.
     const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
     const shape = (count: number): string => {
       const branches = Array.from({ length: count }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
@@ -605,7 +612,32 @@ describe('limits', () => {
     median(control)
     median(attack)
     const ratio = median(attack) / median(control)
-    expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(6)
+    expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(10)
+  })
+
+  it('charges a class comparison for its length, not just for happening', () => {
+    // The companion to the test above, and the one it cannot do. That one varies
+    // the *number* of comparisons; this varies the *size* of what each compares.
+    // A comparison can compile a character class of any length, so charging one
+    // budget unit each left the length free: 105 comparisons against a single
+    // 12,500-character class bought 2.6 million characters of compilation for
+    // 7,136 budget. Reverting the span charge leaves every other test in this
+    // file green, so without this the fix is untested.
+    //
+    // Asserted as a plain verdict rather than a stopwatch. Charged by span, a
+    // 100-member class exhausts the budget and the exemption is withheld — the
+    // safe direction, and the very mechanism that bounds the cost. Charged one
+    // unit per comparison there is budget to spare and the exemption is granted
+    // instead, so this single line fails on the reverted fix.
+    //
+    // A timing ratio was the obvious alternative and is not usable here: both
+    // sides land near half a millisecond, and a ratio of two sub-millisecond
+    // medians is noise — it failed two runs in three under ordinary suite load.
+    // For the record it reads 0.8x charged by span and 45x charged per
+    // comparison, screening 29 ms against 0.5 ms.
+    const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
+    const members = Array.from({ length: 100 }, (_, i) => String.fromCharCode(0x3000 + i)).join('')
+    expect(hasUnsafeRegex(`^(\\.[${members}]*${literals})*$`)).toBe(true)
   })
 
   it('screens a very wide alternation in bounded time', () => {
