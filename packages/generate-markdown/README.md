@@ -592,12 +592,13 @@ On the **root schema**:
 
 | Member | Type | What it does |
 | --- | --- | --- |
-| `file` | `string` | Output path of the index page. Defaults to `index.md`. |
+| `file` | `string` | Output path of the index page. Defaults to `index.md`. Paths are normalised, so `a.md` and `./a.md` are the same page. |
 | `title` | `string` | Page title, when the schema's own `title` is not the one you want. |
+| `description` | `string` | Prose under the page title, when it should differ from the schema's `description`. |
 | `language` | `string` | Fence language for examples, and the dialect values are written in — `json` (default) quotes keys, `javascript` does not. |
 | `layout` | `'headings' \| 'table' \| 'none'` | Default layout for nested properties. Defaults to `headings`. |
 | `sort` | `'schema' \| 'alphabetical'` | Default property order. Defaults to `schema`. |
-| `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. |
+| `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
 | `sections` | `{ id, title?, description?, page?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. |
 | `example` / `examples` | see below | Code blocks under the page title. |
 
@@ -609,7 +610,7 @@ On a **property** (and on any `$defs` entry a property references):
 | `section` | `string` | Documents it under that section. |
 | `type` | `string` | Overrides the **Type:** label — for `AuthenticationConfiguration`, or `(heading: Heading) => string`, which JSON Schema cannot spell. |
 | `title` | `string` | Overrides the heading text. |
-| `heading` | `boolean` | `false` drops the heading and the **Type:** / **Required** markers, for the property that *is* the page or the section. Its children move up a level. |
+| `heading` | `boolean` | `false` drops the heading and the **Type:** / **Required** markers, for the property that *is* the page or the section. Its children move up a level. The **Deprecated** callout, allowed values, examples and prose all stay — they are not restatements of the heading. |
 | `layout` | `'headings' \| 'table' \| 'none'` | How this property's children are documented. |
 | `sort` | `'schema' \| 'alphabetical'` | Order of this property's children. |
 | `order` | `number` | Sorts ahead of properties with a higher (or no) order. |
@@ -639,8 +640,9 @@ An **example** is either a code string, or an object:
 | `required` | **Required** on the property it names |
 | `deprecated` | A **Deprecated** callout above everything else |
 | `format`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `minItems`, `maxItems`, `uniqueItems` | **Constraints:** |
-| `properties`, `items`, `additionalProperties` | The children — an array documents its item shape, a map-like object documents its value shape |
-| `$ref` / `$defs` | Inlined before rendering, with sibling keywords at the ref site winning |
+| `properties`, `allOf`, `anyOf` / `oneOf`, `then` / `else`, `dependentSchemas` | The children. `allOf` branches all apply, so they contribute properties *and* requirements; alternatives and conditionals contribute properties only, and a field is required only when every alternative requires it |
+| `items`, `prefixItems`, `additionalProperties`, `patternProperties` | The children of a container — an array documents its item shape (every tuple position), a map documents its value shape under a `<name>` key |
+| `$ref` / `$defs` | Inlined before rendering. A sibling keyword at the ref site wins — except `properties` and `required`, which merge with the definition's (both applicators apply), and `x-doc`, which merges per key so a ref site can assign a page without discarding the definition's examples. A ref site's own `description` still wins over the definition's `x-doc.description` |
 | root `anyOf` / `oneOf` / `allOf` | Flattened into one property list. A property is only marked required when every branch that declares it requires it |
 
 Each property renders in a fixed order, so a page reads as a reference rather
@@ -681,9 +683,15 @@ That writes `configuration.md` (with a `typescript` row linking to
 `configuration/typescript.md`) and `configuration/typescript.md` (titled
 *TypeScript*, holding the target's options).
 
-An id that no page or section declares is an error rather than a silent
-omission — a typo in `x-doc.page` would otherwise drop a property out of the
-docs, and nothing about the output would look wrong.
+Placement mistakes are errors rather than silent omissions — a typo in
+`x-doc.page` would otherwise drop a property out of the docs, and nothing about
+the output would look wrong. Generation refuses when:
+
+- a property names a page or a section the root never declares;
+- a property's `x-doc.page` disagrees with the page its section renders on;
+- two pages share an id, or resolve to the same file;
+- the schema nests more than 512 levels deep, which no reader can follow and
+  which is deep enough to exhaust the stack.
 
 ### Working examples
 

@@ -18,14 +18,24 @@ export type RenderContext = {
   readonly pageFiles: ReadonlyMap<string, string>
   /** Id of the page being rendered, so children on the same page are inlined. */
   readonly page: string
+  /** Section id → page id, so a row can link a property its section relocated. */
+  readonly sectionPages: ReadonlyMap<string, string>
 }
+
+/**
+ * One step of a property's path from the schema root. A string is a property
+ * name; the two symbols are the array and map hops, which have no name of their
+ * own but still have to be in the path for a derived example to come out in the
+ * shape of the config file.
+ */
+export type PathSegment = string | symbol
 
 /** One property, resolved against its parent, ready to render. */
 export type DocEntry = {
   readonly name: string
   readonly prop: SchemaProperty
   /** Path from the schema root, used to wrap derived examples in their config shape. */
-  readonly path: readonly string[]
+  readonly path: readonly PathSegment[]
   readonly required: boolean
 }
 

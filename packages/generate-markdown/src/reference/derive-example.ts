@@ -1,6 +1,7 @@
 import { asArray } from '#helpers/guards'
-import { ARRAY_ITEM_SEGMENT } from '#reference/child-entries'
+import { ARRAY_ITEM, MAP_KEY, MAP_KEY_PLACEHOLDER } from '#reference/child-entries'
 import type { DocExample } from '#types/doc'
+import type { PathSegment } from '#types/render'
 import type { SchemaProperty } from '#types/schema'
 
 /**
@@ -11,16 +12,19 @@ import type { SchemaProperty } from '#types/schema'
  * which is something you can paste, rather than a bare string that leaves the
  * reader to guess where it goes.
  *
- * `Object.fromEntries` rather than a computed key: a property literally named
- * `__proto__` (JSON can produce one) would otherwise set the prototype and
- * vanish from the example.
+ * `Object.fromEntries` builds the wrapper. A computed key would do as well —
+ * only the literal `__proto__:` form sets a prototype — but going through
+ * `fromEntries` keeps that true no matter how the line is later rewritten.
  */
-export const deriveExample = (prop: SchemaProperty, path: readonly string[]): DocExample | undefined => {
+export const deriveExample = (prop: SchemaProperty, path: readonly PathSegment[]): DocExample | undefined => {
   const examples = asArray(prop.examples)
   if (examples.length === 0) return undefined
-  const value = path.reduceRight<unknown>(
-    (nested, key) => (key === ARRAY_ITEM_SEGMENT ? [nested] : Object.fromEntries([[key, nested]])),
-    examples[0],
-  )
+  const value = path.reduceRight<unknown>((nested, key) => {
+    if (key === ARRAY_ITEM) return [nested]
+    // A map key has no name in the schema, so the sample shows the shape with a
+    // placeholder rather than promoting a value's own field to a key.
+    const name = key === MAP_KEY ? MAP_KEY_PLACEHOLDER : String(key)
+    return Object.fromEntries([[name, nested]])
+  }, examples[0])
   return { value }
 }

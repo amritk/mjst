@@ -13,6 +13,7 @@ const context = (overrides: Partial<RenderContext> = {}): RenderContext => ({
     ['index', 'configuration.md'],
     ['typescript', 'configuration/typescript.md'],
   ]),
+  sectionPages: new Map([['emitter', 'typescript']]),
   ...overrides,
 })
 
@@ -75,6 +76,16 @@ describe('render-property-table', () => {
       context({ file: 'guides/sdk.md', page: 'typescript' }),
     )
     expect(table).toContain('[`typescript`](../configuration.md)')
+  })
+
+  // A section carries its properties to its own page, so a row that ignored the
+  // section's page led nowhere.
+  it('links a property its section relocated to another page', () => {
+    const table = renderPropertyTable(
+      [entry('options', { type: 'object', 'x-doc': { section: 'emitter' } })],
+      context(),
+    )
+    expect(table).toContain('[`options`](configuration/typescript.md)')
   })
 
   it('does not link a property that lives on this page', () => {

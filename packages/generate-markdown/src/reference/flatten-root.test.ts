@@ -31,15 +31,76 @@ describe('flatten-root', () => {
   })
 
   // With `anyOf`, a document that satisfies the branch not requiring it is
-  // still valid, so calling the property required would be a lie.
-  it('marks a property required only when every branch declaring it requires it', () => {
+  // still valid, so calling the property required would be a lie — and a branch
+  // that never mentions the property is exactly such a document.
+  it('marks a property required only when every branch requires it', () => {
     const flattened = flattenRoot({
       anyOf: [
         { properties: { a: { type: 'string' }, b: { type: 'string' } }, required: ['a', 'b'] },
         { properties: { a: { type: 'string' } }, required: ['a'] },
       ],
     })
+    expect(flattened.required).toEqual(['a'])
+  })
+
+  // The shape a generated root takes: "a config with `versions`, or one with
+  // `navigation`". Neither is required — the reader picks a form.
+  it('requires neither side of two mutually exclusive branches', () => {
+    const flattened = flattenRoot({
+      anyOf: [
+        { properties: { versions: { type: 'object' } }, required: ['versions'] },
+        { properties: { navigation: { type: 'object' } }, required: ['navigation'] },
+      ],
+    })
+    expect(Object.keys(flattened.properties ?? {})).toEqual(['versions', 'navigation'])
+    expect(flattened.required).toEqual([])
+  })
+
+  // `allOf` branches all apply, so their requirements all hold.
+  it('unions the requirements of allOf branches', () => {
+    const flattened = flattenRoot({
+      properties: { a: { type: 'string' } },
+      required: ['a'],
+      allOf: [{ properties: { b: { type: 'string' } }, required: ['b'] }],
+    })
+    expect(Object.keys(flattened.properties ?? {})).toEqual(['a', 'b'])
     expect(flattened.required).toEqual(['a', 'b'])
+  })
+
+  // The early return used to fire whenever the root declared any properties of
+  // its own, so an inheriting root lost everything it inherited.
+  it('merges an allOf branch into the root own properties', () => {
+    const flattened = flattenRoot({
+      title: 'R',
+      properties: { bar: { type: 'integer' } },
+      allOf: [{ properties: { foo: { type: 'string', description: 'foo doc' } } }],
+    })
+    expect(Object.keys(flattened.properties ?? {})).toEqual(['bar', 'foo'])
+  })
+
+  it('keeps the root required list when the root is flattened', () => {
+    const flattened = flattenRoot({ required: ['a'], anyOf: [{ properties: { a: { type: 'string' } } }] })
+    expect(flattened.required).toEqual(['a'])
+  })
+
+  // A config that is one big keyed bag describes itself through
+  // `additionalProperties`, and used to render as a title and nothing else.
+  it('documents the value shape of a map-like root', () => {
+    const flattened = flattenRoot({
+      title: 'M',
+      type: 'object',
+      additionalProperties: { type: 'object', properties: { a: { type: 'string' } } },
+    } as never)
+    expect(Object.keys(flattened.properties ?? {})).toEqual(['a'])
+  })
+
+  it('documents the item shape of an array-like root', () => {
+    const flattened = flattenRoot({
+      title: 'L',
+      type: 'array',
+      items: { type: 'object', properties: { a: { type: 'string' } } },
+    } as never)
+    expect(Object.keys(flattened.properties ?? {})).toEqual(['a'])
   })
 
   it('drops a requirement one branch does not share', () => {

@@ -68,16 +68,32 @@ describe('format-literal', () => {
     )
   })
 
+  // The block form renders every derived code fence, and a key that is not an
+  // identifier has to be quoted there too or the sample is a syntax error.
+  it('quotes a non-identifier key in the block form as well', () => {
+    expect(formatLiteral({ 'content-type': 'json' }, 'javascript')).toBe("{\n  'content-type': 'json'\n}")
+    expect(formatLiteral({ 'content-type': 'json' }, 'json')).toBe('{\n  "content-type": "json"\n}')
+  })
+
   it('skips undefined members, which have no JSON spelling', () => {
     expect(formatInlineLiteral({ a: 1, b: undefined }, 'json')).toBe('{"a": 1}')
   })
 
   // A caller can hand us anything, including a cycle. Truncating beats a stack
-  // overflow in the middle of a docs build.
+  // overflow in the middle of a docs build — and it truncates to `null`, not an
+  // ellipsis, because the fence around it claims to be JSON.
   it('truncates a value nested past the depth cap', () => {
     const cyclic: Record<string, unknown> = {}
     cyclic['self'] = cyclic
-    expect(formatInlineLiteral(cyclic, 'json')).toContain('…')
+    const rendered = formatInlineLiteral(cyclic, 'json')
+    expect(rendered).toContain('null')
+    expect(() => JSON.parse(rendered) as unknown).not.toThrow()
+  })
+
+  // Whatever the cap does, the fence still says `json`.
+  it('stays parseable when a deeply nested value is truncated', () => {
+    const deep = (levels: number): unknown => (levels === 0 ? 1 : { n: deep(levels - 1) })
+    expect(() => JSON.parse(formatLiteral(deep(60), 'json')) as unknown).not.toThrow()
   })
 
   it('produces JSON that parses back to the original value', () => {

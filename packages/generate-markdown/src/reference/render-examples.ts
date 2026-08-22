@@ -7,6 +7,19 @@ import type { DocExample } from '#types/doc'
  * an example that itself contains a fence (a docs snippet, a markdown default)
  * would otherwise end the block early and spill the rest onto the page.
  */
+/**
+ * The language name written after the opening backticks. It comes from
+ * `x-doc.language`, so it is schema text: a line ending in it closed the fence
+ * on the very next line and turned the example body into page content, and a
+ * backtick made the opening line not a fence at all (CommonMark forbids
+ * backticks in a backtick info string), which left the sample's own `#` lines
+ * rendering as real headings.
+ *
+ * Language names are short identifiers, so anything outside that shape is
+ * dropped rather than escaped.
+ */
+const fenceLanguageOf = (language: string): string => (language.match(/[A-Za-z0-9_+#.-]+/) ?? [''])[0]
+
 const fenceFor = (code: string): string => {
   const longest = (code.match(/^\s*`{3,}/gm) ?? []).reduce((max, run) => Math.max(max, run.trim().length), 0)
   return '`'.repeat(Math.max(3, longest + 1))
@@ -23,7 +36,7 @@ const fenceFor = (code: string): string => {
  */
 export const renderExamples = (examples: readonly DocExample[], language: string): readonly string[] =>
   examples.flatMap((example): readonly string[] => {
-    const fenceLanguage = example.language ?? language
+    const fenceLanguage = fenceLanguageOf(example.language ?? language)
     const code =
       example.code !== undefined
         ? example.code

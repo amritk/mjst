@@ -13,12 +13,16 @@ export const isJavaScriptLanguage = (language: string): boolean => JAVASCRIPT_LA
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
 
 /**
- * How deep a value is serialized before it collapses to `…`. A config default
- * nested deeper than this is not something a reader can follow in a code fence
- * anyway, and the cap also keeps a caller-supplied cyclic object (never a
- * parsed schema, but the API takes `unknown`) from blowing the stack.
+ * How deep a value is serialized before it collapses to `null`. A config
+ * default nested deeper than this is not something a reader can follow in a
+ * code fence anyway, and the cap also keeps a caller-supplied cyclic object
+ * (never a parsed schema, but the API takes `unknown`) from blowing the stack.
+ *
+ * The truncation renders as `null` rather than an ellipsis because the fence
+ * claims a language: a `…` inside a ```json block is a sample that does not
+ * parse, which is the same trap the non-finite number handling below avoids.
  */
-const MAX_DEPTH = 12
+const MAX_DEPTH = 32
 
 /**
  * Single-quoted JavaScript string. Control characters are escaped rather than
@@ -48,7 +52,7 @@ export const formatInlineLiteral = (value: unknown, language: string, depth = 0)
   // reader to type it would be worse than saying nothing.
   if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'null'
   if (typeof value === 'string') return isJavaScriptLanguage(language) ? quoteJs(value) : JSON.stringify(value)
-  if (depth >= MAX_DEPTH) return '…'
+  if (depth >= MAX_DEPTH) return 'null'
   if (Array.isArray(value)) {
     if (value.length === 0) return '[]'
     return `[${value.map((entry) => formatInlineLiteral(entry, language, depth + 1)).join(', ')}]`

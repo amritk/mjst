@@ -24,6 +24,12 @@ export type SchemaProperty = {
   readonly anyOf?: readonly SchemaProperty[]
   readonly oneOf?: readonly SchemaProperty[]
   readonly allOf?: readonly SchemaProperty[]
+  /** Tuple positions. Read alongside the array form of `items` (draft-07's spelling). */
+  readonly prefixItems?: readonly SchemaProperty[]
+  readonly then?: SchemaProperty
+  readonly else?: SchemaProperty
+  readonly dependentSchemas?: Readonly<Record<string, SchemaProperty>>
+  readonly patternProperties?: Readonly<Record<string, SchemaProperty>>
   readonly 'x-cli-flag'?: string
   readonly 'x-icon'?: string
   /**

@@ -1,8 +1,7 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { dereference, MAX_INLINED_NODES } from '#helpers/dereference'
+import { dereferenceSchema } from '#helpers/dereference'
 import { renderConfigTable } from '#table/render-config-table'
-import type { ConfigSchema } from '#types/schema'
 
 const START_MARKER = '<!-- config-table-start -->'
 const END_MARKER = '<!-- config-table-end -->'
@@ -40,7 +39,7 @@ export const generateMarkdown = async (): Promise<void> => {
     throw new Error(`${schemaPath} is not valid JSON: ${(error as Error).message}`, { cause: error })
   }
   // Inline every $ref against the document's own $defs before rendering.
-  const schema = dereference(parsed, parsed, new Set(), { remaining: MAX_INLINED_NODES }) as ConfigSchema
+  const schema = dereferenceSchema(parsed)
 
   const table = renderConfigTable(schema)
   const readmePath = resolve(root, 'README.md')

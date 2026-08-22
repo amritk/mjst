@@ -1,4 +1,5 @@
 import { asArray, asText, isObject, stringExtension } from '#helpers/guards'
+import { normalizeDocPath } from '#helpers/normalize-doc-path'
 import { asExamples, DOC_KEY, readDescription } from '#helpers/read-doc-meta'
 import type { DocConfig, DocLayout, DocPage, DocSection, DocSort, MarkdownOptions } from '#types/doc'
 import type { ConfigSchema } from '#types/schema'
@@ -44,7 +45,7 @@ const readPages = (value: unknown): readonly DocPage[] =>
     return [
       {
         id,
-        file,
+        file: normalizeDocPath(file),
         ...(title !== undefined && { title }),
         ...(description.length > 0 && { description }),
         examples: [...asExamples(entry['example']), ...asExamples(entry['examples'])],
@@ -90,13 +91,17 @@ export const readDocConfig = (schema: ConfigSchema, options: MarkdownOptions = {
   const declaredIndex = declared.find((page) => page.id === INDEX_PAGE_ID)
   const title = options.title ?? declaredIndex?.title ?? stringExtension(doc['title']) ?? schema.title
   const description = declaredIndex?.description ?? readDescription(schema)
-  const file = options.file ?? declaredIndex?.file ?? stringExtension(doc['file']) ?? DEFAULT_INDEX_FILE
+  const file = normalizeDocPath(
+    options.file ?? declaredIndex?.file ?? stringExtension(doc['file']) ?? DEFAULT_INDEX_FILE,
+  )
   const index: DocPage = {
     id: INDEX_PAGE_ID,
     file,
     ...(title !== undefined && { title }),
     ...(description.length > 0 && { description }),
-    examples: declaredIndex?.examples ?? [...asExamples(doc['example']), ...asExamples(doc['examples'])],
+    // Merged, not replaced: declaring the index page (to give it a file or a
+    // title) must not silently discard the examples the root already carried.
+    examples: [...asExamples(doc['example']), ...asExamples(doc['examples']), ...(declaredIndex?.examples ?? [])],
   }
 
   const headingLevel = typeof options.headingLevel === 'number' ? options.headingLevel : 1

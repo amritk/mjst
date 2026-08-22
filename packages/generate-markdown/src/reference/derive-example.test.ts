@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ARRAY_ITEM_SEGMENT } from '#reference/child-entries'
+import { ARRAY_ITEM } from '#reference/child-entries'
 import { deriveExample } from '#reference/derive-example'
 
 describe('derive-example', () => {
@@ -16,7 +16,7 @@ describe('derive-example', () => {
   })
 
   it('wraps an array hop in brackets', () => {
-    expect(deriveExample({ examples: ['cursor'] }, ['pagination', ARRAY_ITEM_SEGMENT, 'name'])).toEqual({
+    expect(deriveExample({ examples: ['cursor'] }, ['pagination', ARRAY_ITEM, 'name'])).toEqual({
       value: { pagination: [{ name: 'cursor' }] },
     })
   })

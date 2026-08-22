@@ -5,7 +5,6 @@ import { flattenRoot } from '#reference/flatten-root'
 import { readDocConfig } from '#reference/read-doc-config'
 import { renderPage } from '#reference/render-page'
 import type { GeneratedFile, MarkdownOptions } from '#types/doc'
-import type { ConfigSchema } from '#types/schema'
 
 /**
  * Renders a JSON Schema as prose documentation — a heading, a type, the
@@ -34,7 +33,7 @@ export const generateMarkdownFiles = (schema: unknown, options: MarkdownOptions 
   // `flattenRoot` runs after dereferencing, because a generated root often
   // reaches its branches through `$ref` and there would be nothing to flatten
   // before the refs are inlined.
-  const dereferenced = flattenRoot(dereferenceSchema(parsed) as ConfigSchema)
+  const dereferenced = flattenRoot(dereferenceSchema(parsed))
   const config = readDocConfig(dereferenced, options)
   const pageFiles = new Map(config.pages.map((page) => [page.id, page.file]))
   return buildPages(dereferenced, config).map((model) => ({

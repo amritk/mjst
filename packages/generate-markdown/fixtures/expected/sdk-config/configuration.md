@@ -103,6 +103,17 @@ Set `skip: true` on a target to keep its config in place without generating it.
 | [`python`](configuration/python.md) | `object` | Python SDK target config. |
 | `go` | `object` | Go SDK target config. |
 
+#### go
+
+**Type:** `object`
+
+Go SDK target config.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `packageName` | `string` |  | Import and package name for the generated package. |
+| `skip` | `boolean` | `false` | Keep the config in place without generating this target. |
+
 ### resources
 
 **Type:** `object`
@@ -141,6 +152,18 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 | `defaultTimeout` | `number` | `30000` | Request timeout in milliseconds. |
 | `defaultHeaders` | `object` |  | Headers every generated request sends. |
 | `defaultRetries` | `object` |  | Retry policy the generated runtime applies to failed requests. |
+
+#### defaultRetries
+
+**Type:** `object`
+
+Retry policy the generated runtime applies to failed requests.
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `maxRetries` | `integer` | `2` | Attempts after the first failure. |
+| `initialDelaySeconds` | `number` | `1` | Delay before the first retry. |
+| `maxDelaySeconds` | `number` | `10` | Ceiling for the backoff delay. |
 
 ### environmentOrder
 

@@ -116,20 +116,25 @@ export type DocSection = {
  * Programmatic overrides for what the schema declares in its root `x-doc`. The
  * schema is the source of truth — these exist so a caller can point the same
  * schema at a different output file or language without editing it.
+ *
+ * Every member reads `?: T | undefined` rather than `?: T`, because this repo
+ * compiles with `exactOptionalPropertyTypes` and consumers do too: a caller
+ * forwarding an optional flag it may or may not have (`{ title: cliArgs.title }`)
+ * is the ordinary way to use this, and the stricter spelling rejects it.
  */
 export type MarkdownOptions = {
   /** Output path of the index page. Defaults to `x-doc.file`, then `index.md`. */
-  readonly file?: string
+  readonly file?: string | undefined
   /** Page title. Defaults to the schema's `title`. */
-  readonly title?: string
+  readonly title?: string | undefined
   /** Fence language for derived examples and literals. Defaults to `json`. */
-  readonly language?: string
+  readonly language?: string | undefined
   /** Default layout for nested properties. Defaults to `headings`. */
-  readonly layout?: DocLayout
+  readonly layout?: DocLayout | undefined
   /** Default property order. Defaults to `schema`. */
-  readonly sort?: DocSort
+  readonly sort?: DocSort | undefined
   /** Heading level of the page title. Defaults to `1` (`#`). */
-  readonly headingLevel?: number
+  readonly headingLevel?: number | undefined
 }
 
 /**

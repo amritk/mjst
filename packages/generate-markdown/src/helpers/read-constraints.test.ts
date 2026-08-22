@@ -26,6 +26,14 @@ describe('read-constraints', () => {
     ])
   })
 
+  it('reads the exclusive bounds and multipleOf', () => {
+    expect(readConstraints({ exclusiveMinimum: 0, exclusiveMaximum: 10, multipleOf: 2 }, 'json')).toEqual([
+      'exclusiveMinimum: 0',
+      'exclusiveMaximum: 10',
+      'multipleOf: 2',
+    ])
+  })
+
   it('reads uniqueItems only when it is on', () => {
     expect(readConstraints({ uniqueItems: true }, 'json')).toEqual(['uniqueItems: true'])
     expect(readConstraints({ uniqueItems: false }, 'json')).toEqual([])

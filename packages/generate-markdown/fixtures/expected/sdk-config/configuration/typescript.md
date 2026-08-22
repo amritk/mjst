@@ -28,6 +28,16 @@ TypeScript SDK target config.
 | `options` | `object` |  |  | TypeScript emitter options. |
 | `destinations` | `object` |  |  | GitHub destinations for generated output. |
 
+## destinations
+
+**Type:** `object`
+
+GitHub destinations for generated output.
+
+| Property | Type | Description |
+| --- | --- | --- |
+| `production` | `object` | Push generated output to a GitHub repository. |
+
 ## Emitter Options
 
 How the TypeScript emitter names things.

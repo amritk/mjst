@@ -1,18 +1,20 @@
+import { MAX_SCHEMA_DEPTH } from '#helpers/dereference'
 import { asArray, asProperties, asSchema } from '#helpers/guards'
 import { readDocMeta } from '#helpers/read-doc-meta'
-import { childEntries, sortEntries } from '#reference/child-entries'
+import { childEntries, formatPath, sortEntries } from '#reference/child-entries'
 import { INDEX_PAGE_ID } from '#reference/read-doc-config'
 import type { DocConfig, DocSection } from '#types/doc'
 import type { DocEntry, PageModel, SectionModel } from '#types/render'
 import type { ConfigSchema } from '#types/schema'
 
 /**
- * How deep the page scan follows nested properties. The document it walks has
- * already been dereferenced (so it is a finite tree), but a deeply nested
- * config has nothing left to say about page assignment this far down, and the
- * cap keeps a pathological schema from turning a docs build into a hang.
+ * How deep the page scan follows nested properties — the same bound
+ * `dereference` puts on the document it walks, so a schema that made it through
+ * inlining is never cut short here. A lower cap silently dropped the page and
+ * section assignments below it, which is the one failure a docs generator must
+ * not have: the output looks complete.
  */
-const MAX_SCAN_DEPTH = 24
+const MAX_SCAN_DEPTH = MAX_SCHEMA_DEPTH
 
 /** Where one property ends up: which page, and which section of it. */
 type Placement = { readonly page: string; readonly section: DocSection | undefined }
@@ -28,13 +30,13 @@ const placeEntry = (entry: DocEntry, parentPage: string, sections: ReadonlyMap<s
   const section = meta.section === undefined ? undefined : sections.get(meta.section)
   if (meta.section !== undefined && section === undefined) {
     throw new Error(
-      `Property "${entry.path.join('.')}" names the section "${meta.section}", which the schema's ` +
+      `Property "${formatPath(entry.path)}" names the section "${meta.section}", which the schema's ` +
         'root `x-doc.sections` does not declare.',
     )
   }
   if (meta.page !== undefined && section !== undefined && section.page !== meta.page) {
     throw new Error(
-      `Property "${entry.path.join('.')}" is assigned to page "${meta.page}" but its section ` +
+      `Property "${formatPath(entry.path)}" is assigned to page "${meta.page}" but its section ` +
         `"${section.id}" renders on page "${section.page}". Move the section or drop the page.`,
     )
   }
@@ -57,12 +59,21 @@ const collectEntries = (
   depth: number,
   collected: Map<string, { readonly entry: DocEntry; readonly placement: Placement }[]>,
 ): void => {
-  if (depth > MAX_SCAN_DEPTH) return
+  if (depth > MAX_SCAN_DEPTH) {
+    // Returning quietly would drop every page and section assignment below this
+    // point — the silent omission the placement errors exist to prevent, and
+    // the one failure mode where nothing about the output looks wrong.
+    throw new Error(
+      `Scanning the schema for page assignments passed ${MAX_SCAN_DEPTH} levels of nesting at ` +
+        `"${formatPath(entries[0]?.path ?? [])}". Flatten the schema, or move the deeply nested properties ` +
+        'onto a page of their own.',
+    )
+  }
   for (const entry of entries) {
     const placement = placeEntry(entry, parentPage, sections)
     if (!known.has(placement.page)) {
       throw new Error(
-        `Property "${entry.path.join('.')}" is assigned to page "${placement.page}", which the schema's ` +
+        `Property "${formatPath(entry.path)}" is assigned to page "${placement.page}", which the schema's ` +
           'root `x-doc.pages` does not declare.',
       )
     }
@@ -97,6 +108,17 @@ const collectEntries = (
 export const buildPages = (schema: ConfigSchema, config: DocConfig): readonly PageModel[] => {
   const sections = new Map(config.sections.map((section) => [section.id, section]))
   const known = new Set(config.pages.map((page) => page.id))
+  const duplicateId = config.pages.find(
+    (page, index) => config.pages.findIndex((other) => other.id === page.id) !== index,
+  )
+  if (duplicateId !== undefined) {
+    throw new Error(
+      `Two pages share the id "${duplicateId.id}". A property naming it would be documented in full in both ` +
+        'files, so give each page in `x-doc.pages` its own id.',
+    )
+  }
+  // Compared after normalisation, so `a.md` and `./a.md` are recognised as the
+  // one file they are — otherwise the second page silently overwrote the first.
   const duplicateFile = config.pages.find(
     (page, index) => config.pages.findIndex((other) => other.file === page.file) !== index,
   )

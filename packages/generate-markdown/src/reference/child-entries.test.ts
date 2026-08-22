@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ARRAY_ITEM_SEGMENT, childEntries, childSchema, sortEntries } from '#reference/child-entries'
+import { ARRAY_ITEM, childEntries, childSchema, MAP_KEY, sortEntries } from '#reference/child-entries'
 import type { DocEntry } from '#types/render'
 
 const names = (entries: readonly DocEntry[]): readonly string[] => entries.map((entry) => entry.name)
@@ -14,18 +14,18 @@ const entry = (name: string, prop: Record<string, unknown> = {}): DocEntry => ({
 describe('child-entries', () => {
   it('reads children straight off an object', () => {
     const prop = { type: 'object', properties: { a: { type: 'string' } } }
-    expect(childSchema(prop)).toEqual({ node: prop, inArray: false })
+    expect(childSchema(prop)).toEqual({ node: prop, hop: undefined })
   })
 
   // `pagination: [{ name, type }]` documents `name` and `type`, not the array.
   it('reads children off the item schema of an array', () => {
     const items = { type: 'object', properties: { name: { type: 'string' } } }
-    expect(childSchema({ type: 'array', items })).toEqual({ node: items, inArray: true })
+    expect(childSchema({ type: 'array', items })).toEqual({ node: items, hop: ARRAY_ITEM })
   })
 
   it('reads children off additionalProperties for a map-like object', () => {
     const values = { type: 'object', properties: { url: { type: 'string' } } }
-    expect(childSchema({ type: 'object', additionalProperties: values })).toEqual({ node: values, inArray: false })
+    expect(childSchema({ type: 'object', additionalProperties: values })).toEqual({ node: values, hop: MAP_KEY })
   })
 
   it('reads no children from a scalar', () => {
@@ -46,7 +46,7 @@ describe('child-entries', () => {
 
   it('records the array hop in a child path', () => {
     const prop = { type: 'array', items: { type: 'object', properties: { name: { type: 'string' } } } }
-    expect(childEntries(prop, ['pagination'], 'schema')[0]?.path).toEqual(['pagination', ARRAY_ITEM_SEGMENT, 'name'])
+    expect(childEntries(prop, ['pagination'], 'schema')[0]?.path).toEqual(['pagination', ARRAY_ITEM, 'name'])
   })
 
   it('drops hidden children', () => {
@@ -65,11 +65,17 @@ describe('child-entries', () => {
     expect(names(sortEntries([entry('b'), entry('a')], 'alphabetical'))).toEqual(['a', 'b'])
   })
 
-  // Case-sensitive sorting would file every camelCase name ahead of the
-  // lowercase one it belongs next to.
+  // Case-sensitive sorting files every capitalised name ahead of every
+  // lowercase one, so `Timeout` would jump the whole list instead of sitting
+  // next to `timeoutMs`. The fixture has to be a pair the two comparators
+  // order differently, or the test proves nothing.
   it('sorts case-insensitively', () => {
-    const sorted = sortEntries([entry('environments'), entry('environmentOrder')], 'alphabetical')
-    expect(names(sorted)).toEqual(['environmentOrder', 'environments'])
+    const sorted = sortEntries([entry('apple'), entry('Banana')], 'alphabetical')
+    expect(names(sorted)).toEqual(['apple', 'Banana'])
+  })
+
+  it('breaks a case-only tie in favour of the capitalised name', () => {
+    expect(names(sortEntries([entry('foo'), entry('Foo')], 'alphabetical'))).toEqual(['Foo', 'foo'])
   })
 
   it('puts x-doc.order ahead of the sort mode', () => {

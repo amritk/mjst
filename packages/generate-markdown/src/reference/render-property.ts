@@ -2,6 +2,7 @@ import { formatInlineLiteral } from '#helpers/format-literal'
 import { asArray } from '#helpers/guards'
 import { heading } from '#helpers/heading'
 import { headingText } from '#helpers/heading-text'
+import { inlineCode } from '#helpers/inline-code'
 import { readConstraints } from '#helpers/read-constraints'
 import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
 import { referenceType, typeShowsEnum } from '#helpers/reference-type'
@@ -11,8 +12,12 @@ import { renderExamples } from '#reference/render-examples'
 import { renderPropertyTable } from '#reference/render-property-table'
 import type { DocEntry, RenderContext } from '#types/render'
 
-/** Wraps a value in a code span, for the metadata lines above the prose. */
-const code = (value: string): string => `\`${value}\``
+/**
+ * Wraps a value in a code span for the metadata lines above the prose. Every
+ * one of these values is schema-controlled, so the span has to survive a
+ * backtick or a line ending inside it — see {@link inlineCode}.
+ */
+const code = (value: string): string => inlineCode(value)
 
 /**
  * True when the property is rendered somewhere other than under its parent —
@@ -52,9 +57,12 @@ export const renderProperty = (entry: DocEntry, level: number, context: RenderCo
   const meta = readDocMeta(prop)
   const blocks: string[] = []
 
+  if (meta.heading) blocks.push(heading(level, headingText(meta.title ?? name)))
+  // Never inside the heading guard: `heading: false` drops the property's own
+  // name and shape because the page or section above already carries them, and
+  // neither of those says the property is on its way out.
+  if (prop.deprecated === true) blocks.push('> **Deprecated**')
   if (meta.heading) {
-    blocks.push(heading(level, headingText(meta.title ?? name)))
-    if (prop.deprecated === true) blocks.push('> **Deprecated**')
     const type = referenceType(prop, context.language)
     if (type.length > 0) blocks.push(`**Type:** ${code(type)}`)
     if (required) blocks.push('**Required**')
@@ -69,8 +77,9 @@ export const renderProperty = (entry: DocEntry, level: number, context: RenderCo
 
   const values = asArray(prop.enum)
   // The type label already spells out an enum, so repeating it here would be
-  // the same sentence twice — unless `x-doc.type` replaced the label.
-  if (values.length > 0 && !typeShowsEnum(prop)) {
+  // the same sentence twice — unless `x-doc.type` replaced the label, or there
+  // is no label at all because this property renders without a heading.
+  if (values.length > 0 && (!meta.heading || !typeShowsEnum(prop))) {
     blocks.push(`**Allowed values:** ${codeList(values, context.language)}`)
   }
 
@@ -102,6 +111,14 @@ export const renderProperty = (entry: DocEntry, level: number, context: RenderCo
 
   if (layout === 'table') {
     blocks.push(renderPropertyTable(children, context))
+    // A table row says a child is an object; it cannot say what is in it. Any
+    // child with a shape of its own gets its own table below, or a whole
+    // subtree would be documented as the word `object` and nothing else.
+    for (const child of children) {
+      if (documentedElsewhere(child, context)) continue
+      if (childEntries(child.prop, child.path, meta.sort ?? context.sort).length === 0) continue
+      blocks.push(...renderProperty(child, level + (meta.heading ? 1 : 0), context))
+    }
     return blocks
   }
   // With no heading of its own this property occupies its parent's level, so

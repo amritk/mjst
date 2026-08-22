@@ -39,10 +39,12 @@ await generateDocs({ schemaPath: './config.schema.json', outDir: './documentatio
    extension (`page`, `section`, `type`, `title`, `heading`, `layout`, `sort`,
    `order`, `hidden`, `example`/`examples`, `note`/`notes`, `footer`). Do not
    post-process the generated markdown; edit the schema and regenerate.
-4. **A page or section id that is not declared throws.** Declare pages and
-   sections in the root `x-doc.pages` / `x-doc.sections` before a property can
-   reference them. This is deliberate: a silent omission would leave the docs
-   looking complete.
+4. **Placement mistakes throw; they are never silently dropped.** Declare pages
+   and sections in the root `x-doc.pages` / `x-doc.sections` before a property
+   can reference them. Generation also refuses two pages sharing an id or a
+   file (paths are normalised first), a property whose page contradicts its
+   section's, and a schema nested past 512 levels. A silent omission would
+   leave the docs looking complete, which is the one failure mode to avoid.
 5. **Examples are derived when the schema does not supply one.** A property's
    `examples[0]` is wrapped back into the shape of the config file
    (`targets.typescript.packageName` → `{ targets: { typescript: { … } } }`).
@@ -50,7 +52,13 @@ await generateDocs({ schemaPath: './config.schema.json', outDir: './documentatio
 6. **`x-doc.language` decides the dialect of every rendered value**, not just
    the fence label: `json` quotes keys and strings with `"`, `javascript` leaves
    identifier keys bare and quotes with `'`.
-7. **Golden output is checked in.** `fixtures/expected/` is compared by
+7. **Children come from every applicator, not just `properties`.** `allOf`
+   branches merge (properties and requirements), `anyOf`/`oneOf`/`then`/`else`/
+   `dependentSchemas` contribute properties without requirements, and a
+   container's shape is read through `items`/`prefixItems`/
+   `additionalProperties`/`patternProperties` — including when it sits behind a
+   union. Nothing named is dropped.
+8. **Golden output is checked in.** `fixtures/expected/` is compared by
    `generate-markdown-files.test.ts`. After a deliberate renderer change run
    `bun run generate-fixtures` and read the diff — it is the review.
 

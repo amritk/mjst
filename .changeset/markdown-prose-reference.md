@@ -20,11 +20,21 @@ overrides a label JSON Schema cannot spell (`(heading: Heading) => string`),
 schema supplies no example, one is derived from `examples` and wrapped back into
 the shape of the config file.
 
-Three details that a real published schema (`@scalar/schemas/sdk-config`) turned
-up: an `x-doc` on a `$ref` site merges with the one on the definition it points
-at rather than replacing it, a property whose object shape sits in an
-`anyOf`/`oneOf` branch (`boolean | object`, the usual "switch it on or configure
-it" spelling) documents that branch's children, and an `x-doc.description` of
-`""` is honoured as a deliberate silence.
+Children come from every applicator that names one, not just `properties`:
+`allOf` branches merge (properties and requirements both), `anyOf`/`oneOf`/
+`then`/`else`/`dependentSchemas` contribute properties without requirements, and
+a container's shape is read through `items`/`prefixItems`/`additionalProperties`/
+`patternProperties`, including when it sits behind a union. The same rules apply
+at the root, so a schema that is one big keyed bag documents its value shape
+instead of rendering a title and nothing else.
+
+Schema text is contained wherever it reaches the page: metadata labels and table
+cells go through the backtick-run-aware code span, titles and one-line labels
+collapse their line endings, fence languages are sanitised, and cross-page link
+destinations are percent-encoded. A backtick in a `default` used to close its
+code span and leave the rest of the value rendering as live markdown.
+
+Placement mistakes are refused rather than dropped: two pages sharing an id or
+resolving to the same file, and a schema nested past what the walk can read.
 
 `generateMarkdown()` — the README table — is unchanged.
