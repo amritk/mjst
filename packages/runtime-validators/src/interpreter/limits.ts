@@ -812,6 +812,13 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
       for (let b = a + 1; b < unit.firsts.length; b++) {
         const left = unit.firsts[a] as string
         const right = unit.firsts[b] as string
+        // Charged by span for symmetry with the follower walk below, which is
+        // where the cost actually was. This loop is belt and braces: by the time
+        // it runs, `noOtherAtomConsumes` has already charged the whole body by
+        // span, so the budget is spent before the branches can compile anything
+        // large — the worst construction found for it is 1.09x. Reverting this
+        // one charge alone changes no verdict and no test, which is why nothing
+        // pins it.
         budget.anchorChars -= left.length + right.length
         if (budget.anchorChars < 0) return false
         if (!atomsAreDisjoint(left, right)) return false

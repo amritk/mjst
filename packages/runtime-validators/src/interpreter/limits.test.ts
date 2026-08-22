@@ -232,7 +232,7 @@ describe('limits', () => {
     // however unambiguous BODY is — so a second quantifier around it enumerates
     // compositions. `^((-a*)*){0,50}$` waived the inner level and the outer
     // `{0,50}`, being bounded, contributed none of its own, leaving the whole
-    // pattern at height 1: admitted, and 2^n — 1.7 seconds on 26 characters.
+    // pattern at height 1: admitted, and 2^n — 1.6 seconds on 27 characters.
     // Bounded is the trap; an unbounded wrapper was already flagged.
     for (const unsafe of [
       '^((-a*)*){0,50}$',
@@ -244,6 +244,14 @@ describe('limits', () => {
       // And the wrappers that were caught before, which must stay caught.
       '^((\\.a+)*)*$',
       '^((\\.a+)*){2,}$',
+      // Doubly wrapped, which is what a `(?:…)` group produces and how people
+      // actually write these. Reaching the outer quantifier means the exemption
+      // has to travel up through a wrapper that carries no quantifier of its
+      // own; delete that one propagation line and every test here still passed
+      // while this went admitted, at 2^n.
+      '^(((-a*)*)){0,50}$',
+      '^((?:(-a*)*)){0,20}$',
+      '^((?:((\\.a+)*))){0,20}$',
     ]) {
       expect(hasUnsafeRegex(unsafe), unsafe).toBe(true)
     }
@@ -520,11 +528,17 @@ describe('limits', () => {
     // Unbounded only, and every body gets at least one. That is what makes the
     // sweep a test of *this* exemption: without it the body has star height >= 1,
     // so the outer `*` reaches 2 and the pattern can only be admitted by the
-    // exemption granting it. Bounded quantifiers are deliberately absent — they
-    // keep a body at height 0, where the baseline rule admits without ever
-    // consulting the exemption, and a nullable body under one
-    // (`^((?:a){0,3}[^/]{0,3}\.)*$`, 251 seconds on 49 characters) is a
+    // exemption granting it. Bounded quantifiers are deliberately absent from the
+    // *body*: they keep it at height 0, where the baseline rule admits without
+    // ever consulting the exemption, and a nullable body under one
+    // (`^((?:a){0,3}[^/]{0,3}\.)*$`, over 250 seconds on 49 characters) is a
     // pre-existing gap of the screen, not something this rule is answerable for.
+    //
+    // Read that narrowly. It is true of a bounded quantifier inside the body and
+    // false of one *around* the exempted group, and stating it without the
+    // distinction is what let `^((-a*)*){0,50}$` hide — see the named test for
+    // it above. This sweep still does not generate that shape; the named tests
+    // carry it.
     const repeats = ['*', '+', '{0,}', '{1,}', '{2,}']
     const quantifiers = [...repeats, '']
     const groups: readonly (readonly [string, string])[] = [
