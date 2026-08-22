@@ -168,7 +168,7 @@ export const isValidationLimitError = (value: unknown): value is Error =>
 // its budget is spent per branch *pair*, while each comparison may compile a
 // character class, so a 176 KB alternation of literals and long classes screens
 // in ~200 ms and a 632 KB one in ~730 ms. That predates rule 1's exemption and is
-// unchanged by it — the exemption's own worst case is ~15 ms.
+// unchanged by it — the exemption's own worst case is under 10 ms.
 
 /** `{n}` / `{n,}` / `{n,m}`, matched in place at an offset. Sticky, so `lastIndex` selects the offset. */
 const BOUNDED_QUANTIFIER = /\{(\d+)(,(\d*))?\}/y
@@ -799,9 +799,11 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
     // as deterministic, and `(\.(a|aa)*)*` is exponential.
     for (let a = 0; a < unit.firsts.length; a++) {
       for (let b = a + 1; b < unit.firsts.length; b++) {
-        budget.anchorChars -= 1
+        const left = unit.firsts[a] as string
+        const right = unit.firsts[b] as string
+        budget.anchorChars -= left.length + right.length
         if (budget.anchorChars < 0) return false
-        if (!atomsAreDisjoint(unit.firsts[a] as string, unit.firsts[b] as string)) return false
+        if (!atomsAreDisjoint(left, right)) return false
       }
     }
     if (!unit.repeats || unit.atom === null) continue
@@ -811,13 +813,16 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
       const follower = units[j] as Unit
       const firsts = follower.atom === null ? follower.firsts : [follower.atom]
       for (const first of firsts) {
-        // Charged per comparison, not per follower. Each one can compile a
-        // `RegExp`, so debiting the walk once for a k-branch alternation
-        // undercounted the work by a factor of k: a 10.8 KB pattern of distinct
-        // literals in front of a 2,600-branch alternation forced ~300,000
-        // compiles for 20,000 budget — 294 ms, against 0.27 ms before this rule
-        // existed.
-        budget.anchorChars -= 1
+        // Charged per comparison and by span, not per follower. Debiting the
+        // walk once for a k-branch alternation undercounted the work by a factor
+        // of k, since each comparison can compile a `RegExp`: a 10.8 KB pattern
+        // of distinct literals in front of a 2,600-branch alternation forced
+        // ~300,000 compiles for 20,000 budget — 294 ms, against 0.27 ms before
+        // this rule existed. Charging one unit each then left the *length* of a
+        // compiled class free, so 120 comparisons against a single
+        // 12,500-character class bought three million characters of compilation
+        // for 120 budget. The span is what the compiler actually reads.
+        budget.anchorChars -= unit.atom.length + first.length
         if (budget.anchorChars < 0) return false
         if (!atomsAreDisjoint(unit.atom, first)) return false
       }

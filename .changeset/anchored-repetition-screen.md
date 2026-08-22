@@ -13,16 +13,28 @@ Schemas that previously threw at `validate()` time, or needed
 across 1.5 million generated patterns the exemption never turned an accepted
 pattern into a rejected one.
 
-Two parser fixes that ride along **do** newly reject a narrow set, all of them
-genuinely unsafe. The class scanner had been applying the POSIX "a leading `]` is
-a literal member" rule, which ECMAScript does not have — `[]` is the empty class
-and `[^]` is any character — so a `[^]` swallowed the rest of the pattern into
-one atom and hid whatever followed: `^[^]*(a+)+$` contains a textbook `(a+)+` and
-was accepted, at 4 seconds on 28 characters. And a braced escape (`\u{61}`,
-`\p{L}`) was read as two code units, leaving `{61}` to be taken for a bounded
-quantifier that then swallowed the real `+`, so `^(\u{61}+)+$` — which *is*
-`^(a+)+$` — lost a level of star height. Both were pre-existing. Ordinary uses of
-`[^]`, `[]`, `\u{...}` and `\p{...}` are unaffected.
+**Two parser fixes ride along, and they do newly reject a narrow set.** Both were
+pre-existing bugs that let a genuinely exponential pattern through:
+
+- The class scanner applied the POSIX "a leading `]` is a literal member" rule,
+  which ECMAScript does not have — `[]` is the empty class and `[^]` is any
+  character. A `[^]` therefore swallowed the rest of the pattern into one atom
+  and hid whatever followed: `^[^]*(a+)+$` contains a textbook `(a+)+` and was
+  accepted, at 4 seconds on 28 characters.
+- A braced escape (`\u{61}`, `\p{L}`) was read as two code units, leaving `{61}`
+  to be taken for a bounded quantifier that then swallowed the real `+` — so
+  `^(\u{61}+)+$`, which *is* `^(a+)+$`, lost a level of star height. Its payload
+  is now validated as it is scanned, since a span the escape cannot legally
+  carry is not an escape under either compile mode: `\p{(a+)+}` is a
+  `SyntaxError` with `u`, so the fallback compile runs the `(a+)+` inside it.
+
+Most of what these newly reject is genuinely unsafe, but not all of it: rule 1 is
+an over-approximation, and a braced escape in atom position now costs the
+anchored exemption even where the same pattern spelled in ASCII keeps it — so
+`^(\u{61}+x)+$` is refused while `^(a+x)+$`, which it is identical to, is
+admitted. Both are linear; the refusal is a false positive, in the safe
+direction. Ordinary standalone uses (`\u{61}+`, `\p{Script=Latin}+`,
+`[\u{61}-\u{7A}]+`, `[^]*`) keep their previous verdicts.
 
 `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` and
 `^\$message\.(header|payload)#(\/(([^\/~])|(~[01]))*)*` — both from the official
@@ -47,10 +59,11 @@ and takes 94 ms on 22 characters where its body alone takes none.
 (`(a+)+`, `(a*)*`, `(a|a)+`).
 
 The screen remains a best-effort filter rather than a proof of safety, with the
-same known gaps. The new analysis is capped by its own shared budget, charged per
-character examined and per character-class comparison, and the worst source found
-against *it* screens in about 15 ms. That is not a claim about the screen as a
-whole: the pre-existing ambiguous-alternation rule spends its budget per branch
+same known gaps. The new analysis is capped by its own shared budget, charged by
+span for every character it examines and every character-class comparison it
+makes, and the worst source found against *it* screens in under 10 ms. That is
+not a claim about the screen as a whole: the pre-existing ambiguous-alternation
+rule spends its budget per branch
 pair while each comparison may compile a character class, so a 176 KB alternation
 of literals and long classes costs ~200 ms to screen. Unchanged here, and
 unchanged by this release.

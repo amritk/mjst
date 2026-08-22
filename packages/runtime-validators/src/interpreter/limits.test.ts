@@ -420,10 +420,13 @@ describe('limits', () => {
     // number of draws. No wall-clock or RNG dependence, so a failure here is
     // always reproducible.
     //
-    // It is a search, not a proof — it re-finds the `{0,}` hole unaided, but the
-    // lookaround and `u`-flag holes need constructions too specific to stumble
-    // on, which is what the named tests above are for. The two are complements:
-    // this one covers shapes nobody listed, those pin the ones we have paid for.
+    // It is a search, not a proof. It re-finds the `{0,}` hole unaided — but only
+    // because the draw count is high enough to reach the shape, which is why 8,000
+    // rather than a round 1,000: at 1,500 and 4,000 it misses. That also makes the
+    // property fragile, since anything that shifts the draw sequence (adding an
+    // atom did, once) can quietly cost it. Treat the named tests above as the
+    // guarantee and this as the net that catches what nobody listed; if you change
+    // the alphabet, re-check by reverting a fix and confirming this still fails.
     let state = 0x9e3779b9
     const next = (bound: number): number => {
       state = (state + 0x9e3779b9) >>> 0
@@ -526,7 +529,7 @@ describe('limits', () => {
     }
 
     let admitted = 0
-    for (let i = 0; i < 1_500; i++) {
+    for (let i = 0; i < 8_000; i++) {
       const [separator, separatorChar] = pick(separators)
       const inner = body()
       const source = next(2) === 0 ? `^(${separator}${inner.source})*$` : `^(${inner.source}${separator})*$`
@@ -556,8 +559,10 @@ describe('limits', () => {
       }
     }
     // Guards the guard: if the generator ever stopped producing patterns the
-    // screen admits, every assertion above would pass vacuously.
-    expect(admitted).toBeGreaterThan(20)
+    // screen admits, every assertion above would pass vacuously. 930 are admitted
+    // as written, so this floor is loose enough to survive ordinary drift and
+    // tight enough to notice a collapse — which a slacker one would not.
+    expect(admitted).toBeGreaterThan(200)
   })
 
   it('screens an anchored body against a wide alternation in bounded time', () => {
