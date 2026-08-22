@@ -1122,6 +1122,10 @@ describe('generate-markdown', () => {
       await expect(generateMarkdown()).resolves.toBeUndefined()
       const [, content] = writeFileMock.mock.calls[0] ?? []
       expect(content).not.toContain('CLI Flag')
+      // The icon is dropped rather than interpolated: `7 <code>a</code>` is
+      // what reaching `escapeHtml` with a number used to leave in the cell.
+      expect(content).toContain('<td><code>a</code></td>')
+      expect(content).not.toContain('7 <code>a</code>')
     })
 
     it('omits the CLI Flag column when every flag is an empty string', async () => {
@@ -1264,6 +1268,13 @@ describe('generate-markdown', () => {
 
       const [, content] = writeFileMock.mock.calls[0] ?? []
       const table = String(content).slice(String(content).indexOf('<table>'), String(content).indexOf('</table>'))
+      // Each value survives as one line — "no blank line" alone would pass on a
+      // table that never rendered.
+      expect(table).toContain('<code>a b</code>')
+      expect(table).toContain('<code>--a --b</code>')
+      expect(table).toContain('i j')
+      // The detail cell holds the first paragraph, and `\r\r` ends one.
+      expect(table).toContain('<td colspan="3">one</td>')
       expect(table).not.toMatch(/\n[ \t]*\n/)
       expect(table).not.toMatch(/\r/)
     })

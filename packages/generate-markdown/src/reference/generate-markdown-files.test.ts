@@ -258,6 +258,8 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    // The parent is still documented; it is only its children that stop.
+    expect(section(content, '## server')).toBe('## server\n\n**Type:** `object`\n')
     expect(content).not.toContain('host')
   })
 
@@ -978,6 +980,8 @@ describe('generate-markdown-files', () => {
         $defs: { t: { anyOf: [{ type: 'string' }, { type: 'number', description: 'WRONG BRANCH' }] } },
       }),
     )
+    // The property is still on the page, with nothing resolved into it.
+    expect(section(content, '## a')).toBe('## a\n')
     expect(content).not.toContain('WRONG BRANCH')
   })
 
@@ -1162,6 +1166,7 @@ describe('generate-markdown-files', () => {
         $defs: { t: { anyOf: [{ type: 'string' }, { type: 'number', description: 'WRONG BRANCH' }] } },
       }),
     )
+    expect(section(content, '## a')).toBe('## a\n')
     expect(content).not.toContain('WRONG BRANCH')
   })
 
@@ -1445,6 +1450,7 @@ describe('generate-markdown-files', () => {
         $defs: { node: { $anchor: '0', type: 'string', description: 'WRONG TARGET' } },
       }),
     )
+    expect(section(content, '## a')).toBe('## a\n')
     expect(content).not.toContain('WRONG TARGET')
   })
 
@@ -2258,7 +2264,10 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    // No name is asked for by all three, so nothing on the page is required.
+    // No name is asked for by all three, so nothing on the page is required —
+    // and both fields are on it, which is what makes that mean something.
+    expect(content).toContain('#### a')
+    expect(content).toContain('#### b')
     expect(content).not.toContain('**Required**')
   })
 
@@ -2549,7 +2558,6 @@ describe('generate-markdown-files', () => {
     )
     expect(content).toContain('### alpha')
     expect(content).toContain('### beta')
-    expect(content).toContain('### alpha')
     expect(content.indexOf('### alpha')).toBeLessThan(content.indexOf('| `betaField`'))
   })
 
@@ -3755,7 +3763,7 @@ describe('generate-markdown-files', () => {
   // A note of nothing is a blockquote marker and no note.
   it('drops a note that is only whitespace', () => {
     const content = only(generateMarkdownFiles({ properties: { a: { type: 'string', 'x-doc': { note: '   ' } } } }))
-    expect(content).not.toContain('>')
+    expect(content).toBe('## a\n\n**Type:** `string`\n')
   })
 
   // `x-doc.description` overrides the prose, and an override that is not prose
@@ -3773,7 +3781,7 @@ describe('generate-markdown-files', () => {
   // that deprecates the property.
   it('reads deprecated only when it is true', () => {
     const content = only(generateMarkdownFiles({ properties: { a: { type: 'string', deprecated: 'yes' } } }))
-    expect(content).not.toContain('**Deprecated**')
+    expect(content).toBe('## a\n\n**Type:** `string`\n')
   })
 
   // The cache holds an answer only when it did not lean on a reference still
@@ -4262,6 +4270,236 @@ describe('generate-markdown-files', () => {
     )
     expect(section(content, '## root')).toContain('**Type:** `Elem[]`')
     expect(section(content, '### sub')).toContain('**Type:** `Elem[]`')
+  })
+
+  // The page model compares spellings, so an unnormalised file gets past both
+  // the escape check and the duplicate-file check — and `generateMarkdownFiles`
+  // is a public export that would hand the escaping filename straight back.
+  it('normalises the index page file however it is supplied', () => {
+    expect(generateMarkdownFiles({ 'x-doc': { file: 'docs/./guide.md' }, properties: { a: {} } })[0]?.filename).toBe(
+      'docs/guide.md',
+    )
+    expect(generateMarkdownFiles({ properties: { a: {} } }, { file: 'docs/./guide.md' })[0]?.filename).toBe(
+      'docs/guide.md',
+    )
+    expect(() => generateMarkdownFiles({ 'x-doc': { file: 'sub/../../escape.md' }, properties: { a: {} } })).toThrow(
+      /outside the output directory/,
+    )
+  })
+
+  // The keys of a `definitions` map are author-chosen names, so a draft-07
+  // definition called `example` is a definition — skipping it by name made the
+  // `$anchor` it declares unreachable, and the property that referenced it kept
+  // its name and lost everything else.
+  it('finds an anchor declared by a definition whose name is a data keyword', () => {
+    const content = only(
+      generateMarkdownFiles({
+        definitions: { example: { $anchor: 'Port', type: 'integer', description: 'A TCP port.' } },
+        properties: { port: { $ref: '#Port' } },
+      }),
+    )
+    expect(section(content, '## port')).toContain('**Type:** `integer`')
+    expect(section(content, '## port')).toContain('A TCP port.')
+  })
+
+  // When an alias's chain ends nowhere, what is left is the alias's own
+  // keywords — keeping the dead `$ref` instead let it win over them, and the
+  // truncation then told the reader a string was not valid where the full
+  // reference said it was.
+  it('keeps an alias own keywords when its chain leads nowhere', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Alias: { $ref: '#/$defs/Missing', type: 'string' },
+          Node: {
+            anyOf: [{ $ref: '#/$defs/Alias' }, { type: 'object', properties: { child: { $ref: '#/$defs/Node' } } }],
+          },
+        },
+      }),
+    )
+    expect(section(content, '## root')).toContain('**Type:** `string | object`')
+    expect(section(content, '### child')).toContain('**Type:** `string | object`')
+  })
+
+  // And the same alias read as a shape: a dead `$ref` left in place answers
+  // "could be anything", so the alias stops being filtered out of a
+  // requirement intersection and takes the marker off the field beside it.
+  it('reads an alias whose chain leads nowhere by its own keywords', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          Alias: { $ref: '#/$defs/Missing', type: 'string' },
+          Node: {
+            type: 'object',
+            anyOf: [{ $ref: '#/$defs/Alias' }, { type: 'object', required: ['a'], properties: { a: {} } }],
+            properties: {
+              a: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/Node' },
+                  { type: 'object', required: ['a'], properties: { a: { type: 'string' } } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### a')).toContain('**Required**')
+  })
+
+  // An alias's `required` applies alongside the base's, not instead of it —
+  // replacing lost the base's marker at the truncation while the inlined
+  // reading two headings up kept it.
+  it('unions an alias required list with the base one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Alias' } },
+        $defs: {
+          Base: { type: 'object', required: ['a'], properties: { a: { type: 'string' }, b: { type: 'string' } } },
+          Alias: {
+            $ref: '#/$defs/Base',
+            required: ['b'],
+            properties: {
+              b: { type: 'string' },
+              child: {
+                anyOf: [
+                  { $ref: '#/$defs/Alias' },
+                  { type: 'object', required: ['a', 'b'], properties: { a: {}, b: {} } },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### a')).toContain('**Required**')
+    expect(section(content, '#### b')).toContain('**Required**')
+  })
+
+  // The cache answers for a pointer, so a ref site that narrows one must not
+  // *read* it either — asking with siblings and getting the bare answer is the
+  // same order-dependence as storing it.
+  it('does not let a narrowed ref site read the answer cached for a bare one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/Node' } },
+        $defs: {
+          S: { type: 'object', required: ['a'], properties: { a: { type: 'string' }, b: { type: 'string' } } },
+          Node: {
+            type: 'object',
+            anyOf: [
+              { allOf: [{ $ref: '#/$defs/S' }], required: ['b'] },
+              { allOf: [{ $ref: '#/$defs/S', type: 'string' }] },
+            ],
+            properties: {
+              a: { type: 'string' },
+              b: { type: 'string' },
+              kid: {
+                anyOf: [
+                  { $ref: '#/$defs/Node' },
+                  {
+                    type: 'object',
+                    required: ['a', 'b'],
+                    properties: { a: { type: 'string' }, b: { type: 'string' } },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(section(content, '#### a')).toContain('**Required**')
+    expect(section(content, '#### b')).toContain('**Required**')
+  })
+
+  // Cutting only the pointer the label started from leaves a `$defs` cycle to
+  // be walked until the allowance is gone, and the label then falls back to
+  // `object` — the property that makes it finite is the path-local set.
+  it('keeps a truncation label finite through a cycle it does not start in', () => {
+    const label = '**Type:** `number | boolean | null | string | object`'
+    const content = only(
+      generateMarkdownFiles({
+        properties: { root: { $ref: '#/$defs/A' } },
+        $defs: {
+          A: {
+            anyOf: [
+              { $ref: '#/$defs/B' },
+              { $ref: '#/$defs/B' },
+              { $ref: '#/$defs/B' },
+              { $ref: '#/$defs/B' },
+              { type: 'string' },
+              { type: 'object', properties: { child: { $ref: '#/$defs/A' } } },
+            ],
+          },
+          B: { anyOf: [{ $ref: '#/$defs/C' }, { type: 'null' }] },
+          C: { anyOf: [{ $ref: '#/$defs/D' }, { type: 'boolean' }] },
+          D: { anyOf: [{ $ref: '#/$defs/B' }, { type: 'number' }] },
+        },
+      }),
+    )
+    expect(section(content, '## root')).toContain(label)
+    expect(section(content, '### child')).toContain(label)
+  })
+
+  /** A definition that is a union of `count` literals, referenced recursively. */
+  const wideUnion = (count: number): unknown => ({
+    properties: { root: { $ref: '#/$defs/U' } },
+    $defs: {
+      U: {
+        anyOf: [
+          ...Array.from({ length: count }, (_, index) => ({ const: index })),
+          { type: 'object', properties: { kid: { $ref: '#/$defs/U' } } },
+        ],
+      },
+    },
+  })
+
+  // The allowance is generous enough for a union anyone would write, and it is
+  // spent at the node it says: a definition of 2 000 branches costs 2 001, one
+  // more than it has.
+  it('labels a truncation up to the allowance and falls back past it', () => {
+    expect(section(only(generateMarkdownFiles(wideUnion(30))), '### kid')).toContain('| 29 | object`')
+    // The edge: 1998 literals plus the object branch is exactly the allowance,
+    // one more is one past it.
+    expect(section(only(generateMarkdownFiles(wideUnion(1998))), '### kid')).toContain('| 1997 | object`')
+    expect(section(only(generateMarkdownFiles(wideUnion(1999))), '### kid')).toContain('**Type:** `object`')
+  })
+
+  // A node with both container keywords is an object with a shape, not an
+  // array — the label said `array` while its own table listed object fields.
+  it('reads an implied object before an implied array', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: { endpoint: { properties: { host: { type: 'string' } }, items: { type: 'string' } } },
+      }),
+    )
+    expect(section(content, '## endpoint')).toContain('**Type:** `object`')
+  })
+
+  // The root's own documentation wins; a branch only fills in what the root
+  // left unsaid. The `title` half of that rule was tested and the prose half
+  // was not.
+  it('lets the root prose beat a branch prose', () => {
+    const content = only(
+      generateMarkdownFiles({
+        description: 'Root prose.',
+        anyOf: [{ description: 'Branch prose.', properties: { alpha: { type: 'string' } } }],
+      }),
+    )
+    expect(content).toContain('Root prose.')
+    expect(content).not.toContain('Branch prose.')
+  })
+
+  // A description of whitespace survives the config read (it has length) and
+  // trims to nothing, so the page carried an empty block and printed a hole
+  // where its prose would be.
+  it('does not print a hole for a description that is only whitespace', () => {
+    const content = only(generateMarkdownFiles({ title: 'Cfg', description: '   \n   ', properties: { alpha: {} } }))
+    expect(content).toBe('# Cfg\n\n## alpha\n')
   })
 
   it('matches the checked-in docs for the API reference fixture', () => {
