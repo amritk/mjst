@@ -1,6 +1,6 @@
 import { detectFormat, type ParserFormat } from '../parsers'
 import { createDocument, type Document, type IDocumentOptions } from './document'
-import { bySourceThenPosition } from './order'
+import { bySourceThenPosition, withoutDuplicates } from './order'
 import type { LintPlugin } from './plugin'
 import { runPlugins } from './plugin'
 import type { Ruleset } from './ruleset'
@@ -123,7 +123,9 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
     return result
   })
 
-  const diagnostics = [...parserResults, ...resolverDiagnostics, ...ruleResults].sort(bySourceThenPosition)
+  const diagnostics = withoutDuplicates(
+    [...parserResults, ...resolverDiagnostics, ...ruleResults].sort(bySourceThenPosition),
+  )
 
   if (!plugins || plugins.length === 0) return { diagnostics, pluginData: {} }
 

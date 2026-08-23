@@ -33,9 +33,16 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /**
- * Reads a member of `object`. Only *own* properties are visible: a filter must
- * not be able to walk to `constructor`, `__proto__`, or any other prototype
- * member, which is what made the old `new Function` evaluator reachable code.
+ * Reads a member of `object`. Only own *enumerable* properties are visible: a
+ * filter must not be able to walk to `constructor`, `__proto__`, or any other
+ * prototype member, which is what made the old `new Function` evaluator
+ * reachable code. Enumerable, not merely own, so `@.foo` sees a node's members
+ * on the same terms the surrounding JSONPath walk does — the engine has one
+ * answer to "does this node have a `foo`", not two.
+ *
+ * `propertyIsEnumerable` comes off the prototype because `object` is a node of
+ * the linted document and may carry a key of that name. Inherited properties
+ * answer `false`, so the prototype walk is ruled out by the same check.
  */
 const readMember = (object: unknown, name: string | number): unknown => {
   if (object === null || object === undefined) {
@@ -51,7 +58,7 @@ const readMember = (object: unknown, name: string | number): unknown => {
     const index = typeof name === 'number' ? name : Number(name)
     return Number.isInteger(index) ? object[index] : undefined
   }
-  if (isPlainObject(object)) return Object.hasOwn(object, name) ? object[name] : undefined
+  if (isPlainObject(object)) return Object.prototype.propertyIsEnumerable.call(object, name) ? object[name] : undefined
   // Numbers and booleans have no own properties worth exposing.
   return undefined
 }

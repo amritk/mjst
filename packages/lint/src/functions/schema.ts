@@ -113,6 +113,21 @@ export type ISchemaOptions = {
    * without the caller naming a dialect.
    */
   dialect?: string
+  /**
+   * Report nothing when the schema itself cannot be built or run, instead of
+   * reporting why.
+   *
+   * The default suits a schema written in the *ruleset*: if that one is
+   * unusable, its author wants to hear about it. A schema taken from the
+   * *document* — a message payload, a parameter's schema — is different. It can
+   * legitimately carry a `$ref` this package cannot resolve (an external file, or
+   * anything at all when no resolver was injected), and there the validator's own
+   * complaint is not a finding about the document: it is an error-severity
+   * diagnostic, on a valid document, whose text describes this package's API.
+   * Callers validating document-supplied schemas pass `true` and get silence
+   * where they cannot judge.
+   */
+  skipUnusableSchema?: boolean
 }
 
 /** Validates a value against a JSON Schema supplied in the rule's options. */
@@ -137,7 +152,11 @@ export const schema: RulesetFunction<unknown, ISchemaOptions> = (input, options,
     result = getValidator(options.schema)(input)
   } catch (error) {
     // Preparing or running the validator can throw on a schema shape we cannot
-    // interpret. Report it rather than letting it bubble up and crash the run.
+    // interpret — including a `$ref` it cannot resolve, which only surfaces when
+    // the validator runs. Report it rather than letting it bubble up and crash
+    // the run, unless the caller has said the schema is the document's own and a
+    // failure to interpret it is not the document's fault.
+    if (options.skipUnusableSchema) return []
     return [
       {
         message: `Invalid schema: ${error instanceof Error ? error.message : String(error)}`,

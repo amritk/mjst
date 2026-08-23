@@ -90,32 +90,50 @@ const getAtPath = (root: unknown, path: JsonPath): unknown => {
 }
 
 /**
+ * True when `node` is a `$ref` object the walk should step through to reach
+ * `next`.
+ *
+ * A `$ref` can carry siblings — `{ $ref: '#/…/CompletionUsage', nullable: true }`
+ * — and those siblings live at the `$ref` site, not in the target. Stepping
+ * through the ref to read one produces a path to a node the author never wrote,
+ * which then resolves to no range and to nothing a fixer can edit. So a segment
+ * the `$ref` object owns itself is read where it was written; anything else
+ * (including the end of the path, where the finding is about the referenced node
+ * as a whole) follows the ref.
+ */
+const stepsThroughRef = (node: unknown, next: string | number | undefined): node is { $ref: string } =>
+  isContainer(node) &&
+  !Array.isArray(node) &&
+  typeof node['$ref'] === 'string' &&
+  (next === undefined || !Object.hasOwn(node, next))
+
+/**
  * Translates a path into the *resolved* (dereferenced) document back into the
  * equivalent path in the *original* source document, following internal `$ref`s.
  * This lets findings produced against the resolved tree resolve to the exact
  * line:column of the original `$ref` target. External refs stop the walk at the
- * `$ref` site.
+ * `$ref` site, and so does a segment written as a sibling of the `$ref`.
  */
 export const resolveSourcePath = (root: unknown, path: JsonPath): JsonPath => {
   let originalPath: JsonPath = []
   let node: unknown = root
 
-  const followRefs = () => {
+  const followRefs = (next: string | number | undefined) => {
     let guard = 0
-    while (isContainer(node) && !Array.isArray(node) && typeof node['$ref'] === 'string' && guard++ < 100) {
-      const target = pointerToPath(node['$ref'])
+    while (stepsThroughRef(node, next) && guard++ < 100) {
+      const target = pointerToPath(node.$ref)
       if (!target) return
       originalPath = [...target]
       node = getAtPath(root, target)
     }
   }
 
-  followRefs()
-  for (const segment of path) {
+  followRefs(path[0])
+  for (const [index, segment] of path.entries()) {
     if (!isContainer(node)) break
     originalPath.push(segment)
     node = childOf(node, segment)
-    followRefs()
+    followRefs(path[index + 1])
   }
   return originalPath
 }
@@ -130,7 +148,8 @@ export const resolveSourcePath = (root: unknown, path: JsonPath): JsonPath => {
  *
  * The walk re-derives the resolver's traversal over the *unresolved* documents,
  * so a `$ref` whose target file is not in the registry (e.g. it failed to load)
- * stops the walk at the last known location rather than guessing. Prefer
+ * stops the walk at the last known location rather than guessing, and a segment
+ * written as a sibling of the `$ref` is read at the `$ref` site. Prefer
  * {@link resolveSourceOriginFromMap} when the resolver supplies an origin map —
  * it avoids re-deriving this traversal.
  */
@@ -140,10 +159,10 @@ export const resolveSourceOrigin = (registry: IDocumentRegistry, path: JsonPath)
   let originalPath: JsonPath = []
   let node: unknown = root
 
-  const followRefs = () => {
+  const followRefs = (next: string | number | undefined) => {
     let guard = 0
-    while (isContainer(node) && !Array.isArray(node) && typeof node['$ref'] === 'string' && guard++ < 1000) {
-      const { filePart, fragment } = splitRef(node['$ref'])
+    while (stepsThroughRef(node, next) && guard++ < 1000) {
+      const { filePart, fragment } = splitRef(node.$ref)
       if (filePart !== '') {
         const target = joinLocation(location, filePart)
         if (target === undefined) return
@@ -157,12 +176,12 @@ export const resolveSourceOrigin = (registry: IDocumentRegistry, path: JsonPath)
     }
   }
 
-  followRefs()
-  for (const segment of path) {
+  followRefs(path[0])
+  for (const [index, segment] of path.entries()) {
     if (!isContainer(node)) break
     originalPath.push(segment)
     node = childOf(node, segment)
-    followRefs()
+    followRefs(path[index + 1])
   }
   return { location, path: originalPath }
 }

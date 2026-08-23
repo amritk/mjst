@@ -21,7 +21,12 @@ export type FixPluginData = {
 export const createFixPlugin = (fixers: FixerRegistry, options: ApplyFixesOptions = {}): LintPlugin => ({
   name: FIX_PLUGIN_NAME,
   afterLint: (diagnostics, context) => {
-    const result = applyFixes(context.input, context.format, context.document.data, diagnostics, fixers, options)
+    // Only this document's findings. A finding carrying another `source` came
+    // from a file inlined by the resolver, and its path is relative to *that*
+    // document — applying a fixer here would edit whatever happens to sit at the
+    // same path in this one.
+    const own = diagnostics.filter((diagnostic) => diagnostic.source === context.source)
+    const result = applyFixes(context.input, context.format, context.document.data, own, fixers, options)
     if (!result.changed) return undefined
     const data: FixPluginData = { applied: result.applied }
     return { output: result.output, data }
