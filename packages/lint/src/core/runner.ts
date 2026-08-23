@@ -105,13 +105,23 @@ export type Linter = {
   run(document: Document, options?: IRunOptions): Promise<IDiagnostic[]>
 }
 
-/** Resolves where a finding's `path` maps to in the source: its range and originating `source`. */
+/**
+ * Resolves where a finding's `path` maps to in the source: the path in the
+ * originating document, its range, and that document's `source`.
+ *
+ * A rule with `resolved: true` matched against the dereferenced tree, so its
+ * path names a position that may not exist in what the author wrote — a
+ * `$ref` site rather than the declaration behind it. The `sourcePath` returned
+ * here is the authored one, and it is what the finding carries: a path and a
+ * range that describe two different trees is a diagnostic nobody can act on,
+ * and a fixer resolving that path against the raw document would find nothing.
+ */
 const locate = (
   rule: ResolvedRule,
   path: JsonPath,
   document: Document,
   sources: ISourceSet | undefined,
-): { range: IRange; source: string | undefined } => {
+): { sourcePath: JsonPath; range: IRange; source: string | undefined } => {
   // A resolved finding may sit on a node inlined from another file. With a source
   // set, follow the `$ref` chain across documents so the range and `source` point
   // at the originating file; otherwise fall back to the root document, following
@@ -126,7 +136,7 @@ const locate = (
     sourcePath = rule.resolved ? resolveSourcePath(document.data, path) : path
   }
   const location = originDocument.getLocationForJsonPath(sourcePath, true)
-  return { range: location?.range ?? ZERO_RANGE, source: originDocument.source }
+  return { sourcePath, range: location?.range ?? ZERO_RANGE, source: originDocument.source }
 }
 
 /** Builds an error-severity diagnostic (a failed rule function or an unknown-function reference). */
@@ -310,9 +320,9 @@ const runThen = async (
     } catch (error) {
       // Isolate the failure: convert it into an error diagnostic on this node so
       // the rest of the run (and already-collected findings) survive.
-      const { range, source } = locate(rule, target.path, document, sources)
+      const { sourcePath, range, source } = locate(rule, target.path, document, sources)
       const reason = error instanceof Error ? error.message : String(error)
-      out.push(errorDiagnostic(rule, target.path, `Rule "${rule.name}" threw: ${reason}`, range, source))
+      out.push(errorDiagnostic(rule, sourcePath, `Rule "${rule.name}" threw: ${reason}`, range, source))
       continue
     }
     if (!results) continue
@@ -341,11 +351,11 @@ const toDiagnostic = (
       })
     : result.message
 
-  const { range, source } = locate(rule, path, document, sources)
+  const { sourcePath, range, source } = locate(rule, path, document, sources)
   const diagnostic: IDiagnostic = {
     code: rule.name,
     message,
-    path,
+    path: sourcePath,
     severity: rule.severity,
     range,
   }

@@ -36,6 +36,21 @@ describe('resolveSourcePath (internal refs, single document)', () => {
     expect(resolveSourcePath(root, ['a'])).toEqual(['defs', 'X'])
     expect(resolveSourcePath(root, ['a', 'type'])).toEqual(['defs', 'X', 'type'])
   })
+
+  it('reads a sibling of the `$ref` at the `$ref` site, not in the target', () => {
+    // `{ $ref, nullable }` is how OpenAPI documents override a shared schema.
+    // `nullable` is written here and exists nowhere in `X`, so following the ref
+    // to reach it names a node nobody wrote: no range resolves to it, and a
+    // fixer asked to remove it finds nothing.
+    const root = { defs: { X: { type: 'string' } }, a: { $ref: '#/defs/X', nullable: true } }
+    expect(resolveSourcePath(root, ['a', 'nullable'])).toEqual(['a', 'nullable'])
+    // A sibling shadowing a key the target also has is still the sibling: it is
+    // the one the resolver kept.
+    const shadow = { defs: { X: { type: 'string' } }, a: { $ref: '#/defs/X', type: 'number' } }
+    expect(resolveSourcePath(shadow, ['a', 'type'])).toEqual(['a', 'type'])
+    // And the `$ref` key itself is at the `$ref` site by definition.
+    expect(resolveSourcePath(root, ['a', '$ref'])).toEqual(['a', '$ref'])
+  })
 })
 
 describe('resolveSourceOrigin (cross-document)', () => {
@@ -45,6 +60,20 @@ describe('resolveSourceOrigin (cross-document)', () => {
     expect(resolveSourceOrigin(sources, ['a', 'type'])).toEqual({
       location: '/root.yaml',
       path: ['defs', 'X', 'type'],
+    })
+  })
+
+  it('reads a sibling of a cross-file `$ref` in the referring document', () => {
+    const root = { a: { $ref: './ext.yaml#/foo', nullable: true } }
+    const ext = { foo: { baz: 1 } }
+    const sources = registry('/dir/root.yaml', { '/dir/root.yaml': root, '/dir/ext.yaml': ext })
+    expect(resolveSourceOrigin(sources, ['a', 'nullable'])).toEqual({
+      location: '/dir/root.yaml',
+      path: ['a', 'nullable'],
+    })
+    expect(resolveSourceOrigin(sources, ['a', 'baz'])).toEqual({
+      location: '/dir/ext.yaml',
+      path: ['foo', 'baz'],
     })
   })
 

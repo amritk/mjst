@@ -75,6 +75,25 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /**
+ * True when `name` is a property of `value` that this module considers to exist.
+ *
+ * A node's members are its own *enumerable* string keys — exactly what a JSON or
+ * YAML parser produces, what `Object.keys` returns, and so what every walk here
+ * (`$..`, `$.*`, filters, the shared descent seeding) enumerates. Naming one
+ * directly has to agree with enumerating it, or `query` and {@link queryMany}
+ * answer the same expression differently: the shared descent seeds from
+ * `Object.keys`, while a per-path `Object.hasOwn` would also match a
+ * non-enumerable own property no walk ever visits.
+ *
+ * `Object.prototype.propertyIsEnumerable` is called off the prototype because
+ * `value` is the linted document: it may well have a key of that name.
+ * Inherited properties answer `false`, so this rules out `constructor` and
+ * friends for free.
+ */
+const hasMember = (value: Record<string, unknown>, name: string | number): boolean =>
+  Object.prototype.propertyIsEnumerable.call(value, name)
+
+/**
  * True for a non-empty run of ASCII digits — what `/^\d+$/` matched, without
  * the regex. It is asked once per segment of every match's path, which on a
  * large dereferenced spec is hundreds of thousands of calls, and almost all of
@@ -426,8 +445,7 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
   switch (selector.kind) {
     case 'child': {
       if (isObject(value)) {
-        if (Object.hasOwn(value, selector.name))
-          out.push({ value: value[selector.name], parent: node, key: selector.name })
+        if (hasMember(value, selector.name)) out.push({ value: value[selector.name], parent: node, key: selector.name })
       } else if (Array.isArray(value) && selector.index !== undefined) {
         const idx = selector.index
         if (idx < value.length) out.push({ value: value[idx], parent: node, key: idx })
@@ -438,7 +456,7 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
       if (Array.isArray(value)) {
         const idx = selector.index < 0 ? value.length + selector.index : selector.index
         if (idx >= 0 && idx < value.length) out.push({ value: value[idx], parent: node, key: idx })
-      } else if (isObject(value) && Object.hasOwn(value, selector.index)) {
+      } else if (isObject(value) && hasMember(value, selector.index)) {
         out.push({ value: value[selector.index], parent: node, key: selector.index })
       }
       return
@@ -458,7 +476,7 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
             const idx = name < 0 ? value.length + name : name
             if (idx >= 0 && idx < value.length) out.push({ value: value[idx], parent: node, key: idx })
           }
-        } else if (isObject(value) && Object.hasOwn(value, name)) {
+        } else if (isObject(value) && hasMember(value, name)) {
           out.push({ value: value[name], parent: node, key: name })
         }
       }
@@ -636,7 +654,7 @@ export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[
  * `given`s, and the dereferenced tree is large), and the *matching* is inverted
  * on top of that. Nearly every descent `given` opens with a plain name —
  * `$..parameters`, `$..enum`, `$..$ref` — so asking each path in turn whether
- * this node has its name meant a dozen `Object.hasOwn` calls per node. Instead
+ * this node has its name meant a dozen own-property checks per node. Instead
  * we look at each own key the node already has and ask which paths wanted *it*:
  * one map lookup per key, and a node whose keys nobody named costs nothing.
  *

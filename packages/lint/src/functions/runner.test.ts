@@ -202,6 +202,11 @@ describe('runner: resolved rules with a source set', () => {
     expect(results).toHaveLength(1)
     expect(results[0]?.source).toBe('pet.yaml')
     expect(results[0]?.range.start.line).toBe(3)
-    expect(results[0]?.path).toEqual(['pet', 'name'])
+    // The path is relative to the document the finding is reported against, so
+    // it agrees with `source` and `range` above. It used to be the path in the
+    // *root* document's dereferenced tree (`['pet','name']`), which named no
+    // node in `pet.yaml` and so could not be followed from the file the reader
+    // is sent to.
+    expect(results[0]?.path).toEqual(['name'])
   })
 })

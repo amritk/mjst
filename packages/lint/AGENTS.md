@@ -25,11 +25,24 @@ bun run --filter='@amritk/lint' types:check
   `DiagnosticSeverity` (0–3). Don't unify them.
 - **Ranges are zero-based** `{ line, character }`. Preserve that; the `+1` for
   display is the caller's job.
+- **A finding's `source`, `path` and `range` describe one node in one document.**
+  A resolved rule matches the dereferenced tree, so its match path is translated
+  back to the authored node before the finding is built (`locate` in
+  `core/runner.ts`, over `core/pointers.ts`). Don't report a resolved-tree path:
+  it names a node that need not exist, so no range resolves to it and no fixer
+  can edit it. `withoutDuplicates` (`core/order.ts`) then relies on that — it
+  keys on `path` as well as `range`, because a range alone cannot tell three
+  absent siblings apart.
 - **OpenAPI and AsyncAPI support live in the `./rules/openapi` and
   `./rules/asyncapi` subpaths**, layered on top of core — never merge either into
   the root entry. What the two genuinely share (the Server Object's `variables`,
   tag-name uniqueness) lives in `./rules/shared`, which neither subpath imports
   from the other.
+- **A node's members are its own *enumerable* string keys.** Every walk in
+  `core/jsonpath.ts` enumerates with `Object.keys`, so naming a key directly
+  (`hasMember`, and `readMember` in `core/filter.ts`) must agree — a plain
+  `Object.hasOwn` makes `query` and `queryMany` answer the same expression
+  differently, because the latter seeds from one shared descent.
 - **No `eval`, no `new Function`, no dynamic code construction anywhere in the
   engine.** A ruleset is data — often YAML written by someone other than the
   person running the linter — so `[?(...)]` filters are parsed into an AST and

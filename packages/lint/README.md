@@ -165,7 +165,7 @@ Fixing runs to a fixpoint, capped at 10 passes. The result reports how that ende
 
 ### Rendering findings
 
-`lintDocument` returns structured `IDiagnostic[]` — each with a `code`, `message`, `path`, `severity`, `source`, and a zero-based `range`. **Rendering is the caller's job**: print them, serialize them to JSON, or map them to whatever your editor or CI consumes. The linter deliberately ships no output "formatter" layer (that is not the same thing as `prettier`/`biome format`, which reformat source).
+`lintDocument` returns structured `IDiagnostic[]` — each with a `code`, `message`, `path`, `severity`, `source`, and a zero-based `range`. `source`, `path` and `range` all describe the same node in the same document: the one the author wrote. A rule that runs against the dereferenced tree matches inside an inlined `$ref` target, and its finding is reported at the declaration that target came from, not at the `$ref` site. Two `$ref`s to the same mistake therefore produce one finding, not two. **Rendering is the caller's job**: print them, serialize them to JSON, or map them to whatever your editor or CI consumes. The linter deliberately ships no output "formatter" layer (that is not the same thing as `prettier`/`biome format`, which reformat source).
 
 ```ts
 const findings = await lintDocument(source, { ruleset, source: 'doc.yaml' })

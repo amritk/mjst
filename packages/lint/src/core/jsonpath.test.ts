@@ -121,4 +121,31 @@ describe('jsonpath queryMany', () => {
     expect(out[0]).toEqual([])
     expect(out[1]?.map((m) => m.value)).toEqual(['API'])
   })
+
+  it('agrees with `query` about a non-enumerable own property: neither sees it', () => {
+    // The shared descent seeds from `Object.keys`, so it can only ever find
+    // enumerable keys. A per-path own-property check would have found this one,
+    // making the same expression answer differently depending on whether it was
+    // batched — and reporting a node that `$..*` and every filter walk skip.
+    const hidden = { kind: 'secret' }
+    const node: Record<string, unknown> = { visible: 1 }
+    Object.defineProperty(node, 'hidden', { value: hidden, enumerable: false })
+    const root = { wrap: node }
+
+    for (const expression of ['$..hidden', '$.wrap.hidden', "$.wrap['hidden']", '$.wrap[?(@.kind)]']) {
+      const direct = query(root, expression)
+      const batched = queryMany(root, [compileQuery(expression)])[0]
+      expect(direct, expression).toEqual([])
+      expect(batched, expression).toEqual(direct)
+    }
+
+    // A filter reading the same member answers the same way, so a node cannot be
+    // selected by a property the engine will not then let anyone address.
+    expect(query(root, '$..[?(@.hidden)]')).toEqual([])
+    expect(query(root, '$..[?(@.visible)]').map((m) => m.value)).toEqual([node])
+
+    // The enumerable sibling is unaffected, batched or not.
+    expect(query(root, '$..visible').map((m) => m.value)).toEqual([1])
+    expect(queryMany(root, [compileQuery('$..visible')])[0]?.map((m) => m.value)).toEqual([1])
+  })
 })

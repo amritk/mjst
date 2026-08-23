@@ -107,11 +107,13 @@ createAsyncApiRuleset({
    found more. Rules that read what the author wrote (addresses, server
    variables, tag names) run unresolved by design and are unaffected.
 
-   The flip side: with a resolver, a rule that validates content reports a
-   mistake in a reusable `components` definition **once per `$ref` reaching
-   it**, at the same `line:column`. That is how every resolved rule in this
-   package behaves — the OpenAPI preset included — so de-duplicate on
-   `(code, range, message)` if you are rendering a report.
+   The flip side: with a resolver, a rule that validates content matches a
+   reusable `components` definition once per `$ref` reaching it. Each match is
+   reported at the definition, so the copies are identical and only the first is
+   returned — you do not need to de-duplicate a report yourself. Two findings
+   that share a `line:column` are genuinely two problems (the classic case:
+   `info.contact` missing `name`, `url` and `email` all carry the `contact`
+   object's range), so key on `path` if you need to tell them apart.
 
 ## Exports
 
