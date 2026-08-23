@@ -288,6 +288,7 @@ const findings = await lint(document, { ruleset })
 | `aasFunctions` / `allFunctions` | The AsyncAPI-specific functions; `allFunctions` = built-ins + AsyncAPI. |
 | `aasFormats` | AsyncAPI version detectors (`aas2`, `aas2.0`–`aas2.6`, `aas3`, `aas3.0`). |
 | `loadAsyncApiSchema(version)` | Lazily load one version's official structural meta-schema (`'2.0'`–`'2.6'`, `'3.0'`). See [`schemas/README.md`](./src/rules/asyncapi/schemas/README.md). |
+| `ASYNCAPI_VERSIONS` / `LATEST_ASYNCAPI_VERSION` / `asyncApiSchemaVersion(declared)` | The bundled versions, the newest one, and the mapping from a document's `asyncapi` field to the minor whose schema covers it (`'2.6.4'` → `'2.6'`; an unbundled minor → `undefined`). |
 
 Both majors are covered, and the rules are gated by format so a 2.x document never picks up a 3.x rule. The 3.0-specific ones carry an `asyncapi-3-` prefix, matching Spectral's names so a `.spectral.yml` that re-severities individual rules keeps working.
 
