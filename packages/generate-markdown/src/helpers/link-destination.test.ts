@@ -1,0 +1,48 @@
+import { describe, expect, it } from 'vitest'
+import { linkDestination } from '#helpers/link-destination'
+
+describe('link-destination', () => {
+  it('leaves an ordinary page path alone', () => {
+    expect(linkDestination('configuration/typescript.md')).toBe('configuration/typescript.md')
+  })
+
+  // A hyphen is in half the file names a docs site has; encoding it breaks
+  // every link the generator writes.
+  it('keeps a hyphen in a file name', () => {
+    expect(linkDestination('guides/sdk-config.md')).toBe('guides/sdk-config.md')
+  })
+
+  // What this encodes is always a file, never a URL reference. A page written
+  // to `c#d.md` linked as `c#d.md` points at a file `c` with a fragment.
+  it('encodes a fragment or query character in a file name', () => {
+    expect(linkDestination('c#d.md')).toBe('c%23d.md')
+    expect(linkDestination('e?f.md')).toBe('e%3Ff.md')
+  })
+
+  // A space stops the destination being a link at all, and `)` closes it early
+  // — the text after it became a second, schema-chosen link.
+  it('encodes what would end the destination', () => {
+    expect(linkDestination('my docs (v2).md')).toBe('my%20docs%20%28v2%29.md')
+  })
+
+  // Uppercase hex and a leading zero: `%A` and `%a0` are not what a byte
+  // encodes to, and a reader is entitled to reject either.
+  it('writes a percent escape as two uppercase hex digits', () => {
+    expect(linkDestination('a\nb')).toBe('a%0Ab')
+    expect(linkDestination('é.md')).toBe('%C3%A9.md')
+  })
+
+  // Every character a file name may carry unencoded. Encoding one of these
+  // breaks a link that was working; the list is the behaviour.
+  it('leaves every character a path may hold', () => {
+    const safe = "ABCXYZabcxyz0189-._~!$&'*+,;=:@/"
+    expect(linkDestination(safe)).toBe(safe)
+  })
+
+  // Split by code unit rather than code point, a surrogate pair becomes two
+  // lone surrogates and `TextEncoder` replaces each with U+FFFD — the link
+  // then points at a file nobody wrote.
+  it('encodes a character outside the basic plane as one character', () => {
+    expect(linkDestination('emoji😀.md')).toBe('emoji%F0%9F%98%80.md')
+  })
+})

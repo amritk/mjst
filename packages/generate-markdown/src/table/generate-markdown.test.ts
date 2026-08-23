@@ -1,7 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-
-import { generateMarkdown } from '.'
+import { generateMarkdown } from '#table/generate-markdown'
 
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
@@ -36,7 +35,7 @@ const mockFs = (schema: unknown) => {
   writeFileMock.mockImplementation(async () => {})
 }
 
-describe('generate-readme', () => {
+describe('generate-markdown', () => {
   beforeEach(() => {
     readFileMock.mockReset()
     writeFileMock.mockReset()
@@ -1023,12 +1022,33 @@ describe('generate-readme', () => {
       expect(writeFileMock).not.toHaveBeenCalled()
     })
 
+    // Only a missing README means "safe to create one". Swallowing every read
+    // error let an existing-but-unreadable README be replaced wholesale by the
+    // bootstrap path — the opposite of the refusal above.
+    it('refuses to overwrite a README it cannot read', async () => {
+      readFileMock.mockImplementation(async (path) => {
+        if (typeof path === 'string' && path.includes('config.schema.json')) return JSON.stringify(minimalSchema)
+        const error = new Error('permission denied') as NodeJS.ErrnoException
+        error.code = 'EACCES'
+        throw error
+      })
+      writeFileMock.mockImplementation(async () => {})
+
+      await expect(generateMarkdown()).rejects.toThrow(/permission denied/)
+      expect(writeFileMock).not.toHaveBeenCalled()
+    })
+
+    // What Node actually throws, `code` included — an `Error` without one is a
+    // different path, and testing that one left the real missing-file case
+    // unexercised.
     it('falls back to table-only when README does not exist', async () => {
       readFileMock.mockImplementation(async (path) => {
         if (typeof path === 'string' && path.includes('config.schema.json')) {
           return JSON.stringify(minimalSchema)
         }
-        throw new Error('ENOENT: no such file or directory')
+        const error = new Error('ENOENT: no such file or directory') as NodeJS.ErrnoException
+        error.code = 'ENOENT'
+        throw error
       })
       writeFileMock.mockImplementation(async () => {})
 
@@ -1102,6 +1122,10 @@ describe('generate-readme', () => {
       await expect(generateMarkdown()).resolves.toBeUndefined()
       const [, content] = writeFileMock.mock.calls[0] ?? []
       expect(content).not.toContain('CLI Flag')
+      // The icon is dropped rather than interpolated: `7 <code>a</code>` is
+      // what reaching `escapeHtml` with a number used to leave in the cell.
+      expect(content).toContain('<td><code>a</code></td>')
+      expect(content).not.toContain('7 <code>a</code>')
     })
 
     it('omits the CLI Flag column when every flag is an empty string', async () => {
@@ -1134,6 +1158,20 @@ describe('generate-readme', () => {
       const table = String(content).slice(String(content).indexOf('<table>'))
       expect(table).not.toContain('<!-- config-table-start -->')
       expect(table).toContain('&lt;!-- config-table-start --&gt;')
+    })
+
+    // Either marker on its own is enough to make the next run splice against
+    // this run's output: checking only one of them left the other live.
+    it('refuses to write when the start marker reaches the heading', async () => {
+      mockFs({
+        title: 'T',
+        properties: {
+          'evil <!-- config-table-start --> name': { type: 'object', properties: { x: { type: 'string' } } },
+        },
+      })
+
+      await expect(generateMarkdown()).rejects.toThrow(/would corrupt README\.md/)
+      expect(writeFileMock).not.toHaveBeenCalled()
     })
 
     it('refuses to write when a marker reaches the heading, which is not HTML', async () => {
@@ -1230,6 +1268,13 @@ describe('generate-readme', () => {
 
       const [, content] = writeFileMock.mock.calls[0] ?? []
       const table = String(content).slice(String(content).indexOf('<table>'), String(content).indexOf('</table>'))
+      // Each value survives as one line — "no blank line" alone would pass on a
+      // table that never rendered.
+      expect(table).toContain('<code>a b</code>')
+      expect(table).toContain('<code>--a --b</code>')
+      expect(table).toContain('i j')
+      // The detail cell holds the first paragraph, and `\r\r` ends one.
+      expect(table).toContain('<td colspan="3">one</td>')
       expect(table).not.toMatch(/\n[ \t]*\n/)
       expect(table).not.toMatch(/\r/)
     })

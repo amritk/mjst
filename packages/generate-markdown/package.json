@@ -6,6 +6,12 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "type": "module",
+  "imports": {
+    "#helpers/*": "./src/helpers/*.ts",
+    "#reference/*": "./src/reference/*.ts",
+    "#table/*": "./src/table/*.ts",
+    "#types/*": "./src/types/*.ts"
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=20"
@@ -36,6 +42,7 @@
   },
   "scripts": {
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
+    "generate-fixtures": "bun --conditions development scripts/update-fixtures.ts",
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. generate-markdown"
