@@ -20,7 +20,9 @@ describe('format-value', () => {
   // `1e400` interpolates as `Infinity`, which no JSON parser accepts — the
   // reader would be told to type something that cannot be read back.
   it('does not document a number JSON cannot hold', () => {
-    expect(formatValue(1e400)).toBe('<code>null</code>')
+    // Parsed, not written: `1e400` is a number literal the compiler rounds, and
+    // it reaches here the way every schema value does — through `JSON.parse`.
+    expect(formatValue(JSON.parse('1e400'))).toBe('<code>null</code>')
     expect(formatValue(Number.NaN)).toBe('<code>null</code>')
   })
 
