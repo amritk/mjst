@@ -20,6 +20,8 @@ type MutableConfig = {
   typesOnly?: boolean
   validators?: boolean
   examples?: boolean
+  messageContracts?: boolean
+  discriminator?: string
   build?: boolean
   force?: boolean
   logWarnings?: boolean
@@ -49,6 +51,7 @@ const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
   'typesOnly',
   'validators',
   'examples',
+  'messageContracts',
   'build',
   'force',
   'logWarnings',
@@ -67,6 +70,7 @@ const VALUE_KEYS = new Set<keyof MutableConfig>([
   'outFile',
   'input',
   'export',
+  'discriminator',
   'helpers',
   'typeSuffix',
   'importExt',
@@ -157,6 +161,9 @@ const assignValue = (config: MutableConfig, key: string, value: string): boolean
     case 'rootType':
       config.rootType = value
       return true
+    case 'discriminator':
+      config.discriminator = value
+      return true
     case 'input': {
       const parsed = parseInputValue(value)
       if (!parsed) {
@@ -206,6 +213,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
       return true
     case 'examples':
       config.examples = value
+      return true
+    case 'messageContracts':
+      config.messageContracts = value
       return true
     case 'build':
       config.build = value

@@ -63,6 +63,14 @@ export type NormalizedChannel = {
   readonly key: string
   /** The 3.0 `address`; for 2.x the channel key, which *is* the topic/path. */
   readonly address?: string
+  /**
+   * The property naming which message a frame is, when the channel declares one
+   * via `x-mjst: { discriminator }`. AsyncAPI itself has no way to say this —
+   * it lists a channel's messages and stops — but a message contract has to
+   * pick one property, so a document whose frames are tagged `event` rather
+   * than `type` can say so where the messages are.
+   */
+  readonly discriminator?: string
   readonly messages: readonly NormalizedMessage[]
 }
 
