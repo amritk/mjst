@@ -604,6 +604,11 @@ describe('avro-to-json-schema', () => {
   // The same namespace slip in the other encoding: a short-name reference to a
   // sibling `fixed` failed to resolve, so it was not recognised as a byte type
   // and the latin-1 default the drop rule exists to catch sailed through.
+  //
+  // `F` is defined under a field that carries no default, and the defaulting
+  // record holds nothing but the reference. An earlier fixture defined `F`
+  // inline beside the reference, so that inline `fixed` dropped the default on
+  // its own and the test passed with the fix reverted.
   it('resolves a sibling reference when deciding a byte default under json', () => {
     const schema = avroToJsonSchema({
       type: 'record',
@@ -611,17 +616,18 @@ describe('avro-to-json-schema', () => {
       namespace: 'outer',
       fields: [
         {
-          name: 'sub',
+          name: 'anchor',
           type: {
             type: 'record',
-            name: 'Sub',
+            name: 'Anchor',
             namespace: 'inner',
-            fields: [
-              { name: 'f0', type: { type: 'fixed', name: 'F', size: 2 } },
-              { name: 'blob', type: 'F' },
-            ],
+            fields: [{ name: 'f0', type: { type: 'fixed', name: 'F', size: 2 } }],
           },
-          default: { f0: 'ab', blob: 'ÿþ' },
+        },
+        {
+          name: 'sub',
+          type: { type: 'record', name: 'Sub', namespace: 'inner', fields: [{ name: 'blob', type: 'F' }] },
+          default: { blob: 'ÿþ' },
         },
       ],
     })

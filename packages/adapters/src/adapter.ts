@@ -4,8 +4,12 @@ import type { SourceFormat } from './source-format'
 
 /**
  * Options that tune how an adapter handles source constructs with no JSON
- * Schema representation. Only the Zod and Valibot adapters read these today;
+ * Schema representation. The Zod, Valibot and Avro adapters read these today;
  * adapters that ignore the argument simply keep their default behaviour.
+ *
+ * An adapter may also accept options of its own by widening this type — see
+ * `AvroAdapterOptions`, whose `encoding` no other adapter reads. That stays
+ * assignable to {@link Adapter} because the extra field is optional.
  */
 export type AdapterOptions = {
   /**
