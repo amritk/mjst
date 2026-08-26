@@ -854,4 +854,65 @@ describe('cli-e2e', () => {
     expect(probes.valid?.ok).toBe(true)
     expect(probes.badKind?.ok).toBe(false)
   })
+
+  // --input asyncapi: the vendored real-world document goes through YAML
+  // parsing, extraction, per-message generation, validators, and --build —
+  // then the generated parser and validator run under plain Node against
+  // payloads the spec's own schema constrains.
+  it('generates runnable parsers and validators from an AsyncAPI document', async () => {
+    const caseDir = join(workDir, 'asyncapi')
+    await mkdir(caseDir, { recursive: true })
+    const outDir = join(caseDir, 'out')
+    await runNode(
+      [
+        CLI_BIN,
+        '--input',
+        'asyncapi',
+        '--schema',
+        join(ROOT, 'fixtures/asyncapi/v3.0/streetlights-mqtt.yaml'),
+        '--outDir',
+        outDir,
+        '--helpers',
+        'embedded',
+        '--validators',
+        '--strict',
+        '--build',
+      ],
+      { cwd: ROOT },
+    )
+
+    // Each message gets its own channels/<channel>/<message>/ tree, importing
+    // the shared _helpers/ at the output root.
+    const parserProbes = await runProbes(join(outDir, 'channels/lighting-measured/light-measured/index.js'), {
+      valid: "m.parseLightMeasured({ lumens: 5, sentAt: '2024-01-01T00:00:00Z' })",
+      negativeLumens: 'm.parseLightMeasured({ lumens: -1 })',
+    })
+    expect(parserProbes.valid?.ok).toBe(true)
+    expect(parserProbes.negativeLumens?.ok).toBe(false)
+
+    const validatorProbes = await runProbes(
+      join(outDir, 'validators/channels/lighting-measured/light-measured/index.js'),
+      {
+        valid: 'm.isLightMeasured({ lumens: 5 })',
+        wrongType: "m.isLightMeasured({ lumens: 'bright' })",
+      },
+    )
+    expect(validatorProbes.valid?.value).toBe(true)
+    expect(validatorProbes.wrongType?.value).toBe(false)
+
+    // The commonHeaders trait contributes a headers schema, which lands in a
+    // sibling -headers tree with a Headers-suffixed root type.
+    const headerProbes = await runProbes(join(outDir, 'channels/lighting-measured/light-measured-headers/index.js'), {
+      valid: "m.parseLightMeasuredHeaders({ 'my-app-header': 42 })",
+    })
+    expect(headerProbes.valid?.ok).toBe(true)
+  })
+
+  it('rejects --input asyncapi combined with --root-type', async () => {
+    await expect(
+      runNode([CLI_BIN, '--input', 'asyncapi', '--schema', 'x.yaml', '--outDir', 'out', '--root-type', 'X'], {
+        cwd: ROOT,
+      }),
+    ).rejects.toThrow(/--root-type cannot be combined with --input asyncapi/)
+  })
 })

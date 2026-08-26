@@ -26,11 +26,11 @@
     },
     "input": {
       "type": "string",
-      "enum": ["json", "typebox", "zod", "valibot", "effect"],
+      "enum": ["json", "typebox", "zod", "valibot", "effect", "asyncapi"],
       "default": "json",
       "x-cli-flag": "--input <format>",
       "x-icon": "🔌",
-      "description": "Source format of the schema. 'json' (default) reads a JSON Schema file directly. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project."
+      "description": "Source format of the schema. 'json' (default) reads a JSON Schema file directly. 'asyncapi' reads an AsyncAPI 2.x/3.0 document (JSON or YAML) and generates from every message payload/headers schema it declares. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project."
     },
     "export": {
       "type": "string",

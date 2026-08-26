@@ -148,9 +148,19 @@ describe('AsyncAPI meta-schemas', () => {
     }
   })
 
-  it('rejects the upstream patterns it replaced, which is why they were replaced', () => {
-    for (const { upstream } of ADAPTATIONS) {
-      expect(() => validate({ type: 'string', pattern: upstream }, { formats: 'all' })).toThrow(/Unsafe regular/)
+  // The rewrites predate the ReDoS screen's anchored-repetition exemption,
+  // which now admits the two separator-delimited upstream spellings on its
+  // own — only the outer-star form (two nested nullable loops) is still
+  // refused. The vendored patterns stay: they are equivalent (proved above)
+  // and linear without leaning on the exemption.
+  it('still needs the outer-star rewrite; the separator-delimited ones are admitted now', () => {
+    for (const { name, upstream } of ADAPTATIONS) {
+      const build = () => validate({ type: 'string', pattern: upstream }, { formats: 'all' })
+      if (name === 'dotted identifier chain, outer star') {
+        expect(build, name).toThrow(/Unsafe regular/)
+      } else {
+        expect(build, name).not.toThrow()
+      }
     }
   })
 

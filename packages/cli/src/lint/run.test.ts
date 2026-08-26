@@ -198,4 +198,41 @@ describe('cli', () => {
     expect(stderr).toContain('ruleset')
     expect(code).not.toBe(2)
   })
+
+  it('resolves --ruleset asyncapi to the built-in preset', async () => {
+    const dir = tmp('lint-aas-')
+    const file = join(dir, 'doc.yaml')
+    // Valid enough to lint, sparse enough to draw preset findings (no
+    // description, no channel description) — proving the preset's own rules
+    // actually ran rather than an empty ruleset reporting nothing.
+    writeFileSync(
+      file,
+      ['asyncapi: 2.6.0', 'info:', '  title: Sparse', '  version: 1.0.0', 'channels:', '  events: {}', ''].join('\n'),
+    )
+
+    const { code, stdout } = await run([file, '--ruleset', 'asyncapi'])
+
+    expect(code).not.toBe(2)
+    expect(stdout).not.toContain('No problems found')
+    expect(stdout).toContain('asyncapi')
+  })
+
+  it('resolves --ruleset oas to the built-in OpenAPI preset', async () => {
+    const dir = tmp('lint-oas-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, ['openapi: 3.1.0', 'info:', '  title: Sparse', '  version: 1.0.0', 'paths: {}', ''].join('\n'))
+
+    const { code, stdout } = await run([file, '--ruleset', 'oas'])
+
+    expect(code).not.toBe(2)
+    expect(stdout).not.toContain('No problems found')
+  })
+
+  it('still treats an unknown --ruleset value as a file path', async () => {
+    const dir = tmp('lint-missing-rs-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, 'name: my-service\n')
+
+    await expect(run([file, '--ruleset', join(dir, 'nope.yaml')])).rejects.toThrow()
+  })
 })

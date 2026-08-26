@@ -295,7 +295,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"><code>"json"</code></td>
 </tr>
 <tr>
-<td colspan="4">Source format of the schema. 'json' (default) reads a JSON Schema file directly. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"typebox"</code>, <code>"zod"</code>, <code>"valibot"</code>, <code>"effect"</code></td>
+<td colspan="4">Source format of the schema. 'json' (default) reads a JSON Schema file directly. 'asyncapi' reads an AsyncAPI 2.x/3.0 document (JSON or YAML) and generates from every message payload/headers schema it declares. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"typebox"</code>, <code>"zod"</code>, <code>"valibot"</code>, <code>"effect"</code>, <code>"asyncapi"</code></td>
 </tr>
 <tr>
 <td>📦 <code>export</code></td>

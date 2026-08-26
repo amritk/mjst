@@ -56,6 +56,7 @@ The CLI (`mjst`) is the primary entry point; everything above is also published 
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Renders a config schema as documentation — a README table, or a multi-page prose reference |
 | [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, Valibot, Effect) into JSON Schema |
+| [`@amritk/asyncapi`](./packages/asyncapi) | Extract message schemas from AsyncAPI 2.x/3.0 documents for the generators (`--input asyncapi`) |
 | [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
 | [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |
 | [`@amritk/helpers`](./packages/helpers) | Shared runtime helpers used by generated code |

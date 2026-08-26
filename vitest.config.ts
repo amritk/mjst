@@ -28,10 +28,19 @@ export default defineConfig({
         find: /^@amritk\/runtime-validators$/,
         replacement: resolve(root, 'packages/runtime-validators/dist/index.js'),
       },
+      { find: /^@amritk\/asyncapi$/, replacement: resolve(root, 'packages/asyncapi/src/index.ts') },
       { find: /^@amritk\/resolve-refs$/, replacement: resolve(root, 'packages/resolve-refs/src/index.ts') },
       { find: /^@amritk\/yaml$/, replacement: resolve(root, 'packages/yaml/src/index.ts') },
       // The types subpath must resolve to source too (more specific first).
       { find: /^@amritk\/lint\/types$/, replacement: resolve(root, 'packages/lint/src/core/types.ts') },
+      {
+        find: /^@amritk\/lint\/rules\/openapi$/,
+        replacement: resolve(root, 'packages/lint/src/rules/openapi/index.ts'),
+      },
+      {
+        find: /^@amritk\/lint\/rules\/asyncapi$/,
+        replacement: resolve(root, 'packages/lint/src/rules/asyncapi/index.ts'),
+      },
       { find: /^@amritk\/lint$/, replacement: resolve(root, 'packages/lint/src/index.ts') },
     ],
   },

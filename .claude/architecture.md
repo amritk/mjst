@@ -18,6 +18,7 @@ mjst/
 │   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — schema → markdown docs (README table + prose reference)
 │   ├── adapters/              # @amritk/adapters — convert external schemas (TypeBox, …) to JSON Schema
+│   ├── asyncapi/              # @amritk/asyncapi — extract message schemas from AsyncAPI documents
 │   ├── resolve-refs/          # @amritk/resolve-refs — inline internal/cross-file/remote $refs
 │   ├── yaml/                  # @amritk/yaml — tiny YAML parser with exact source positions
 │   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
@@ -107,6 +108,15 @@ Converts schemas authored in external libraries into Draft 2020-12 JSON Schema s
 
 - **Implemented:** `typebox`, `zod`, `valibot`, and `effect`. Each external library is an optional peer dependency loaded at runtime (so the core stays slim): TypeBox schemas are already JSON-Schema-shaped (strip symbol keys + rewrite extended types); `zod` uses Zod 4's `toJSONSchema`; `valibot` uses `@valibot/to-json-schema`; `effect` uses `JSONSchema.make`. The Zod, Valibot, and TypeBox adapters map their date types to the `x-mjst` Date extension; the Effect adapter passes through Effect's encoded (string) representation.
 - **Lossy constructs:** types JSON Schema cannot express are preserved as an `x-mjst` vendor extension rather than dropped. `@amritk/helpers/mjst-extension` defines the shared contract (`MJST_EXTENSION_KEY`, `MjstExtension`, and the readers `getMjstInstanceOf` / `getMjstPrimitive` / `getMjstBrand`), which the type generator, parsers, and validators read to emit the right TypeScript type and runtime checks. The extension currently carries: `instanceOf` (a runtime class such as `Date`, checked with `instanceof`), `primitive` (a non-JSON primitive such as `bigint`, checked with `typeof`), and `brand` (a type-level nominal brand — the value still validates as its base JSON type at runtime, but the generated TypeScript type is intersected with a unique brand). Brands cannot be auto-detected from the source libraries (Zod/Valibot/Effect brands are type-level or stripped during conversion), so they are opt-in via a hand-authored `x-mjst.brand` keyword — which TypeBox passes through from `Type.String({ 'x-mjst': { brand: 'UserId' } })`.
+
+### `@amritk/asyncapi` (`packages/asyncapi`)
+
+Extracts every message's payload and headers schema from an AsyncAPI document — 2.0 through 2.6, and 3.0 — as **self-contained JSON Schema 2020-12** documents ready for the generators. This is the extraction layer behind `mjst --input asyncapi`: the CLI parses the file (JSON via `JSON.parse`, YAML via `@amritk/yaml`) and resolves cross-file refs (`@amritk/resolve-refs`), then hands the parsed value here.
+
+- **Depends on:** `@amritk/helpers` only, and does no I/O — parsing and cross-file `$ref` resolution stay the caller's job, so the package's inputs are plain values.
+- **One model for both majors:** 2.x and 3.0 normalize into a 3.0-shaped `AsyncApiModel`; directions are named from the application's point of view (2.x `publish` → `receive`, `subscribe` → `send`), matching `@amritk/api`'s message contracts. Traits are shallow-merged **before** `schemaFormat` is read, so a trait-contributed format gates its payload like an inline one.
+- **Dialect normalization:** the AsyncAPI default dialect (a draft-07 superset) and declared draft-07 run through `upgradeDraft07Schema`; OpenAPI-format payloads get `nullable` folded; 2020-12 passes through. Non-JSON-Schema formats (Avro, Protobuf, …) skip that one schema with an issue — problems are collected, never thrown, except for "not an AsyncAPI document at all".
+- **Self-contained outputs:** every `$ref` into `#/components/schemas/...` is rebased to a local `$defs` entry with the referenced components copied in transitively, so each extracted schema stands alone as a generator input (a component used by N messages appears in N trees — the `--schema-dir` trade). `listMessageSchemas` flattens the model into `{ subDir, rootTypeName, schema }` records laid out as `channels/<channel>/<message>[-headers]`, with deterministic collision suffixes.
 
 ### `@amritk/resolve-refs` (`packages/resolve-refs`)
 
