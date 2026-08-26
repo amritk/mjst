@@ -476,6 +476,100 @@ describe('avro-to-json-schema', () => {
     expect(() => avroToJsonSchema({ type: 'record', name: 'ns./Thing', fields: [] })).toThrow(/not a legal Avro name/)
   })
 
+  // `convertUnion` decides null-ness from the converted branch, so it emits the
+  // object spelling bare too. Deciding the same question from the raw string
+  // spelling wrapped the default as `{"null": null}`, matching neither branch.
+  it('leaves a union default bare when the null branch is written in object form', () => {
+    const objectForm = fieldSchema(recordWith({ name: 'value', type: [{ type: 'null' }, 'string'], default: null }), {
+      encoding: 'avro-json',
+    })
+    expect(objectForm).toHaveProperty('default', null)
+  })
+
+  // A union nested inside a record, array, or map needs the same branch wrapper
+  // the top level does; translating only the outermost level left it untagged.
+  it('tags a union nested inside a record, array, or map default under avro-json', () => {
+    const inRecord = fieldSchema(
+      recordWith({
+        name: 'value',
+        type: { type: 'record', name: 'Cfg', fields: [{ name: 'host', type: ['string', 'null'] }] },
+        default: { host: 'localhost' },
+      }),
+      { encoding: 'avro-json' },
+    )
+    expect(inRecord).toHaveProperty('default', { host: { string: 'localhost' } })
+
+    const inArray = fieldSchema(
+      recordWith({ name: 'value', type: { type: 'array', items: ['string', 'null'] }, default: ['hi'] }),
+      { encoding: 'avro-json' },
+    )
+    expect(inArray).toHaveProperty('default', [{ string: 'hi' }])
+
+    const inMap = fieldSchema(
+      recordWith({ name: 'value', type: { type: 'map', values: ['string', 'null'] }, default: { k: 'hi' } }),
+      { encoding: 'avro-json' },
+    )
+    expect(inMap).toHaveProperty('default', { k: { string: 'hi' } })
+  })
+
+  // The same depth problem in the other encoding: a latin-1 byte value nested in
+  // a default is still latin-1, and a half-translated default is worse than none.
+  it('drops a whole default when a nested byte value cannot be carried under json', () => {
+    expect(
+      fieldSchema(recordWith({ name: 'value', type: { type: 'array', items: 'bytes' }, default: ['ÿþ'] })),
+    ).not.toHaveProperty('default')
+
+    expect(
+      fieldSchema(
+        recordWith({
+          name: 'value',
+          type: { type: 'record', name: 'In', fields: [{ name: 'b', type: 'bytes' }] },
+          default: { b: 'ÿþ' },
+        }),
+      ),
+    ).not.toHaveProperty('default')
+  })
+
+  // A default reaching a named type by reference has to be walked through that
+  // type's Avro definition, since the converted schema is only a `$ref` by then.
+  it('follows a name reference when translating a default', () => {
+    const schema = avroToJsonSchema(
+      {
+        type: 'record',
+        name: 'Outer',
+        fields: [
+          { name: 'a', type: { type: 'record', name: 'Inner', fields: [{ name: 'v', type: ['string', 'null'] }] } },
+          { name: 'b', type: 'Inner', default: { v: 'hi' } },
+        ],
+      },
+      { encoding: 'avro-json' },
+    )
+
+    expect((rootDef(schema)['properties'] as Record<string, unknown>)['b']).toHaveProperty('default', {
+      v: { string: 'hi' },
+    })
+  })
+
+  // A logical type on a base the spec does not define it for is invalid, and the
+  // spec says to ignore it. Reporting it claimed a loss that never happened.
+  it('ignores a logical type declared on a base it is not defined for', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    expect(() =>
+      avroToJsonSchema({ type: 'record', name: 'R', logicalType: 'decimal', fields: [] }, { strict: true }),
+    ).not.toThrow()
+    expect(() =>
+      avroToJsonSchema({ type: 'enum', name: 'E', symbols: ['A'], logicalType: 'duration' }, { strict: true }),
+    ).not.toThrow()
+    // `uuid` is defined on a string; on a long it means nothing.
+    expect(fieldSchema(recordWith({ name: 'value', type: { type: 'long', logicalType: 'uuid' } }))).toEqual({
+      type: 'integer',
+    })
+
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
   // The point of the whole adapter: the output has to be valid generator input,
   // producing one named TypeScript type per Avro named type.
   it('produces schemas the mjst generators consume', async () => {

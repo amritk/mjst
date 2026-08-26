@@ -180,6 +180,8 @@ avroToJsonSchema(avro, { encoding: 'avro-json' })
 
 The `default` column is not a stylistic choice. Avro has **no optional fields** — every declared field is present in the encoding, and a `default` is only consulted during schema resolution, when reading data written against a *different* schema. So `'avro-json'` marks every field required, because that is what is on the wire, while `'json'` treats a defaulted field as optional, because that is the shape application code deals with.
 
+The default **value** is translated too, not just copied, because Avro writes it in neither encoding exactly. Avro states a union's default as a *bare* value of the union's **first** branch, so under `'avro-json'` it is wrapped to match the branch tagging the data uses (`null` stays bare, in both the `"null"` and `{"type": "null"}` spellings). Under `'json'` a byte default is in the wrong alphabet — Avro writes it latin-1, the idiomatic shape is base64 — so it is dropped rather than mistranslated. Both rules apply at any depth: a union nested inside a record, array, or map default is tagged the same way, and a byte value anywhere inside a default drops the whole thing, since a half-translated default is worse than none. This matters more than a stray annotation would, because `@amritk/generate-parsers` coerces with `default`.
+
 #### What deliberately does not get refined
 
 Two mappings look like omissions and are not:
@@ -187,7 +189,7 @@ Two mappings look like omissions and are not:
 - **A `long` gets no bounds.** Its range is ±2^63, which no JSON number can represent — a stated `maximum` would round to 2^63 and be both wrong and unreachable. (A `long` past 2^53 will not survive `JSON.parse` intact either, whatever the schema says.) An `int` *is* bounded, since ±2^31 lands exactly on a double.
 - **Date and time logical types stay integers.** Avro encodes `timestamp-millis` as a `long` in its JSON encoding as much as in binary, so `format: 'date-time'` would describe a string that never arrives. Only `uuid` genuinely narrows its base type, to `{ type: 'string', format: 'uuid' }`.
 
-`decimal` and `duration` carry structure JSON Schema cannot express (precision/scale; three unsigned 32-bit ints in 12 bytes), so they degrade to their base type and are reported through the usual widening warning. An unrecognised `logicalType` falls through to its base type silently, which the Avro spec requires. `aliases` and field `order` describe how *two* schemas relate during resolution and have no place in a single document's shape, so they are ignored.
+`decimal` and `duration` carry structure JSON Schema cannot express (precision/scale; three unsigned 32-bit ints in 12 bytes), so they degrade to their base type and are reported through the usual widening warning. An unrecognised `logicalType` falls through to its base type silently, which the Avro spec requires — as does one declared on a base it is not defined for (`decimal` on a `record`, say), which is invalid rather than lossy and so is ignored rather than reported. `aliases` and field `order` describe how *two* schemas relate during resolution and have no place in a single document's shape, so they are ignored. Names **are** validated: one is written straight into a `$defs` key and the `$ref` pointing at it, so an illegal name would silently produce a different, broken JSON Pointer rather than an error.
 
 ---
 

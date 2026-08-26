@@ -57,10 +57,19 @@ Two mappings look like gaps and are deliberate:
   `format: 'date-time'` would describe a string that never arrives. Only `uuid`
   narrows its base type.
 
+The default **value** is translated, not copied: Avro states a union's default as
+a bare value of its first branch, so under `'avro-json'` it is wrapped to match
+the branch tagging the data uses (`null` stays bare), and under `'json'` a
+latin-1 byte default is dropped rather than mistranslated into base64. Both rules
+apply at any depth, and a byte value anywhere inside a default drops the whole
+default — a half-translated one is worse than none.
+
 `decimal` and `duration` degrade to their base type and are reported through the
 existing widening warning (`strict: true` throws instead). An unrecognised
 `logicalType` falls through to its base type silently, which the Avro spec
-requires. `aliases` and field `order` describe how *two* schemas relate during
+requires, as does one declared on a base it is not defined for. Names are
+validated against the spec's pattern, since a name is written straight into a
+`$defs` key and the `$ref` pointing at it. `aliases` and field `order` describe how *two* schemas relate during
 resolution and have no place in a single document's shape, so they are ignored.
 A duplicate name, a reference to an undefined name, or a malformed
 `record`/`enum`/`fixed` throws rather than converting to something wrong.
