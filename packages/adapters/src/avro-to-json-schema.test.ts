@@ -327,7 +327,7 @@ describe('avro-to-json-schema', () => {
     })
   })
 
-  it('warns once for logical types it has to widen', () => {
+  it('warns once for logical types it has to widen, naming each of them', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     avroToJsonSchema({
@@ -341,8 +341,22 @@ describe('avro-to-json-schema', () => {
 
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]?.[0]).toContain('Avro adapter')
+    // Both are asserted by name. Asserting only `decimal` let this test pass
+    // while `duration` reported nothing at all: a logical type on a `fixed` was
+    // dropped before it could be classified, and since `duration` is only ever
+    // defined on a `fixed`, its whole branch was unreachable.
     expect(warn.mock.calls[0]?.[0]).toContain('decimal')
+    expect(warn.mock.calls[0]?.[0]).toContain('duration')
     warn.mockRestore()
+  })
+
+  it('reports a logical type declared on a fixed, not only on a primitive', () => {
+    expect(() =>
+      avroToJsonSchema({ type: 'fixed', name: 'Span', size: 12, logicalType: 'duration' }, { strict: true }),
+    ).toThrow(/duration/)
+    expect(() =>
+      avroToJsonSchema({ type: 'fixed', name: 'Dec', size: 8, logicalType: 'decimal' }, { strict: true }),
+    ).toThrow(/decimal/)
   })
 
   it('throws on a widened logical type in strict mode', () => {
@@ -365,6 +379,101 @@ describe('avro-to-json-schema', () => {
 
   it('rejects a schema that is not a name, union, or object', () => {
     expect(() => avroToJsonSchema(42)).toThrow(/expected a type name/)
+  })
+
+  // `["float", "double"]` is a legal union — the spec forbids two branches of the
+  // *same* type, and these are distinct — but both map to a bare `number`. An
+  // undeduplicated `{type: ['number','number']}` violates the metaschema, which
+  // requires the members to be unique, and Ajv refuses to compile it.
+  it('de-duplicates a union whose branches share one JSON Schema type', () => {
+    expect(fieldSchema(recordWith({ name: 'value', type: ['float', 'double'] }))).toEqual({ type: 'number' })
+    expect(fieldSchema(recordWith({ name: 'value', type: ['null', 'float', 'double'] }))).toEqual({
+      type: ['number', 'null'],
+    })
+  })
+
+  // `__proto__` matches Avro's name pattern, so it is a legal field name. Built
+  // by assignment it set the prototype instead of creating an own property: the
+  // field vanished from `properties` but stayed in `required`, and with
+  // `additionalProperties: false` the schema then rejected every document.
+  it('keeps a field named __proto__ as a real property', () => {
+    const schema = avroToJsonSchema(recordWith({ name: '__proto__', type: 'string' }))
+    const properties = rootDef(schema)['properties'] as Record<string, unknown>
+
+    expect(Object.hasOwn(properties, '__proto__')).toBe(true)
+    expect(Object.keys(properties)).toEqual(['__proto__'])
+    expect(rootDef(schema)['required']).toEqual(['__proto__'])
+  })
+
+  // Avro states a union's default as a bare value of its FIRST branch, but the
+  // spec's JSON encoding tags the data. Copied verbatim the default matched none
+  // of the wrapper branches it sat beside.
+  it('wraps a union default to match the branch tagging under avro-json', () => {
+    const wrapped = fieldSchema(recordWith({ name: 'value', type: ['string', 'null'], default: 'hi' }), {
+      encoding: 'avro-json',
+    })
+    expect(wrapped).toHaveProperty('default', { string: 'hi' })
+
+    // A null first branch is written bare, so it needs no wrapper.
+    const bare = fieldSchema(recordWith({ name: 'value', type: ['null', 'string'], default: null }), {
+      encoding: 'avro-json',
+    })
+    expect(bare).toHaveProperty('default', null)
+  })
+
+  // The byte-default guard used to look for `contentEncoding` at the top level of
+  // the converted schema, which a nullable field (an `anyOf`) and a `fixed` (a
+  // `$ref`) never carry — so the latin-1 default survived into base64 output.
+  it('drops a latin-1 default from a nullable bytes or fixed field under json', () => {
+    expect(fieldSchema(recordWith({ name: 'value', type: ['bytes', 'null'], default: 'ÿþ' }))).not.toHaveProperty(
+      'default',
+    )
+
+    const viaFixed = avroToJsonSchema({
+      type: 'record',
+      name: 'R',
+      fields: [{ name: 'value', type: [{ type: 'fixed', name: 'Md5', size: 16 }, 'null'], default: 'ÿþ' }],
+    })
+    expect((rootDef(viaFixed)['properties'] as Record<string, unknown>)['value']).not.toHaveProperty('default')
+  })
+
+  // A reference written in object form (`{"type": "E"}`) resolves to a fullname
+  // everywhere else; the avro-json branch tag returned it verbatim, so the
+  // wrapper key said `E` while the $ref it wrapped pointed at `#/$defs/ns.E`.
+  it('tags an object-form reference in an avro-json union by its fullname', () => {
+    const schema = avroToJsonSchema(
+      {
+        type: 'record',
+        name: 'O',
+        namespace: 'ns',
+        fields: [
+          { name: 'a', type: { type: 'enum', name: 'E', symbols: ['X'] } },
+          { name: 'b', type: ['null', { type: 'E' }] },
+        ],
+      },
+      { encoding: 'avro-json' },
+    )
+
+    expect((rootDef(schema)['properties'] as Record<string, unknown>)['b']).toEqual({
+      anyOf: [
+        { type: 'null' },
+        {
+          type: 'object',
+          properties: { 'ns.E': { $ref: '#/$defs/ns.E' } },
+          required: ['ns.E'],
+          additionalProperties: false,
+        },
+      ],
+    })
+  })
+
+  // A name is written straight into a `$defs` key and the `$ref` at it, so an
+  // illegal one silently produced a different, broken JSON Pointer:
+  // `#/$defs/a~b/c` resolves as `$defs` -> `a~b` -> `c`.
+  it('rejects a name that is not a legal Avro name', () => {
+    expect(() => avroToJsonSchema({ type: 'record', name: 'a~b/c', fields: [] })).toThrow(/not a legal Avro name/)
+    expect(() => avroToJsonSchema({ type: 'record', name: '1bad', fields: [] })).toThrow(/not a legal Avro name/)
+    expect(() => avroToJsonSchema({ type: 'record', name: 'ns./Thing', fields: [] })).toThrow(/not a legal Avro name/)
   })
 
   // The point of the whole adapter: the output has to be valid generator input,

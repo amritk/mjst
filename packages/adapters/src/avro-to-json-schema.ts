@@ -39,6 +39,29 @@ const JSON_TYPE_NAMES = ['null', 'boolean', 'integer', 'number', 'string', 'obje
 
 type JsonTypeName = (typeof JSON_TYPE_NAMES)[number]
 
+/**
+ * A single Avro name, per the spec: `[A-Za-z_][A-Za-z0-9_]*`. A fullname is one
+ * or more of these joined by dots.
+ *
+ * Validated rather than trusted because a name lands verbatim in a `$defs` key
+ * and in the `$ref` pointing at it. A name containing `/` or `~` silently
+ * produced a *different*, broken JSON Pointer — `#/$defs/a~b/c` parses as
+ * `$defs` -> `a~b` -> `c` — so the schema referenced a definition that was never
+ * written. Rejecting is the only safe answer; the spec forbids such a name anyway.
+ */
+const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/** Throws unless `fullname` is a dot-separated sequence of legal Avro names. */
+const assertLegalFullname = (fullname: string, what: string): void => {
+  const parts = fullname.split('.')
+  if (parts.every((part) => NAME_PATTERN.test(part))) return
+
+  throw new Error(
+    `Avro adapter: ${what} "${fullname}" is not a legal Avro name. ` +
+      'Each dot-separated part must match [A-Za-z_][A-Za-z0-9_]*.',
+  )
+}
+
 /** Avro's eight primitive type names. */
 const PRIMITIVES = new Set(['null', 'boolean', 'int', 'long', 'float', 'double', 'bytes', 'string'])
 
@@ -71,6 +94,13 @@ type Context = {
   readonly namespace: string | undefined
   /** Named types converted so far, keyed by fullname — becomes the root `$defs`. */
   readonly defs: Map<string, JSONSchema>
+  /**
+   * Fullnames of `fixed` definitions seen so far. Needed to decide whether a
+   * field `default` is a byte string, which is a question about the *Avro* type
+   * and cannot be answered from the converted JSON Schema once a named type has
+   * collapsed to a `$ref`.
+   */
+  readonly byteTypes: Set<string>
   readonly encoding: AvroEncoding
   /** Constructs widened during conversion, reported once at the end. */
   readonly lossy: Set<string>
@@ -112,12 +142,17 @@ const definitionFullname = (node: Record<string, unknown>, context: Context): st
   if (name === undefined || name === '') {
     throw new Error(`Avro adapter: a ${String(node['type'])} definition is missing its required "name".`)
   }
-  if (name.includes('.')) return name
+  const fullname = ((): string => {
+    if (name.includes('.')) return name
 
-  const declared = readString(node, 'namespace')
-  if (declared !== undefined) return declared === '' ? name : `${declared}.${name}`
+    const declared = readString(node, 'namespace')
+    if (declared !== undefined) return declared === '' ? name : `${declared}.${name}`
 
-  return context.namespace === undefined ? name : `${context.namespace}.${name}`
+    return context.namespace === undefined ? name : `${context.namespace}.${name}`
+  })()
+
+  assertLegalFullname(fullname, 'the name')
+  return fullname
 }
 
 /**
@@ -129,6 +164,7 @@ const definitionFullname = (node: Record<string, unknown>, context: Context): st
  * should win over an unrelated top-level type of the same short name.
  */
 const resolveReference = (name: string, context: Context): string => {
+  assertLegalFullname(name, 'the reference')
   if (name.includes('.')) return name
 
   const qualified = context.namespace === undefined ? undefined : `${context.namespace}.${name}`
@@ -201,6 +237,8 @@ const convertPrimitive = (type: string, context: Context): JSONSchema => {
 const applyLogicalType = (base: JSONSchema, logicalType: string, context: Context): JSONSchema => {
   switch (logicalType) {
     case 'uuid':
+      // Narrow only a bare string. A `fixed` under `'json'` carries
+      // contentEncoding, and a base64 blob is not a UUID by the `uuid` format.
       return soleTypeOf(base) === 'string' ? { ...(base as object), format: 'uuid' } : base
     case 'decimal':
       context.lossy.add('the decimal logical type (precision/scale)')
@@ -252,9 +290,19 @@ const convertUnion = (branches: readonly unknown[], context: Context): JSONSchem
   // dominates real schemas.
   const types = converted.map(soleTypeOf)
   if (types.every((type): type is JsonTypeName => type !== undefined)) {
+    // De-duplicated, because two distinct Avro types can share one JSON Schema
+    // type: `["float", "double"]` is a legal union (the spec only forbids two
+    // branches of the *same* type) and both map to a bare `number`. Emitting
+    // `{type: ['number', 'number']}` violates the metaschema, which requires the
+    // members to be unique — Ajv refuses to compile it even in non-strict mode.
     // Null last: `string | null` is the conventional order, and the generators
     // render the array in the order given.
-    return { type: [...types.filter((type) => type !== 'null'), ...types.filter((type) => type === 'null')] }
+    const unique = [...new Set(types)]
+    const ordered = [...unique.filter((type) => type !== 'null'), ...unique.filter((type) => type === 'null')]
+    // A one-member array is legal but reads badly, and `soleTypeOf` would no
+    // longer recognise the result as a bare type if it were nested again.
+    const [only] = ordered
+    return ordered.length === 1 && only !== undefined ? { type: only } : { type: ordered }
   }
 
   return { anyOf: converted }
@@ -271,9 +319,78 @@ const avroJsonBranchName = (branch: unknown, context: Context): string => {
   if (isRecord(branch)) {
     const type = readString(branch, 'type')
     if (type !== undefined && NAMED_TYPES.has(type)) return definitionFullname(branch, context)
-    if (type !== undefined) return type
+    // An unnamed type is tagged by its type name; anything else is a reference
+    // written in object form (`{"type": "MyEnum"}`) and is tagged by the
+    // *fullname* it resolves to, exactly as the string spelling would be.
+    // Returning it verbatim tagged `MyEnum` while the branch it wrapped pointed
+    // at `#/$defs/ns.MyEnum`, so real wire data matched neither branch.
+    if (type !== undefined) {
+      return PRIMITIVES.has(type) || type === 'array' || type === 'map' ? type : resolveReference(type, context)
+    }
   }
   throw new Error(`Avro adapter: cannot name the union branch ${JSON.stringify(branch)}.`)
+}
+
+/**
+ * Whether an Avro type is one whose values are byte strings — `bytes`, a
+ * `fixed`, or a reference to one.
+ *
+ * This asks about the *Avro* type rather than the converted schema on purpose.
+ * The converted schema for a `fixed` is a `$ref`, and for a nullable byte field
+ * it is an `anyOf`, so neither carries the `contentEncoding: 'base64'` marker
+ * that an earlier check looked for at the top level — which is exactly how a
+ * latin-1 default survived onto `["bytes", "null"]` while being dropped from a
+ * plain `bytes`.
+ */
+const isByteType = (avroType: unknown, context: Context): boolean => {
+  if (typeof avroType === 'string') {
+    return avroType === 'bytes' || context.byteTypes.has(resolveReference(avroType, context))
+  }
+  if (!isRecord(avroType)) return false
+
+  const type = readString(avroType, 'type')
+  if (type === undefined) return false
+  if (type === 'bytes' || type === 'fixed') return true
+  // A reference written in object form; a builtin container never is one.
+  if (PRIMITIVES.has(type) || NAMED_TYPES.has(type) || type === 'array' || type === 'map') return false
+  return isByteType(type, context)
+}
+
+/**
+ * Translates a field's Avro `default` into the encoding being described, or
+ * reports that it cannot be carried at all.
+ *
+ * Avro states a union's default as a *bare* value of the union's **first**
+ * branch — untagged, even though the data itself is tagged under the spec's JSON
+ * encoding. So a default copied verbatim into `'avro-json'` output matched none
+ * of the wrapper branches it sat beside: `{"type": ["string","null"], "default":
+ * "hi"}` produced `default: "hi"` against branches accepting only
+ * `{"string": …}` or `null`. Here it is wrapped to match.
+ *
+ * Under `'json'` the reverse problem: a byte default is written latin-1 and the
+ * idiomatic shape is base64, so it is dropped rather than mistranslated. That
+ * matters more than a stray annotation would, because `@amritk/generate-parsers`
+ * coerces with `default` and would substitute the wrong bytes into real output.
+ */
+const encodeDefault = (
+  avroType: unknown,
+  value: unknown,
+  context: Context,
+): { readonly carried: true; readonly value: unknown } | { readonly carried: false } => {
+  // A union states its default as a value of its first branch.
+  const target = Array.isArray(avroType) ? avroType[0] : avroType
+
+  if (context.encoding === 'json') {
+    return isByteType(target, context) && typeof value === 'string' ? { carried: false } : { carried: true, value }
+  }
+
+  if (!Array.isArray(avroType)) return { carried: true, value }
+  if (avroType.length === 0) return { carried: false }
+
+  // Null is written bare under the spec's JSON encoding; everything else is
+  // tagged with its branch name.
+  if (target === 'null') return { carried: true, value }
+  return { carried: true, value: { [avroJsonBranchName(target, context)]: value } }
 }
 
 /**
@@ -294,7 +411,14 @@ const convertFields = (
   fields: readonly unknown[],
   context: Context,
 ): { properties: Record<string, JSONSchema>; required: string[] } => {
-  const properties: Record<string, JSONSchema> = {}
+  // Collected in a Map and materialised with `Object.fromEntries`, never by
+  // assigning `properties[name]`. A plain assignment of the key `__proto__` — a
+  // legal Avro field name — invokes the `Object.prototype` setter instead of
+  // creating an own property, so the field vanished from `properties` while
+  // still being listed in `required`. With `additionalProperties: false` that
+  // schema rejects *every* document: without the key `required` fails, with it
+  // `additionalProperties` does. `Object.fromEntries` defines own properties.
+  const properties = new Map<string, JSONSchema>()
   const required: string[] = []
 
   for (const field of fields) {
@@ -309,32 +433,18 @@ const convertFields = (
     const converted = convertSchema(field['type'], context)
     const doc = readString(field, 'doc')
     const hasDefault = Object.hasOwn(field, 'default')
+    const encoded = hasDefault ? encodeDefault(field['type'], field['default'], context) : { carried: false as const }
 
-    properties[name] = {
+    properties.set(name, {
       ...(converted as object),
       ...(doc === undefined ? {} : { description: doc }),
-      ...(hasDefault && keepsDefault(field['default'], converted, context) ? { default: field['default'] } : {}),
-    } as JSONSchema
+      ...(encoded.carried ? { default: encoded.value } : {}),
+    } as JSONSchema)
 
     if (context.encoding === 'avro-json' || !hasDefault) required.push(name)
   }
 
-  return { properties, required }
-}
-
-/**
- * Whether a field's Avro `default` can be carried into JSON Schema unchanged.
- *
- * `default` is not a mere annotation here — `@amritk/generate-parsers` coerces
- * with it — so a value in the wrong encoding would be substituted into real
- * output. The one place the encodings disagree about a *default* is a byte
- * string: Avro writes it codepoint-per-byte, which is not the base64 the
- * idiomatic shape expects, so that default is dropped rather than mistranslated.
- */
-const keepsDefault = (value: unknown, converted: JSONSchema, context: Context): boolean => {
-  if (context.encoding === 'avro-json') return true
-  const isBase64String = isRecord(converted) && converted['contentEncoding'] === 'base64'
-  return !(isBase64String && typeof value === 'string')
+  return { properties: Object.fromEntries(properties), required }
 }
 
 /**
@@ -361,7 +471,18 @@ const defineNamedType = (node: Record<string, unknown>, type: string, context: C
     ...(doc === undefined ? {} : { description: doc }),
   }
 
-  context.defs.set(fullname, { ...annotations, ...(convertNamedBody(node, type, inner) as object) } as JSONSchema)
+  if (type === 'fixed') context.byteTypes.add(fullname)
+
+  // A `logicalType` on a named type has to be applied here, not in the
+  // primitives branch of `convertSchema`, which a named type never reaches.
+  // `duration` is defined *only* on a `fixed`, so routing it through here is
+  // what makes its widening report reachable at all rather than dead code;
+  // `decimal` is valid on `bytes` or `fixed`, and only the first half worked.
+  const body = convertNamedBody(node, type, inner)
+  const logicalType = readString(node, 'logicalType')
+  const refined = logicalType === undefined ? body : applyLogicalType(body, logicalType, inner)
+
+  context.defs.set(fullname, { ...annotations, ...(refined as object) } as JSONSchema)
   return refTo(fullname)
 }
 
@@ -536,6 +657,7 @@ export const avroToJsonSchema = (source: unknown, options?: AvroAdapterOptions):
   const context: Context = {
     namespace: undefined,
     defs: new Map(),
+    byteTypes: new Set(),
     encoding: options?.encoding ?? 'json',
     lossy: new Set(),
   }
