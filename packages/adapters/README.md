@@ -2,7 +2,7 @@
 
 # @amritk/adapters
 
-**Convert schemas authored in TypeBox, Zod, Valibot, or Effect into Draft 2020-12 JSON Schema — the single input shape the mjst generators understand.**
+**Convert schemas authored in TypeBox, Zod, Valibot, Effect, or Apache Avro into Draft 2020-12 JSON Schema — the single input shape the mjst generators understand.**
 
 ![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
 ![version](https://img.shields.io/npm/v/@amritk/adapters?style=flat-square&logo=npm&logoColor=white&label=version&color=6366f1)&nbsp;
@@ -17,11 +17,11 @@
 
 ## Overview
 
-mjst's generators — parsers, validators, types, docs, test data — all take **one** input: a Draft 2020-12 JSON Schema. This package lets you author that schema in a validation library you already use instead. It converts a **TypeBox**, **Zod**, **Valibot**, or **Effect** schema into JSON Schema, then hands the result straight to the generators.
+mjst's generators — parsers, validators, types, docs, test data — all take **one** input: a Draft 2020-12 JSON Schema. This package lets you author that schema somewhere else instead. It converts a **TypeBox**, **Zod**, **Valibot**, or **Effect** schema — or an **Apache Avro** `.avsc` document — into JSON Schema, then hands the result straight to the generators.
 
-The [`mjst`](../cli) CLI wires these in behind the `--input <format>` flag (`typebox`, `zod`, `valibot`, `effect`); with any of those the `--schema` path points at a JS/TS **module** that exports a schema rather than a `.json` file. You can also call the adapters directly — each is a small, pure async function.
+The [`mjst`](../cli) CLI wires these in behind the `--input <format>` flag (`typebox`, `zod`, `valibot`, `effect`, `avro`). For the library formats the `--schema` path points at a JS/TS **module** that exports a schema rather than a `.json` file; for `avro` it points at the `.avsc` document itself, which is read as data and never imported. You can also call the adapters directly — each is a small, pure function.
 
-Each adapter leans on its source library's own JSON Schema exporter (Zod 4's `toJSONSchema`, `@valibot/to-json-schema`, Effect's `JSONSchema.make`; TypeBox schemas are already JSON Schema at runtime) and then normalises the result:
+The library adapters lean on their source library's own JSON Schema exporter (Zod 4's `toJSONSchema`, `@valibot/to-json-schema`, Effect's `JSONSchema.make`; TypeBox schemas are already JSON Schema at runtime) and then normalise the result. Avro is the exception — it has no such exporter, so that conversion is implemented here in full (and needs no dependency, since an Avro schema is itself JSON). Normalisation:
 
 - strips the dialect marker (`$schema`) the generators don't need,
 - rewrites constructs JSON Schema can't express — runtime `Date`, `bigint` — into the shared [`x-mjst`](#the-x-mjst-extension) hint the generators read, and
@@ -46,6 +46,7 @@ The source libraries are **optional peer dependencies** — each adapter dynamic
 | `zod` | `zod@>=4` |
 | `valibot` | `valibot@>=1` **and** `@valibot/to-json-schema@>=1` |
 | `effect` | `effect@>=3` |
+| `avro` | *(nothing — an Avro schema is plain JSON)* |
 
 If the required package is missing (or too old), the adapter throws a clear, actionable error naming what to install — e.g. *"The Zod adapter requires 'zod' (v4 or later) to be installed in your project."*
 
@@ -59,6 +60,7 @@ If the required package is missing (or too old), the adapter throws a clear, act
 Each adapter is a function `(source: unknown) => Promise<JSONSchema>` (TypeBox's is synchronous but is exposed with the same signature for uniformity). Import them by subpath:
 
 ```ts
+import { avroToJsonSchema } from '@amritk/adapters/avro-to-json-schema'
 import { typeboxToJsonSchema } from '@amritk/adapters/typebox-to-json-schema'
 import { zodToJsonSchema } from '@amritk/adapters/zod-to-json-schema'
 import { valibotToJsonSchema } from '@amritk/adapters/valibot-to-json-schema'
@@ -147,6 +149,46 @@ const jsonSchema = await effectToJsonSchema(User)
 
 Requires `effect@>=3`. A `Schema.BigIntFromSelf` / `Schema.DateFromSelf` **anywhere in the tree** — top level or nested inside a struct, array, or union — is rescued into an `x-mjst` hint; every subtree `JSONSchema.make` accepts is taken from it verbatim. **Read the [encoded-representation caveat](#effect-encodes-the-wire-representation) before choosing between `Schema.Date` and `Schema.DateFromSelf`** — it changes whether you get a `string` or a runtime `Date`.
 
+### Avro
+
+```ts
+import { readFile } from 'node:fs/promises'
+import { avroToJsonSchema } from '@amritk/adapters/avro-to-json-schema'
+
+const avro = JSON.parse(await readFile('user.avsc', 'utf-8'))
+const jsonSchema = avroToJsonSchema(avro)
+```
+
+No peer dependency: an Avro schema is a JSON document, so the adapter reads it directly. Every named type — `record`, `enum`, `fixed` — is defined once under its **fullname** in `$defs` and referenced by `$ref` everywhere it appears, so a recursive type stays finite and `com.example.User` generates a `ComExampleUser` type rather than an inline shape repeated at each use site.
+
+#### Pick the encoding you actually mean
+
+Avro is a binary format with a *separately specified* JSON encoding, and the two readings of "the JSON for this schema" genuinely disagree. The adapter makes you choose:
+
+| `encoding` | Describes | Unions | `bytes` | Fields with a `default` |
+|:---|:---|:---|:---|:---|
+| `'json'` *(default)* | the object your application code sees | plain `anyOf`; `["null", T]` collapses to a nullable `T` | base64 string | optional |
+| `'avro-json'` | the spec's JSON encoding — what travels as `application/vnd.apache.avro+json` | single-key wrapper objects tagged with the branch's fullname | codepoint-per-byte string | required |
+
+```ts
+// Generating TypeScript types and parsers? You want the idiomatic shape.
+avroToJsonSchema(avro)
+
+// Validating an AsyncAPI examples.payload? You want the wire shape.
+avroToJsonSchema(avro, { encoding: 'avro-json' })
+```
+
+The `default` column is not a stylistic choice. Avro has **no optional fields** — every declared field is present in the encoding, and a `default` is only consulted during schema resolution, when reading data written against a *different* schema. So `'avro-json'` marks every field required, because that is what is on the wire, while `'json'` treats a defaulted field as optional, because that is the shape application code deals with.
+
+#### What deliberately does not get refined
+
+Two mappings look like omissions and are not:
+
+- **A `long` gets no bounds.** Its range is ±2^63, which no JSON number can represent — a stated `maximum` would round to 2^63 and be both wrong and unreachable. (A `long` past 2^53 will not survive `JSON.parse` intact either, whatever the schema says.) An `int` *is* bounded, since ±2^31 lands exactly on a double.
+- **Date and time logical types stay integers.** Avro encodes `timestamp-millis` as a `long` in its JSON encoding as much as in binary, so `format: 'date-time'` would describe a string that never arrives. Only `uuid` genuinely narrows its base type, to `{ type: 'string', format: 'uuid' }`.
+
+`decimal` and `duration` carry structure JSON Schema cannot express (precision/scale; three unsigned 32-bit ints in 12 bytes), so they degrade to their base type and are reported through the usual widening warning. An unrecognised `logicalType` falls through to its base type silently, which the Avro spec requires. `aliases` and field `order` describe how *two* schemas relate during resolution and have no place in a single document's shape, so they are ignored.
+
 ---
 
 ## The `x-mjst` extension
@@ -213,6 +255,7 @@ Some source types have no faithful JSON Schema representation and are **not** re
 - **Zod.** These Zod types become "accept anything": `symbol`, `nan`, `void`, `undefined`, `never`, `map`, `set`, `promise`, `function`. When any appear, the adapter logs, e.g.: *"[mjst] Zod adapter: function, symbol have no JSON Schema representation and became 'accept anything'. The generated type will be wider than the Zod schema."*
 - **Valibot.** The converter runs in `errorMode: 'warn'`: an unsupported construct degrades to an open schema and `@valibot/to-json-schema` logs which one, so the widening is reported by the converter itself.
 - **TypeBox.** An extended `type` string with no mapping (see below) is left unchanged with a warning: *"[mjst] TypeBox type '…' has no JSON Schema or x-mjst mapping; leaving it unchanged."*
+- **Avro.** Only the `decimal` and `duration` logical types widen, each degrading to its base type: *"[mjst] Avro adapter: the decimal logical type (precision/scale) has no full JSON Schema representation and was widened."* Everything else in Avro maps exactly, or is rejected outright — a duplicate name, a reference to an undefined name, or a malformed `record`/`enum`/`fixed` throws rather than converting to something wrong.
 - **Effect.** Effect does not widen — it is stricter. `JSONSchema.make` throws on any unrepresentable type, wherever it sits. The adapter catches that and descends structurally, rebuilding the container (struct, array, union, refinement, …) and rescuing every `BigIntFromSelf` / `DateFromSelf` leaf it reaches into an `x-mjst` hint. Only a leaf it has no rescue for (a raw `symbol`, say) is fatal, and then it throws an actionable message rather than Effect's opaque one: replace the type with a JSON-representable one, or add a `jsonSchema` annotation to that field.
 
 If any of these matter to your schema, prefer a representable alternative (e.g. model a set as an array) or add the library's own JSON Schema annotation.
