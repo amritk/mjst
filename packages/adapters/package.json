@@ -46,6 +46,9 @@
     "json-schema-typed": "catalog:",
     "@amritk/helpers": "workspace:*"
   },
+  "devDependencies": {
+    "@amritk/runtime-validators": "workspace:*"
+  },
   "exports": {
     "./package.json": "./package.json",
     "./adapter": {

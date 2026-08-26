@@ -57,7 +57,7 @@ If the required package is missing (or too old), the adapter throws a clear, act
 
 ## Usage
 
-Each adapter is a function `(source: unknown) => Promise<JSONSchema>` (TypeBox's is synchronous but is exposed with the same signature for uniformity). Import them by subpath:
+Each adapter is a function `(source: unknown) => Promise<JSONSchema>` (the TypeBox and Avro adapters are synchronous, but are exposed through `getAdapter` with the same signature for uniformity — so always `await` when you go through it). Import them by subpath:
 
 ```ts
 import { avroToJsonSchema } from '@amritk/adapters/avro-to-json-schema'

@@ -336,25 +336,47 @@ const avroJsonBranchName = (branch: unknown, context: Context): string => {
   throw new Error(`Avro adapter: cannot name the union branch ${JSON.stringify(branch)}.`)
 }
 
+/** An Avro node together with the namespace its children resolve against. */
+type Dereferenced = { readonly node: unknown; readonly namespace: string | undefined }
+
 /**
- * The Avro node a type expression denotes, following name references.
+ * The Avro node a type expression denotes, following name references, plus the
+ * namespace to walk its children under.
  *
  * A default has to be walked against the *Avro* type, not the converted schema:
- * once a named type has collapsed to a `$ref` there is nothing left to walk.
+ * once a named type has collapsed to a `$ref` there is nothing left to walk. And
+ * the namespace has to travel with the node, because entering a named type
+ * re-bases name resolution for everything inside it — exactly as
+ * `defineNamedType` does for the conversion walk. Reusing the declaring record's
+ * namespace instead resolved a nested short name against the wrong parent: a
+ * union branch came out tagged `outer.E` where the schema said `inner.E`, and a
+ * reference to a sibling `fixed` was not recognised as a byte type at all, so
+ * the latin-1 default the drop rule exists to catch sailed through.
  */
-const dereferenceAvroType = (avroType: unknown, context: Context): unknown => {
+const dereferenceAvroType = (avroType: unknown, context: Context): Dereferenced => {
   if (typeof avroType === 'string') {
-    if (PRIMITIVES.has(avroType)) return avroType
-    return context.avroDefs.get(resolveReference(avroType, context)) ?? avroType
+    if (PRIMITIVES.has(avroType)) return { node: avroType, namespace: context.namespace }
+
+    const fullname = resolveReference(avroType, context)
+    const found = context.avroDefs.get(fullname)
+    return found === undefined
+      ? { node: avroType, namespace: context.namespace }
+      : { node: found, namespace: namespaceOf(fullname) }
   }
+
   if (isRecord(avroType)) {
     const type = readString(avroType, 'type')
-    // A reference written in object form. Builtins and definitions denote themselves.
-    if (type !== undefined && !PRIMITIVES.has(type) && !NAMED_TYPES.has(type) && type !== 'array' && type !== 'map') {
+    // An inline definition re-bases its children onto its own namespace.
+    if (type !== undefined && NAMED_TYPES.has(type)) {
+      return { node: avroType, namespace: namespaceOf(definitionFullname(avroType, context)) }
+    }
+    // A reference written in object form. Builtins denote themselves.
+    if (type !== undefined && !PRIMITIVES.has(type) && type !== 'array' && type !== 'map') {
       return dereferenceAvroType(type, context)
     }
   }
-  return avroType
+
+  return { node: avroType, namespace: context.namespace }
 }
 
 /** True for the null type in either spelling — `"null"` or `{"type": "null"}`. */
@@ -395,23 +417,25 @@ const DROPPED: EncodedDefault = { carried: false }
  * literal `[[…]]`, which is a finite expression.
  */
 const encodeDefault = (avroType: unknown, value: unknown, context: Context): EncodedDefault => {
-  const node = dereferenceAvroType(avroType, context)
+  const { node, namespace } = dereferenceAvroType(avroType, context)
+  // Everything below this node resolves against the dereferenced namespace.
+  const scope: Context = namespace === context.namespace ? context : { ...context, namespace }
 
   if (Array.isArray(node)) {
     const [first] = node
     if (first === undefined) return DROPPED
 
-    const inner = encodeDefault(first, value, context)
+    const inner = encodeDefault(first, value, scope)
     if (!inner.carried) return DROPPED
-    if (context.encoding === 'json' || isNullType(first)) return inner
+    if (scope.encoding === 'json' || isNullType(first)) return inner
 
-    return { carried: true, value: { [avroJsonBranchName(first, context)]: inner.value } }
+    return { carried: true, value: { [avroJsonBranchName(first, scope)]: inner.value } }
   }
 
   const typeName = typeof node === 'string' ? node : isRecord(node) ? readString(node, 'type') : undefined
 
   if (typeName === 'bytes' || typeName === 'fixed') {
-    if (context.encoding === 'avro-json') return { carried: true, value }
+    if (scope.encoding === 'avro-json') return { carried: true, value }
     return typeof value === 'string' ? DROPPED : { carried: true, value }
   }
 
@@ -423,11 +447,18 @@ const encodeDefault = (avroType: unknown, value: unknown, context: Context): Enc
     for (const field of fields) {
       if (!isRecord(field)) continue
       const name = readString(field, 'name')
-      // A field the default omits is simply absent; Avro fills it from that
-      // field's own default at read time, which is not this layer's business.
-      if (name === undefined || !Object.hasOwn(value, name)) continue
+      if (name === undefined) continue
 
-      const inner = encodeDefault(field['type'], value[name], context)
+      if (!Object.hasOwn(value, name)) {
+        // Avro lets a record default omit a field that carries its own default,
+        // filling it in at read time. JSON Schema has nowhere to say that, so an
+        // omission of a property the emitted schema will *require* would leave a
+        // default that fails its own subschema. Drop rather than emit that.
+        if (scope.encoding === 'avro-json' || !Object.hasOwn(field, 'default')) return DROPPED
+        continue
+      }
+
+      const inner = encodeDefault(field['type'], value[name], scope)
       if (!inner.carried) return DROPPED
       translated.set(name, inner.value)
     }
@@ -437,7 +468,7 @@ const encodeDefault = (avroType: unknown, value: unknown, context: Context): Enc
   if (typeName === 'array' && isRecord(node) && Array.isArray(value)) {
     const items: unknown[] = []
     for (const item of value) {
-      const inner = encodeDefault(node['items'], item, context)
+      const inner = encodeDefault(node['items'], item, scope)
       if (!inner.carried) return DROPPED
       items.push(inner.value)
     }
@@ -447,7 +478,7 @@ const encodeDefault = (avroType: unknown, value: unknown, context: Context): Enc
   if (typeName === 'map' && isRecord(node) && isRecord(value)) {
     const translated = new Map<string, unknown>()
     for (const [key, entry] of Object.entries(value)) {
-      const inner = encodeDefault(node['values'], entry, context)
+      const inner = encodeDefault(node['values'], entry, scope)
       if (!inner.carried) return DROPPED
       translated.set(key, inner.value)
     }

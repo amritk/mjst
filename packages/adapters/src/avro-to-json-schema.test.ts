@@ -570,6 +570,88 @@ describe('avro-to-json-schema', () => {
     warn.mockRestore()
   })
 
+  // Entering a named type re-bases name resolution for everything inside it, and
+  // the default walk has to follow. Using the declaring record's namespace tagged
+  // the branch `outer.E` where the schema said `inner.E` — a key not even in $defs.
+  it('re-bases the namespace when a default descends into a named type', () => {
+    const schema = avroToJsonSchema(
+      {
+        type: 'record',
+        name: 'Root',
+        namespace: 'outer',
+        fields: [
+          {
+            name: 'sub',
+            type: {
+              type: 'record',
+              name: 'Sub',
+              namespace: 'inner',
+              fields: [{ name: 'u', type: [{ type: 'enum', name: 'E', symbols: ['A', 'B'] }, 'null'] }],
+            },
+            default: { u: 'A' },
+          },
+        ],
+      },
+      { encoding: 'avro-json' },
+    ) as { $defs: Record<string, unknown> }
+
+    expect((rootDef(schema)['properties'] as Record<string, unknown>)['sub']).toHaveProperty('default', {
+      u: { 'inner.E': 'A' },
+    })
+    expect(Object.keys(schema.$defs)).toContain('inner.E')
+  })
+
+  // The same namespace slip in the other encoding: a short-name reference to a
+  // sibling `fixed` failed to resolve, so it was not recognised as a byte type
+  // and the latin-1 default the drop rule exists to catch sailed through.
+  it('resolves a sibling reference when deciding a byte default under json', () => {
+    const schema = avroToJsonSchema({
+      type: 'record',
+      name: 'Root',
+      namespace: 'outer',
+      fields: [
+        {
+          name: 'sub',
+          type: {
+            type: 'record',
+            name: 'Sub',
+            namespace: 'inner',
+            fields: [
+              { name: 'f0', type: { type: 'fixed', name: 'F', size: 2 } },
+              { name: 'blob', type: 'F' },
+            ],
+          },
+          default: { f0: 'ab', blob: 'ÿþ' },
+        },
+      ],
+    })
+
+    expect((rootDef(schema)['properties'] as Record<string, unknown>)['sub']).not.toHaveProperty('default')
+  })
+
+  // Avro lets a record default omit a field that carries its own default. JSON
+  // Schema has nowhere to say that, so emitting the partial object left a
+  // default that failed the very subschema it annotated.
+  it('drops a record default that omits a field the schema will require', () => {
+    const avro = recordWith({
+      name: 'value',
+      type: {
+        type: 'record',
+        name: 'Inner',
+        fields: [
+          { name: 'a', type: 'string', default: 'x' },
+          { name: 'b', type: 'int' },
+        ],
+      },
+      default: { b: 1 },
+    })
+
+    // Under avro-json every field is required, so the omission of `a` is fatal.
+    expect(fieldSchema(avro, { encoding: 'avro-json' })).not.toHaveProperty('default')
+    // Under json `a` carries its own default and so is optional; the default stands.
+    expect(fieldSchema(avro)).toHaveProperty('default', { b: 1 })
+  })
+
   // The point of the whole adapter: the output has to be valid generator input,
   // producing one named TypeScript type per Avro named type.
   it('produces schemas the mjst generators consume', async () => {
