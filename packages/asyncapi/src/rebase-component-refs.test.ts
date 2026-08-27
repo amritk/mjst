@@ -14,6 +14,11 @@ const document = {
         schema: { type: 'string' },
       },
       avro: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: { type: 'record' } },
+      form: {
+        type: 'object',
+        properties: { name: { $ref: '#/definitions/nameType' } },
+        definitions: { nameType: { type: 'string', minLength: 1 } },
+      },
     },
   },
 }
@@ -91,6 +96,50 @@ describe('rebase-component-refs', () => {
       '#/$defs/component-user',
     )
     expect(defs['component-user']?.['type']).toBe('object')
+  })
+
+  it("hoists a copied component's own definitions to the root and re-aims its refs", () => {
+    const issues: ExtractionIssue[] = []
+    const rebased = rebaseComponentRefs({ $ref: '#/components/schemas/form' }, document, 'asyncapi', issues, '#/x')
+    const defs = rebased['$defs'] as Record<string, Record<string, unknown>>
+    // The component body sits at its own key, its definitions beside it —
+    // never nested, where their `#/$defs/...` refs would resolve against the
+    // message root and land on nothing.
+    expect(Object.keys(defs).sort()).toEqual(['form', 'form-nameType'])
+    expect(defs['form-nameType']).toEqual({ type: 'string', minLength: 1 })
+    expect((defs['form']?.['properties'] as Record<string, unknown>)['name']).toEqual({ $ref: '#/$defs/form-nameType' })
+    expect(defs['form']?.['$defs']).toBeUndefined()
+    expect(issues).toEqual([])
+  })
+
+  it('re-aims a pointer tail that dives through a component definitions block', () => {
+    const issues: ExtractionIssue[] = []
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/form/definitions/nameType' },
+      document,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    // The block was renamed and hoisted, so the tail's old spelling would
+    // dangle — the ref lands directly on the hoisted entry instead.
+    expect(rebased['$ref']).toBe('#/$defs/form-nameType')
+    expect((rebased['$defs'] as Record<string, unknown>)['form-nameType']).toEqual({ type: 'string', minLength: 1 })
+    expect(issues).toEqual([])
+  })
+
+  it('turns a tail naming an undeclared definition into an unconstrained schema with an issue', () => {
+    const issues: ExtractionIssue[] = []
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/form/definitions/ghost' },
+      document,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    expect(rebased['$ref']).toBe('#/$defs/form-ghost')
+    expect((rebased['$defs'] as Record<string, unknown>)['form-ghost']).toEqual({})
+    expect(issues.some((issue) => issue.message.includes('ghost'))).toBe(true)
   })
 
   it('leaves refs inside instance data alone', () => {

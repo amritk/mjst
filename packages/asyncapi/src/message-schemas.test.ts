@@ -69,6 +69,30 @@ describe('message-schemas', () => {
     expect(schemas.map((schema) => schema.subDir)).toEqual(['channels/events/my-event', 'channels/events/my-event-2'])
   })
 
+  it('keeps a message named like a sibling headers tree out of that directory', () => {
+    const issues: ExtractionIssue[] = []
+    const schemas = listMessageSchemas(
+      model(
+        [
+          {
+            key: 'events',
+            messages: [message('light', { headers: { type: 'object' } }), message('light-headers')],
+          },
+        ],
+        issues,
+      ),
+    )
+    // The derived light-headers directory is reserved when `light` is
+    // claimed, so the literal message moves aside instead of sharing it.
+    expect(schemas.map((schema) => schema.subDir)).toEqual([
+      'channels/events/light',
+      'channels/events/light-headers',
+      'channels/events/light-headers-2',
+    ])
+    expect(new Set(schemas.map((schema) => schema.subDir)).size).toBe(schemas.length)
+    expect(issues.length).toBeGreaterThan(0)
+  })
+
   it('falls back to stable tokens for names that sanitize away', () => {
     const schemas = listMessageSchemas(model([{ key: '///', messages: [message('{}')] }]))
     expect(schemas[0]?.subDir).toBe('channels/channel/message')

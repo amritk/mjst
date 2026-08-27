@@ -124,6 +124,27 @@ describe('extract-channels-v3', () => {
     expect(issues.some((issue) => issue.message.includes('avro'))).toBe(true)
   })
 
+  it("keeps the message's own keys over a trait's, per 3.0 precedence", () => {
+    const channels = extractChannelsV3(
+      {
+        asyncapi: '3.0.0',
+        channels: {
+          events: {
+            messages: {
+              evt: {
+                contentType: 'application/json',
+                traits: [{ contentType: 'application/xml' }],
+                payload: { type: 'object' },
+              },
+            },
+          },
+        },
+      },
+      [],
+    )
+    expect(channels[0]?.messages[0]?.contentType).toBe('application/json')
+  })
+
   it('resolves channel and message refs through components', () => {
     const channels = extractChannelsV3(
       {

@@ -73,6 +73,45 @@ describe('extract-channels-v2', () => {
     expect(channels[0]?.address).toBe('user/{id}/events')
   })
 
+  it("lets a trait override the message's own keys, per 2.x merge-patch semantics", () => {
+    const issues: ExtractionIssue[] = []
+    const channels = extractChannelsV2(
+      {
+        asyncapi: '2.6.0',
+        channels: {
+          events: {
+            publish: {
+              message: {
+                name: 'evt',
+                contentType: 'application/json',
+                traits: [{ schemaFormat: 'application/vnd.apache.avro;version=1.9.0', contentType: 'application/xml' }],
+                payload: { type: 'record' },
+              },
+            },
+          },
+        },
+      },
+      issues,
+    )
+    const message = channels[0]?.messages[0]
+    // The trait's Avro format wins over nothing-declared AND over any inline
+    // declaration, so the payload is gated out rather than emitted as JSON Schema.
+    expect(message?.contentType).toBe('application/xml')
+    expect(message?.schemaFormat).toContain('avro')
+    expect(message?.payload).toBeUndefined()
+    expect(issues.length).toBeGreaterThan(0)
+  })
+
+  it('accepts an operation without a message, which 2.x allows', () => {
+    const issues: ExtractionIssue[] = []
+    const channels = extractChannelsV2(
+      { asyncapi: '2.6.0', channels: { events: { publish: { operationId: 'onEvents', bindings: {} } } } },
+      issues,
+    )
+    expect(channels[0]?.messages).toEqual([])
+    expect(issues).toEqual([])
+  })
+
   it('skips a dangling message ref with an issue and keeps the channel', () => {
     const issues: ExtractionIssue[] = []
     const channels = extractChannelsV2(

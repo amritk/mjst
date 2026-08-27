@@ -25,6 +25,22 @@ describe('normalize-schema', () => {
     expect(normalizeSchema({ type: 'string' }, 'draft-07')).toEqual({ type: 'string' })
   })
 
+  it('keeps an authored $defs alongside upgraded definitions', () => {
+    // Draft-07 tools accept unknown keywords, so a schema can carry both
+    // blocks; the upgrade must not delete the authored one.
+    const normalized = normalizeSchema(
+      {
+        type: 'object',
+        properties: { a: { $ref: '#/$defs/authored' }, b: { $ref: '#/definitions/legacy' } },
+        $defs: { authored: { type: 'string' } },
+        definitions: { legacy: { type: 'number' } },
+      },
+      'asyncapi',
+    )
+    expect(normalized['$defs']).toEqual({ authored: { type: 'string' }, legacy: { type: 'number' } })
+    expect((normalized['properties'] as Record<string, unknown>)['b']).toEqual({ $ref: '#/$defs/legacy' })
+  })
+
   it('folds OpenAPI nullable into the type', () => {
     const normalized = normalizeSchema(
       { type: 'object', properties: { name: { type: 'string', nullable: true } } },

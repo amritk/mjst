@@ -61,12 +61,11 @@ export const extractChannelsV2 = (
       const direction: MessageDirection = operationKey === 'publish' ? 'receive' : 'send'
       const operationPath = `${channelPath}/${operationKey}`
 
-      const messageNode = resolveNode(
-        document,
-        readKey(operation as Record<string, unknown>, 'message'),
-        issues,
-        `${operationPath}/message`,
-      )
+      // `message` is optional on a 2.x operation (an operation can exist just
+      // to carry an operationId or bindings) — its absence is not a problem.
+      const rawMessage = readKey(operation as Record<string, unknown>, 'message')
+      if (rawMessage === undefined) continue
+      const messageNode = resolveNode(document, rawMessage, issues, `${operationPath}/message`)
       if (messageNode === undefined) continue
 
       // A `oneOf` message lists alternatives; anything else is one message.
@@ -78,7 +77,13 @@ export const extractChannelsV2 = (
         const resolved = resolveNode(document, item, issues, itemPath)
         if (resolved === undefined) continue
 
-        const merged = mergeTraits(resolved, resolveTraits(document, readKey(resolved, 'traits'), issues, itemPath))
+        // 2.x: the trait is the merge patch, so a trait-set key overrides the
+        // message's own — the opposite of 3.0, which is why this is spelled out.
+        const merged = mergeTraits(
+          resolved,
+          resolveTraits(document, readKey(resolved, 'traits'), issues, itemPath),
+          'trait',
+        )
         positional++
         const declaredName = readKey(merged, 'name')
         const messageId = readKey(merged, 'messageId')

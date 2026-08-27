@@ -37,6 +37,27 @@ const claimToken = (base: string, taken: Set<string>, issues: ExtractionIssue[],
 }
 
 /**
+ * Claims a message token together with its `-headers` shadow. The headers
+ * tree is derived, not claimed by name, so without reserving both slots a
+ * message literally named `foo-headers` landed in the same directory as
+ * `foo`'s headers tree — two schemas silently sharing one output. Both slots
+ * are reserved whether or not this message carries headers: a later sibling
+ * must not claim a directory an earlier message's derivation already implies.
+ */
+const claimMessageToken = (base: string, taken: Set<string>, issues: ExtractionIssue[], path: string): string => {
+  let token = base
+  for (let n = 2; taken.has(token) || taken.has(`${token}-headers`); n++) {
+    token = `${base}-${n}`
+  }
+  if (token !== base) {
+    issues.push({ path, message: `output name "${base}" already claimed; using "${token}"` })
+  }
+  taken.add(token)
+  taken.add(`${token}-headers`)
+  return token
+}
+
+/**
  * Flattens the model into the list of generatable schemas, each with the
  * output subdirectory and root type name the CLI hands to `buildSchema` —
  * `channels/<channel>/<message>/` per payload, with headers in a sibling
@@ -69,7 +90,7 @@ export const listMessageSchemas = (model: AsyncApiModel, issues?: ExtractionIssu
 
     for (const message of channel.messages) {
       if (message.payload === undefined && message.headers === undefined) continue
-      const messageToken = claimToken(
+      const messageToken = claimMessageToken(
         sanitizeToken(message.name, 'message'),
         messageTokens,
         collected,

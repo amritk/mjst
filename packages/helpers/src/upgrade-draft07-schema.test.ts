@@ -271,6 +271,24 @@ describe('upgrade-draft07-schema', () => {
     expect(Object.keys(x['properties'] as object)).toEqual(['definitions'])
   })
 
+  // Draft-07 tools accept unknown keywords, so a document can carry an
+  // authored `$defs` beside its `definitions`; the rename must merge into
+  // that block, not replace it — replacing deleted every authored entry and
+  // left its `#/$defs/...` refs dangling.
+  it('keeps an authored $defs alongside the renamed definitions', () => {
+    const upgraded = upgradeDraft07Schema({
+      $schema: 'http://json-schema.org/draft-07/schema',
+      type: 'object',
+      properties: { a: { $ref: '#/$defs/authored' }, b: { $ref: '#/definitions/legacy' } },
+      $defs: { authored: { type: 'string' } },
+      definitions: { legacy: { type: 'number' } },
+    })
+    expect(upgraded['$defs']).toEqual({ authored: { type: 'string' }, legacy: { type: 'number' } })
+    const properties = upgraded['properties'] as Record<string, unknown>
+    expect(properties['a']).toEqual({ $ref: '#/$defs/authored' })
+    expect(properties['b']).toEqual({ $ref: '#/$defs/legacy' })
+  })
+
   // An inherited `$schema` would put every document through the draft-07
   // rewrite — hoisting definitions and renaming refs in schemas that declare no
   // draft at all.
