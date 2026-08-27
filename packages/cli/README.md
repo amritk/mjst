@@ -295,7 +295,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"><code>"json"</code></td>
 </tr>
 <tr>
-<td colspan="4">Source format of the schema. 'json' (default) reads a JSON Schema file directly. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"typebox"</code>, <code>"zod"</code>, <code>"valibot"</code>, <code>"effect"</code></td>
+<td colspan="4">Source format of the schema. 'json' (default) reads a JSON Schema file directly. 'avro' reads an Apache Avro '.avsc' JSON document and converts it, needing no extra library. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"typebox"</code>, <code>"zod"</code>, <code>"valibot"</code>, <code>"effect"</code>, <code>"avro"</code></td>
 </tr>
 <tr>
 <td>📦 <code>export</code></td>
@@ -304,7 +304,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Which export of the schema module to use when 'input' is not 'json'. Defaults to the default export, or the sole named export when the module has exactly one.</td>
+<td colspan="4">Which export of the schema module to use when 'input' names a module format (anything but 'json' and 'avro', which are read as data). Defaults to the default export, or the sole named export when the module has exactly one.</td>
 </tr>
 <tr>
 <td>📁 <code>outDir</code></td>

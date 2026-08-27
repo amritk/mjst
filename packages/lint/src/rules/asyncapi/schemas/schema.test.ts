@@ -11,25 +11,42 @@ import {
 
 /**
  * The three upstream patterns this directory rewrites, paired with the
- * replacement `README.md` documents. Every one nests unbounded quantifiers,
- * which `@amritk/runtime-validators` refuses to build a validator from — and the
- * first is genuinely exponential, not merely suspicious.
+ * replacement `README.md` documents.
+ *
+ * All three nest unbounded quantifiers, which is what the ReDoS screen in
+ * `@amritk/runtime-validators` originally refused outright — the reason every
+ * one of them is rewritten here. Only the first is genuinely exponential. The
+ * other two are *separator-anchored*: every repetition must begin with a
+ * character the body cannot itself produce, so no input splits two ways. The
+ * screen now admits that shape deliberately, and names these two as its
+ * motivating cases.
+ *
+ * `stillRefused` records which side of that line each pattern falls on, so a
+ * change to the screen in either direction surfaces here rather than silently
+ * making a rewrite load-bearing or redundant.
+ *
+ * The rewrites are kept for all three regardless: the equivalence test below
+ * proves each matches the same language, and one flat loop is simpler to read
+ * than a nested pair whether or not the screen would accept the original.
  */
 const ADAPTATIONS = [
   {
     name: 'dotted identifier chain, outer star',
     upstream: '^([A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)*$',
     vendored: '^(?:[A-Za-z_](?:[A-Za-z0-9_]|\\.[A-Za-z_])*)?$',
+    stillRefused: true,
   },
   {
     name: 'dotted identifier chain',
     upstream: '^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$',
     vendored: '^[A-Za-z_](?:[A-Za-z0-9_]|\\.[A-Za-z_])*$',
+    stillRefused: false,
   },
   {
     name: 'runtime expression pointer',
     upstream: '^\\$message\\.(header|payload)#(\\/(([^\\/~])|(~[01]))*)*',
     vendored: '^\\$message\\.(header|payload)#(?:\\/(?:[^~]|~[01])*)?',
+    stillRefused: false,
   },
 ]
 
@@ -148,9 +165,17 @@ describe('AsyncAPI meta-schemas', () => {
     }
   })
 
-  it('rejects the upstream patterns it replaced, which is why they were replaced', () => {
-    for (const { upstream } of ADAPTATIONS) {
-      expect(() => validate({ type: 'string', pattern: upstream }, { formats: 'all' })).toThrow(/Unsafe regular/)
+  // Asserted in both directions. The screen used to refuse all three, which is
+  // why all three are rewritten; it now admits the two separator-anchored ones
+  // on purpose. Pinning only the refusals would let a future relaxation quietly
+  // admit the exponential one, and pinning nothing would hide a re-tightening
+  // that made these schemas fail to build again.
+  it('screens the upstream patterns exactly as the validator intends today', () => {
+    for (const { name, upstream, stillRefused } of ADAPTATIONS) {
+      const build = () => validate({ type: 'string', pattern: upstream }, { formats: 'all' })
+
+      if (stillRefused) expect(build, `${name}: expected refusal`).toThrow(/Unsafe regular/)
+      else expect(build, `${name}: expected acceptance`).not.toThrow()
     }
   })
 

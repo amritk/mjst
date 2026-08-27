@@ -57,6 +57,14 @@ const formatResolveErrors = (schemaPath: string, errors: readonly ResolveError[]
  * `@amritk/resolve-refs`, inlining every external target into a single document.
  * Any resolve failures are surfaced as a CLI error rather than silently yielding
  * a half-resolved schema.
+ *
+ * Avro splits the difference, and is the reason this is not a plain
+ * json/not-json branch: a `.avsc` is a JSON *document*, not a module exporting a
+ * value, so it is read and parsed like a JSON Schema and only the conversion is
+ * delegated to the adapter. Nothing is imported, which also means an Avro schema
+ * — unlike a Zod or TypeBox one — never reaches module evaluation. Its `$ref`s
+ * are Avro names resolved by the adapter, not JSON Pointers, so the resolver
+ * does not run over it either.
  */
 export const loadSchema = async (config: Partial<CliConfig>, schemaPath: string): Promise<unknown> => {
   const inputFormat = config.input ?? 'json'
@@ -71,6 +79,12 @@ export const loadSchema = async (config: Partial<CliConfig>, schemaPath: string)
   }
 
   console.log(`Input format: ${inputFormat}`)
+
+  if (inputFormat === 'avro') {
+    const source: unknown = JSON.parse(await readFile(schemaPath, 'utf-8'))
+    return getAdapter(inputFormat).toJSONSchema(source)
+  }
+
   const source = await loadSchemaModule(schemaPath, config.export)
   return getAdapter(inputFormat).toJSONSchema(source)
 }

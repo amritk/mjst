@@ -166,4 +166,30 @@ describe('loadSchema', () => {
 
     await expect(loadSchema({ allowedRoots: [root] }, main)).rejects.toThrow(/Refusing to read local \$ref/)
   })
+
+  // An Avro schema is a JSON document, not a module exporting a value, so it
+  // takes the read-and-parse path rather than the `import()` one every other
+  // non-JSON format uses.
+  it('reads an avro schema off disk without importing it', async () => {
+    const path = write(tmp(), 'user.avsc', {
+      type: 'record',
+      name: 'User',
+      namespace: 'com.example',
+      fields: [{ name: 'id', type: 'string' }],
+    })
+
+    const schema = (await loadSchema({ input: 'avro' }, path)) as {
+      $ref: string
+      $defs: Record<string, { properties: Record<string, unknown> }>
+    }
+
+    expect(schema.$ref).toBe('#/$defs/com.example.User')
+    expect(schema.$defs['com.example.User']?.properties['id']).toEqual({ type: 'string' })
+  })
+
+  it('surfaces an invalid avro schema as an error', async () => {
+    const path = write(tmp(), 'broken.avsc', { type: 'record', name: 'NoFields' })
+
+    await expect(loadSchema({ input: 'avro' }, path)).rejects.toThrow(/missing its required "fields"/)
+  })
 })

@@ -36,6 +36,9 @@
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
       },
+      "devDependencies": {
+        "@amritk/runtime-validators": "workspace:*",
+      },
       "peerDependencies": {
         "@valibot/to-json-schema": ">=1",
         "effect": ">=3",

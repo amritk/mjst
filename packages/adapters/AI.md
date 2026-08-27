@@ -1,8 +1,8 @@
 # @amritk/adapters — notes for AI coding agents
 
-Convert schemas authored in TypeBox, Zod, Valibot, or Effect into Draft 2020-12
-JSON Schema — the single input shape the mjst generators consume. Full
-reference is [README.md](./README.md).
+Convert schemas authored in TypeBox, Zod, Valibot, or Effect — or an Apache
+Avro `.avsc` document — into Draft 2020-12 JSON Schema, the single input shape
+the mjst generators consume. Full reference is [README.md](./README.md).
 
 > Pre-alpha: APIs change in **minor** versions.
 
@@ -27,17 +27,25 @@ const jsonSchema = await adapter.toJSONSchema(User) // always await
    is the caller's job.
 3. **`getAdapter('json')` throws** — `'json'` is a valid `SourceFormat` but has no
    adapter (JSON Schema is read directly). Only `typebox` / `zod` / `valibot` /
-   `effect` resolve.
+   `effect` / `avro` resolve.
 4. **Source libraries are optional peer deps**, imported dynamically. **Zod must
    be v4+** (`toJSONSchema` doesn't exist earlier). Always `await` — even
    TypeBox's synchronous path is typed to allow a Promise.
 5. **Unrepresentable constructs widen to `{}`** with a stderr `[mjst]` warning
    (Effect throws on nested ones). `date` / `bigint` become `x-mjst` hints. Pass
    `{ strict: true }` to throw instead of widening.
+6. **Avro takes a parsed `.avsc`, not a module, and needs no peer dep.** Pick the
+   encoding deliberately: `avroToJsonSchema(avro)` describes the idiomatic
+   decoded object (nullable unions, base64 bytes, defaulted fields optional);
+   `{ encoding: 'avro-json' }` describes the spec's JSON encoding (branch-tagged
+   union wrappers, every field required) — that is the one to validate an
+   AsyncAPI `examples.payload` against. Do not expect `timestamp-millis` to
+   become `format: 'date-time'`: Avro encodes it as a `long` in JSON too.
 
 ## Subpaths
 
 `@amritk/adapters/get-adapter`, `.../typebox-to-json-schema`,
 `.../zod-to-json-schema`, `.../valibot-to-json-schema`,
-`.../effect-to-json-schema`, `.../adapter` (types), `.../source-format` (types).
+`.../effect-to-json-schema`, `.../avro-to-json-schema`, `.../adapter` (types),
+`.../source-format` (types).
 Install: `bun add @amritk/adapters` (+ your source library).

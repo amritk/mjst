@@ -1,7 +1,7 @@
 {
   "name": "@amritk/adapters",
   "version": "0.4.4",
-  "description": "Convert schemas from external libraries (TypeBox, Zod, ...) into JSON Schema for mjst.",
+  "description": "Convert schemas from external libraries (TypeBox, Zod, Avro, ...) into JSON Schema for mjst.",
   "type": "module",
   "sideEffects": false,
   "engines": {
@@ -16,6 +16,7 @@
     "zod",
     "valibot",
     "effect",
+    "avro",
     "adapter",
     "mjst"
   ],
@@ -45,6 +46,9 @@
     "json-schema-typed": "catalog:",
     "@amritk/helpers": "workspace:*"
   },
+  "devDependencies": {
+    "@amritk/runtime-validators": "workspace:*"
+  },
   "exports": {
     "./package.json": "./package.json",
     "./adapter": {
@@ -61,6 +65,11 @@
       "development": "./src/get-adapter.ts",
       "types": "./dist/get-adapter.d.ts",
       "default": "./dist/get-adapter.js"
+    },
+    "./avro-to-json-schema": {
+      "development": "./src/avro-to-json-schema.ts",
+      "types": "./dist/avro-to-json-schema.d.ts",
+      "default": "./dist/avro-to-json-schema.js"
     },
     "./typebox-to-json-schema": {
       "development": "./src/typebox-to-json-schema.ts",
