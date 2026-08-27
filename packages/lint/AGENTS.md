@@ -63,9 +63,13 @@ bun run --filter='@amritk/lint' types:check
   bundler-safe.
 - **The vendored AsyncAPI schemas carry three deliberate regex rewrites.** The
   upstream patterns nest unbounded quantifiers — one is genuinely exponential —
-  and `@amritk/runtime-validators` refuses to compile them. Each replacement is
-  proven equivalent in `rules/asyncapi/schemas/schema.test.ts`; re-vendoring a
-  schema without re-applying them fails that test. Never reach for
-  `allowUnsafePatterns` instead.
+  and `@amritk/runtime-validators` refused to compile all three when they were
+  vendored. Each replacement is proven equivalent in
+  `rules/asyncapi/schemas/schema.test.ts`; re-vendoring a schema without
+  re-applying them fails that test. Never reach for `allowUnsafePatterns`
+  instead. The screen has since been relaxed to admit separator-anchored
+  repetitions, so only the exponential one is still refused — the same test pins
+  each pattern's current verdict in both directions, and the other two rewrites
+  stay as equivalent simplifications, not necessities.
 
 Add a changeset for every change (`bunx changeset`).
