@@ -45,6 +45,25 @@ describe('merge-traits', () => {
     }
   })
 
+  it("keeps the target's own authored nulls under target precedence", () => {
+    // Only traits carry patch semantics: a `const: null` or `default: null`
+    // the message itself authors is a value, never a deletion marker — the
+    // target-as-patch shortcut silently stripped both from every 3.0 payload.
+    const merged = mergeTraits(
+      {
+        payload: {
+          type: 'object',
+          properties: { reason: { const: null }, note: { type: ['string', 'null'], default: null } },
+        },
+      },
+      [],
+      'target',
+    )
+    const properties = (merged['payload'] as Record<string, Record<string, Record<string, unknown>>>)['properties']
+    expect(properties?.['reason']).toEqual({ const: null })
+    expect(properties?.['note']?.['default']).toBeNull()
+  })
+
   it('treats a null patch value as a deletion, per RFC 7386', () => {
     const merged = mergeTraits({ contentType: 'application/json', name: 'msg' }, [{ contentType: null }], 'trait')
     expect('contentType' in merged).toBe(false)

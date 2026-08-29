@@ -41,13 +41,32 @@ const applyMergePatch = (target: unknown, patch: unknown): unknown => {
 }
 
 /**
+ * Deep target-wins overlay for 3.0's precedence rule. This is deliberately
+ * NOT a merge patch with the target as the patch: only *traits* carry RFC
+ * 7386 patch semantics, so a `null` the message itself authors — a
+ * `const: null` in a payload schema, a `default: null` — is a value to keep,
+ * never a deletion marker. Plain objects merge key by key with the target's
+ * side winning; everything else copies from the target verbatim.
+ */
+const overlayTarget = (base: unknown, target: unknown): unknown => {
+  if (typeof target !== 'object' || target === null || Array.isArray(target)) return target
+  if (typeof base !== 'object' || base === null || Array.isArray(base)) return structuredClone(target)
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(base as Record<string, unknown>)) assignKey(result, key, value)
+  for (const key of Object.keys(target as Record<string, unknown>)) {
+    assignKey(result, key, overlayTarget(readKey(result, key), readKey(target as Record<string, unknown>, key)))
+  }
+  return result
+}
+
+/**
  * Applies a message's (or operation's) traits per the requested precedence:
  * with `'trait'` each trait patches the accumulating target in declaration
- * order; with `'target'` the traits accumulate first and the target lands as
- * the final patch. Merging happens *before* anything reads `schemaFormat` off
- * the result: a trait-contributed format is just as binding as an inline one,
- * and reading it pre-merge is how an Avro payload gets misjudged as JSON
- * Schema.
+ * order; with `'target'` the traits accumulate first and the target overlays
+ * them, its own values — authored `null`s included — kept verbatim. Merging
+ * happens *before* anything reads `schemaFormat` off the result: a
+ * trait-contributed format is just as binding as an inline one, and reading
+ * it pre-merge is how an Avro payload gets misjudged as JSON Schema.
  *
  * The `traits` key itself is dropped from the result — it has been applied,
  * and a leftover copy would read as still-pending.
@@ -60,12 +79,14 @@ export const mergeTraits = (
   // The seed is cloned (not patched in — a patch drops `null`-valued keys as
   // RFC 7386 deletions), so the `delete` below never reaches into the
   // caller's document node.
-  let merged: unknown = precedence === 'trait' ? structuredClone(target) : {}
+  let merged: unknown
   if (precedence === 'trait') {
+    merged = structuredClone(target)
     for (const trait of traits) merged = applyMergePatch(merged, trait)
   } else {
+    merged = {}
     for (const trait of traits) merged = applyMergePatch(merged, trait)
-    merged = applyMergePatch(merged, target)
+    merged = overlayTarget(merged, target)
   }
   const result = merged as Record<string, unknown>
   delete result['traits']

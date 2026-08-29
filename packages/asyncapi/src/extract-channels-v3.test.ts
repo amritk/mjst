@@ -77,6 +77,27 @@ describe('extract-channels-v3', () => {
     expect(issues.some((issue) => issue.message.includes('both sent and received'))).toBe(true)
   })
 
+  it('keeps directions for percent-encoded operation ref segments', () => {
+    // RFC 3986 requires a space in a $ref fragment to be percent-encoded, so
+    // this is the spec-correct spelling of a legal document; the unvalidated
+    // fast path used to key the direction under the encoded name and lose it.
+    const channels = extractChannelsV3(
+      {
+        asyncapi: '3.0.0',
+        channels: { 'my channel': { address: 't', messages: { 'my msg': { payload: { type: 'object' } } } } },
+        operations: {
+          onEvt: {
+            action: 'receive',
+            channel: { $ref: '#/channels/my%20channel' },
+            messages: [{ $ref: '#/channels/my%20channel/messages/my%20msg' }],
+          },
+        },
+      },
+      [],
+    )
+    expect(channels[0]?.messages[0]?.direction).toBe('receive')
+  })
+
   it('keeps directions when channels and operations live in components', () => {
     // The operation's channel ref points at #/components/channels/... while
     // the channels-map entry is its own ref to the same component — only the

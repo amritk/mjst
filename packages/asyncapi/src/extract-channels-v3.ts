@@ -13,6 +13,28 @@ const CHANNEL_MESSAGE_REF = /^#\/channels\/([^/]+)\/messages\/([^/]+)$/
 const decodeSegment = (segment: string): string => segment.replace(/~1/g, '/').replace(/~0/g, '~')
 
 /**
+ * Resolves a pointer segment to a key the map actually holds, or `undefined`.
+ * Documents spell segments both raw and percent-encoded (the RFC 3986 form a
+ * `$ref` fragment requires for spaces and friends), so when the tilde-decoded
+ * segment misses, its percent-decoded form gets a try — an unvalidated fast
+ * path returned the undecoded spelling and silently dropped every direction
+ * keyed under the real name.
+ */
+const memberKey = (map: Record<string, unknown>, segment: string): string | undefined => {
+  const raw = decodeSegment(segment)
+  if (readKey(map, raw) !== undefined) return raw
+  if (raw.includes('%')) {
+    try {
+      const decoded = decodeURIComponent(raw)
+      if (readKey(map, decoded) !== undefined) return decoded
+    } catch {
+      // Not a valid percent sequence — the miss stands.
+    }
+  }
+  return undefined
+}
+
+/**
  * Resolves a message's `traits` list to plain records, dropping (with an
  * issue) any entry that does not dereference.
  */
@@ -57,7 +79,12 @@ const collectDirections = (
       const ref = readKey(channelNode as Record<string, unknown>, '$ref')
       if (typeof ref === 'string') {
         const match = CHANNEL_REF.exec(ref)
-        if (match) return decodeSegment(match[1] as string)
+        if (match) {
+          // Membership-checked: an unverified key silently dropped the
+          // direction; a miss falls through to the identity path below.
+          const key = memberKey(channelsMap, match[1] as string)
+          if (key !== undefined) return key
+        }
       }
     }
     // Identity fallback, through resolution on *both* sides: the operation may
@@ -103,9 +130,13 @@ const collectDirections = (
         const ref =
           typeof item === 'object' && item !== null ? readKey(item as Record<string, unknown>, '$ref') : undefined
         const match = typeof ref === 'string' ? CHANNEL_MESSAGE_REF.exec(ref) : null
-        if (match) {
-          messageKeys.push(decodeSegment(match[2] as string))
-          continue
+        if (match && typeof channelMessages === 'object' && channelMessages !== null) {
+          const key = memberKey(channelMessages as Record<string, unknown>, match[2] as string)
+          if (key !== undefined) {
+            messageKeys.push(key)
+            continue
+          }
+          // A key the channel does not hold falls through to the identity path.
         }
         // Any other spelling (`#/components/messages/...`, or a node a
         // resolver inlined): find the message by identity in the channel's

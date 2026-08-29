@@ -13,27 +13,42 @@ import { unwrapMultiFormat } from './unwrap-multi-format'
 // deeper pointer tail that must survive the move (`#/components/schemas/X/properties/y`).
 const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)(\/.*)?$/
 
-// A tail that dives through the component's own definitions block. Those
-// entries do not stay inside the copied component — normalization renames
-// `definitions` to `$defs` and this module hoists that block to the root —
-// so the tail's first hop has to be re-aimed at the hoisted entry.
-const TAIL_THROUGH_DEFS = /^\/(?:definitions|\$defs)\/([^/]+)(\/.*)?$/
+// A tail whose first hop dives through the component's own definitions block,
+// capturing which spelling it used — `definitions.x` and `$defs.x` are
+// distinct entries on a component that carries both blocks, so the spelling
+// picks the target. Those entries do not stay inside the copied component
+// (this module hoists them to the root), so the hop is re-aimed there.
+const TAIL_THROUGH_DEFS = /^\/(definitions|\$defs)\/([^/]+)(\/.*)?$/
 
-// A component-internal reference (`#/$defs/<name>` from the draft-07 upgrade
-// or a 2020-12 component's authored block, `#/definitions/<name>` in one whose
-// dialect keeps the old spelling), which must follow its target when that
-// block is hoisted to the root under a prefixed key.
-const LOCAL_DEFS_REF = /^#\/(?:\$defs|definitions)\/([^/]+)(\/.*)?$/
+// A component-internal reference, spelling captured for the same reason.
+const LOCAL_DEFS_REF = /^#\/(\$defs|definitions)\/([^/]+)(\/.*)?$/
 
-// A pointer tail that dives through a *second* definitions block. The first
-// hop's target is hoisted, but blocks nested inside it stay where the
-// draft-07 upgrade left them (renamed, contents hoisted separately), so a
-// deeper dive has no stable target — the same one-level limit the upgrade
-// helper documents for its own ref rewriting.
-const NESTED_DEFS_TAIL = /\/(?:definitions|\$defs)\//
+// The keywords whose immediate children are *names*, not schema keywords — a
+// property legitimately called `definitions` must not read as a block hop.
+const NAME_MAP_KEYWORDS = new Set(['properties', 'patternProperties', 'dependentSchemas'])
 
 /** Unescapes one RFC 6901 pointer segment. */
 const decodeSegment = (segment: string): string => segment.replace(/~1/g, '/').replace(/~0/g, '~')
+
+/**
+ * Whether a pointer tail (relative to a schema) passes through a
+ * definitions/`$defs` *block* — as opposed to merely containing a property
+ * named `definitions`. Walked structurally: under `properties` (and friends)
+ * the next segment is a name and carries no keyword meaning.
+ */
+const divesThroughDefs = (tail: string): boolean => {
+  let expectName = false
+  for (const rawSegment of tail.split('/').slice(1)) {
+    const segment = decodeSegment(rawSegment)
+    if (expectName) {
+      expectName = false
+      continue
+    }
+    if (segment === 'definitions' || segment === '$defs') return true
+    if (NAME_MAP_KEYWORDS.has(segment)) expectName = true
+  }
+  return false
+}
 
 /**
  * Folds the characters a `$defs` key cannot carry to `-`: pointer syntax, and
@@ -41,6 +56,21 @@ const decodeSegment = (segment: string): string => segment.replace(/~1/g, '/').r
  * an emitted key makes the ref and the key disagree after decoding.
  */
 const sanitizeKey = (name: string): string => name.replace(/[~/%]+/g, '-')
+
+type DefsBlock = 'definitions' | '$defs'
+
+/** The rewrite context: copying a component, or a hoisted document-root def. */
+type RewriteScope =
+  | { readonly kind: 'root' }
+  | { readonly kind: 'docDef' }
+  | {
+      readonly kind: 'component'
+      readonly component: string
+      readonly blocks: Readonly<Record<DefsBlock, ReadonlySet<string>>>
+    }
+
+const ROOT_SCOPE: RewriteScope = { kind: 'root' }
+const DOC_DEF_SCOPE: RewriteScope = { kind: 'docDef' }
 
 /**
  * Makes an extracted schema self-contained: every `$ref` into the document's
@@ -63,14 +93,21 @@ const sanitizeKey = (name: string): string => name.replace(/[~/%]+/g, '-')
  * rewrites the component's internal refs to `#/$defs/...` — pointers that,
  * embedded under the message root, would resolve against the *root's* `$defs`
  * and land on nothing (or on the wrong schema). So each copied component's
- * `$defs` entries are hoisted to the root under `<component>-<name>` keys,
- * with the component's internal refs — and any external ref whose pointer
- * tail dives through the block — re-aimed at the hoisted entries.
+ * definitions — from `$defs` *and* from a `definitions` block a
+ * 2020-12/OpenAPI component keeps verbatim, each block under its own key —
+ * are hoisted to the root under `<component>-<name>` keys, with the
+ * component's internal refs and any external ref whose pointer tail dives
+ * through a block re-aimed at the hoisted entries.
  *
- * A reference to a component (or a component definition) the document does
- * not declare becomes an empty (`{}`, match-anything) definition plus an
- * issue — one dangling pointer should cost precision on one branch, not the
- * whole message.
+ * Two more pointer shapes are handled the same way: a tail through a Multi
+ * Format component's `schema` wrapper key (the copy is unwrapped, so the hop
+ * is stripped), and a document-root `#/$defs/...` reference — which the
+ * cross-file resolver manufactures when it hoists a reference cycle onto the
+ * document root — whose target is copied in beside the components.
+ *
+ * A reference to anything the document does not declare becomes an empty
+ * (`{}`, match-anything) definition plus an issue — one dangling pointer
+ * should cost precision on one branch, not the whole message.
  */
 export const rebaseComponentRefs = (
   root: Record<string, unknown>,
@@ -79,25 +116,39 @@ export const rebaseComponentRefs = (
   issues: ExtractionIssue[],
   path: string,
 ): Record<string, unknown> => {
-  const componentSchemas =
-    typeof document === 'object' && document !== null
-      ? (readKey(
-          (readKey(document as Record<string, unknown>, 'components') ?? {}) as Record<string, unknown>,
-          'schemas',
-        ) as Record<string, unknown> | undefined)
+  const documentRecord =
+    typeof document === 'object' && document !== null && !Array.isArray(document)
+      ? (document as Record<string, unknown>)
       : undefined
+  const componentSchemas = documentRecord
+    ? (readKey((readKey(documentRecord, 'components') ?? {}) as Record<string, unknown>, 'schemas') as
+        | Record<string, unknown>
+        | undefined)
+    : undefined
+  const documentDefs = (() => {
+    const block = documentRecord === undefined ? undefined : readKey(documentRecord, '$defs')
+    return typeof block === 'object' && block !== null && !Array.isArray(block)
+      ? (block as Record<string, unknown>)
+      : undefined
+  })()
 
   const rootDefs = readKey(root, '$defs')
-  const taken = new Set<string>(
+  const rootOwnDefNames = new Set<string>(
     typeof rootDefs === 'object' && rootDefs !== null ? Object.keys(rootDefs as Record<string, unknown>) : [],
   )
+  const taken = new Set<string>(rootOwnDefNames)
   /** Component name → the `$defs` key allocated for it. */
   const keyByName = new Map<string, string>()
-  /** `component\u0000definition` → the root `$defs` key its hoisted copy gets. */
+  /** JSON-encoded `[component, block, definition]` → the root `$defs` key its hoisted copy gets. */
   const defKeyByName = new Map<string, string>()
-  /** Refs diving deeper than one definitions level, degraded to `{}` with an issue. */
+  /** The same allocations in structured form, for the post-pass repair loop. */
+  const defKeyEntries: { component: string; block: DefsBlock; defName: string; key: string }[] = []
+  /** Document-root `$defs` name → the key its copy gets. */
+  const docDefKeyByName = new Map<string, string>()
+  /** Refs no rewrite can satisfy, degraded to `{}` with an issue. */
   const unresolvable: { key: string; ref: string }[] = []
-  const queue: string[] = []
+  const componentQueue: string[] = []
+  const docDefQueue: string[] = []
 
   const claimKey = (preferred: string): string => {
     let key = preferred
@@ -114,7 +165,7 @@ export const rebaseComponentRefs = (
     // the emitted pointer cannot (see {@link sanitizeKey}).
     const key = taken.has(name) || /[~/%]/.test(name) ? claimKey(`component-${sanitizeKey(name)}`) : claimKey(name)
     keyByName.set(name, key)
-    queue.push(name)
+    componentQueue.push(name)
     return key
   }
 
@@ -140,60 +191,97 @@ export const rebaseComponentRefs = (
   }
 
   /** Root key for one of a component's own definitions, hoisted beside it. */
-  const allocateDefKey = (componentName: string, defName: string): string => {
-    const mapKey = `${componentName}\u0000${defName}`
+  const allocateDefKey = (componentName: string, block: DefsBlock, defName: string): string => {
+    // JSON-encoded triple: names may carry any character, so no separator is safe.
+    const mapKey = JSON.stringify([componentName, block, defName])
     const existing = defKeyByName.get(mapKey)
     if (existing !== undefined) return existing
     const componentKey = allocateKey(componentName)
     const key = claimKey(`${componentKey}-${sanitizeKey(defName)}`)
     defKeyByName.set(mapKey, key)
+    defKeyEntries.push({ component: componentName, block, defName, key })
     return key
   }
 
-  /**
-   * Rewrites one `$ref` string, or returns it unchanged. `localDefs` carries
-   * the component context while its body and definitions are being copied:
-   * the set of definition names whose `#/$defs/...` refs must follow their
-   * hoisted targets.
-   */
-  const rewriteRef = (ref: string, localDefs?: { component: string; names: ReadonlySet<string> }): string => {
+  /** Key for a copied document-root `$defs` entry (a resolver-hoisted cycle target). */
+  const allocateDocDefKey = (name: string): string => {
+    const existing = docDefKeyByName.get(name)
+    if (existing !== undefined) return existing
+    const key = /[~/%]/.test(name) ? claimKey(sanitizeKey(name)) : claimKey(name)
+    docDefKeyByName.set(name, key)
+    docDefQueue.push(name)
+    return key
+  }
+
+  /** Whether the components map holds `name` as a Multi Format wrapper. */
+  const isWrappedComponent = (name: string): boolean => {
+    const raw = componentSchemas === undefined ? undefined : readKey(componentSchemas, name)
+    return raw !== undefined && unwrapMultiFormat(raw).schemaFormat !== undefined
+  }
+
+  const degrade = (ref: string): string => {
+    const key = claimKey('unsupported-pointer')
+    unresolvable.push({ key, ref })
+    return `#/$defs/${key}`
+  }
+
+  /** Rewrites one `$ref` string per the current scope, or returns it unchanged. */
+  const rewriteRef = (ref: string, scope: RewriteScope): string => {
     const component = COMPONENT_SCHEMA_REF.exec(ref)
     if (component) {
       const name = canonicalName(component[1] as string)
-      const tail = component[2] ?? ''
+      let tail = component[2] ?? ''
+      // The copy is the UNWRAPPED Multi Format schema, so a pointer-faithful
+      // hop through the wrapper's `schema` key has no level to land on.
+      if (tail !== '' && isWrappedComponent(name)) {
+        const wrapperHop = /^\/schema(\/.*)?$/.exec(tail)
+        if (wrapperHop) tail = wrapperHop[1] ?? ''
+      }
       const throughDefs = TAIL_THROUGH_DEFS.exec(tail)
       if (throughDefs) {
-        const rest = throughDefs[2] ?? ''
-        if (NESTED_DEFS_TAIL.test(rest)) {
-          const key = claimKey('unsupported-pointer')
-          unresolvable.push({ key, ref })
-          return `#/$defs/${key}`
-        }
-        const defName = decodeSegment(throughDefs[1] as string)
-        return `#/$defs/${allocateDefKey(name, defName)}${rest}`
+        const rest = throughDefs[3] ?? ''
+        if (divesThroughDefs(rest)) return degrade(ref)
+        const block = throughDefs[1] as DefsBlock
+        const defName = decodeSegment(throughDefs[2] as string)
+        return `#/$defs/${allocateDefKey(name, block, defName)}${rest}`
       }
       return `#/$defs/${allocateKey(name)}${tail}`
     }
-    if (localDefs) {
-      const local = LOCAL_DEFS_REF.exec(ref)
-      if (local) {
-        const defName = decodeSegment(local[1] as string)
-        if (localDefs.names.has(defName)) {
-          return `#/$defs/${allocateDefKey(localDefs.component, defName)}${local[2] ?? ''}`
+
+    const local = LOCAL_DEFS_REF.exec(ref)
+    if (local) {
+      const block = local[1] as DefsBlock
+      const defName = decodeSegment(local[2] as string)
+      const tail = local[3] ?? ''
+      if (scope.kind === 'component') {
+        // Spelling-faithful lookup, with one fallback: a `#/definitions/...`
+        // ref inside a draft-07 component targets the block normalization
+        // renamed to `$defs`.
+        if (scope.blocks[block].has(defName)) {
+          return `#/$defs/${allocateDefKey(scope.component, block, defName)}${tail}`
+        }
+        if (block === 'definitions' && scope.blocks.$defs.has(defName)) {
+          return `#/$defs/${allocateDefKey(scope.component, '$defs', defName)}${tail}`
+        }
+        return ref
+      }
+      if (block === '$defs') {
+        // The message root keeps its own `$defs`, so those refs stand; inside
+        // a copied document-root def there is no local block, and at the root
+        // a name the payload does not define may still live on the *document*
+        // root — where the cross-file resolver hoists reference cycles.
+        if (scope.kind === 'root' && rootOwnDefNames.has(defName)) return ref
+        if (documentDefs !== undefined && readKey(documentDefs, defName) !== undefined) {
+          return `#/$defs/${allocateDocDefKey(defName)}${tail}`
         }
       }
     }
     return ref
   }
 
-  const rewrite = (
-    node: unknown,
-    depth: number,
-    inSchemaMap: boolean,
-    localDefs?: { component: string; names: ReadonlySet<string> },
-  ): unknown => {
+  const rewrite = (node: unknown, depth: number, inSchemaMap: boolean, scope: RewriteScope): unknown => {
     assertSchemaDepth(depth, 'rebaseComponentRefs')
-    if (Array.isArray(node)) return node.map((item) => rewrite(item, depth + 1, inSchemaMap, localDefs))
+    if (Array.isArray(node)) return node.map((item) => rewrite(item, depth + 1, inSchemaMap, scope))
     if (typeof node !== 'object' || node === null) return node
 
     const record = node as Record<string, unknown>
@@ -205,22 +293,21 @@ export const rebaseComponentRefs = (
       if (isDataPosition(key, inSchemaMap)) {
         assignKey(result, key, value)
       } else if (!inSchemaMap && key === '$ref' && typeof value === 'string') {
-        assignKey(result, key, rewriteRef(value, localDefs))
+        assignKey(result, key, rewriteRef(value, scope))
       } else {
-        assignKey(result, key, rewrite(value, depth + 1, entersSchemaMap(key, inSchemaMap), localDefs))
+        assignKey(result, key, rewrite(value, depth + 1, entersSchemaMap(key, inSchemaMap), scope))
       }
     }
     return result
   }
 
-  const rewrittenRoot = rewrite(root, 0, false) as Record<string, unknown>
+  const rewrittenRoot = rewrite(root, 0, false, ROOT_SCOPE) as Record<string, unknown>
 
   const copiedDefs: Record<string, unknown> = {}
-  // `queue` grows while iterating: rewriting one component's refs can pull in
-  // another. `keyByName` already de-duplicates, so each name is processed once
-  // and a component cycle terminates.
-  for (let i = 0; i < queue.length; i++) {
-    const name = queue[i] as string
+  /** Which blocks each processed component actually declared, for alias repair. */
+  const processedBlocks = new Map<string, Record<DefsBlock, ReadonlySet<string>>>()
+
+  const processComponent = (name: string): void => {
     const defsKey = keyByName.get(name) as string
     const raw = componentSchemas === undefined ? undefined : readKey(componentSchemas, name)
     if (raw === undefined) {
@@ -229,7 +316,7 @@ export const rebaseComponentRefs = (
         message: `$ref to undeclared component "#/components/schemas/${name}"; treated as an unconstrained schema`,
       })
       assignKey(copiedDefs, defsKey, {})
-      continue
+      return
     }
 
     const { schemaFormat, schema } = unwrapMultiFormat(raw)
@@ -243,50 +330,88 @@ export const rebaseComponentRefs = (
             : `component "${name}" is not an object schema; treated as an unconstrained schema`,
       })
       assignKey(copiedDefs, defsKey, {})
-      continue
+      return
     }
 
     const normalized = normalizeSchema(schema as Record<string, unknown>, componentFamily)
 
     // Hoist the component's own definitions to the root and copy the body
-    // without them, with every internal ref re-aimed at the hoisted entries.
-    // Both spellings are collected: `$defs` (the draft-07 upgrade's output, or
-    // a 2020-12 component's authored block) and a `definitions` block a
-    // 2020-12/OpenAPI component keeps verbatim — normalization only renames it
-    // for the draft-07 families, and pointer tails re-aim unconditionally, so
-    // leaving the block behind stranded those targets as `{}`.
-    const ownDefs: Record<string, unknown> = {}
+    // without them. Both block spellings are hoisted, each under its own key:
+    // `$defs` (the draft-07 upgrade's output, or an authored 2020-12 block)
+    // and a `definitions` block a 2020-12/OpenAPI component keeps verbatim.
+    // Keeping the blocks separate matters when one component carries both —
+    // `definitions.x` and `$defs.x` are different schemas, and merging them
+    // silently pointed both spellings at whichever survived.
+    const blocks: Record<DefsBlock, Set<string>> = { definitions: new Set(), $defs: new Set() }
+    const blockValues: { block: DefsBlock; defName: string; value: unknown }[] = []
     for (const blockName of ['definitions', '$defs'] as const) {
       const block = readKey(normalized, blockName)
       if (typeof block !== 'object' || block === null || Array.isArray(block)) continue
-      for (const [defName, defValue] of Object.entries(block as Record<string, unknown>)) {
-        assignKey(ownDefs, defName, defValue)
+      for (const [defName, value] of Object.entries(block as Record<string, unknown>)) {
+        blocks[blockName].add(defName)
+        blockValues.push({ block: blockName, defName, value })
       }
     }
-    const hasOwnDefs = Object.keys(ownDefs).length > 0
-    const localDefs = hasOwnDefs ? { component: name, names: new Set(Object.keys(ownDefs)) } : undefined
+    processedBlocks.set(name, blocks)
+    const scope: RewriteScope = { kind: 'component', component: name, blocks }
 
-    if (hasOwnDefs) {
-      for (const [defName, defValue] of Object.entries(ownDefs)) {
-        assignKey(copiedDefs, allocateDefKey(name, defName), rewrite(defValue, 0, false, localDefs))
-      }
+    for (const { block, defName, value } of blockValues) {
+      assignKey(copiedDefs, allocateDefKey(name, block, defName), rewrite(value, 0, false, scope))
     }
 
     const { $defs: _, definitions: __, ...body } = normalized
-    assignKey(copiedDefs, defsKey, rewrite(body, 0, false, localDefs))
+    assignKey(copiedDefs, defsKey, rewrite(body, 0, false, scope))
   }
 
-  // A pointer tail can name a definition its component never declares; the
-  // allocated key would otherwise dangle, so it resolves to "anything" with
-  // an issue — same posture as an undeclared component.
-  for (const [mapKey, defKey] of defKeyByName) {
-    if (readKey(copiedDefs, defKey) !== undefined) continue
-    const [componentName, defName] = mapKey.split('\u0000') as [string, string]
+  const processDocDef = (name: string): void => {
+    const key = docDefKeyByName.get(name) as string
+    const raw = documentDefs === undefined ? undefined : readKey(documentDefs, name)
+    if (raw === undefined || typeof raw !== 'object' || Array.isArray(raw)) {
+      issues.push({
+        path,
+        message: `$ref to "#/$defs/${name}" has no target on the document root; treated as an unconstrained schema`,
+      })
+      assignKey(copiedDefs, key, {})
+      return
+    }
+    assignKey(
+      copiedDefs,
+      key,
+      rewrite(normalizeSchema(raw as Record<string, unknown>, family), 0, false, DOC_DEF_SCOPE),
+    )
+  }
+
+  // Both queues grow while draining: rewriting one copy can pull in another.
+  // The allocation maps de-duplicate, so each entry is processed once and
+  // reference cycles terminate.
+  let componentIndex = 0
+  let docDefIndex = 0
+  while (componentIndex < componentQueue.length || docDefIndex < docDefQueue.length) {
+    if (componentIndex < componentQueue.length) {
+      processComponent(componentQueue[componentIndex++] as string)
+    } else {
+      processDocDef(docDefQueue[docDefIndex++] as string)
+    }
+  }
+
+  // A pointer can name a definition its component never declares. Before
+  // reporting, try the rename alias: a `/definitions/x` tail on a draft-07
+  // component targets the block normalization renamed to `$defs`.
+  for (const { component, block, defName, key } of defKeyEntries) {
+    if (readKey(copiedDefs, key) !== undefined) continue
+    const declared = processedBlocks.get(component)
+    if (block === 'definitions' && declared?.$defs.has(defName)) {
+      const aliasKey = defKeyByName.get(JSON.stringify([component, '$defs', defName]))
+      if (aliasKey !== undefined) {
+        assignKey(copiedDefs, key, readKey(copiedDefs, aliasKey))
+        continue
+      }
+    }
     issues.push({
       path,
-      message: `$ref into "#/components/schemas/${componentName}" names a definition "${defName}" it does not declare; treated as an unconstrained schema`,
+      message: `$ref into "#/components/schemas/${component}" names a definition "${defName}" it does not declare; treated as an unconstrained schema`,
     })
-    assignKey(copiedDefs, defKey, {})
+    assignKey(copiedDefs, key, {})
   }
 
   for (const { key, ref } of unresolvable) {

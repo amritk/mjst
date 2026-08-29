@@ -200,6 +200,112 @@ describe('rebase-component-refs', () => {
     expect(issues).toEqual([])
   })
 
+  it("strips the wrapper hop from a tail through a Multi Format component's schema key", () => {
+    // The copy is the unwrapped schema, so the pointer-faithful `/schema` hop
+    // has no level to land on — kept verbatim, buildSchema threw and the
+    // whole run aborted.
+    const issues: ExtractionIssue[] = []
+    const rebased = rebaseComponentRefs(
+      { type: 'object', properties: { id: { $ref: '#/components/schemas/wrapped/schema' } } },
+      document,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    expect((rebased['properties'] as Record<string, Record<string, unknown>>)['id']?.['$ref']).toBe('#/$defs/wrapped')
+    expect((rebased['$defs'] as Record<string, unknown>)['wrapped']).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
+  it('does not mistake a property named definitions for a block hop', () => {
+    const issues: ExtractionIssue[] = []
+    const tricky = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          A: {
+            definitions: {
+              x: {
+                type: 'object',
+                properties: { definitions: { type: 'object', properties: { y: { type: 'number' } } } },
+              },
+            },
+          },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/A/definitions/x/properties/definitions/properties/y' },
+      tricky,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    // The second `definitions` is a property name inside the hoisted def, so
+    // the tail stays and resolves — no false "unsupported pointer" degrade.
+    expect(rebased['$ref']).toBe('#/$defs/A-x/properties/definitions/properties/y')
+    const hoisted = (rebased['$defs'] as Record<string, Record<string, unknown>>)['A-x']
+    expect((hoisted?.['properties'] as Record<string, unknown>)['definitions']).toBeDefined()
+    expect(issues).toEqual([])
+  })
+
+  it('keeps definitions.x and $defs.x apart when a component declares both', () => {
+    const issues: ExtractionIssue[] = []
+    const both = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          A: {
+            schemaFormat: 'application/schema+json;version=draft-2020-12',
+            schema: { type: 'object', definitions: { x: { type: 'integer' } }, $defs: { x: { type: 'string' } } },
+          },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs(
+      {
+        type: 'object',
+        properties: {
+          p: { $ref: '#/components/schemas/A/definitions/x' },
+          q: { $ref: '#/components/schemas/A/$defs/x' },
+        },
+      },
+      both,
+      '2020-12',
+      issues,
+      '#/x',
+    )
+    const defs = rebased['$defs'] as Record<string, Record<string, unknown>>
+    const properties = rebased['properties'] as Record<string, Record<string, string>>
+    const pKey = (properties['p']?.['$ref'] as string).replace('#/$defs/', '')
+    const qKey = (properties['q']?.['$ref'] as string).replace('#/$defs/', '')
+    // Two different schemas must stay two different entries.
+    expect(pKey).not.toBe(qKey)
+    expect(defs[pKey]).toEqual({ type: 'integer' })
+    expect(defs[qKey]).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
+  it('copies a document-root $defs target the cross-file resolver hoisted', () => {
+    // resolveRefsFromFile resolves a reference cycle by hoisting the target
+    // onto the DOCUMENT root's $defs and rewriting the ref to #/$defs/<name>;
+    // extraction lifts only the payload subtree, so without copying the
+    // target in, the ref dangled and the generators aborted the whole run.
+    const issues: ExtractionIssue[] = []
+    const hoistedCycle = {
+      asyncapi: '2.6.0',
+      $defs: { node: { type: 'object', properties: { next: { $ref: '#/$defs/node' } } } },
+    }
+    const rebased = rebaseComponentRefs({ $ref: '#/$defs/node' }, hoistedCycle, 'asyncapi', issues, '#/x')
+    const defs = rebased['$defs'] as Record<string, Record<string, unknown>>
+    expect(rebased['$ref']).toBe('#/$defs/node')
+    // The copy keeps the self-reference resolvable within the extracted schema.
+    expect((defs['node']?.['properties'] as Record<string, Record<string, unknown>>)['next']?.['$ref']).toBe(
+      '#/$defs/node',
+    )
+    expect(issues).toEqual([])
+  })
+
   it('leaves refs inside instance data alone', () => {
     const issues: ExtractionIssue[] = []
     const rebased = rebaseComponentRefs(
