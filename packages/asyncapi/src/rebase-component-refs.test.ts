@@ -381,6 +381,89 @@ describe('rebase-component-refs', () => {
     expect(issues).toEqual([])
   })
 
+  it('drops the tail when a tailed ref targets something that degrades to {}', () => {
+    // `#/$defs/Missing/properties/x` with Missing = {} is a dangling pointer
+    // the generators abort on — the degrade contract is one branch's
+    // precision, never the build.
+    const issues: ExtractionIssue[] = []
+    const avroDoc = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          AvroThing: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: { type: 'record' } },
+          A: { type: 'object', definitions: { real: { type: 'string' } } },
+        },
+      },
+    }
+    for (const ref of [
+      '#/components/schemas/Missing/properties/x',
+      '#/components/schemas/AvroThing/properties/x',
+      '#/components/schemas/A/definitions/Nope/properties/y',
+    ]) {
+      const rebased = rebaseComponentRefs({ $ref: ref }, avroDoc, 'asyncapi', issues, '#/x')
+      const target = (rebased['$defs'] as Record<string, unknown>)[(rebased['$ref'] as string).replace('#/$defs/', '')]
+      // The rewritten ref must land exactly on its {} target — no tail.
+      expect(rebased['$ref'], ref).toMatch(/^#\/\$defs\/[^/]+$/)
+      expect(target, ref).toEqual({})
+    }
+    expect(issues.length).toBe(3)
+  })
+
+  it('finds percent-encoded definition names the document declares', () => {
+    const issues: ExtractionIssue[] = []
+    const spaced = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          A: { type: 'object', definitions: { 'My Def': { type: 'string' } } },
+          B: {
+            type: 'object',
+            properties: { d: { $ref: '#/definitions/My%20Def' } },
+            definitions: { 'My Def': { type: 'string' } },
+          },
+        },
+      },
+    }
+    // The RFC 6901 URI-fragment spelling of a tail must reach the declared entry...
+    const tail = rebaseComponentRefs(
+      { $ref: '#/components/schemas/A/definitions/My%20Def' },
+      spaced,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    expect((tail['$defs'] as Record<string, unknown>)[(tail['$ref'] as string).replace('#/$defs/', '')]).toEqual({
+      type: 'string',
+    })
+    // ...and so must a component-internal ref spelled the same way.
+    const internal = rebaseComponentRefs({ $ref: '#/components/schemas/B' }, spaced, 'asyncapi', issues, '#/x')
+    const defs = internal['$defs'] as Record<string, Record<string, unknown>>
+    const innerRef = ((defs['B']?.['properties'] as Record<string, Record<string, string>>)['d']?.['$ref'] ??
+      '') as string
+    expect(defs[innerRef.replace('#/$defs/', '')]).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
+  it('follows a $defs-spelled ref into a 2020-12 component that only declares definitions', () => {
+    const issues: ExtractionIssue[] = []
+    const legacy = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          A: {
+            schemaFormat: 'application/schema+json;version=draft-2020-12',
+            schema: { type: 'object', definitions: { x: { type: 'integer' } } },
+          },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs({ $ref: '#/components/schemas/A/$defs/x' }, legacy, '2020-12', issues, '#/x')
+    expect((rebased['$defs'] as Record<string, unknown>)[(rebased['$ref'] as string).replace('#/$defs/', '')]).toEqual({
+      type: 'integer',
+    })
+    expect(issues).toEqual([])
+  })
+
   it('leaves refs inside instance data alone', () => {
     const issues: ExtractionIssue[] = []
     const rebased = rebaseComponentRefs(

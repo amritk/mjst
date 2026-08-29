@@ -221,6 +221,50 @@ export const rebaseComponentRefs = (
     return raw !== undefined && unwrapMultiFormat(raw).schemaFormat !== undefined
   }
 
+  /**
+   * The names in a component's definitions blocks, read off the *raw*
+   * document, or `undefined` when the component cannot be copied at all
+   * (missing, unsupported format, non-object). Top-level definition names
+   * survive normalization (the draft-07 upgrade renames the block, not its
+   * keys), so membership can be judged before the copy exists — which is what
+   * lets a tailed ref know at rewrite time whether its target will be real.
+   */
+  const componentBlockNames = (name: string): Record<DefsBlock, ReadonlySet<string>> | undefined => {
+    const raw = componentSchemas === undefined ? undefined : readKey(componentSchemas, name)
+    if (raw === undefined) return undefined
+    const { schemaFormat, schema } = unwrapMultiFormat(raw)
+    const componentFamily = schemaFormat === undefined ? family : classifySchemaFormat(schemaFormat)
+    if (componentFamily === 'unsupported' || typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+      return undefined
+    }
+    const names: Record<DefsBlock, Set<string>> = { definitions: new Set(), $defs: new Set() }
+    for (const blockName of ['definitions', '$defs'] as const) {
+      const block = readKey(schema as Record<string, unknown>, blockName)
+      if (typeof block !== 'object' || block === null || Array.isArray(block)) continue
+      for (const key of Object.keys(block as Record<string, unknown>)) names[blockName].add(key)
+    }
+    return names
+  }
+
+  /**
+   * A definition-name segment against a set of declared names, with the same
+   * percent-decoded fallback component names get — the RFC 6901 URI-fragment
+   * spelling must find the definition the document declares.
+   */
+  const canonicalDefName = (segment: string, declared: (name: string) => boolean): string => {
+    const raw = decodeSegment(segment)
+    if (declared(raw)) return raw
+    if (raw.includes('%')) {
+      try {
+        const decoded = decodeURIComponent(raw)
+        if (declared(decoded)) return decoded
+      } catch {
+        // Not a valid percent sequence — the raw spelling stands.
+      }
+    }
+    return raw
+  }
+
   const degrade = (ref: string): string => {
     const key = claimKey('unsupported-pointer')
     unresolvable.push({ key, ref })
@@ -244,16 +288,32 @@ export const rebaseComponentRefs = (
         const rest = throughDefs[3] ?? ''
         if (divesThroughDefs(rest)) return degrade(ref)
         const block = throughDefs[1] as DefsBlock
-        const defName = decodeSegment(throughDefs[2] as string)
+        const blocks = componentBlockNames(name)
+        const defName = canonicalDefName(
+          throughDefs[2] as string,
+          (candidate) => blocks !== undefined && (blocks[block].has(candidate) || blocks.$defs.has(candidate)),
+        )
+        // A tail below the definition needs a real target to land in: when the
+        // component (or the named definition) will degrade to `{}`, keeping the
+        // tail emits a pointer into the empty object — a dangling ref the
+        // generators abort on, instead of the documented one-branch degrade.
+        if (rest !== '') {
+          const declared =
+            blocks !== undefined &&
+            (blocks[block].has(defName) || blocks.$defs.has(defName) || blocks.definitions.has(defName))
+          if (!declared) return degrade(ref)
+        }
         return `#/$defs/${allocateDefKey(name, block, defName)}${rest}`
       }
+      // Same rule for a plain tail: a component that will degrade to `{}`
+      // cannot carry one.
+      if (tail !== '' && componentBlockNames(name) === undefined) return degrade(ref)
       return `#/$defs/${allocateKey(name)}${tail}`
     }
 
     const local = LOCAL_DEFS_REF.exec(ref)
     if (local) {
       const block = local[1] as DefsBlock
-      const defName = decodeSegment(local[2] as string)
       const tail = local[3] ?? ''
       if (scope.kind === 'component') {
         // Spelling-faithful lookup, with one fallback: a `#/definitions/...`
@@ -261,6 +321,10 @@ export const rebaseComponentRefs = (
         // renamed to `$defs`. A miss falls through to the document-root
         // check below — the cross-file resolver plants its `#/$defs/...`
         // cycle refs inside components too.
+        const defName = canonicalDefName(
+          local[2] as string,
+          (candidate) => scope.blocks[block].has(candidate) || scope.blocks.$defs.has(candidate),
+        )
         if (scope.blocks[block].has(defName)) {
           return `#/$defs/${allocateDefKey(scope.component, block, defName)}${tail}`
         }
@@ -274,6 +338,12 @@ export const rebaseComponentRefs = (
         // claim on the message root's block) a name may still live on the
         // *document* root — where the cross-file resolver hoists reference
         // cycles.
+        const defName = canonicalDefName(
+          local[2] as string,
+          (candidate) =>
+            (scope.kind === 'root' && rootOwnDefNames.has(candidate)) ||
+            (documentDefs !== undefined && readKey(documentDefs, candidate) !== undefined),
+        )
         if (scope.kind === 'root' && rootOwnDefNames.has(defName)) return ref
         if (documentDefs !== undefined && readKey(documentDefs, defName) !== undefined) {
           return `#/$defs/${allocateDocDefKey(defName)}${tail}`
@@ -404,8 +474,17 @@ export const rebaseComponentRefs = (
   for (const { component, block, defName, key } of defKeyEntries) {
     if (readKey(copiedDefs, key) !== undefined) continue
     const declared = processedBlocks.get(component)
-    if (block === 'definitions' && declared?.$defs.has(defName)) {
-      const aliasKey = defKeyByName.get(JSON.stringify([component, '$defs', defName]))
+    // Both alias directions: `/definitions/x` into a draft-07 component whose
+    // block was renamed to `$defs`, and `/$defs/x` into a 2020-12 component
+    // that only declares a verbatim `definitions` block.
+    const aliasBlock: DefsBlock | undefined =
+      block === 'definitions' && declared?.$defs.has(defName)
+        ? '$defs'
+        : block === '$defs' && declared?.definitions.has(defName)
+          ? 'definitions'
+          : undefined
+    if (aliasBlock !== undefined) {
+      const aliasKey = defKeyByName.get(JSON.stringify([component, aliasBlock, defName]))
       if (aliasKey !== undefined) {
         assignKey(copiedDefs, key, readKey(copiedDefs, aliasKey))
         continue
