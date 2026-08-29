@@ -184,6 +184,39 @@ describe('rebase-component-refs', () => {
     expect(issues.some((issue) => issue.message.includes('nested definitions'))).toBe(true)
   })
 
+  it('degrades a bare definitions-block tail instead of dangling on the stripped copy', () => {
+    // `#/components/schemas/form/definitions` resolves in the source document
+    // (to the block itself, a vacuously valid schema), but the copy strips
+    // that block — the kept tail dangled with no issue, aborting generation.
+    const issues: ExtractionIssue[] = []
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/form/definitions' },
+      document,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    expect(rebased['$ref']).toBe('#/$defs/unsupported-pointer')
+    expect((rebased['$defs'] as Record<string, unknown>)['unsupported-pointer']).toEqual({})
+    expect(issues.some((issue) => issue.message.includes('definitions block'))).toBe(true)
+  })
+
+  it('degrades a tail into a Multi Format wrapper key the copy does not keep', () => {
+    // The copy is the unwrapped schema: `/schema` hops are stripped, but a
+    // tail into `/schemaFormat` (or any other wrapper key) has no target.
+    const issues: ExtractionIssue[] = []
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/wrapped/schemaFormat' },
+      document,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    expect(rebased['$ref']).toBe('#/$defs/unsupported-pointer')
+    expect((rebased['$defs'] as Record<string, unknown>)['unsupported-pointer']).toEqual({})
+    expect(issues.some((issue) => issue.message.includes('wrapper key'))).toBe(true)
+  })
+
   it('degrades a component-internal ref diving through nested definitions too', () => {
     // Same hazard as the external spelling above, one scope deeper: the
     // component's own `#/definitions/parent/definitions/child` re-aims its

@@ -93,6 +93,33 @@ describe('message-schemas', () => {
     expect(issues.length).toBeGreaterThan(0)
   })
 
+  it('moves a later message aside when its headers tree is already claimed literally', () => {
+    // The reversed ordering of the case above: the literal `a-headers`
+    // message claims its directory first, so `a` — whose headers tree would
+    // land on the same path — must shift to `a-2`/`a-2-headers`. This is the
+    // `-headers` clause of the claim loop; without it the two messages
+    // silently share one output directory.
+    const issues: ExtractionIssue[] = []
+    const schemas = listMessageSchemas(
+      model(
+        [
+          {
+            key: 'events',
+            messages: [message('a-headers'), message('a', { headers: { type: 'object' } })],
+          },
+        ],
+        issues,
+      ),
+    )
+    expect(schemas.map((schema) => schema.subDir)).toEqual([
+      'channels/events/a-headers',
+      'channels/events/a-2',
+      'channels/events/a-2-headers',
+    ])
+    expect(new Set(schemas.map((schema) => schema.subDir)).size).toBe(schemas.length)
+    expect(issues.length).toBeGreaterThan(0)
+  })
+
   it('falls back to stable tokens for names that sanitize away', () => {
     const schemas = listMessageSchemas(model([{ key: '///', messages: [message('{}')] }]))
     expect(schemas[0]?.subDir).toBe('channels/channel/message')

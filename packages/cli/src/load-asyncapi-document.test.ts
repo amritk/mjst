@@ -1,6 +1,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { extractAsyncApi } from '@amritk/asyncapi'
 import { describe, expect, it } from 'vitest'
 
 import { loadAsyncApiDocument } from './load-asyncapi-document'
@@ -78,6 +79,58 @@ describe('load-asyncapi-document', () => {
     const payload = JSON.stringify(document)
     expect(payload).not.toContain('payload.json')
     expect(payload).toContain('"id"')
+  })
+
+  it('parses a BOM-prefixed JSON document', async () => {
+    const dir = tmp()
+    const file = join(dir, 'bom.json')
+    // A Windows-saved file: EF BB BF, which utf-8 readFile keeps and
+    // JSON.parse rejects with an error naming an invisible character.
+    const byteOrderMark = String.fromCharCode(0xfeff)
+    writeFileSync(
+      file,
+      byteOrderMark + JSON.stringify({ asyncapi: '3.0.0', info: { title: 'T', version: '1.0.0' }, channels: {} }),
+    )
+    const document = (await loadAsyncApiDocument({}, file)) as Record<string, unknown>
+    expect(document['asyncapi']).toBe('3.0.0')
+  })
+
+  it('keeps operation channel identity through cross-file resolution', async () => {
+    // The resolver inlines the operation's internal `channel: {$ref:
+    // '#/channels/events'}` as a fresh copy while rebuilding the channels map
+    // structurally — two different objects for one node, which broke the
+    // extractor's identity matching (its only tool once the `$ref` strings
+    // are gone) and silently dropped every direction whenever the document
+    // carried a single cross-file ref.
+    const dir = tmp()
+    writeFileSync(join(dir, 'payload.json'), JSON.stringify({ type: 'object', properties: { id: { type: 'string' } } }))
+    const file = join(dir, 'api.yaml')
+    writeFileSync(
+      file,
+      [
+        'asyncapi: 3.0.0',
+        'info: { title: T, version: 1.0.0 }',
+        'channels:',
+        '  events:',
+        '    messages:',
+        '      evt:',
+        '        payload:',
+        "          $ref: './payload.json'",
+        'operations:',
+        '  sendEvt:',
+        '    action: send',
+        "    channel: { $ref: '#/channels/events' }",
+        '',
+      ].join('\n'),
+    )
+    const document = (await loadAsyncApiDocument({}, file)) as Record<string, unknown>
+    const channels = document['channels'] as Record<string, unknown>
+    const operations = document['operations'] as Record<string, Record<string, unknown>>
+    expect(operations['sendEvt']?.['channel']).toBe(channels['events'])
+
+    const model = extractAsyncApi(document)
+    expect(model.channels[0]?.messages[0]?.direction).toBe('send')
+    expect(model.issues).toEqual([])
   })
 
   it('refuses a cross-file $ref escaping the document directory', async () => {

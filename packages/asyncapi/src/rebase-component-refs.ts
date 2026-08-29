@@ -278,10 +278,15 @@ export const rebaseComponentRefs = (
       const name = canonicalName(component[1] as string)
       let tail = component[2] ?? ''
       // The copy is the UNWRAPPED Multi Format schema, so a pointer-faithful
-      // hop through the wrapper's `schema` key has no level to land on.
+      // hop through the wrapper's `schema` key has no level to land on — and a
+      // tail into the wrapper's *other* key (`/schemaFormat`) has no target in
+      // the copy at all. Every other tail spelling addresses the unwrapped
+      // schema itself (`/definitions/x`, `/properties/y`) and stands.
       if (tail !== '' && isWrappedComponent(name)) {
         const wrapperHop = /^\/schema(\/.*)?$/.exec(tail)
         if (wrapperHop) tail = wrapperHop[1] ?? ''
+        else if (/^\/schemaFormat(\/|$)/.test(tail))
+          return degrade(ref, 'points into a Multi Format wrapper key the unwrapped copy does not keep')
       }
       const throughDefs = TAIL_THROUGH_DEFS.exec(tail)
       if (throughDefs) {
@@ -310,6 +315,12 @@ export const rebaseComponentRefs = (
       // cannot carry one.
       if (tail !== '' && componentBlockNames(name) === undefined)
         return degrade(ref, 'points into a component that cannot be copied')
+      // A tail TAIL_THROUGH_DEFS did not claim can still land on a block the
+      // copy does not keep — a bare `/definitions` (no name), or a block
+      // reached deeper in — so it degrades rather than dangling on the
+      // stripped copy.
+      if (tail !== '' && divesThroughDefs(tail))
+        return degrade(ref, 'points through a definitions block in a form rebasing does not support')
       return `#/$defs/${allocateKey(name)}${tail}`
     }
 
@@ -363,6 +374,11 @@ export const rebaseComponentRefs = (
         }
       }
     }
+    // A component-internal ref to a bare block (`#/definitions`, `#/$defs`,
+    // which LOCAL_DEFS_REF's name segment never matches) has no target
+    // either: the copy hoists both blocks away.
+    if (scope.kind === 'component' && /^#\/(?:definitions|\$defs)$/.test(ref))
+      return degrade(ref, 'points at a definitions block the copy does not keep')
     return ref
   }
 
