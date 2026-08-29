@@ -904,8 +904,12 @@ describe('cli-e2e', () => {
     // sibling -headers tree with a Headers-suffixed root type.
     const headerProbes = await runProbes(join(outDir, 'channels/lighting-measured/light-measured-headers/index.js'), {
       valid: "m.parseLightMeasuredHeaders({ 'my-app-header': 42 })",
+      outOfRange: "m.parseLightMeasuredHeaders({ 'my-app-header': 999 })",
     })
     expect(headerProbes.valid?.ok).toBe(true)
+    // The trait's schema (0–100) must actually gate the tree: an
+    // accept-anything headers parser passes the positive probe alone.
+    expect(headerProbes.outOfRange?.ok).toBe(false)
   })
 
   it('rejects --input asyncapi combined with --root-type', async () => {

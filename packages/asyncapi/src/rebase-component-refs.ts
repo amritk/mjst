@@ -33,6 +33,36 @@ const NAME_MAP_KEYWORDS = new Set(['properties', 'patternProperties', 'dependent
 const decodeSegment = (segment: string): string => segment.replace(/~1/g, '/').replace(/~0/g, '~')
 
 /**
+ * The structural keywords this module matches by spelling. RFC 6901 evaluates
+ * a URI-fragment pointer percent-decoded, so `#/components/schemas/A/%24defs/x`
+ * names the same block as the literal spelling — the document resolver honors
+ * that, and matching only the literal form would append the encoded segment
+ * verbatim onto a copy whose block was hoisted away.
+ */
+const KEYWORD_SEGMENTS = new Set(['definitions', '$defs', 'schema', 'schemaFormat'])
+
+/**
+ * Rewrites percent-encoded spellings of the structural keywords to their
+ * decoded form, segment by segment. Every other segment keeps its raw
+ * spelling: definition- and component-name lookups carry their own
+ * membership-checked percent fallbacks, and decoding them here would break
+ * the spelling-faithful emitted keys.
+ */
+const decodeKeywordSegments = (pointer: string): string =>
+  pointer
+    .split('/')
+    .map((segment) => {
+      if (!segment.includes('%')) return segment
+      try {
+        const decoded = decodeURIComponent(segment)
+        return KEYWORD_SEGMENTS.has(decoded) ? decoded : segment
+      } catch {
+        return segment
+      }
+    })
+    .join('/')
+
+/**
  * Whether a pointer tail (relative to a schema) passes through a
  * definitions/`$defs` *block* — as opposed to merely containing a property
  * named `definitions`. Walked structurally: under `properties` (and friends)
@@ -276,7 +306,7 @@ export const rebaseComponentRefs = (
     const component = COMPONENT_SCHEMA_REF.exec(ref)
     if (component) {
       const name = canonicalName(component[1] as string)
-      let tail = component[2] ?? ''
+      let tail = decodeKeywordSegments(component[2] ?? '')
       // The copy is the UNWRAPPED Multi Format schema, so a pointer-faithful
       // hop through the wrapper's `schema` key has no level to land on — and a
       // tail into the wrapper's *other* key (`/schemaFormat`) has no target in
@@ -324,7 +354,7 @@ export const rebaseComponentRefs = (
       return `#/$defs/${allocateKey(name)}${tail}`
     }
 
-    const local = LOCAL_DEFS_REF.exec(ref)
+    const local = LOCAL_DEFS_REF.exec(decodeKeywordSegments(ref))
     if (local) {
       const block = local[1] as DefsBlock
       const tail = local[3] ?? ''
@@ -377,7 +407,7 @@ export const rebaseComponentRefs = (
     // A component-internal ref to a bare block (`#/definitions`, `#/$defs`,
     // which LOCAL_DEFS_REF's name segment never matches) has no target
     // either: the copy hoists both blocks away.
-    if (scope.kind === 'component' && /^#\/(?:definitions|\$defs)$/.test(ref))
+    if (scope.kind === 'component' && /^#\/(?:definitions|\$defs)$/.test(decodeKeywordSegments(ref)))
       return degrade(ref, 'points at a definitions block the copy does not keep')
     return ref
   }

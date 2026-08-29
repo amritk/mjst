@@ -47,6 +47,10 @@ describe('message-schemas', () => {
     )
     expect(schemas.map((schema) => schema.subDir)).toEqual(['channels/events/evt', 'channels/events/evt-headers'])
     expect(schemas[1]?.rootTypeName).toBe('EvtHeaders')
+    // The entry must carry the headers schema itself — not the payload, and
+    // not a placeholder: an accept-anything headers tree would ship silently.
+    expect(schemas[0]?.schema).toEqual({ type: 'object' })
+    expect(schemas[1]?.schema).toEqual({ type: 'object', properties: {} })
   })
 
   it('suffixes colliding tokens deterministically with an issue', () => {

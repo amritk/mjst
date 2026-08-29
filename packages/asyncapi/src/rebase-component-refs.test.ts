@@ -259,6 +259,34 @@ describe('rebase-component-refs', () => {
     expect(issues).toEqual([])
   })
 
+  it('recognizes percent-spelled block keywords the way the resolver does', () => {
+    // RFC 6901 evaluates URI-fragment pointers percent-decoded, so
+    // `/%24defs/x` names the `$defs` block — the resolver follows it, and a
+    // literal-only match appended the encoded segment verbatim onto a copy
+    // whose block was hoisted away, a silent dangling ref.
+    const issues: ExtractionIssue[] = []
+    const encoded = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          A: {
+            type: 'object',
+            properties: { x: { $ref: '#/%24defs/x' } },
+            $defs: { x: { type: 'string' } },
+          },
+        },
+      },
+    }
+    const tailed = rebaseComponentRefs({ $ref: '#/components/schemas/A/%24defs/x' }, encoded, '2020-12', issues, '#/x')
+    expect(tailed['$ref']).toBe('#/$defs/A-x')
+    expect((tailed['$defs'] as Record<string, unknown>)['A-x']).toEqual({ type: 'string' })
+
+    const internal = rebaseComponentRefs({ $ref: '#/components/schemas/A' }, encoded, '2020-12', issues, '#/x')
+    const defs = internal['$defs'] as Record<string, Record<string, unknown>>
+    expect((defs['A']?.['properties'] as Record<string, Record<string, unknown>>)['x']?.['$ref']).toBe('#/$defs/A-x')
+    expect(issues).toEqual([])
+  })
+
   it("strips the wrapper hop from a tail through a Multi Format component's schema key", () => {
     // The copy is the unwrapped schema, so the pointer-faithful `/schema` hop
     // has no level to land on — kept verbatim, buildSchema threw and the
