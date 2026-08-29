@@ -103,37 +103,59 @@ const collectDirections = (
     return undefined
   }
 
-  for (const [operationKey, rawOperation] of Object.entries(operationsMap as Record<string, unknown>)) {
-    const operationPath = `#/operations/${operationKey}`
-    const operation = resolveNode(document, rawOperation, issues, operationPath)
-    if (operation === undefined) continue
-    const action = readKey(operation, 'action')
-    if (action !== 'send' && action !== 'receive') continue
-
-    const channelKey = channelKeyOf(readKey(operation, 'channel'), `${operationPath}/channel`)
-    if (channelKey === undefined) {
-      issues.push({
-        path: `${operationPath}/channel`,
-        message: 'operation channel does not resolve; direction skipped',
-      })
-      continue
+  const processOperationLike = (
+    operation: Record<string, unknown>,
+    action: MessageDirection,
+    operationPath: string,
+    kind: 'operation' | 'reply',
+  ): void => {
+    const channelNode = readKey(operation, 'channel')
+    let channelKey: string | undefined
+    let channelMessages: unknown
+    // An operation must name its channel; a reply may skip it and name one
+    // inside each message ref instead (`#/channels/x/messages/y`).
+    if (channelNode !== undefined || kind === 'operation') {
+      channelKey = channelKeyOf(channelNode, `${operationPath}/channel`)
+      if (channelKey === undefined) {
+        issues.push({
+          path: `${operationPath}/channel`,
+          message: `${kind} channel does not resolve; direction skipped`,
+        })
+        return
+      }
+      const channel = resolveNode(document, readKey(channelsMap, channelKey), issues, `#/channels/${channelKey}`)
+      channelMessages = channel === undefined ? undefined : readKey(channel, 'messages')
     }
-
-    const channel = resolveNode(document, readKey(channelsMap, channelKey), issues, `#/channels/${channelKey}`)
-    const channelMessages = channel === undefined ? undefined : readKey(channel, 'messages')
 
     // With no `messages` list the operation covers the whole channel.
     const opMessages = readKey(operation, 'messages')
-    const messageKeys: string[] = []
+    const messageTargets: [channel: string, message: string][] = []
     if (Array.isArray(opMessages)) {
       for (const [index, item] of opMessages.entries()) {
         const ref =
           typeof item === 'object' && item !== null ? readKey(item as Record<string, unknown>, '$ref') : undefined
         const match = typeof ref === 'string' ? CHANNEL_MESSAGE_REF.exec(ref) : null
-        if (match && typeof channelMessages === 'object' && channelMessages !== null) {
+        if (match && channelKey === undefined) {
+          // A channel-less reply: the ref's own channel segment keys the direction.
+          const refChannelKey = memberKey(channelsMap, match[1] as string)
+          const refChannel =
+            refChannelKey === undefined
+              ? undefined
+              : resolveNode(document, readKey(channelsMap, refChannelKey), issues, `#/channels/${refChannelKey}`)
+          const refMessages = refChannel === undefined ? undefined : readKey(refChannel, 'messages')
+          const messageKey =
+            typeof refMessages === 'object' && refMessages !== null
+              ? memberKey(refMessages as Record<string, unknown>, match[2] as string)
+              : undefined
+          if (refChannelKey !== undefined && messageKey !== undefined) {
+            messageTargets.push([refChannelKey, messageKey])
+            continue
+          }
+        }
+        if (match && channelKey !== undefined && typeof channelMessages === 'object' && channelMessages !== null) {
           const key = memberKey(channelMessages as Record<string, unknown>, match[2] as string)
           if (key !== undefined) {
-            messageKeys.push(key)
+            messageTargets.push([channelKey, key])
             continue
           }
           // A key the channel does not hold falls through to the identity path.
@@ -142,7 +164,7 @@ const collectDirections = (
         // resolver inlined): find the message by identity in the channel's
         // map, resolving both sides so two refs to the same component match.
         let found = false
-        if (typeof channelMessages === 'object' && channelMessages !== null) {
+        if (channelKey !== undefined && typeof channelMessages === 'object' && channelMessages !== null) {
           const scratch: ExtractionIssue[] = []
           const itemPath = `${operationPath}/messages/${index}`
           const resolvedItem = resolveNode(document, item, scratch, itemPath)
@@ -152,7 +174,7 @@ const collectDirections = (
               (resolvedItem !== undefined &&
                 (value === resolvedItem || resolveNode(document, value, scratch, itemPath) === resolvedItem))
             if (matches) {
-              messageKeys.push(key)
+              messageTargets.push([channelKey, key])
               found = true
               break
             }
@@ -161,24 +183,46 @@ const collectDirections = (
         if (!found) {
           issues.push({
             path: `${operationPath}/messages/${index}`,
-            message: 'operation message reference does not resolve to a channel message; direction skipped',
+            message: `${kind} message reference does not resolve to a channel message; direction skipped`,
           })
         }
       }
-    } else if (typeof channelMessages === 'object' && channelMessages !== null) {
-      messageKeys.push(...Object.keys(channelMessages as Record<string, unknown>))
+    } else if (channelKey !== undefined && typeof channelMessages === 'object' && channelMessages !== null) {
+      for (const key of Object.keys(channelMessages as Record<string, unknown>)) {
+        messageTargets.push([channelKey, key])
+      }
     }
 
-    for (const messageKey of messageKeys) {
-      const key = `${channelKey}\u0000${messageKey}`
+    for (const [messageChannelKey, messageKey] of messageTargets) {
+      const key = `${messageChannelKey}\u0000${messageKey}`
       const existing = directions.get(key)
       if (existing === undefined) {
         directions.set(key, action)
       } else if (existing !== action) {
         issues.push({
           path: operationPath,
-          message: `message "${messageKey}" on channel "${channelKey}" is both sent and received; keeping "${existing}"`,
+          message: `message "${messageKey}" on channel "${messageChannelKey}" is both sent and received; keeping "${existing}"`,
         })
+      }
+    }
+  }
+
+  for (const [operationKey, rawOperation] of Object.entries(operationsMap as Record<string, unknown>)) {
+    const operationPath = `#/operations/${operationKey}`
+    const operation = resolveNode(document, rawOperation, issues, operationPath)
+    if (operation === undefined) continue
+    const action = readKey(operation, 'action')
+    if (action !== 'send' && action !== 'receive') continue
+
+    processOperationLike(operation, action, operationPath, 'operation')
+
+    // 3.0 request-reply: the reply declares the messages that come back to
+    // the application, so they travel opposite the operation's action.
+    const rawReply = readKey(operation, 'reply')
+    if (rawReply !== undefined) {
+      const reply = resolveNode(document, rawReply, issues, `${operationPath}/reply`)
+      if (reply !== undefined) {
+        processOperationLike(reply, action === 'send' ? 'receive' : 'send', `${operationPath}/reply`, 'reply')
       }
     }
   }

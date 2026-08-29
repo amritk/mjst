@@ -53,6 +53,96 @@ describe('extract-channels-v3', () => {
     }
   })
 
+  it('gives reply messages the direction opposite the operation action', () => {
+    const document = {
+      asyncapi: '3.0.0',
+      channels: {
+        requests: { messages: { ping: { payload: { type: 'object' } } } },
+        replies: { messages: { pong: { payload: { type: 'object' } } } },
+      },
+      operations: {
+        doPing: {
+          action: 'send',
+          channel: { $ref: '#/channels/requests' },
+          reply: {
+            channel: { $ref: '#/channels/replies' },
+            messages: [{ $ref: '#/channels/replies/messages/pong' }],
+          },
+        },
+      },
+    }
+    const issues: ExtractionIssue[] = []
+    const channels = extractChannelsV3(document, issues)
+    const byChannel = new Map(channels.map((channel) => [channel.key, channel]))
+    expect(byChannel.get('requests')?.messages[0]?.direction).toBe('send')
+    // The reply comes *back* to the application: a send operation receives it.
+    expect(byChannel.get('replies')?.messages[0]?.direction).toBe('receive')
+    expect(issues).toEqual([])
+  })
+
+  it('keys a channel-less reply off each message ref, and covers a reply channel with no list', () => {
+    const document = {
+      asyncapi: '3.0.0',
+      channels: {
+        requests: { messages: { ask: { payload: { type: 'object' } } } },
+        answers: { messages: { yes: { payload: { type: 'object' } }, no: { payload: { type: 'object' } } } },
+      },
+      operations: {
+        // No reply.channel: the message ref's own channel segment decides.
+        askOne: {
+          action: 'receive',
+          channel: { $ref: '#/channels/requests' },
+          reply: { messages: [{ $ref: '#/channels/answers/messages/yes' }] },
+        },
+      },
+    }
+    const channels = extractChannelsV3(document, [])
+    const byChannel = new Map(channels.map((channel) => [channel.key, channel]))
+    const answers = new Map(byChannel.get('answers')?.messages.map((message) => [message.name, message]))
+    expect(answers.get('yes')?.direction).toBe('send')
+    expect(answers.get('no')?.direction).toBeUndefined()
+
+    const wholeChannel = extractChannelsV3(
+      {
+        ...document,
+        operations: {
+          askAll: {
+            action: 'receive',
+            channel: { $ref: '#/channels/requests' },
+            reply: { channel: { $ref: '#/channels/answers' } },
+          },
+        },
+      },
+      [],
+    )
+    for (const message of wholeChannel.find((channel) => channel.key === 'answers')?.messages ?? []) {
+      expect(message.direction).toBe('send')
+    }
+  })
+
+  it('reports a reply channel that does not resolve, keeping the operation direction', () => {
+    const issues: ExtractionIssue[] = []
+    const channels = extractChannelsV3(
+      {
+        ...baseDocument,
+        operations: {
+          onCreated: {
+            action: 'send',
+            channel: { $ref: '#/channels/events' },
+            reply: { channel: { $ref: '#/channels/missing' } },
+          },
+        },
+      },
+      issues,
+    )
+    for (const message of channels[0]?.messages ?? []) {
+      expect(message.direction).toBe('send')
+    }
+    expect(issues).toEqual([
+      { path: '#/operations/onCreated/reply/channel', message: 'reply channel does not resolve; direction skipped' },
+    ])
+  })
+
   it('keeps the first direction and reports a conflict', () => {
     const issues: ExtractionIssue[] = []
     const channels = extractChannelsV3(

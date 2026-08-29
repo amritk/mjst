@@ -148,7 +148,7 @@ export const rebaseComponentRefs = (
   /** Document-root `$defs` name → the key its copy gets. */
   const docDefKeyByName = new Map<string, string>()
   /** Refs no rewrite can satisfy, degraded to `{}` with an issue. */
-  const unresolvable: { key: string; ref: string }[] = []
+  const unresolvable: { key: string; ref: string; reason: string }[] = []
   const componentQueue: string[] = []
   const docDefQueue: string[] = []
 
@@ -265,9 +265,9 @@ export const rebaseComponentRefs = (
     return raw
   }
 
-  const degrade = (ref: string): string => {
+  const degrade = (ref: string, reason: string): string => {
     const key = claimKey('unsupported-pointer')
-    unresolvable.push({ key, ref })
+    unresolvable.push({ key, ref, reason })
     return `#/$defs/${key}`
   }
 
@@ -286,7 +286,8 @@ export const rebaseComponentRefs = (
       const throughDefs = TAIL_THROUGH_DEFS.exec(tail)
       if (throughDefs) {
         const rest = throughDefs[3] ?? ''
-        if (divesThroughDefs(rest)) return degrade(ref)
+        if (divesThroughDefs(rest))
+          return degrade(ref, 'dives through nested definitions, which rebasing does not support')
         const block = throughDefs[1] as DefsBlock
         const blocks = componentBlockNames(name)
         const defName = canonicalDefName(
@@ -301,13 +302,14 @@ export const rebaseComponentRefs = (
           const declared =
             blocks !== undefined &&
             (blocks[block].has(defName) || blocks.$defs.has(defName) || blocks.definitions.has(defName))
-          if (!declared) return degrade(ref)
+          if (!declared) return degrade(ref, 'points below a definition its component does not declare')
         }
         return `#/$defs/${allocateDefKey(name, block, defName)}${rest}`
       }
       // Same rule for a plain tail: a component that will degrade to `{}`
       // cannot carry one.
-      if (tail !== '' && componentBlockNames(name) === undefined) return degrade(ref)
+      if (tail !== '' && componentBlockNames(name) === undefined)
+        return degrade(ref, 'points into a component that cannot be copied')
       return `#/$defs/${allocateKey(name)}${tail}`
     }
 
@@ -315,6 +317,14 @@ export const rebaseComponentRefs = (
     if (local) {
       const block = local[1] as DefsBlock
       const tail = local[3] ?? ''
+      // A hoisted definition is a normalized copy like any component — a tail
+      // that dives through a *nested* definitions block dangles the same way
+      // the external spelling above does, so it degrades before rebasing.
+      // Refs that stand unrewritten (the message root's own `$defs`) keep
+      // their tails: that block is not re-normalized here.
+      const nestedTail = tail !== '' && divesThroughDefs(tail)
+      const degradeNestedTail = (): string =>
+        degrade(ref, 'dives through nested definitions, which rebasing does not support')
       if (scope.kind === 'component') {
         // Spelling-faithful lookup, with one fallback: a `#/definitions/...`
         // ref inside a draft-07 component targets the block normalization
@@ -326,9 +336,11 @@ export const rebaseComponentRefs = (
           (candidate) => scope.blocks[block].has(candidate) || scope.blocks.$defs.has(candidate),
         )
         if (scope.blocks[block].has(defName)) {
+          if (nestedTail) return degradeNestedTail()
           return `#/$defs/${allocateDefKey(scope.component, block, defName)}${tail}`
         }
         if (block === 'definitions' && scope.blocks.$defs.has(defName)) {
+          if (nestedTail) return degradeNestedTail()
           return `#/$defs/${allocateDefKey(scope.component, '$defs', defName)}${tail}`
         }
       }
@@ -346,6 +358,7 @@ export const rebaseComponentRefs = (
         )
         if (scope.kind === 'root' && rootOwnDefNames.has(defName)) return ref
         if (documentDefs !== undefined && readKey(documentDefs, defName) !== undefined) {
+          if (nestedTail) return degradeNestedTail()
           return `#/$defs/${allocateDocDefKey(defName)}${tail}`
         }
       }
@@ -497,10 +510,10 @@ export const rebaseComponentRefs = (
     assignKey(copiedDefs, key, {})
   }
 
-  for (const { key, ref } of unresolvable) {
+  for (const { key, ref, reason } of unresolvable) {
     issues.push({
       path,
-      message: `$ref "${ref}" dives through nested definitions, which rebasing does not support; treated as an unconstrained schema`,
+      message: `$ref "${ref}" ${reason}; treated as an unconstrained schema`,
     })
     assignKey(copiedDefs, key, {})
   }

@@ -184,6 +184,32 @@ describe('rebase-component-refs', () => {
     expect(issues.some((issue) => issue.message.includes('nested definitions'))).toBe(true)
   })
 
+  it('degrades a component-internal ref diving through nested definitions too', () => {
+    // Same hazard as the external spelling above, one scope deeper: the
+    // component's own `#/definitions/parent/definitions/child` re-aims its
+    // first hop at the hoisted `Form-parent` entry, but the upgrade renames
+    // the block nested *inside* that entry, so the kept tail dangled.
+    const issues: ExtractionIssue[] = []
+    const nested = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          Form: {
+            type: 'object',
+            properties: { child: { $ref: '#/definitions/parent/definitions/child' } },
+            definitions: { parent: { type: 'object', definitions: { child: { type: 'string' } } } },
+          },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs({ $ref: '#/components/schemas/Form' }, nested, 'asyncapi', issues, '#/x')
+    const defs = rebased['$defs'] as Record<string, Record<string, unknown>>
+    const child = (defs['Form']?.['properties'] as Record<string, Record<string, unknown>>)['child']
+    expect(child?.['$ref']).toBe('#/$defs/unsupported-pointer')
+    expect(defs['unsupported-pointer']).toEqual({})
+    expect(issues.some((issue) => issue.message.includes('dives through nested definitions'))).toBe(true)
+  })
+
   it('keeps percent escapes out of emitted $defs keys', () => {
     // The generators percent-decode $ref pointers, so a `%` surviving into a
     // key makes the emitted ref and the key disagree after decoding — the
