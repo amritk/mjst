@@ -23,28 +23,149 @@
  *
  * Values are also *narrowed* here — `minLength` is a `number | undefined`
  * rather than `unknown` — so the per-validation `typeof` guards move off the hot
- * path too, and the group flags (`hasRefs`, `hasBranches`, …) let the walker
- * skip whole blocks of keywords with a single boolean test.
+ * path too.
+ *
+ * ## Why the keywords are grouped
+ *
+ * This was one flat object of 64 fields, and the engine pays for a field whether
+ * or not the node declares it: a `{ type: 'string', minLength: 1 }` node — the
+ * overwhelmingly common shape — allocated 64 slots to hold two answers and 62
+ * `undefined`s. Measured on JSC, that is **662 bytes per node**, and the meta is
+ * retained for the life of the prepared validator, so a document like the
+ * AsyncAPI 3.0 meta-schema (2351 schema nodes) carried ~1.5 MB of mostly-empty
+ * objects.
+ *
+ * So the per-vocabulary keywords now live in sub-objects that are built **only
+ * when the node declares one of them** — the same trick `ObjectMeta` in
+ * `interpret.ts` already plays, and the same one Zod 4.5 used to shrink a schema
+ * instance ~10x: stop materializing what this instance will never be asked for.
+ * Averaged over that document's nodes the meta now costs **132 bytes** (5x
+ * smaller), and the document ~300 KB.
+ *
+ * It costs the hot path nothing, because the walker was *already* gated on a
+ * `has…Keywords` boolean before it read any of these fields — the group pointer
+ * is that boolean, `null` where the flag was `false`. So the flag test becomes a
+ * null check on the same fixed-offset load, and only the branch that already
+ * passed it pays one extra hop. Each group is built at exactly one site, so all
+ * of them share a hidden class and stay monomorphic to read. Steady-state
+ * throughput measured unchanged; the *cold* one-shot path — the one this package
+ * exists for — got faster, because a node no longer initializes 64 slots to
+ * answer two questions (the 40-property benchmark's schema-to-first-result went
+ * 0.063 ms → 0.045 ms).
  *
  * Keys come from `Object.getOwnPropertyNames`, not `Object.keys`, so this reads
  * exactly what `Object.hasOwn` used to: own properties only — never an inherited
  * name off a polluted `Object.prototype`, which is the bug the old reader
  * existed to prevent — including a non-enumerable one.
  */
-export type NodeMeta = {
-  /** True when the node declares a string `$id`, opening a new schema resource. */
-  readonly hasId: boolean
-  /** OpenAPI 3.0 `nullable: true`, which accepts `null` regardless of `type`. */
-  readonly nullable: boolean
 
+/**
+ * The three reference keywords. Present when the node carries any of them, which
+ * most nodes do not.
+ */
+export type RefKeywords = {
   /** `$ref`, when it is a string — the only form that resolves. */
   readonly ref: string | undefined
   /** `$dynamicRef`, when it is a string. */
   readonly dynamicRef: string | undefined
   /** True when a string `$recursiveRef` (2019-09) is present. */
   readonly hasRecursiveRef: boolean
-  /** Any of the three reference keywords above — one test to skip all of them. */
-  readonly hasRefs: boolean
+}
+
+/**
+ * The branching applicators. Present when the node declares `allOf`, `anyOf`,
+ * `oneOf`, `not`, or `if` — a `then`/`else` with no `if` asserts nothing, so it
+ * does not open the group on its own.
+ */
+export type BranchKeywords = {
+  readonly allOf: readonly unknown[] | undefined
+  /** `anyOf`, when a non-empty array — an empty one asserts nothing. */
+  readonly anyOf: readonly unknown[] | undefined
+  /** `oneOf`, when a non-empty array — see {@link BranchKeywords.anyOf}. */
+  readonly oneOf: readonly unknown[] | undefined
+  readonly hasNot: boolean
+  readonly not: unknown
+  readonly hasIf: boolean
+  readonly ifSchema: unknown
+  readonly hasThen: boolean
+  readonly thenSchema: unknown
+  readonly hasElse: boolean
+  readonly elseSchema: unknown
+}
+
+/** `unevaluatedProperties` / `unevaluatedItems` — the keywords that open an annotation scope. */
+export type UnevaluatedKeywords = {
+  readonly hasProperties: boolean
+  readonly properties: unknown
+  readonly hasItems: boolean
+  readonly items: unknown
+}
+
+/** The string constraints. */
+export type StringKeywords = {
+  readonly minLength: number | undefined
+  readonly maxLength: number | undefined
+  readonly pattern: string | undefined
+  readonly format: string | undefined
+}
+
+/** The numeric constraints. */
+export type NumberKeywords = {
+  readonly minimum: number | undefined
+  readonly maximum: number | undefined
+  readonly exclusiveMinimum: number | undefined
+  readonly exclusiveMaximum: number | undefined
+  /** Draft-04's boolean `exclusiveMinimum: true`, which makes a sibling `minimum` strict. */
+  readonly strictMinimum: boolean
+  /** Draft-04's boolean `exclusiveMaximum: true` — see {@link NumberKeywords.strictMinimum}. */
+  readonly strictMaximum: boolean
+  readonly multipleOf: number | undefined
+}
+
+/** The array keywords. */
+export type ArrayKeywords = {
+  readonly minItems: number | undefined
+  readonly maxItems: number | undefined
+  readonly uniqueItems: boolean
+  /**
+   * The positional schemas: `prefixItems`, or draft-07's array-form `items`.
+   * Undefined when the node declares neither.
+   */
+  readonly tuple: readonly unknown[] | undefined
+  /**
+   * The schema for everything past {@link ArrayKeywords.tuple}: `items` next to a
+   * `prefixItems`, `additionalItems` next to an array-form `items`, or a plain
+   * schema-form `items` on its own.
+   */
+  readonly rest: unknown
+  readonly hasContains: boolean
+  readonly contains: unknown
+  readonly minContains: number | undefined
+  readonly maxContains: number | undefined
+}
+
+/** The object keywords. */
+export type ObjectKeywords = {
+  readonly properties: Record<string, unknown> | undefined
+  readonly patternProperties: Record<string, unknown> | undefined
+  readonly required: readonly string[] | undefined
+  readonly dependentRequired: Record<string, unknown> | undefined
+  readonly dependentSchemas: Record<string, unknown> | undefined
+  /** Draft-07 `dependencies`, the dual-form predecessor of the two keywords above. */
+  readonly dependencies: Record<string, unknown> | undefined
+  readonly hasAdditionalProperties: boolean
+  readonly additionalProperties: unknown
+  readonly minProperties: number | undefined
+  readonly maxProperties: number | undefined
+  readonly hasPropertyNames: boolean
+  readonly propertyNames: unknown
+}
+
+export type NodeMeta = {
+  /** True when the node declares a string `$id`, opening a new schema resource. */
+  readonly hasId: boolean
+  /** OpenAPI 3.0 `nullable: true`, which accepts `null` regardless of `type`. */
+  readonly nullable: boolean
 
   /**
    * Presence of `const`, kept separate from its value: `const: undefined` is a
@@ -61,84 +182,20 @@ export type NodeMeta = {
   /** `type`, when a non-empty array of strings. */
   readonly types: readonly string[] | undefined
 
-  readonly allOf: readonly unknown[] | undefined
-  /** `anyOf`, when a non-empty array — an empty one asserts nothing. */
-  readonly anyOf: readonly unknown[] | undefined
-  /** `oneOf`, when a non-empty array — see {@link NodeMeta.anyOf}. */
-  readonly oneOf: readonly unknown[] | undefined
-  readonly hasNot: boolean
-  readonly not: unknown
-  readonly hasIf: boolean
-  readonly ifSchema: unknown
-  readonly hasThen: boolean
-  readonly thenSchema: unknown
-  readonly hasElse: boolean
-  readonly elseSchema: unknown
-  /** Any of the branching applicators above — one test to skip all of them. */
-  readonly hasBranches: boolean
-
-  readonly hasUnevaluatedProperties: boolean
-  readonly unevaluatedProperties: unknown
-  readonly hasUnevaluatedItems: boolean
-  readonly unevaluatedItems: unknown
-  /** Either `unevaluated*` keyword, which is what starts an annotation scope. */
-  readonly hasUnevaluated: boolean
-
-  readonly minLength: number | undefined
-  readonly maxLength: number | undefined
-  readonly pattern: string | undefined
-  readonly format: string | undefined
-  /** True when the node carries any string keyword, so a string value can skip the block. */
-  readonly hasStringKeywords: boolean
-
-  readonly minimum: number | undefined
-  readonly maximum: number | undefined
-  readonly exclusiveMinimum: number | undefined
-  readonly exclusiveMaximum: number | undefined
-  /** Draft-04's boolean `exclusiveMinimum: true`, which makes a sibling `minimum` strict. */
-  readonly strictMinimum: boolean
-  /** Draft-04's boolean `exclusiveMaximum: true` — see {@link NodeMeta.strictMinimum}. */
-  readonly strictMaximum: boolean
-  readonly multipleOf: number | undefined
-  /** True when the node carries any numeric keyword. */
-  readonly hasNumberKeywords: boolean
-
-  readonly minItems: number | undefined
-  readonly maxItems: number | undefined
-  readonly uniqueItems: boolean
-  /**
-   * The positional schemas: `prefixItems`, or draft-07's array-form `items`.
-   * Undefined when the node declares neither.
-   */
-  readonly tuple: readonly unknown[] | undefined
-  /**
-   * The schema for everything past {@link NodeMeta.tuple}: `items` next to a
-   * `prefixItems`, `additionalItems` next to an array-form `items`, or a plain
-   * schema-form `items` on its own.
-   */
-  readonly rest: unknown
-  readonly hasContains: boolean
-  readonly contains: unknown
-  readonly minContains: number | undefined
-  readonly maxContains: number | undefined
-  /** True when the node carries any array keyword. */
-  readonly hasArrayKeywords: boolean
-
-  readonly properties: Record<string, unknown> | undefined
-  readonly patternProperties: Record<string, unknown> | undefined
-  readonly required: readonly string[] | undefined
-  readonly dependentRequired: Record<string, unknown> | undefined
-  readonly dependentSchemas: Record<string, unknown> | undefined
-  /** Draft-07 `dependencies`, the dual-form predecessor of the two keywords above. */
-  readonly dependencies: Record<string, unknown> | undefined
-  readonly hasAdditionalProperties: boolean
-  readonly additionalProperties: unknown
-  readonly minProperties: number | undefined
-  readonly maxProperties: number | undefined
-  readonly hasPropertyNames: boolean
-  readonly propertyNames: unknown
-  /** True when the node carries any object keyword. */
-  readonly hasObjectKeywords: boolean
+  /** The reference keywords, or `null` when the node carries none — one test to skip all three. */
+  readonly refs: RefKeywords | null
+  /** The branching applicators, or `null` — one test to skip all five. */
+  readonly branches: BranchKeywords | null
+  /** The `unevaluated*` keywords, or `null`. */
+  readonly unevaluated: UnevaluatedKeywords | null
+  /** The string constraints, or `null`, so a string value can skip the block. */
+  readonly strings: StringKeywords | null
+  /** The numeric constraints, or `null`. */
+  readonly numbers: NumberKeywords | null
+  /** The array keywords, or `null`. */
+  readonly arrays: ArrayKeywords | null
+  /** The object keywords, or `null`. */
+  readonly objects: ObjectKeywords | null
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -404,75 +461,73 @@ export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Rec
   const meta: NodeMeta = {
     hasId,
     nullable,
-    ref,
-    dynamicRef,
-    hasRecursiveRef,
-    hasRefs: ref !== undefined || dynamicRef !== undefined || hasRecursiveRef,
     hasConst,
     constValue,
     enumValues,
     type,
     types,
-    allOf,
-    anyOf,
-    oneOf,
-    hasNot,
-    not,
-    hasIf,
-    ifSchema,
-    hasThen,
-    thenSchema,
-    hasElse,
-    elseSchema,
-    hasBranches: allOf !== undefined || anyOf !== undefined || oneOf !== undefined || hasNot || hasIf,
-    hasUnevaluatedProperties,
-    unevaluatedProperties,
-    hasUnevaluatedItems,
-    unevaluatedItems,
-    hasUnevaluated: hasUnevaluatedProperties || hasUnevaluatedItems,
-    minLength,
-    maxLength,
-    pattern,
-    format,
-    hasStringKeywords:
-      minLength !== undefined || maxLength !== undefined || pattern !== undefined || format !== undefined,
-    minimum,
-    maximum,
-    exclusiveMinimum,
-    exclusiveMaximum,
-    strictMinimum,
-    strictMaximum,
-    multipleOf,
-    hasNumberKeywords:
+    refs:
+      ref !== undefined || dynamicRef !== undefined || hasRecursiveRef ? { ref, dynamicRef, hasRecursiveRef } : null,
+    branches:
+      allOf !== undefined || anyOf !== undefined || oneOf !== undefined || hasNot || hasIf
+        ? {
+            allOf,
+            anyOf,
+            oneOf,
+            hasNot,
+            not,
+            hasIf,
+            ifSchema,
+            hasThen,
+            thenSchema,
+            hasElse,
+            elseSchema,
+          }
+        : null,
+    unevaluated:
+      hasUnevaluatedProperties || hasUnevaluatedItems
+        ? {
+            hasProperties: hasUnevaluatedProperties,
+            properties: unevaluatedProperties,
+            hasItems: hasUnevaluatedItems,
+            items: unevaluatedItems,
+          }
+        : null,
+    strings:
+      minLength !== undefined || maxLength !== undefined || pattern !== undefined || format !== undefined
+        ? { minLength, maxLength, pattern, format }
+        : null,
+    numbers:
       minimum !== undefined ||
       maximum !== undefined ||
       exclusiveMinimum !== undefined ||
       exclusiveMaximum !== undefined ||
-      multipleOf !== undefined,
-    minItems,
-    maxItems,
-    uniqueItems,
-    tuple,
-    rest,
-    hasContains,
-    contains,
-    minContains,
-    maxContains,
-    hasArrayKeywords:
-      minItems !== undefined || maxItems !== undefined || uniqueItems || tuple !== undefined || hasItems || hasContains,
-    properties,
-    patternProperties,
-    required,
-    dependentRequired,
-    dependentSchemas,
-    dependencies,
-    hasAdditionalProperties,
-    additionalProperties,
-    minProperties,
-    maxProperties,
-    hasPropertyNames,
-    propertyNames,
-    hasObjectKeywords:
+      multipleOf !== undefined
+        ? {
+            minimum,
+            maximum,
+            exclusiveMinimum,
+            exclusiveMaximum,
+            strictMinimum,
+            strictMaximum,
+            multipleOf,
+          }
+        : null,
+    arrays:
+      minItems !== undefined || maxItems !== undefined || uniqueItems || tuple !== undefined || hasItems || hasContains
+        ? {
+            minItems,
+            maxItems,
+            uniqueItems,
+            tuple,
+            rest,
+            hasContains,
+            contains,
+            minContains,
+            maxContains,
+          }
+        : null,
+    objects:
       properties !== undefined ||
       patternProperties !== undefined ||
       required !== undefined ||
@@ -482,7 +537,22 @@ export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Rec
       hasAdditionalProperties ||
       minProperties !== undefined ||
       maxProperties !== undefined ||
-      hasPropertyNames,
+      hasPropertyNames
+        ? {
+            properties,
+            patternProperties,
+            required,
+            dependentRequired,
+            dependentSchemas,
+            dependencies,
+            hasAdditionalProperties,
+            additionalProperties,
+            minProperties,
+            maxProperties,
+            hasPropertyNames,
+            propertyNames,
+          }
+        : null,
   }
   cache?.set(schema, meta)
   return meta

@@ -2860,7 +2860,7 @@ const applyScalarTag = (node: YamlScalar): unknown => {
  * materialized node decrements the budget; hitting zero throws instead of
  * hanging, matching how eemeli's `yaml` guards `maxAliasCount`.
  */
-type ExpansionBudget = { left: number }
+export type ExpansionBudget = { left: number }
 
 /**
  * Assigns `value` under `key` on a projected mapping. A plain `obj[key] = value`
@@ -2904,7 +2904,18 @@ const MIN_ALIAS_NODE_BUDGET = 100_000
  */
 const MAX_ALIAS_NODE_BUDGET = 20_000_000
 
-const newExpansionBudget = (sourceLength: number): ExpansionBudget => ({
+/**
+ * The budget a document of `sourceLength` bytes gets: proportional in the middle,
+ * with a floor for small documents and {@link MAX_ALIAS_NODE_BUDGET} on top.
+ *
+ * Exported so the ceiling can be asserted directly. Reading it off a projection
+ * instead means timing one — the cap only changes *how much* work a bomb does
+ * before the throw, never whether it throws — and a wall-clock assertion in a
+ * suite that runs twelve packages at once measures contention, which is the
+ * reason `testTimeout` is 30s in `vitest.config.ts` to begin with. Not re-exported
+ * from the package index, so this stays internal to `@amritk/yaml`.
+ */
+export const newExpansionBudget = (sourceLength: number): ExpansionBudget => ({
   left: Math.min(MAX_ALIAS_NODE_BUDGET, Math.max(MIN_ALIAS_NODE_BUDGET, sourceLength * ALIAS_NODES_PER_BYTE)),
 })
 
