@@ -2,6 +2,7 @@
 '@amritk/asyncapi': minor
 '@amritk/mjst': minor
 '@amritk/adapters': minor
+'@amritk/helpers': patch
 ---
 
 The generate pipeline now consumes AsyncAPI documents: `mjst --input asyncapi
@@ -56,6 +57,11 @@ come from message identity (`lightMeasured` → `LightMeasured`), never the
 schema `title` — two messages titled "Event" stay distinct. Colliding output
 names dedupe deterministically (`-2`, `-3`, …) with a warning rather than
 failing, because documents in the wild collide.
+
+**`@amritk/helpers`**: `upgradeDraft07Schema` now merges the renamed
+`definitions` into an authored `$defs` block instead of replacing it — a
+draft-07 document carrying both no longer loses every authored entry (and the
+refs pointing at them) during the upgrade.
 
 This is phase one of AsyncAPI support: generating `defineMessages`-compatible
 channel contracts, and projecting AsyncAPI documents *from* `@amritk/api`

@@ -306,6 +306,81 @@ describe('rebase-component-refs', () => {
     expect(issues).toEqual([])
   })
 
+  it('copies a document-root $defs target referenced from inside a component', () => {
+    // The resolver plants its hoisted-cycle refs inside components too; the
+    // component scope used to return such a ref unrewritten, leaving it
+    // dangling (or silently resolving against an unrelated payload-root def).
+    const issues: ExtractionIssue[] = []
+    const shared = {
+      asyncapi: '3.0.0',
+      $defs: { Shared: { type: 'string' } },
+      components: { schemas: { A: { type: 'object', properties: { s: { $ref: '#/$defs/Shared' } } } } },
+    }
+    const rebased = rebaseComponentRefs({ $ref: '#/components/schemas/A' }, shared, 'asyncapi', issues, '#/x')
+    const defs = rebased['$defs'] as Record<string, Record<string, unknown>>
+    const componentRef = ((defs['A']?.['properties'] as Record<string, Record<string, string>>)['s']?.['$ref'] ??
+      '') as string
+    expect(defs[componentRef.replace('#/$defs/', '')]).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
+  it('keeps a component ref to a document-root name distinct from a same-named payload def', () => {
+    const issues: ExtractionIssue[] = []
+    const shared = {
+      asyncapi: '3.0.0',
+      $defs: { Shared: { type: 'string' } },
+      components: { schemas: { A: { type: 'object', properties: { s: { $ref: '#/$defs/Shared' } } } } },
+    }
+    const rebased = rebaseComponentRefs(
+      {
+        type: 'object',
+        properties: { a: { $ref: '#/components/schemas/A' }, own: { $ref: '#/$defs/Shared' } },
+        $defs: { Shared: { type: 'integer' } },
+      },
+      shared,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    const defs = rebased['$defs'] as Record<string, Record<string, unknown>>
+    // The payload's own def keeps its name and its integer shape...
+    expect(defs['Shared']).toEqual({ type: 'integer' })
+    // ...while the component's ref lands on a copy of the DOCUMENT root's string.
+    const componentRef = ((defs['A']?.['properties'] as Record<string, Record<string, string>>)['s']?.['$ref'] ??
+      '') as string
+    expect(componentRef).not.toBe('#/$defs/Shared')
+    expect(defs[componentRef.replace('#/$defs/', '')]).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
+  it('does not mistake a dependencies entry named definitions for a block hop', () => {
+    // Draft-07 `dependencies` keys are author-chosen property names, exactly
+    // like `properties` keys — the structural walk must skip them too.
+    const issues: ExtractionIssue[] = []
+    const tricky = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          A: {
+            type: 'object',
+            definitions: { d: { type: 'object', dependencies: { definitions: { type: 'string' } } } },
+          },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/A/definitions/d/dependencies/definitions' },
+      tricky,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    expect(rebased['$ref']).toBe('#/$defs/A-d/dependencies/definitions')
+    const hoisted = (rebased['$defs'] as Record<string, Record<string, unknown>>)['A-d']
+    expect((hoisted?.['dependencies'] as Record<string, unknown>)['definitions']).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
   it('leaves refs inside instance data alone', () => {
     const issues: ExtractionIssue[] = []
     const rebased = rebaseComponentRefs(

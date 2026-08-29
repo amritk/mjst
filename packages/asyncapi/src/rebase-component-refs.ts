@@ -25,7 +25,9 @@ const LOCAL_DEFS_REF = /^#\/(\$defs|definitions)\/([^/]+)(\/.*)?$/
 
 // The keywords whose immediate children are *names*, not schema keywords — a
 // property legitimately called `definitions` must not read as a block hop.
-const NAME_MAP_KEYWORDS = new Set(['properties', 'patternProperties', 'dependentSchemas'])
+// `dependencies` is draft-07's spelling of `dependentSchemas`, and its keys
+// are author-chosen property names too.
+const NAME_MAP_KEYWORDS = new Set(['properties', 'patternProperties', 'dependentSchemas', 'dependencies'])
 
 /** Unescapes one RFC 6901 pointer segment. */
 const decodeSegment = (segment: string): string => segment.replace(/~1/g, '/').replace(/~0/g, '~')
@@ -256,20 +258,22 @@ export const rebaseComponentRefs = (
       if (scope.kind === 'component') {
         // Spelling-faithful lookup, with one fallback: a `#/definitions/...`
         // ref inside a draft-07 component targets the block normalization
-        // renamed to `$defs`.
+        // renamed to `$defs`. A miss falls through to the document-root
+        // check below — the cross-file resolver plants its `#/$defs/...`
+        // cycle refs inside components too.
         if (scope.blocks[block].has(defName)) {
           return `#/$defs/${allocateDefKey(scope.component, block, defName)}${tail}`
         }
         if (block === 'definitions' && scope.blocks.$defs.has(defName)) {
           return `#/$defs/${allocateDefKey(scope.component, '$defs', defName)}${tail}`
         }
-        return ref
       }
       if (block === '$defs') {
-        // The message root keeps its own `$defs`, so those refs stand; inside
-        // a copied document-root def there is no local block, and at the root
-        // a name the payload does not define may still live on the *document*
-        // root — where the cross-file resolver hoists reference cycles.
+        // The message root keeps its own `$defs`, so those refs stand; in any
+        // other scope (a copied component or document-root def, which have no
+        // claim on the message root's block) a name may still live on the
+        // *document* root — where the cross-file resolver hoists reference
+        // cycles.
         if (scope.kind === 'root' && rootOwnDefNames.has(defName)) return ref
         if (documentDefs !== undefined && readKey(documentDefs, defName) !== undefined) {
           return `#/$defs/${allocateDocDefKey(defName)}${tail}`
