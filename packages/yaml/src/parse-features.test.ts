@@ -1512,7 +1512,9 @@ describe('the expansion budget ceiling', () => {
     expect(capped).toBeLessThan((padded * 100) / 10)
     // Below the ceiling it is still proportional, so ordinary documents keep the
     // headroom they need, and small ones keep the floor.
-    expect(newExpansionBudget(200_000).left).toBeGreaterThan(newExpansionBudget(100_000).left)
+    // Both lengths sit well under the cap, so this compares two proportional
+    // budgets rather than the cap against one.
+    expect(newExpansionBudget(60_000).left).toBeGreaterThan(newExpansionBudget(30_000).left)
     expect(newExpansionBudget(10).left).toBe(newExpansionBudget(0).left)
   })
 
