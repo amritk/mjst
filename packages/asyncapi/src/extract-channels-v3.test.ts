@@ -77,6 +77,32 @@ describe('extract-channels-v3', () => {
     expect(issues.some((issue) => issue.message.includes('both sent and received'))).toBe(true)
   })
 
+  it('keeps directions when channels and operations live in components', () => {
+    // The operation's channel ref points at #/components/channels/... while
+    // the channels-map entry is its own ref to the same component — only the
+    // resolved objects coincide, so matching must resolve both sides.
+    const channels = extractChannelsV3(
+      {
+        asyncapi: '3.0.0',
+        channels: { events: { $ref: '#/components/channels/events' } },
+        operations: { onEvt: { $ref: '#/components/operations/onEvt' } },
+        components: {
+          channels: { events: { address: 'topic', messages: { evt: { $ref: '#/components/messages/evt' } } } },
+          operations: {
+            onEvt: {
+              action: 'receive',
+              channel: { $ref: '#/components/channels/events' },
+              messages: [{ $ref: '#/components/messages/evt' }],
+            },
+          },
+          messages: { evt: { payload: { type: 'object' } } },
+        },
+      },
+      [],
+    )
+    expect(channels[0]?.messages[0]?.direction).toBe('receive')
+  })
+
   it('matches an inlined operation channel by identity', () => {
     // A resolver that inlined the refs replaces `$ref` nodes with the shared
     // channel object, so pointer matching has nothing to read.

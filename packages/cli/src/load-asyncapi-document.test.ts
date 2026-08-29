@@ -48,6 +48,13 @@ describe('load-asyncapi-document', () => {
     await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(/Failed to parse .*broken\.yaml as YAML/)
   })
 
+  it('refuses a multi-document YAML stream instead of generating from its first document', async () => {
+    const dir = tmp()
+    const file = join(dir, 'multi.yaml')
+    writeFileSync(file, `${YAML_DOCUMENT}---\nasyncapi: 2.6.0\ninfo: { title: Second, version: '1' }\n`)
+    await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(/multiple YAML documents/)
+  })
+
   it('inlines a cross-file $ref within the document directory', async () => {
     const dir = tmp()
     writeFileSync(join(dir, 'payload.json'), JSON.stringify({ type: 'object', properties: { id: { type: 'string' } } }))

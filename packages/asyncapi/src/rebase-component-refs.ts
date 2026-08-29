@@ -19,16 +19,28 @@ const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)(\/.*)?$/
 // so the tail's first hop has to be re-aimed at the hoisted entry.
 const TAIL_THROUGH_DEFS = /^\/(?:definitions|\$defs)\/([^/]+)(\/.*)?$/
 
-// A component-internal reference (`#/$defs/<name>`, produced by the draft-07
-// upgrade or authored in a 2020-12 component), which must follow its target
-// when that block is hoisted to the root under a prefixed key.
-const LOCAL_DEFS_REF = /^#\/\$defs\/([^/]+)(\/.*)?$/
+// A component-internal reference (`#/$defs/<name>` from the draft-07 upgrade
+// or a 2020-12 component's authored block, `#/definitions/<name>` in one whose
+// dialect keeps the old spelling), which must follow its target when that
+// block is hoisted to the root under a prefixed key.
+const LOCAL_DEFS_REF = /^#\/(?:\$defs|definitions)\/([^/]+)(\/.*)?$/
+
+// A pointer tail that dives through a *second* definitions block. The first
+// hop's target is hoisted, but blocks nested inside it stay where the
+// draft-07 upgrade left them (renamed, contents hoisted separately), so a
+// deeper dive has no stable target — the same one-level limit the upgrade
+// helper documents for its own ref rewriting.
+const NESTED_DEFS_TAIL = /\/(?:definitions|\$defs)\//
 
 /** Unescapes one RFC 6901 pointer segment. */
 const decodeSegment = (segment: string): string => segment.replace(/~1/g, '/').replace(/~0/g, '~')
 
-/** Folds the characters a `$defs` key cannot carry (pointer syntax) to `-`. */
-const sanitizeKey = (name: string): string => name.replace(/[~/]+/g, '-')
+/**
+ * Folds the characters a `$defs` key cannot carry to `-`: pointer syntax, and
+ * `%` — the generators percent-decode `$ref` pointers, so a `%` surviving into
+ * an emitted key makes the ref and the key disagree after decoding.
+ */
+const sanitizeKey = (name: string): string => name.replace(/[~/%]+/g, '-')
 
 /**
  * Makes an extracted schema self-contained: every `$ref` into the document's
@@ -83,6 +95,8 @@ export const rebaseComponentRefs = (
   const keyByName = new Map<string, string>()
   /** `component\u0000definition` → the root `$defs` key its hoisted copy gets. */
   const defKeyByName = new Map<string, string>()
+  /** Refs diving deeper than one definitions level, degraded to `{}` with an issue. */
+  const unresolvable: { key: string; ref: string }[] = []
   const queue: string[] = []
 
   const claimKey = (preferred: string): string => {
@@ -96,12 +110,33 @@ export const rebaseComponentRefs = (
     const existing = keyByName.get(name)
     if (existing !== undefined) return existing
     // Prefer the component's own name; fall back to a prefixed (then numbered)
-    // key when the root's own `$defs` claims it or the name needs pointer
-    // escaping, which the generators' pointer lookups do not perform.
-    const key = taken.has(name) || /[~/]/.test(name) ? claimKey(`component-${sanitizeKey(name)}`) : claimKey(name)
+    // key when the root's own `$defs` claims it or the name carries characters
+    // the emitted pointer cannot (see {@link sanitizeKey}).
+    const key = taken.has(name) || /[~/%]/.test(name) ? claimKey(`component-${sanitizeKey(name)}`) : claimKey(name)
     keyByName.set(name, key)
     queue.push(name)
     return key
+  }
+
+  /**
+   * The components-map spelling a ref segment names. Documents write pointer
+   * segments both raw and percent-encoded (the RFC 6901 URI-fragment form),
+   * so when the tilde-decoded segment misses the map, its percent-decoded
+   * form gets a try — whichever spelling the document declares is canonical,
+   * keeping every ref to the same component on one allocated key.
+   */
+  const canonicalName = (segment: string): string => {
+    const raw = decodeSegment(segment)
+    if (componentSchemas !== undefined && readKey(componentSchemas, raw) !== undefined) return raw
+    if (raw.includes('%')) {
+      try {
+        const decoded = decodeURIComponent(raw)
+        if (componentSchemas !== undefined && readKey(componentSchemas, decoded) !== undefined) return decoded
+      } catch {
+        // Not a valid percent sequence — the raw spelling stands.
+      }
+    }
+    return raw
   }
 
   /** Root key for one of a component's own definitions, hoisted beside it. */
@@ -124,12 +159,18 @@ export const rebaseComponentRefs = (
   const rewriteRef = (ref: string, localDefs?: { component: string; names: ReadonlySet<string> }): string => {
     const component = COMPONENT_SCHEMA_REF.exec(ref)
     if (component) {
-      const name = decodeSegment(component[1] as string)
+      const name = canonicalName(component[1] as string)
       const tail = component[2] ?? ''
       const throughDefs = TAIL_THROUGH_DEFS.exec(tail)
       if (throughDefs) {
+        const rest = throughDefs[2] ?? ''
+        if (NESTED_DEFS_TAIL.test(rest)) {
+          const key = claimKey('unsupported-pointer')
+          unresolvable.push({ key, ref })
+          return `#/$defs/${key}`
+        }
         const defName = decodeSegment(throughDefs[1] as string)
-        return `#/$defs/${allocateDefKey(name, defName)}${throughDefs[2] ?? ''}`
+        return `#/$defs/${allocateDefKey(name, defName)}${rest}`
       }
       return `#/$defs/${allocateKey(name)}${tail}`
     }
@@ -207,25 +248,31 @@ export const rebaseComponentRefs = (
 
     const normalized = normalizeSchema(schema as Record<string, unknown>, componentFamily)
 
-    // Hoist the component's own `$defs` (its upgraded `definitions`, or the
-    // authored block of a 2020-12 component) to the root, and copy the body
-    // without them — with every internal `#/$defs/...` ref re-aimed at the
-    // hoisted entries.
-    const ownDefs = readKey(normalized, '$defs')
-    const ownDefsRecord =
-      typeof ownDefs === 'object' && ownDefs !== null && !Array.isArray(ownDefs)
-        ? (ownDefs as Record<string, unknown>)
-        : undefined
-    const localDefs =
-      ownDefsRecord === undefined ? undefined : { component: name, names: new Set(Object.keys(ownDefsRecord)) }
+    // Hoist the component's own definitions to the root and copy the body
+    // without them, with every internal ref re-aimed at the hoisted entries.
+    // Both spellings are collected: `$defs` (the draft-07 upgrade's output, or
+    // a 2020-12 component's authored block) and a `definitions` block a
+    // 2020-12/OpenAPI component keeps verbatim — normalization only renames it
+    // for the draft-07 families, and pointer tails re-aim unconditionally, so
+    // leaving the block behind stranded those targets as `{}`.
+    const ownDefs: Record<string, unknown> = {}
+    for (const blockName of ['definitions', '$defs'] as const) {
+      const block = readKey(normalized, blockName)
+      if (typeof block !== 'object' || block === null || Array.isArray(block)) continue
+      for (const [defName, defValue] of Object.entries(block as Record<string, unknown>)) {
+        assignKey(ownDefs, defName, defValue)
+      }
+    }
+    const hasOwnDefs = Object.keys(ownDefs).length > 0
+    const localDefs = hasOwnDefs ? { component: name, names: new Set(Object.keys(ownDefs)) } : undefined
 
-    if (ownDefsRecord !== undefined) {
-      for (const [defName, defValue] of Object.entries(ownDefsRecord)) {
+    if (hasOwnDefs) {
+      for (const [defName, defValue] of Object.entries(ownDefs)) {
         assignKey(copiedDefs, allocateDefKey(name, defName), rewrite(defValue, 0, false, localDefs))
       }
     }
 
-    const { $defs: _, ...body } = normalized
+    const { $defs: _, definitions: __, ...body } = normalized
     assignKey(copiedDefs, defsKey, rewrite(body, 0, false, localDefs))
   }
 
@@ -240,6 +287,14 @@ export const rebaseComponentRefs = (
       message: `$ref into "#/components/schemas/${componentName}" names a definition "${defName}" it does not declare; treated as an unconstrained schema`,
     })
     assignKey(copiedDefs, defKey, {})
+  }
+
+  for (const { key, ref } of unresolvable) {
+    issues.push({
+      path,
+      message: `$ref "${ref}" dives through nested definitions, which rebasing does not support; treated as an unconstrained schema`,
+    })
+    assignKey(copiedDefs, key, {})
   }
 
   if (Object.keys(copiedDefs).length === 0) return rewrittenRoot

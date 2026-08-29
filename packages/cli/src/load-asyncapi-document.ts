@@ -24,6 +24,14 @@ const parseDocumentText = (content: string, location: string): unknown => {
       .join('\n')
     throw new Error(`Failed to parse ${location} as YAML:\n${details}`)
   }
+  // The parser reads only the first document of a `---` stream and flags the
+  // rest with a warning; generating from half a file while exiting 0 would
+  // silently drop every channel in the later documents.
+  if (doc.warnings.some((warning) => warning.code === 'MULTIPLE_DOCUMENTS')) {
+    throw new Error(
+      `${location} contains multiple YAML documents; an AsyncAPI document must be a single-document file.`,
+    )
+  }
   return doc.toJS()
 }
 

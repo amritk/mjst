@@ -60,10 +60,17 @@ const collectDirections = (
         if (match) return decodeSegment(match[1] as string)
       }
     }
-    const resolved = resolveNode(document, channelNode, issues, path)
+    // Identity fallback, through resolution on *both* sides: the operation may
+    // point at `#/components/channels/...` while the channels-map entry is its
+    // own ref to the same component — only the resolved objects coincide. A
+    // scratch issue list keeps these probes quiet; the caller reports the one
+    // real failure when no channel matches.
+    const scratch: ExtractionIssue[] = []
+    const resolved = resolveNode(document, channelNode, scratch, path)
     if (resolved !== undefined) {
       for (const [key, value] of Object.entries(channelsMap)) {
         if (value === channelNode || value === resolved) return key
+        if (resolveNode(document, value, scratch, path) === resolved) return key
       }
     }
     return undefined
@@ -100,11 +107,20 @@ const collectDirections = (
           messageKeys.push(decodeSegment(match[2] as string))
           continue
         }
-        // Inlined by a resolver: find the message by identity in the channel's map.
+        // Any other spelling (`#/components/messages/...`, or a node a
+        // resolver inlined): find the message by identity in the channel's
+        // map, resolving both sides so two refs to the same component match.
         let found = false
         if (typeof channelMessages === 'object' && channelMessages !== null) {
+          const scratch: ExtractionIssue[] = []
+          const itemPath = `${operationPath}/messages/${index}`
+          const resolvedItem = resolveNode(document, item, scratch, itemPath)
           for (const [key, value] of Object.entries(channelMessages as Record<string, unknown>)) {
-            if (value === item) {
+            const matches =
+              value === item ||
+              (resolvedItem !== undefined &&
+                (value === resolvedItem || resolveNode(document, value, scratch, itemPath) === resolvedItem))
+            if (matches) {
               messageKeys.push(key)
               found = true
               break

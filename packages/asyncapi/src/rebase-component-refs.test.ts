@@ -142,6 +142,64 @@ describe('rebase-component-refs', () => {
     expect(issues.some((issue) => issue.message.includes('ghost'))).toBe(true)
   })
 
+  it('hoists a definitions block a 2020-12 component keeps verbatim', () => {
+    // Normalization renames `definitions` only for the draft-07 families, but
+    // pointer tails re-aim unconditionally — without hoisting from the raw
+    // block, the tail's target became `{}` plus a false "does not declare"
+    // issue while the component declared it right there.
+    const issues: ExtractionIssue[] = []
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/form/definitions/nameType' },
+      document,
+      '2020-12',
+      issues,
+      '#/x',
+    )
+    expect((rebased['$defs'] as Record<string, unknown>)['form-nameType']).toEqual({ type: 'string', minLength: 1 })
+    expect(issues).toEqual([])
+  })
+
+  it('degrades a ref diving through nested definitions with an issue instead of dangling', () => {
+    const issues: ExtractionIssue[] = []
+    const nested = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          X: { type: 'object', definitions: { a: { type: 'object', definitions: { b: { type: 'string' } } } } },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs(
+      { $ref: '#/components/schemas/X/definitions/a/definitions/b' },
+      nested,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    // The first hop's target is hoisted but blocks nested inside it move too,
+    // so the deeper dive has no stable target — an unconstrained schema with a
+    // warning beats emitting a pointer the generators would throw on.
+    const target = (rebased['$defs'] as Record<string, unknown>)[(rebased['$ref'] as string).split('/')[2] as string]
+    expect(target).toEqual({})
+    expect(issues.some((issue) => issue.message.includes('nested definitions'))).toBe(true)
+  })
+
+  it('keeps percent escapes out of emitted $defs keys', () => {
+    // The generators percent-decode $ref pointers, so a `%` surviving into a
+    // key makes the emitted ref and the key disagree after decoding — the
+    // whole message failed generation.
+    const issues: ExtractionIssue[] = []
+    const escaped = {
+      asyncapi: '2.6.0',
+      components: { schemas: { 'foo%20bar': { type: 'string' } } },
+    }
+    const rebased = rebaseComponentRefs({ $ref: '#/components/schemas/foo%20bar' }, escaped, 'asyncapi', issues, '#/x')
+    const ref = rebased['$ref'] as string
+    expect(ref).not.toContain('%')
+    expect((rebased['$defs'] as Record<string, unknown>)[ref.replace('#/$defs/', '')]).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
   it('leaves refs inside instance data alone', () => {
     const issues: ExtractionIssue[] = []
     const rebased = rebaseComponentRefs(

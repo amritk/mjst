@@ -20,8 +20,19 @@ export const getByPointer = (document: unknown, pointer: string): unknown => {
       if (!Number.isInteger(index) || index < 0 || index >= current.length) return undefined
       current = current[index]
     } else if (typeof current === 'object' && current !== null) {
-      current = readKey(current as Record<string, unknown>, segment)
-      if (current === undefined) return undefined
+      const record = current as Record<string, unknown>
+      let next = readKey(record, segment)
+      // Documents also spell pointer segments in the RFC 6901 URI-fragment
+      // form; when the raw segment misses, its percent-decoded form gets a try.
+      if (next === undefined && segment.includes('%')) {
+        try {
+          next = readKey(record, decodeURIComponent(segment))
+        } catch {
+          // Not a valid percent sequence — the miss stands.
+        }
+      }
+      if (next === undefined) return undefined
+      current = next
     } else {
       return undefined
     }
