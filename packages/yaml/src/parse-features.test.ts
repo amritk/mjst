@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { keyText, parseAllDocuments, parseDocument } from './parse-document'
+import { keyText, newExpansionBudget, parseAllDocuments, parseDocument } from './parse-document'
 import type { YamlAlias, YamlNode } from './types'
 
 describe('core-schema tags', () => {
@@ -1485,25 +1485,35 @@ describe('resource exhaustion through a mapping key', () => {
 })
 
 describe('the expansion budget ceiling', () => {
-  it('does not let padding buy a bigger budget', { timeout: 5_000 }, () => {
+  it('does not let padding buy a bigger budget', () => {
     // The budget was `sourceLength * 100` nodes with no ceiling, so harmless
     // padding in front of a bomb raised the bar it had to clear: 2.7 MB of keys
     // ahead of a 600-byte bomb bought a 279-million-node budget, and the
     // projection reached 3.5 GB of resident memory over thirteen seconds before
     // throwing. Ten times the padding is an out-of-memory kill, which is the one
-    // failure this guard exists to rule out. Capped, the same document throws in
-    // well under a second — hence the timeout, which is the assertion.
-    const padding = Array.from({ length: 130_000 }, (_, i) => `pad${i}: value${i}`).join('\n')
-    const bomb = ['a0: &a0 [x, x, x, x, x, x, x, x, x, x]']
-    for (let level = 1; level < 12; level++) {
-      bomb.push(
-        `a${level}: &a${level} [${Array(10)
-          .fill(`*a${level - 1}`)
-          .join(', ')}]`,
-      )
-    }
-    bomb.push(`boom: [*a11, *a11]`)
-    expect(() => parseDocument(`${padding}\n${bomb.join('\n')}\n`).toJS()).toThrow(/resource-exhaustion/)
+    // failure this guard exists to rule out.
+    //
+    // Asserted on the budget rather than on a projection, because the cap does
+    // not change *whether* a bomb throws — only how much it materializes first —
+    // so end-to-end the only observable is the clock. This was that test, with a
+    // 5s timeout as the assertion, and it went red under the twelve-package
+    // fan-out `bun run test` does while passing in 1.5s on its own: the same
+    // contention `vitest.config.ts` raised `testTimeout` to 30s for. It also cost
+    // the suite 350 MB of resident memory to say so. That a bomb throws at all is
+    // covered end-to-end above ('rejects alias-expansion (billion laughs)').
+    const padded = 2_768_501
+    const capped = newExpansionBudget(padded).left
+    // Ten times the padding buys nothing, nor does a hundred: past the point where
+    // the ceiling binds, the budget is flat.
+    expect(newExpansionBudget(padded * 10).left).toBe(capped)
+    expect(newExpansionBudget(padded * 100).left).toBe(capped)
+    // And the ceiling is a fraction of what the per-byte allowance alone granted
+    // this document — 276 million nodes, at a hundred per byte.
+    expect(capped).toBeLessThan((padded * 100) / 10)
+    // Below the ceiling it is still proportional, so ordinary documents keep the
+    // headroom they need, and small ones keep the floor.
+    expect(newExpansionBudget(200_000).left).toBeGreaterThan(newExpansionBudget(100_000).left)
+    expect(newExpansionBudget(10).left).toBe(newExpansionBudget(0).left)
   })
 
   it('still projects a document that legitimately leans on aliases', () => {
