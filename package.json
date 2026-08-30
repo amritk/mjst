@@ -59,7 +59,7 @@
     "typescript": "^5.9.3",
     "valibot": "^1.4.2",
     "vitest": "^4.1.10",
-    "zod": "^4.4.3",
+    "zod": "^4.5.4",
     "zod-to-json-schema": "^3.25.2",
     "zod-v3": "npm:zod@^3.25.76"
   },
