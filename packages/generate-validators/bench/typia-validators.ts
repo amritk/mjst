@@ -53,10 +53,16 @@ type AssertShape = {
   deeplyNested: { foo: string; num: number; bool: boolean }
 }
 
-/** Keyed by `BenchCase.name`; the worker picks the validator for its case. */
+/**
+ * Keyed by `BenchCase.name`; the worker picks the validator for its case. The
+ * `(frozen)` cases are the same schemas over a deep-frozen input pool, so they
+ * reuse the same validator — only the input differs.
+ */
 export const typiaValidators: Record<string, BoolValidator> = {
   'small (4 fields)': typia.createEquals<Small>(),
+  'small (4 fields, frozen)': typia.createEquals<Small>(),
   'order (nested + array)': typia.createEquals<Order>(),
   'assert-loose': typia.createIs<AssertShape>(),
   'assert-strict': typia.createEquals<AssertShape>(),
+  'assert-strict (frozen)': typia.createEquals<AssertShape>(),
 }

@@ -34,6 +34,16 @@ export type BenchCase = {
    * an undeclared *nested* key under `additionalProperties: false`).
    */
   extraInvalid?: readonly unknown[]
+  /**
+   * Deep-freezes every object in the timed input pool. Frozen inputs are
+   * ordinary in production — a config object, a shared fixture, a module-level
+   * constant — and on JavaScriptCore they are a different workload entirely:
+   * a non-extensible object loses the engine's cached own-keys fast path, so
+   * `Object.keys` / `for...in` (how *every* library answers
+   * `additionalProperties: false`) fall off a cliff. Without a frozen case a
+   * bench that builds fresh mutable objects is structurally blind to it.
+   */
+  freezeInputs?: boolean
 }
 
 const smallSchema: JSONSchema = {
@@ -315,5 +325,31 @@ export const BENCH_CASES: readonly BenchCase[] = [
     invalid: { ...assertValid, extra: true },
     // An undeclared key in the nested object must be rejected too.
     extraInvalid: [{ ...assertValid, deeplyNested: { ...assertValid.deeplyNested, extra: true } }],
+  },
+  // The frozen-input pair. Same schemas and samples as the mutable cases above,
+  // timed over a deep-frozen pool: one small `additionalProperties: false`
+  // object (the frozen-config shape a real app passes in) and the moltar shape
+  // (whose upstream fixture is itself an `Object.freeze({ ... })`, so this is
+  // the workload the public leaderboard actually measures).
+  {
+    name: 'small (4 fields, frozen)',
+    typeName: 'User',
+    schema: smallSchema,
+    zod: smallZod,
+    typebox: smallTypebox,
+    valid: { id: '00000000-0000-4000-8000-000000000000', name: 'Ada', age: 36, active: true },
+    invalid: { id: 'not-a-uuid', name: '', age: -1 },
+    freezeInputs: true,
+  },
+  {
+    name: 'assert-strict (frozen)',
+    typeName: 'AssertStrict',
+    schema: assertSchema(true),
+    zod: assertZod(true),
+    typebox: assertTypebox(true),
+    valid: assertValid,
+    invalid: { ...assertValid, extra: true },
+    extraInvalid: [{ ...assertValid, deeplyNested: { ...assertValid.deeplyNested, extra: true } }],
+    freezeInputs: true,
   },
 ]
