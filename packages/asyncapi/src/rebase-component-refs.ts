@@ -403,6 +403,18 @@ export const rebaseComponentRefs = (
           return `#/$defs/${allocateDocDefKey(defName)}${tail}`
         }
       }
+      // The reverse alias, after the document root's claim: a `#/$defs/x` ref
+      // inside a component whose `x` lives only in a `definitions` block — a
+      // verbatim 2020-12 block, or a draft-07 body whose upgrade respelled
+      // the ref while the raw block keeps the `definitions` name. Without it
+      // the ref passed through and dangled at the emitted root.
+      if (scope.kind === 'component' && block === '$defs') {
+        const defName = canonicalDefName(local[2] as string, (candidate) => scope.blocks.definitions.has(candidate))
+        if (scope.blocks.definitions.has(defName)) {
+          if (nestedTail) return degradeNestedTail()
+          return `#/$defs/${allocateDefKey(scope.component, 'definitions', defName)}${tail}`
+        }
+      }
     }
     // A component-internal ref to a bare block (`#/definitions`, `#/$defs`,
     // which LOCAL_DEFS_REF's name segment never matches) has no target
@@ -470,15 +482,17 @@ export const rebaseComponentRefs = (
 
     // Hoist the component's own definitions to the root and copy the body
     // without them. Both block spellings are hoisted, each under its own key:
-    // `$defs` (the draft-07 upgrade's output, or an authored 2020-12 block)
-    // and a `definitions` block a 2020-12/OpenAPI component keeps verbatim.
-    // Keeping the blocks separate matters when one component carries both —
-    // `definitions.x` and `$defs.x` are different schemas, and merging them
-    // silently pointed both spellings at whichever survived.
+    // `$defs` and a `definitions` block. The blocks are read from the RAW
+    // schema, not the normalized copy — the draft-07 upgrade merges
+    // `definitions` into `$defs`, so a name declared in both blocks would
+    // lose one schema and silently point both spellings at the survivor.
+    // Each entry is normalized individually instead (same as a document-root
+    // def), which also keeps these sets aligned with the ones
+    // `componentBlockNames` validated tails against at rewrite time.
     const blocks: Record<DefsBlock, Set<string>> = { definitions: new Set(), $defs: new Set() }
     const blockValues: { block: DefsBlock; defName: string; value: unknown }[] = []
     for (const blockName of ['definitions', '$defs'] as const) {
-      const block = readKey(normalized, blockName)
+      const block = readKey(schema as Record<string, unknown>, blockName)
       if (typeof block !== 'object' || block === null || Array.isArray(block)) continue
       for (const [defName, value] of Object.entries(block as Record<string, unknown>)) {
         blocks[blockName].add(defName)
@@ -489,7 +503,11 @@ export const rebaseComponentRefs = (
     const scope: RewriteScope = { kind: 'component', component: name, blocks }
 
     for (const { block, defName, value } of blockValues) {
-      assignKey(copiedDefs, allocateDefKey(name, block, defName), rewrite(value, 0, false, scope))
+      const prepared =
+        typeof value === 'object' && value !== null && !Array.isArray(value)
+          ? normalizeSchema(value as Record<string, unknown>, componentFamily)
+          : value
+      assignKey(copiedDefs, allocateDefKey(name, block, defName), rewrite(prepared, 0, false, scope))
     }
 
     const { $defs: _, definitions: __, ...body } = normalized

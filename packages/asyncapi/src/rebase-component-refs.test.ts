@@ -259,6 +259,71 @@ describe('rebase-component-refs', () => {
     expect(issues).toEqual([])
   })
 
+  it('keeps colliding definitions.x and $defs.x block-faithful through the draft-07 merge', () => {
+    // The draft-07 upgrade merges `definitions` into `$defs`, so hoisting
+    // from the normalized copy pointed both spellings at the merge's
+    // survivor — the `$defs`-spelled ref silently validated against the
+    // definitions schema. Hoists now come from the raw blocks, each entry
+    // normalized individually.
+    const issues: ExtractionIssue[] = []
+    const both = {
+      asyncapi: '2.6.0',
+      components: {
+        schemas: {
+          A: {
+            type: 'object',
+            definitions: { x: { type: 'object', properties: { y: { type: 'number' } } } },
+            $defs: { x: { type: 'string' } },
+          },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs(
+      {
+        properties: {
+          fromDefinitions: { $ref: '#/components/schemas/A/definitions/x' },
+          fromDollarDefs: { $ref: '#/components/schemas/A/$defs/x' },
+        },
+      },
+      both,
+      'asyncapi',
+      issues,
+      '#/x',
+    )
+    const defs = rebased['$defs'] as Record<string, unknown>
+    const props = rebased['properties'] as Record<string, Record<string, string>>
+    const defKey = (props['fromDefinitions']?.['$ref'] ?? '').replace('#/$defs/', '')
+    const dollarKey = (props['fromDollarDefs']?.['$ref'] ?? '').replace('#/$defs/', '')
+    expect(defs[defKey]).toEqual({ type: 'object', properties: { y: { type: 'number' } } })
+    expect(defs[dollarKey]).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
+  it('re-aims a component-internal $defs ref at a verbatim definitions block', () => {
+    // The alias direction the internal branch was missing: a 2020-12
+    // component declaring only `definitions.x` whose own ref spells
+    // `#/$defs/x` — the ref passed through unrewritten and dangled at the
+    // emitted root, with no issue.
+    const issues: ExtractionIssue[] = []
+    const legacy = {
+      asyncapi: '3.0.0',
+      components: {
+        schemas: {
+          A: {
+            type: 'object',
+            properties: { x: { $ref: '#/$defs/x' } },
+            definitions: { x: { type: 'string' } },
+          },
+        },
+      },
+    }
+    const rebased = rebaseComponentRefs({ $ref: '#/components/schemas/A' }, legacy, '2020-12', issues, '#/x')
+    const defs = rebased['$defs'] as Record<string, Record<string, unknown>>
+    expect((defs['A']?.['properties'] as Record<string, Record<string, unknown>>)['x']?.['$ref']).toBe('#/$defs/A-x')
+    expect(defs['A-x']).toEqual({ type: 'string' })
+    expect(issues).toEqual([])
+  })
+
   it('recognizes percent-spelled block keywords the way the resolver does', () => {
     // RFC 6901 evaluates URI-fragment pointers percent-decoded, so
     // `/%24defs/x` names the `$defs` block — the resolver follows it, and a
