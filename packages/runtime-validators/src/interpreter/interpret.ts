@@ -164,7 +164,7 @@ const spend = (ctx: InterpreterContext): void => {
   }
 }
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+export const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const isPrimitiveEnumValue = (value: unknown): boolean =>
@@ -215,7 +215,7 @@ const MAX_EQUAL_DEPTH = 512
  * `NaN` equals `NaN`, matching the native `Set` fast path in {@link allUnique}
  * and {@link getEnumSet}). Depth-capped so cyclic input fails rather than throws.
  */
-const deepEqual = (a: unknown, b: unknown, depth = 0): boolean => {
+export const deepEqual = (a: unknown, b: unknown, depth = 0): boolean => {
   // SameValueZero: `a === b` covers everything except NaN, which we treat as
   // equal to itself so the structural and Set-based paths agree.
   if (a === b || (Number.isNaN(a) && Number.isNaN(b))) return true
@@ -329,7 +329,7 @@ const allUnique = (ctx: InterpreterContext, arr: readonly unknown[]): boolean =>
 }
 
 /** True when `value` satisfies a single JSON Schema `type` keyword. */
-const matchesType = (type: string, value: unknown): boolean => {
+export const matchesType = (type: string, value: unknown): boolean => {
   switch (type) {
     case 'string':
       return typeof value === 'string'
@@ -396,7 +396,7 @@ const childPath = (ctx: InterpreterContext, path: string, key: string | number):
  * character (e.g. an emoji) would otherwise count as 2. Iterating the string
  * yields code points without allocating an intermediate array.
  */
-const codePointLength = (value: string): number => {
+export const codePointLength = (value: string): number => {
   let count = 0
   for (let i = 0; i < value.length; i++) {
     count++
@@ -416,7 +416,7 @@ const codePointLength = (value: string): number => {
  * astral character and `\p{L}` is misread. Fall back to a non-Unicode compile for
  * the rare legacy pattern that is only valid without the stricter `u` escapes.
  */
-const compilePattern = (source: string): RegExp => {
+export const compilePattern = (source: string): RegExp => {
   try {
     return new RegExp(source, 'u')
   } catch {
@@ -665,7 +665,7 @@ type ObjectMeta = {
  * the schema's, not the instance's, so a handful — against a class of bug that
  * has now recurred three times. One rule, no exemption list to keep correct.
  */
-const hasProperty = (obj: Record<string, unknown>, key: string): boolean =>
+export const hasProperty = (obj: Record<string, unknown>, key: string): boolean =>
   Object.hasOwn(obj, key) && obj[key] !== undefined
 
 /**
@@ -681,7 +681,7 @@ const hasProperty = (obj: Record<string, unknown>, key: string): boolean =>
  */
 const enumSetCache = new WeakMap<object, Set<unknown> | null>()
 
-const getEnumSet = (s: object, values: readonly unknown[]): Set<unknown> | null => {
+export const getEnumSet = (s: object, values: readonly unknown[]): Set<unknown> | null => {
   let set = enumSetCache.get(s)
   if (set === undefined) {
     set = values.every(isPrimitiveEnumValue) ? new Set(values) : null

@@ -141,9 +141,21 @@ Pick the right tool for the shape of your workload. There are two regimes, and t
 | wide (40 props) | ~0.031 ms | ~16 ms | **~530×** |
 | deep (`$ref`) | ~0.17 ms | ~17 ms | **~96×** |
 
-**Steady state — one schema, many values.** Here Ajv wins, and it is not close: once compiled, its JIT'd function outruns a tree-walking interpreter by roughly **6–11×** per call. If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — an interpreter is the wrong tool for that job, and this package does not pretend otherwise.
+**Steady state — one schema, many values.** Here Ajv wins: once compiled, its JIT'd function outruns a tree-walking interpreter by roughly **6–11×** per call. If you validate one schema against a high-throughput stream, an interpreter is the wrong tool, and this package does not pretend otherwise.
 
-So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → compile**.
+For that case there is [`compileGuard`](#compileguardtschema-options--amritkruntime-validatorscompile), which partially evaluates the schema into a tree of closures once and then runs it — still eval-free. It closes part of the gap, not all of it (`bun run bench:compile`, same machine as above):
+
+| schema | `validateGuard` | `compileGuard` | Ajv | vs interpreter | vs Ajv |
+|:---|---:|---:|---:|---:|---:|
+| small | ~2.0M/s | ~5.5M/s | ~8.0M/s | **2.8×** | 0.70× |
+| wide (40 props) | ~375k/s | ~545k/s | ~1.63M/s | **1.45×** | 0.33× |
+| deep (`$ref`) | ~68k/s | ~118k/s | ~385k/s | **1.7×** | 0.31× |
+
+The compile is not free, and on the cold path it is a cost rather than a saving — ~0.014 ms vs 0.013 ms (small) and ~0.105 ms vs 0.042 ms (wide), though a `$ref`-heavy schema comes out slightly *ahead* (~0.12 ms vs 0.15 ms) because linking each reference once beats resolving it per value. Both remain two orders of magnitude ahead of Ajv cold.
+
+If you need Ajv-class throughput and can afford a build step, generate the validator ahead of time with [`@amritk/generate-validators`](../generate-validators) instead.
+
+So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → `compileGuard`, or generate ahead of time**.
 
 What keeps the interpreter lean:
 
@@ -174,6 +186,95 @@ Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: Valid
 ### `validateGuard<T>(schema, options?)`
 
 Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and never builds an error object or message, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override.
+
+### `parse(schema, options?)` — `@amritk/runtime-validators/parse`
+
+Builds a **parser**: it coerces its input toward the schema, then validates the
+result, returning `{ ok: true, value } | { ok: false, errors }`.
+
+`validate` is the right tool for data that arrived as JSON. `parse` is for data
+that did not — an HTTP query string, a path segment, a header, a form body, an
+environment variable, a CSV row. All of those deliver every scalar as a string,
+so a schema saying `{ type: 'integer' }` and an input saying `'42'` are
+describing the same thing, and only a parser can say so.
+
+```typescript
+import { parse } from '@amritk/runtime-validators/parse'
+
+const parseQuery = parse({
+  type: 'object',
+  properties: {
+    page: { type: 'integer', default: 1 },
+    verbose: { type: 'boolean' },
+  },
+})
+
+parseQuery({ page: '3', verbose: 'true' }) // { ok: true, value: { page: 3, verbose: true } }
+parseQuery({})                             // { ok: true, value: { page: 1 } }
+parseQuery({ page: 'abc' })                // { ok: false, errors: [{ message: 'must be integer', path: '/page' }] }
+```
+
+**Coercion never decides a verdict.** It converts, then defers — the validator
+still judges the result in full, so a parse can only ever accept something
+`validate` would have accepted. Where a string does not actually denote the type
+its subschema declares, the string is passed through unchanged and rejected with
+a proper type error rather than guessed at:
+
+| schema `type` | input | output |
+| --- | --- | --- |
+| `number` / `integer` | `'42'`, `'1.5'` | `42`, `1.5` |
+| `number` / `integer` | `''`, `'abc'`, `'Infinity'` | unchanged, then rejected |
+| `boolean` | `'true'`, `'false'` | `true`, `false` |
+| `null` | `'null'` | `null` |
+
+A node whose type is genuinely ambiguous — `type: ['number','string']`, `anyOf`,
+`oneOf`, `if` — is never converted at: `'42'` is a valid value under the string
+branch of each, and picking one would destroy it. Structural descent continues
+regardless, so `properties` and `items` under such a node still coerce.
+
+Absent object properties are filled from the `default` in their subschema,
+deep-copied so a caller mutating the result cannot corrupt a schema held as a
+constant. Turn either half off with `{ coerce: false }` / `{ defaults: false }`.
+Input is never mutated, and a value that already has the declared types comes
+back as the very object that went in.
+
+Options are `validate`'s, plus those two switches.
+
+### `compileGuard<T>(schema, options?)` — `@amritk/runtime-validators/compile`
+
+The same boolean guard `validateGuard` returns, built by partially evaluating
+the schema into a **tree of closures** once, up front — regexes compiled,
+property lists flattened, bounds and divisor cases specialized, `$ref`s resolved
+and linked. Validation is then a tree of direct calls with no schema inspection
+left in it. Still eval-free: closures, not `new Function`, so a strict CSP,
+Workers and Hermes are unaffected.
+
+```typescript
+import { compileGuard } from '@amritk/runtime-validators/compile'
+
+const isUser = compileGuard({
+  type: 'object',
+  properties: { id: { type: 'integer' }, name: { type: 'string' } },
+  required: ['id', 'name'],
+})
+
+for (const row of millionsOfRows) if (isUser(row)) handle(row)
+```
+
+**Reach for it only when one schema validates many values.** It is not a
+free upgrade — see the numbers below. For the cold one-shot path this package is
+built around, `validateGuard` is still the right tool, which is why this is a
+separate entry point rather than the default.
+
+Correctness comes from deferral, not from a second implementation. A node
+carrying a keyword the compiler does not answer itself — `if`/`then`/`else`,
+`unevaluated*`, `patternProperties`, `propertyNames`, `contains`, `dependent*`,
+`format`, `uniqueItems` — is handed to the interpreter whole, subtree included.
+A document containing `$dynamicRef` / `$recursiveRef` (they resolve against a
+dynamic scope that only exists while a walk is in progress) or validated against
+a `schemas` registry is not compiled at all. `compile-parity.test.ts` holds the
+compiled guard to the interpreter's verdict across the entire JSON Schema Test
+Suite.
 
 ### `assert(schema, value, options?)`
 
@@ -347,7 +448,7 @@ Either way the split holds: `resolve-refs` owns the network and its policy,
 
 - [`@amritk/resolve-refs`](../resolve-refs) — inline cross-file and remote `$ref`s before validating
 - [`@amritk/generate-validators`](../generate-validators) — generate validator source files at build time
-- [`@amritk/generate-parsers`](../generate-parsers) — type definitions plus parsers that coerce input
+- [`@amritk/generate-parsers`](../generate-parsers) — the build-time counterpart to `/parse`: type definitions plus parser source files
 - [`@amritk/mjst`](../cli) — CLI wrapper around the generators
 
 ---

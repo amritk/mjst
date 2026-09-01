@@ -1,6 +1,7 @@
 import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
+import { boundPassExpr } from '@amritk/helpers/numeric-bound-check'
 import { hasOwnCheck } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
@@ -161,16 +162,16 @@ const generateInferredChecks = (accessor: string, schema: JSONSchema, type: Infe
     case 'number':
       checks.push(`typeof ${accessor} === "number"`)
       if (hasMinimum(schema)) {
-        checks.push(`${accessor} >= ${schema.minimum}`)
+        checks.push(boundPassExpr(accessor, 'minimum', schema.minimum))
       }
       if (hasMaximum(schema)) {
-        checks.push(`${accessor} <= ${schema.maximum}`)
+        checks.push(boundPassExpr(accessor, 'maximum', schema.maximum))
       }
       if (hasExclusiveMinimum(schema)) {
-        checks.push(`${accessor} > ${schema.exclusiveMinimum}`)
+        checks.push(boundPassExpr(accessor, 'minimum', schema.exclusiveMinimum, true))
       }
       if (hasExclusiveMaximum(schema)) {
-        checks.push(`${accessor} < ${schema.exclusiveMaximum}`)
+        checks.push(boundPassExpr(accessor, 'maximum', schema.exclusiveMaximum, true))
       }
       if (hasMultipleOf(schema)) {
         checks.push(`${accessor} % ${schema.multipleOf} === 0`)
@@ -282,16 +283,16 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
         checks.push(`Number.isInteger(${accessor})`)
       }
       if (hasMinimum(schema)) {
-        checks.push(`${accessor} >= ${schema.minimum}`)
+        checks.push(boundPassExpr(accessor, 'minimum', schema.minimum))
       }
       if (hasMaximum(schema)) {
-        checks.push(`${accessor} <= ${schema.maximum}`)
+        checks.push(boundPassExpr(accessor, 'maximum', schema.maximum))
       }
       if (hasExclusiveMinimum(schema)) {
-        checks.push(`${accessor} > ${schema.exclusiveMinimum}`)
+        checks.push(boundPassExpr(accessor, 'minimum', schema.exclusiveMinimum, true))
       }
       if (hasExclusiveMaximum(schema)) {
-        checks.push(`${accessor} < ${schema.exclusiveMaximum}`)
+        checks.push(boundPassExpr(accessor, 'maximum', schema.exclusiveMaximum, true))
       }
       if (hasMultipleOf(schema)) {
         checks.push(multipleOfPassExpr(accessor, schema.multipleOf))

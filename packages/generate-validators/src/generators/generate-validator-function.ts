@@ -1,6 +1,7 @@
 import { regexFlagsFor, regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive, MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr, multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
+import { boundFailExpr, boundOperator, boundPassExpr } from '@amritk/helpers/numeric-bound-check'
 import { declaresKey, readKey } from '@amritk/helpers/read-key'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { safeAccessor } from '@amritk/helpers/safe-accessor'
@@ -887,25 +888,31 @@ const generateConstraintChecks = (
     if (hasMinimum(propSchema)) {
       // Draft-04 `exclusiveMinimum: true` makes the paired `minimum` strict.
       const strict = hasStrictExclusiveMinimum(propSchema)
-      const rel = strict ? '>' : '>='
-      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.minimum})) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must be ${rel} ${propSchema.minimum}', path: ${path} })`)
+      lines.push(`  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'minimum', propSchema.minimum, strict)}) {`)
+      lines.push(
+        `    ${ctx.sink}.push({ message: 'must be ${boundOperator('minimum', strict)} ${propSchema.minimum}', path: ${path} })`,
+      )
       lines.push(`  }`)
     }
     if (hasMaximum(propSchema)) {
       const strict = hasStrictExclusiveMaximum(propSchema)
-      const rel = strict ? '<' : '<='
-      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} ${rel} ${propSchema.maximum})) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must be ${rel} ${propSchema.maximum}', path: ${path} })`)
+      lines.push(`  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'maximum', propSchema.maximum, strict)}) {`)
+      lines.push(
+        `    ${ctx.sink}.push({ message: 'must be ${boundOperator('maximum', strict)} ${propSchema.maximum}', path: ${path} })`,
+      )
       lines.push(`  }`)
     }
     if (hasExclusiveMinimum(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} > ${propSchema.exclusiveMinimum})) {`)
+      lines.push(
+        `  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'minimum', propSchema.exclusiveMinimum, true)}) {`,
+      )
       lines.push(`    ${ctx.sink}.push({ message: 'must be > ${propSchema.exclusiveMinimum}', path: ${path} })`)
       lines.push(`  }`)
     }
     if (hasExclusiveMaximum(propSchema)) {
-      lines.push(`  if (typeof ${raw} === 'number' && !(${raw} < ${propSchema.exclusiveMaximum})) {`)
+      lines.push(
+        `  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'maximum', propSchema.exclusiveMaximum, true)}) {`,
+      )
       lines.push(`    ${ctx.sink}.push({ message: 'must be < ${propSchema.exclusiveMaximum}', path: ${path} })`)
       lines.push(`  }`)
     }
@@ -2269,10 +2276,12 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
       const num = typed('number')
       const parts = [`typeof ${acc} === 'number'`]
       if (t === 'integer') parts.push(`Number.isInteger(${acc})`)
-      if (hasMinimum(schema)) parts.push(`${num} ${hasStrictExclusiveMinimum(schema) ? '>' : '>='} ${schema.minimum}`)
-      if (hasMaximum(schema)) parts.push(`${num} ${hasStrictExclusiveMaximum(schema) ? '<' : '<='} ${schema.maximum}`)
-      if (hasExclusiveMinimum(schema)) parts.push(`${num} > ${schema.exclusiveMinimum}`)
-      if (hasExclusiveMaximum(schema)) parts.push(`${num} < ${schema.exclusiveMaximum}`)
+      if (hasMinimum(schema))
+        parts.push(boundPassExpr(num, 'minimum', schema.minimum, hasStrictExclusiveMinimum(schema)))
+      if (hasMaximum(schema))
+        parts.push(boundPassExpr(num, 'maximum', schema.maximum, hasStrictExclusiveMaximum(schema)))
+      if (hasExclusiveMinimum(schema)) parts.push(boundPassExpr(num, 'minimum', schema.exclusiveMinimum, true))
+      if (hasExclusiveMaximum(schema)) parts.push(boundPassExpr(num, 'maximum', schema.exclusiveMaximum, true))
       if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(num, schema.multipleOf))
       return withMembership(parts.join(' && '))
     }
