@@ -565,13 +565,15 @@ describe('build-schema', () => {
     const indexFile = result.find((f) => f.filename === 'index.ts')
 
     expect(indexFile).toBeDefined()
-    // Named type + parser + shape-validator exports for each file
+    // Named type re-exports plus `const`-aliased values for each file: the
+    // alias form is what keeps a CommonJS consumer off an accessor per call.
+    expect(indexFile?.content).toContain("export type { Contact } from './contact.js';")
     expect(indexFile?.content).toContain(
-      "export { type Contact, validateContactShape, parseContact } from './contact.js';",
+      "import { validateContactShape as validateContactShape$0, parseContact as parseContact$0 } from './contact.js';",
     )
-    expect(indexFile?.content).toContain(
-      "export { type Document, validateDocumentShape, parseDocument } from './document.js';",
-    )
+    expect(indexFile?.content).toContain('export const parseContact = parseContact$0;')
+    expect(indexFile?.content).toContain("export type { Document } from './document.js';")
+    expect(indexFile?.content).toContain('export const parseDocument = parseDocument$1;')
     // No wildcard exports
     expect(indexFile?.content).not.toContain('export *')
     expect(indexFile?.content).not.toContain('export type *')
@@ -622,9 +624,20 @@ describe('build-schema', () => {
     const indexFile = result.find((f) => f.filename === 'index.ts')
 
     expect(indexFile).toBeDefined()
-    const lines = indexFile?.content.trim().split('\n')
-    const sorted = [...lines].sort()
-    expect(lines).toEqual(sorted)
+    const lines = indexFile?.content.trim().split('\n') ?? []
+    // Imports and type re-exports carry one module each, in filename order.
+    for (const prefix of ['import ', 'export type ']) {
+      const section = lines.filter((line) => line.startsWith(prefix))
+      expect(section.length).toBe(3)
+      expect(section).toEqual([...section].sort())
+    }
+    // The value aliases follow the same module order — their `$<index>` suffix
+    // never goes backwards.
+    const moduleIndexes = lines
+      .filter((line) => line.startsWith('export const '))
+      .map((line) => Number((line.match(/\$(\d+);$/) as RegExpMatchArray)[1]))
+    expect(moduleIndexes.length).toBe(6)
+    expect(moduleIndexes).toEqual([...moduleIndexes].sort((a, b) => a - b))
   })
 
   it('skips adding a nested ref to the queue when it was already processed', async () => {
