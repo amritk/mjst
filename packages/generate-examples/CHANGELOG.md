@@ -1,5 +1,255 @@
 # @amritk/generate-examples
 
+## 0.7.0
+
+### Minor Changes
+
+- cb7b35a: Fix several ways a generated example file could fail to compile, and bound the
+  generator's work on hostile schemas.
+
+  - A `$ref` inside `contains` or `dependentSchemas` was emitted as a bare
+    `FooArbitrary` identifier with no matching import, so the generated file did
+    not compile. The import collector now walks both surfaces.
+  - An example carrying a key its generated type never declares — `required`
+    naming something absent from `properties`, a `dependentRequired` /
+    `dependentSchemas` dependency, a `minProperties` filler on an object with no
+    index signature — was an excess property TypeScript rejected. The key stays
+    (dropping it would ship a fixture missing what its schema demands) and the
+    literal is now emitted as `… as Foo`.
+  - An integer `multipleOf` was enforced with `.filter((n) => n % m === 0)`, which
+    starved fast-check for anything but the smallest steps and rejected _every_
+    value when `m` was `0` (`n % 0` is `NaN`). Positive integral steps are now
+    derived analytically, as the `number` path already did; a non-positive one is
+    dropped.
+  - A crossed range (`minLength: 10, maxLength: 2`, and the equivalents for
+    numbers, arrays, and dictionaries) was emitted verbatim, and every bounded
+    `fc.*` combinator asserts `min <= max` — so the generated module threw at
+    import, taking its other exports with it. Crossed bounds now collapse.
+  - A large `minProperties` cost quadratic time and memory (synthesized key names
+    grew with the key count), and a large `minLength`/`minItems` was honoured
+    literally. Derived values are now capped at 10,000 characters / elements /
+    keys, with the usual warning; the arbitrary still honours the real bound.
+  - The runtime-validator import was decided by searching the generated source for
+    the validator's name, which a schema could plant in its own data — earning an
+    import nothing uses, which a consumer's `noUnusedLocals` rejects.
+
+- 53651a1: Closes out the generated-file compile failures: a sweep of all 982
+  `components.schemas` entries in the vendored OpenAPI corpus now type-checks with
+  **0 failures** against the real `fast-check` declarations under the repo's strict
+  flags, down from 13% at the start of the review and 2.33% one round ago. That
+  sweep is now a test, so the number cannot drift back silently.
+
+  Fixes, all reproduced against the corpus or a schema reduced from it:
+
+  - **`oneOf`/`anyOf` replaced the node's own keywords instead of constraining them
+    alongside.** `{ type: 'object', properties: …, anyOf: [{ required: … }] }` read
+    the branch alone and answered `null` / `fc.anything()` against an object type.
+    The node's own shape is now merged into each branch, and a branch whose `type`
+    contradicts the node is dropped rather than re-admitting a value the type
+    excludes.
+  - **`mergeAllOf` silently dropped a nested `allOf`.** A `oneOf` branch written as
+    `{ title: 'Token Usage', allOf: [{ properties: … }] }` — the shape OpenAPI
+    documents use for discriminated unions — merged down to just its `title`, so
+    the whole variant's properties vanished and the example came out `{}`.
+  - **Object-likeness disagreed with the type generator.** It calls a schema an
+    object on the _presence_ of `patternProperties`/`additionalProperties`, and on
+    `properties` whatever `type` says; this package tested the value's shape and
+    dispatched on `type` first. Both now match it exactly.
+  - **`if`/`then`-only objects** get an assertion: the type generator folds the
+    branch's properties in as required, and nothing structural tells the deriver to
+    produce them.
+  - **An unresolvable `$ref` is no longer named by the arbitrary**, since the import
+    collector deliberately skips it.
+  - **A `false` schema** types as `never`, which nothing is assignable to; both the
+    arbitrary and the example now say so explicitly.
+  - **An exclusive bound equal to its opposite** (`exclusiveMinimum: 5, maximum: 5`)
+    emptied the range `fc.double` had to draw from.
+  - **`k * multipleOf`** could exceed `fc.integer`'s inclusive 32-bit maximum by one.
+  - **`uniqueItems` with a closed `contains`** could not reach the required length
+    and retried forever; elements now widen to "that value, or anything", which is
+    the freedom the schema actually grants.
+  - **The runtime-validator import** was decided by a weaker condition than the one
+    that emits the validator, so a schema the interpreter refuses earned an import
+    nothing used.
+
+- 1e77678: A round of fixes for generated files that did not compile, threw at import, or
+  hung when sampled. Measured against a real OpenAPI corpus, 13% of schemas
+  produced a file that failed to type-check before these.
+
+  **Files that did not compile**
+
+  - The validating filter's type guard (`(value): value is T`) requires the
+    declared type to extend what the base expression infers, but a filtered
+    arbitrary deliberately builds a _different_ shape — `contains` generates
+    `number[]` for a declared `unknown[]`, `dependentRequired` promotes an optional
+    key to required, `dependentSchemas` adds one the type never declared. Each
+    raised TS2677. The base is now widened to `Arbitrary<unknown>` first.
+  - A schema with `properties` and no `type: object` — ordinary in OpenAPI — got a
+    type of `{ … }` but an arbitrary of `fc.anything()` and an example of `null`.
+    Both now infer the object shape the same way the type generator does.
+  - A recursive definition's example cuts the cycle with `null`, which its
+    non-nullable type rejects. It is now emitted with an assertion.
+  - `contains` alongside `items` put a `contains`-typed value into an
+    `items`-typed array. `items` constrains every element, so a `contains` value is
+    used only when `items` accepts it too.
+  - A non-finite `multipleOf` derived `NaN`, which serialized as `null`.
+  - A non-string `required` entry reached the emitted `requiredKeys`.
+
+  **Modules that threw at import, or hung when sampled**
+
+  - An uncompilable `pattern` (`"["`) or one using a lookahead/lookbehind made
+    `fc.stringMatching` throw — at import for the first, at sample time for the
+    second — taking every export in the file with it. Both now fall back to
+    `fc.string()`. The embedded runtime validator is likewise only emitted when it
+    can actually be built.
+  - An integer bound beyond fast-check's 32-bit range left it with a minimum above
+    its own maximum, and threw. Bounds are now confined to that range.
+  - `uniqueItems` over a closed value set (`items: { type: 'boolean' }`,
+    `minItems: 5`) asked for more distinct values than exist, and fast-check
+    retries forever. The length is now capped at the size of the set.
+
+  **Crashes and resource use**
+
+  - A property named `__proto__` under any `allOf` threw
+    `TypeError: bucket.push is not a function` out of the whole generation run:
+    `mergeAllOf` read its accumulator with a bare index, which answers
+    `Object.prototype` for that key. Its accumulators are now null-prototype.
+  - A deeply nested document died with a bare `RangeError` from whichever helper
+    was deepest. The three recursions here now refuse past 400 levels with a
+    message naming the limit.
+
+### Patch Changes
+
+- 4d5f1bb: The ReDoS screen now admits separator-delimited repetitions it used to reject.
+
+  **What changes for you:** a `pattern` of the shape `(<sep><body>)*` or
+  `(<body><sep>)*` — a dotted identifier chain, a slash-delimited pointer, a
+  comma-separated list — is no longer refused as "nested unbounded quantifiers".
+  Schemas that previously threw at `validate()` time, or needed
+  `limits: { allowUnsafePatterns: true }`, now build. That part is one-directional:
+  across 1.5 million generated patterns the exemption never turned an accepted
+  pattern into a rejected one.
+
+  **One such loop per concatenation.** Two of them side by side keep being refused,
+  because two nullable loops compose — see below — and the rule does not try to work
+  out whether a particular pair can. So `^\d+(\.\d+)*$` builds where it used to
+  throw, while `^\d+(\.\d+)*(-[a-z]+)*$` still throws, even though its two loops
+  have disjoint separators and it is in fact linear. Both were refused before this
+  release, so nothing regresses; but if you were hoping a semver or host-and-port
+  pattern would start building, it will not. `allowUnsafePatterns` remains the
+  escape hatch, and a rule that proved the two loops' alphabets disjoint would be
+  the way to lift it.
+
+  **Two parser fixes ride along, and they do newly reject a narrow set.** Both were
+  pre-existing bugs that let a genuinely exponential pattern through:
+
+  - The class scanner applied the POSIX "a leading `]` is a literal member" rule,
+    which ECMAScript does not have — `[]` is the empty class and `[^]` is any
+    character. A `[^]` therefore swallowed the rest of the pattern into one atom
+    and hid whatever followed: `^[^]*(a+)+$` contains a textbook `(a+)+` and was
+    accepted, at 4 seconds on 28 characters.
+  - A braced escape (`\u{61}`, `\p{L}`) was read as two code units, leaving `{61}`
+    to be taken for a bounded quantifier that then swallowed the real `+` — so
+    `^(\u{61}+)+$`, which _is_ `^(a+)+$`, lost a level of star height. Its payload
+    is now validated as it is scanned, since a span the escape cannot legally
+    carry is not an escape under either compile mode: `\p{(a+)+}` is a
+    `SyntaxError` with `u`, so the fallback compile runs the `(a+)+` inside it.
+
+  Most of what these newly reject is genuinely unsafe, but not all of it: rule 1 is
+  an over-approximation, and a braced escape in atom position now costs the
+  anchored exemption even where the same pattern spelled in ASCII keeps it — so
+  `^(\u{61}+x)+$` is refused while `^(a+x)+$`, which it is identical to, is
+  admitted. Both are linear; the refusal is a false positive, in the safe
+  direction. Ordinary standalone uses (`\u{61}+`, `\p{Script=Latin}+`,
+  `[\u{61}-\u{7A}]+`, `[^]*`) keep their previous verdicts.
+
+  `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` and
+  `^\$message\.(header|payload)#(\/(([^\/~])|(~[01]))*)*` — both from the official
+  AsyncAPI meta-schemas — are the motivating cases. Star height alone called them
+  catastrophic; on V8 they match a failing 30-character input in under 0.05 ms.
+
+  **Why it is sound.** Star height >= 2 is still the rule; a repetition is now
+  exempt from _counting toward_ it when two things hold together. First, the body
+  carries a literal character at a fixed end that no other atom in it can produce,
+  so the positions of that character are the word boundaries and no input can be
+  split two ways. Second, the body derives each word exactly once — checked over a
+  deliberately small grammar (no `?`, no `{n,m}`, a repeated atom may not run into
+  what follows it, a trailing alternation must be settled by its first character).
+
+  The waived level comes back whenever something can compose the exempted loop with
+  itself. What the exemption establishes holds for one pass; `(BODY)*` still matches
+  the empty string however unambiguous BODY is. A quantifier around it composes
+  those matches — a _bounded_ one too, which is the case that looks harmless, and
+  `^((-a*)*){0,50}$` is 2^n. So does simply writing the loop twice in a row:
+  nothing pins which copy owns which word, and `^(-a*)*(-a*)*…$` with eight of them
+  is degree-8 polynomial, 5.6 seconds on 43 characters. One loop is the case the
+  exemption is for; two is where it stops holding.
+
+  The second condition is the one that is easy to miss, and omitting it is not
+  safe: a backtracking engine explores derivations, not splits, so a body that
+  matches its own substring k ways costs k^n over n repetitions even with every
+  boundary pinned. `^(\.((\w[a-z]?|b\w+)?|(a*[a-z0-9]?)?))*$` is separator-anchored
+  and takes 94 ms on 22 characters where its body alone takes none.
+  `^([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*)*$` — genuinely exponential,
+  8.9 seconds on 30 characters — is still refused, as is every classic shape
+  (`(a+)+`, `(a*)*`, `(a|a)+`).
+
+  The screen remains a best-effort filter rather than a proof of safety, with the
+  same known gaps. The new analysis is capped by its own shared budget, charged by
+  span for every character it examines and every character-class comparison it
+  makes, and its cost against a hostile source plateaus around 15 ms. That is
+  not a claim about the screen as a whole: the pre-existing ambiguous-alternation
+  rule spends its budget per branch
+  pair while each comparison may compile a character class, so a 176 KB alternation
+  of literals and long classes costs ~200 ms to screen. Unchanged here, and
+  unchanged by this release.
+
+  `@amritk/generate-examples` only retargets a test fixture that had used
+  `^(repeat+)+once$` to stand for a refused pattern — that one is admitted now,
+  and measures linear.
+
+- 6771a4f: Degenerate keywords no longer produce an arbitrary that throws at import.
+
+  - An empty `oneOf`, `anyOf`, `enum`, or `type: []` emitted `fc.oneof()` /
+    `fc.constantFrom()` with no arguments, and both throw. They now degrade to
+    `fc.anything()`, as every other keyword this generator cannot honour does. A
+    single-branch choice is emitted directly instead of being wrapped.
+  - A fractional or negative length/count bound (`minItems: 1.5`,
+    `maxLength: -5`) was passed straight to fast-check, which requires a
+    non-negative integer and throws otherwise. Each bound now rounds toward the
+    satisfiable side and floors at zero.
+
+- c90143f: Two more ways a generated file could fail to compile or throw at import.
+
+  - A non-finite numeric bound was emitted verbatim. `1e999` is legal JSON and
+    `JSON.parse` turns it into `Infinity`, which the numeric keyword guards accept
+    — so `{ minimum: 1e999 }` produced `fc.double({ …, min: Infinity })`, and every
+    bounded `fc.*` combinator throws on that the moment the module is imported.
+    Non-finite bounds (and a non-finite or non-positive `multipleOf`) are now
+    treated as absent.
+  - An authored `default` / `examples[0]` was emitted verbatim even when it
+    contradicted its own schema. The generated type follows the schema, not the
+    hint, so `{ type: 'string', default: 42 }` produced
+    `const fooExample: string = 42`. A hint is now used only when it validates;
+    otherwise the value is derived structurally. `const` is unaffected — the type
+    is the const's own literal type, so the two cannot disagree.
+
+- Updated dependencies [4d5f1bb]
+- Updated dependencies [0f27eeb]
+- Updated dependencies [1c328af]
+- Updated dependencies [1fd154c]
+- Updated dependencies [3557eb5]
+- Updated dependencies [11a280f]
+- Updated dependencies [e091f22]
+- Updated dependencies [2162f87]
+- Updated dependencies [3a54baf]
+- Updated dependencies [543fbe8]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [261f650]
+- Updated dependencies [dcfe9a9]
+  - @amritk/runtime-validators@0.12.0
+  - @amritk/helpers@0.16.0
+
 ## 0.6.4
 
 ### Patch Changes

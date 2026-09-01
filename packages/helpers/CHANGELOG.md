@@ -1,5 +1,194 @@
 # @amritk/helpers
 
+## 0.16.0
+
+### Minor Changes
+
+- 1c328af: `escapeRegexPattern` rejected patterns that are legal in Unicode mode.
+
+  Its validating `new RegExp(pattern)` omitted the `u` flag, while `regexFlagsFor`
+  adds that flag whenever the pattern compiles with it. A pattern that is legal
+  _only_ in Unicode mode — an astral range like `[😀-😜]`, or `[\u{61}-\u{7A}]` —
+  therefore failed generation with "Invalid regex pattern", even though the
+  emitter would have given it the `u` flag that makes it legal, and even though
+  Ajv (the differential oracle this package tracks) accepts it.
+
+  Both functions now read one cached compile decision: `u` where the pattern is a
+  legal Unicode-mode regex, no flag where it is legal only without one, and an
+  error only where it is a regex in neither mode. A pattern that is legal only
+  without the flag (`\-`, a bare `\p`) is unaffected.
+
+- 11a280f: Fix five correctness and robustness defects found in a review of the package.
+
+  - `resolveDynamicRefs` skipped the whole document when its only `$dynamicRef`
+    sat under a property genuinely _named_ `enum`, `const`, `default`, `example`
+    or `examples`. The cheap pre-scan that decides whether to rewrite at all
+    tested key names without tracking whether it was inside a name-to-schema map,
+    so the ref survived into generation — where the type generator names the type
+    after the anchor and, for the conventional anchor `node`, silently binds to
+    the DOM's `Node` interface. The pre-scan now asks the same shared position
+    rule the rewrite does.
+
+  - `generateTypeDefinition` and `mjst-extension` read schema keywords straight
+    off the node, so a polluted `Object.prototype` was indistinguishable from an
+    authored keyword: with `Object.prototype.additionalProperties` set, a bare
+    `{ type: 'string' }` rendered as `{ [key: string]: number }`, and an inherited
+    `if`/`then` pair recursed until the stack ran out. Both now read own
+    properties only, matching what `schema-guards` already does for the keywords
+    it guards.
+
+  - `graftExternalSchemas` and `pruneExternalSchemas` rebuilt `$defs` with plain
+    assignment, so a definition named `__proto__` — including one the author
+    wrote, and one derived from a registered URI ending in `__proto__.json` —
+    ran the prototype setter instead of becoming a property: the definition
+    disappeared while every reference to it stayed, and the map inherited the
+    definition's own keywords. Both now use the package's `assignKey`.
+
+  - Six recursive walkers had no depth guard, so a pathologically nested document
+    died with a bare `RangeError` instead of the message `MAX_SCHEMA_DEPTH`
+    exists to produce — including on `walkRefGraph`, the package's main entry
+    point. `assertSchemaDepth` now takes an optional limit, and the type renderer
+    passes a lower one: it spends about five stack frames per schema level where
+    the document walkers spend one, so at the shared cap the stack ran out first
+    and the guard could never fire. Documents nesting deeper than 400 levels are
+    now reported by name rather than crashing.
+
+  - `walkRefGraph` generated an output file for a definition referenced only from
+    a `default` value, because the `$dynamicRef` pointer scan walked instance
+    data. It now skips data positions, as its sibling scans already did.
+
+  Also: the `minLength: 1` fast paths in `string-length-check` are now
+  self-parenthesized, so every emitted expression can be negated with a bare `!`
+  the way `multiple-of-check` documents (`!x.length >= 1` parsed as
+  `(!x.length) >= 1` — a constant `false` that passed every string).
+
+- e091f22: `deriveRootTypeName` mangled non-ASCII titles. It split words on
+  `[^a-zA-Z0-9]+`, which is the ASCII-only class `ref-to-name` documents having
+  fixed for `$ref`-derived names — so a document titled `中文` or `Приложение`
+  reduced to nothing and was named `Document`, `Café Menu` came back as
+  `CafMenu` with the `é` deleted from the middle of a word, and `Ünïcödé Doc` as
+  `NCDDoc`. A `$ref` to a definition of the same name was spelled correctly, so
+  the root type and the refs into it disagreed. Both now go through one shared
+  `toPascalWords`, so they cannot drift again. Leading digits are still dropped
+  from a title (`3 amigos` → `Amigos`), which is where the two policies
+  legitimately differ.
+
+  `isDraft07Schema`, `hoistNestedDefs` and `deriveRootTypeName` also read
+  `$schema`, `$defs` and `title` straight off the object, so a polluted
+  `Object.prototype` was indistinguishable from a declared keyword — an inherited
+  `$schema` put every document through the draft-07 rewrite. All three now read
+  own properties only.
+
+- 3a54baf: `unknownKeyCheck`'s `isUnknown` / `isKnown` now return self-parenthesized
+  expressions, matching what `multiple-of-check` and `string-length-check`
+  already promise.
+
+  The two forms were not interchangeable: above `INLINE_KEY_LIMIT` the result is
+  an atomic `set.has(k)`, below it a bare `a || b`. A caller writing
+  `x && check.isKnown(k)` therefore got `(x && a) || b` for a 16-key object and
+  correct code for a 17-key one — a precedence bug that appears and disappears
+  with a performance threshold rather than with anything the caller wrote.
+  Generated sweeps gain one pair of parentheses; nothing they mean changes.
+
+- 261f650: `quoteJsString` and `escapeRegexPattern` lost unpaired surrogates.
+
+  A lone surrogate is a legal JSON string (`"\ud800"`), so it is a legal property
+  name, `pattern`, or enum member — but it has no UTF-8 encoding. Both helpers
+  passed one through raw, and writing the generated file replaced it with U+FFFD:
+  the string literal on disk was a _different string_ than the schema declared, so
+  the emitted check rejected a value the document says is valid, and an emitted
+  regex matched a different character than its author wrote. Both now escape an
+  unpaired surrogate (`\ud800`, matching the identical character). A well-formed
+  surrogate pair encodes fine and stays on the fast path, so emoji in a property
+  name cost nothing.
+
+### Patch Changes
+
+- 1fd154c: Fix five shape combinations where the generated TypeScript did not compile.
+
+  Found by a new fuzz suite that type-checks _fuzzed_ documents — `$defs`, `$ref`s,
+  embedded helpers and the index barrel compiled as one program, the way a consumer
+  compiles them — across every option the generator exposes. The existing
+  `generated-code-types` corpus is hand-picked, and none of these shapes were in it.
+
+  Four of the five have one cause: an expression TypeScript cannot narrow, read
+  twice. A property named after an `Object.prototype` member is read through a
+  conditional (`Object.hasOwn(input, "constructor") ? … : undefined`), so
+  `Array.isArray(<expr>) && <expr>.length` reported "Object is of type 'unknown'";
+  the subschema matcher's record view (`x as Record<string, unknown>`) and its
+  tuple-element view (`x as unknown[]`) are cast expressions with the same problem.
+  Each now carries a type the repeated read can use — nothing real is given up,
+  since the value behind it genuinely is unknown and every read sits inside a
+  runtime guard that tests it. The `.every` callbacks that hang off those accessors
+  carry an explicit parameter type, so they cannot come out implicitly `any`.
+
+  The fast path's object literal was asserted with a plain `as T`. That looked
+  checkable and was not: `_x !== undefined` narrows an `unknown` read to
+  `{} | null`, which TypeScript then refuses to convert to a `$ref` type, and
+  `Array.isArray(_x)` narrows it to `any[]`, which it refuses to convert to a
+  tuple. It is `as unknown as T` now — the guard above it is what proves the shape.
+
+  Finally, the non-object fallback literal is asserted whenever a prototype-member
+  name appears anywhere in the subtree it builds, not only at the top level: a
+  nested `{ "0": "" }` against an item type declaring `constructor?: true` carries
+  an inherited `constructor: Function` that does not assign. The assertion is
+  `as unknown as T` for the same index-signature reason.
+
+- 3557eb5: Treat a non-map `properties` / `patternProperties` as absent instead of crashing.
+
+  `typeof null === 'object'`, so a document carrying `{"patternProperties": null}`
+  slipped past the `!== undefined` check and reached `Object.keys(null)` — which
+  throws a `TypeError` and took the whole generation run down with it, rather than
+  producing a type for the one bad schema. Schemas come from the caller and
+  malformed ones are ordinary input, so a keyword whose value is not a map of
+  names to schemas is now read as absent. The same applies to a `null`
+  `additionalProperties`, which previously counted as present and was rendered as
+  an index signature's value type.
+
+- 543fbe8: Read every schema keyword as the node's own property.
+
+  The generators asked `'items' in schema` and read `schema.type` straight off the
+  node, and both walk the prototype chain. With `Object.prototype.items` set — by a
+  dependency with a prototype-pollution bug, or simply by a schema built over a base
+  object — every node in the document answered "yes" to keywords none of them
+  declared, and the result was a _different validator_: an inherited `items: false`
+  made every array have to be empty, an inherited `patternProperties` swallowed the
+  `additionalProperties` sweep so unknown keys stopped being reported, and an
+  inherited `if`/`then`, `allOf` or `contains` sent a walker into unbounded
+  recursion, so `buildValidatorSchema` threw a `RangeError` instead of generating.
+
+  `@amritk/helpers/own-keyword` is the shared reader — the question
+  `@amritk/helpers/schema-guards` and `@amritk/runtime-validators` already ask, for
+  the keywords with no named guard. Generated output is unchanged for every schema
+  in the conformance corpus and the vendored OpenAPI fixtures.
+
+- c6a1f16: Read each schema node's keywords once, compile lint filters, and match descents by key.
+
+  - **`@amritk/runtime-validators`** — the interpreter walked the schema afresh for
+    every value and asked each node for every keyword it might carry on every one of
+    those walks: about two dozen `Object.hasOwn` plus dynamic-key reads per node, per
+    validation. A CPU profile of the steady-state benchmark put 31% of the whole run
+    inside that one reader. A node's keywords are now read once into a fixed-shape
+    record and reused, which makes each read a fixed-offset field load instead of a
+    megamorphic dictionary lookup, moves the `typeof` narrowing off the hot path, and
+    lets group flags skip the reference, branching and type-specific blocks outright.
+    Steady-state throughput is 2.1–3.6× on the benchmark cases. Building the record
+    walks the node's own keys — three or four, rather than two dozen questions — so it
+    is cheaper than a single old scan, and the cache only starts filling on a
+    validator's _second_ call, leaving the cold one-shot path unchanged-to-better.
+    `@amritk/api`'s runtime engine and `@amritk/lint`'s `schema` rule both run this
+    interpreter, so both inherit it.
+  - **`@amritk/helpers`** — `generateIndexBarrel` read every character of every
+    generated file looking for `export` at a line start, which was ~18% of a
+    generation run. It now jumps between `export ` occurrences with `indexOf`, taking
+    roughly a quarter off generation time per parser.
+  - **`@amritk/lint`** — `[?(...)]` filter bodies compile to closures once instead of
+    being walked as an AST on every document node (still no `eval`/`new Function`;
+    these are ordinary closures over the parsed tree), recursive descents ask which
+    paths wanted each key the node has rather than asking every path in turn, and two
+    `/^\d+$/` tests moved off the hot path. Linting the vendored real-world specs:
+    petstore 11.1 → 7.4 ms, openai 1780 → 1110 ms.
+
 ## 0.15.4
 
 ### Patch Changes
