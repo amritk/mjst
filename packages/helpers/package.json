@@ -25,6 +25,7 @@
   },
   "files": [
     "dist",
+    "src/has-exact-key-count.ts",
     "src/has-ref.ts",
     "src/is-object.ts",
     "src/validate-array.ts",

@@ -1,5 +1,5 @@
 /** Names (without `.ts`) of runtime helpers that can be embedded into generated output. */
-export type RuntimeHelperName = 'is-object' | 'validate-array' | 'validate-record' | 'has-ref'
+export type RuntimeHelperName = 'is-object' | 'validate-array' | 'validate-record' | 'has-ref' | 'has-exact-key-count'
 
 /** Controls how generated parsers reference their runtime helpers. */
 export type HelpersMode = 'package' | 'embedded'
@@ -21,6 +21,7 @@ const PACKAGE_IMPORTS: Record<RuntimeHelperName, string> = {
   'validate-record': "import { validateRecord } from '@amritk/helpers/validate-record';",
   // hasRef has historically lived in the schema-guards subpath; preserve that for package mode.
   'has-ref': "import { hasRef } from '@amritk/helpers/schema-guards';",
+  'has-exact-key-count': "import { hasExactKeyCount } from '@amritk/helpers/has-exact-key-count';",
 }
 
 const EMBEDDED_NAMED_EXPORTS: Record<RuntimeHelperName, string> = {
@@ -28,6 +29,7 @@ const EMBEDDED_NAMED_EXPORTS: Record<RuntimeHelperName, string> = {
   'validate-array': 'validateArray',
   'validate-record': 'validateRecord',
   'has-ref': 'hasRef',
+  'has-exact-key-count': 'hasExactKeyCount',
 }
 
 const embeddedImport = (helper: RuntimeHelperName, prefix: string, ext: 'js' | 'ts'): string =>
@@ -48,7 +50,7 @@ const embeddedImport = (helper: RuntimeHelperName, prefix: string, ext: 'js' | '
 // One alternation pass over the generated source instead of four full-text
 // `.includes` scans — an absent helper name used to cost a complete rescan
 // each, which showed up at several percent of total generation time.
-const HELPER_USAGE = /validateArray|validateRecord|isObject|hasRef\(/g
+const HELPER_USAGE = /validateArray|validateRecord|isObject|hasExactKeyCount|hasRef\(/g
 
 export const collectHelpers = (
   parserFunction: string,
@@ -65,6 +67,7 @@ export const collectHelpers = (
   let sawValidateRecord = false
   let sawIsObject = false
   let sawHasRef = false
+  let sawHasExactKeyCount = false
   HELPER_USAGE.lastIndex = 0
   let match = HELPER_USAGE.exec(parserFunction)
   while (match !== null) {
@@ -72,8 +75,9 @@ export const collectHelpers = (
     if (token === 'validateArray') sawValidateArray = true
     else if (token === 'validateRecord') sawValidateRecord = true
     else if (token === 'isObject') sawIsObject = true
+    else if (token === 'hasExactKeyCount') sawHasExactKeyCount = true
     else sawHasRef = true
-    if (sawValidateArray && sawValidateRecord && sawIsObject && sawHasRef) break
+    if (sawValidateArray && sawValidateRecord && sawIsObject && sawHasRef && sawHasExactKeyCount) break
     match = HELPER_USAGE.exec(parserFunction)
   }
 
@@ -99,6 +103,11 @@ export const collectHelpers = (
   if (sawHasRef) {
     imports.push(importFor('has-ref'))
     used.add('has-ref')
+  }
+
+  if (sawHasExactKeyCount) {
+    imports.push(importFor('has-exact-key-count'))
+    used.add('has-exact-key-count')
   }
 
   return { imports, used }

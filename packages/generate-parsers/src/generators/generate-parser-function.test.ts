@@ -390,9 +390,7 @@ describe('generate-parser-function', () => {
     // than a per-key walk — so the fast path builds an explicit literal
     // (faster than a generic spread and a stable shape) rather than
     // `{ ...input }`.
-    expect(result).toContain(
-      'Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2) return {',
-    )
+    expect(result).toContain('hasExactKeyCount(input, 2)) return {')
     expect(result).toContain('    id: _id,')
     expect(result).toContain('    name: _name,')
     expect(result).not.toContain('_hasOnlyKnownKeysStrict')
@@ -2164,19 +2162,20 @@ describe('generate-parser-function', () => {
       expect(() => parse({ gone: null, name: 42 })).toThrow("[Tombstone] field 'name' expected string, got number")
     })
 
-    it('hands back clean array elements by reference in strip mode', () => {
+    // A stripping item parser builds every element from the declared properties
+    // rather than proving the element carries no extra and handing it back: the
+    // proof (a key walk or an own-key count) costs more than the literal it
+    // saves. The result therefore never aliases the caller's element.
+    it('rebuilds array elements in strip mode instead of aliasing them', () => {
       const parse = evalGenerated<(input: unknown) => { steps: Record<string, unknown>[] }>(
         generateParserFunction(stepsSchema, 'Plan', { strict: true, stripUnknown: true }),
         'parsePlan',
       )
 
-      // A clean element is already exactly the declared shape, so the private
-      // item parser returns it without allocating; a dirty one is rebuilt with
-      // its extras stripped.
       const clean = { kind: 'assume' }
       const result = parse({ steps: [clean], junk: 1 })
       expect(result).toEqual({ steps: [{ kind: 'assume' }] })
-      expect(result.steps[0]).toBe(clean)
+      expect(result.steps[0]).not.toBe(clean)
 
       const dirty = parse({ steps: [{ kind: 'derive', extra: 2 }] })
       expect(dirty.steps[0]).toEqual({ kind: 'derive' })
@@ -2315,7 +2314,7 @@ describe('generate-parser-function', () => {
 
     // Review pin: exported root-array parsers must never alias the caller's
     // array — validateArray identity-returns clean input, so the parser copies
-    // exactly when that happens (elements stay shared, like every fast path).
+    // exactly when that happens.
     it('exported root-array parsers never return the input array by reference', () => {
       const rootArray: JSONSchema = {
         type: 'array',
@@ -2336,8 +2335,38 @@ describe('generate-parser-function', () => {
         const result = parse(input)
         expect(result).toEqual(input)
         expect(result).not.toBe(input)
-        expect(result[0]).toBe(input[0])
       }
+    })
+
+    // Element identity follows what the item parser had to prove. A rejecting
+    // one (strict + additionalProperties: false) proves the element carries no
+    // undeclared key before it returns, so handing it back by reference is
+    // free. A stripping one — coerce mode, where an extra is dropped rather
+    // than thrown — has no such proof to reuse and builds a fresh literal.
+    it('shares clean array elements only when the item parser rejects extras', () => {
+      const rootArray: JSONSchema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { v: { type: 'string' } },
+          required: ['v'],
+          additionalProperties: false,
+        },
+      }
+
+      const rejecting = evalGenerated<(input: unknown) => unknown[]>(
+        generateParserFunction(rootArray, 'List', { strict: true }),
+        'parseList',
+      )
+      const stripping = evalGenerated<(input: unknown) => unknown[]>(
+        generateParserFunction(rootArray, 'List', {}),
+        'parseList',
+      )
+
+      const input = [{ v: 'a' }, { v: 'b' }]
+      expect(rejecting(input)[0]).toBe(input[0])
+      expect(stripping(input)[0]).not.toBe(input[0])
+      expect(stripping(input)).toEqual(input)
     })
 
     // Review pin: the own-key-count fast path is prototype-guarded — an input
@@ -2367,6 +2396,90 @@ describe('generate-parser-function', () => {
       const smuggled = Object.assign(Object.create({ kind: 'manual' }), { n: 1, evil: 2 })
       expect(() => parse(smuggled)).toThrow('unknown property "evil"')
       expect(validate(smuggled)).toBe(false)
+    })
+
+    // The no-extras term is `hasExactKeyCount`, which counts with for..in
+    // rather than allocating a keys array. for..in walks *inherited* enumerable
+    // keys too, so the helper's prototype guard is what keeps its verdict equal
+    // to `Object.keys(input).length === N` — pinned here in both directions
+    // against an object whose prototype carries an enumerable property.
+    it('counts only own keys when the prototype carries an enumerable property', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'number' }, b: { type: 'number' } },
+        required: ['a', 'b'],
+        additionalProperties: false,
+      }
+
+      const source = generateParserFunction(schema, 'Pair', { strict: true })
+      expect(source).toContain('hasExactKeyCount(input, 2)')
+      const parse = evalGenerated<(input: unknown) => unknown>(source, 'parsePair')
+      const validate = evalGenerated<(input: unknown) => boolean>(
+        generateShapeValidator(schema, 'Pair', false),
+        'validatePairShape',
+      )
+
+      expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
+      expect(validate({ a: 1, b: 2 })).toBe(true)
+
+      // Own keys are exactly {a, b}; the prototype adds an enumerable `extra`.
+      // Both forms answer the same way, and for the same reason: the prototype
+      // is not Object.prototype, so the fast path declines and the cold for..in
+      // rejection — which has always walked inherited keys — reports the extra.
+      const withInheritedExtra = Object.assign(Object.create({ extra: 3 }), { a: 1, b: 2 })
+      expect(() => parse(withInheritedExtra)).toThrow('unknown property "extra"')
+      expect(validate(withInheritedExtra)).toBe(false)
+
+      // And when the inherited enumerable key is a *declared* one, the cold
+      // path finds nothing to reject and the value is read through the
+      // prototype, own-key count notwithstanding.
+      const withInheritedDeclared = Object.assign(Object.create({ a: 1 }), { b: 2 })
+      expect(parse(withInheritedDeclared)).toEqual({ a: 1, b: 2 })
+      expect(validate(withInheritedDeclared)).toBe(false)
+    })
+
+    // Issue: the strip build's fast path used to prove "no undeclared key" only
+    // so it could hand the input straight back. Building the declared-property
+    // literal is cheaper than that proof, so the proof is gone — and with it the
+    // aliasing, at every level of the tree.
+    it('strips extras at every level without aliasing the input in strip mode', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          nested: {
+            type: 'object',
+            properties: { foo: { type: 'string' }, num: { type: 'number' } },
+            required: ['foo', 'num'],
+          },
+        },
+        required: ['id', 'nested'],
+      }
+
+      const source = generateParserFunction(schema, 'Doc', { strict: true, stripUnknown: true })
+      // No no-extras term in either parser — neither the own-key count nor the
+      // per-key walk — and neither hands the input back. (The shape predicates
+      // the file also emits keep their own term; they answer a different
+      // question, and callers read them.)
+      const parsers = source.slice(source.indexOf('const parseDoc'))
+      expect(parsers).not.toContain('hasExactKeyCount')
+      expect(parsers).not.toContain('_hasOnlyKnownKeys')
+      expect(parsers).not.toContain('return input as')
+
+      const parse = evalGenerated<(input: unknown) => { id: string; nested: Record<string, unknown> }>(
+        source,
+        'parseDoc',
+      )
+
+      const clean = { id: 'a', nested: { foo: 'b', num: 1 } }
+      const cleanResult = parse(clean)
+      expect(cleanResult).toEqual(clean)
+      expect(cleanResult).not.toBe(clean)
+      expect(cleanResult.nested).not.toBe(clean.nested)
+
+      const dirty = { id: 'a', junk: true, nested: { foo: 'b', num: 1, junk: true } }
+      expect(parse(dirty)).toEqual(clean)
+      expect(Object.keys(parse(dirty).nested)).toEqual(['foo', 'num'])
     })
 
     // Review pin: --log-warnings must behave identically for a root-level

@@ -1399,13 +1399,31 @@ const generateObjectParser = (
   // fast-path guard, or a clean-looking input carrying an extra would be handed
   // straight back before the rejection ran.
   const guardKeys = stripKeys || rejectsUnknownKeys
+  // What the fast path hands back decides whether it has to prove anything
+  // about undeclared keys. A strip build returns a literal naming only the
+  // declared properties, so an extra is dropped by construction and the
+  // no-extras term is pure cost on every clean parse — measurably so, since its
+  // cheap form still walks the key set and its cheapest-looking form allocates
+  // a keys array. `allOf` keeps the `{ ...input }` spread (this propInfo list
+  // does not carry the merged-in properties), which does carry extras across,
+  // so it still has to prove their absence.
+  const fastPathBuildsDeclaredLiteral = stripKeys && !(isSchemaObject(schema) && hasAllOf(schema))
+  // Rejecting parsers keep the term whatever they return: an undeclared key has
+  // to throw, and a fast path that silently dropped it would never reach the
+  // rejection loop.
+  const fastPathNeedsKnownKeys = guardKeys && (rejectsUnknownKeys || !fastPathBuildsDeclaredLiteral)
+  const droppedKnownKeysTerm = guardKeys && !fastPathNeedsKnownKeys
   // When every declared property is required, the fast-path no-extras test is
   // the cheaper own-key count (see exactKeyCountOf) and the `_hasOnlyKnownKeys`
   // predicate is not emitted at all — the shape validator derives the same
   // decision from the schema, so the cross-function contract stays in sync.
   const exactKeyCount = guardKeys ? exactKeyCountOf(schema) : null
   const strictKeyCheck = unknownKeyCheck(propertyKeys, `_knownKeys${typeName}`)
-  if (guardKeys && exactKeyCount === null) {
+  // The shape validator emitted alongside this parser reads the same predicate
+  // under its own (schema-derived) conditions, so the declaration survives a
+  // parser that no longer names it.
+  const shapeValidatorNeedsKnownKeys = shapeValidatorSource?.includes(`_hasOnlyKnownKeys${typeName}(`) ?? false
+  if ((fastPathNeedsKnownKeys || shapeValidatorNeedsKnownKeys) && exactKeyCount === null) {
     for (const declaration of strictKeyCheck.declarations) {
       preamble.push(`${declaration};`)
     }
@@ -1538,13 +1556,14 @@ const generateObjectParser = (
   // required, the own-key count is equivalent and cheaper than the per-key walk —
   // but only for plain objects: a crafted prototype could satisfy the typed
   // checks through inherited properties while the own-key count still matches,
-  // so non-plain inputs route to the slow path, where the for..in walk keeps
-  // the historical inherited-key rejection.
-  if (guardKeys) {
+  // so `hasExactKeyCount` rejects those, routing them to the slow path where the
+  // for..in walk keeps the historical inherited-key rejection. That helper is the
+  // whole `Object.getPrototypeOf(input) === Object.prototype &&
+  // Object.keys(input).length === N` test this used to inline: same verdict for
+  // every input, without the keys array `Object.keys` allocated on every parse.
+  if (fastPathNeedsKnownKeys) {
     fastPathChecks.push(
-      exactKeyCount !== null
-        ? `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`
-        : `_hasOnlyKnownKeys${typeName}(input)`,
+      exactKeyCount !== null ? `hasExactKeyCount(input, ${exactKeyCount})` : `_hasOnlyKnownKeys${typeName}(input)`,
     )
   }
 
@@ -1570,15 +1589,17 @@ const generateObjectParser = (
   // caller actually emitted; any difference — a stub, an alias or union
   // predicate, a schema transformed on the way here — keeps the inline guard.
   let deepGuardExpr = deepGuard
-  if (deepGuard !== null && shapeValidatorSource !== undefined && !literalReturnUsesVars) {
+  // A guard that dropped the no-extras term (see fastPathNeedsKnownKeys) is
+  // deliberately weaker than the shape validator, which still carries one:
+  // delegating would silently reinstate the very check the strip build does
+  // not need.
+  if (deepGuard !== null && shapeValidatorSource !== undefined && !literalReturnUsesVars && !droppedKnownKeysTerm) {
     const shapeFnName = shapeValidatorName(typeName)
     const shapeStrictKeysGuard =
       stripKeys && exactKeyCount === null ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
     const shapeChecks = [...fastPathAccessorChecks]
     if (stripKeys && exactKeyCount !== null) {
-      shapeChecks.push(
-        `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`,
-      )
+      shapeChecks.push(`hasExactKeyCount(input, ${exactKeyCount})`)
     }
     const expectedShapeValidator =
       shapeChecks.length === 0
@@ -1836,8 +1857,7 @@ const generateObjectParser = (
   // it never re-parses an already-validated nested object. allOf merges in
   // properties this `propInfo` list doesn't carry, so it keeps the spread.
   const emitDeepGuardReturn = (lines: string[]): void => {
-    const canLiteral = stripKeys && !(isSchemaObject(schema) && hasAllOf(schema))
-    if (!canLiteral) {
+    if (!fastPathBuildsDeclaredLiteral) {
       lines.push(`  if (${deepGuardExpr}) return { ...input } as ${typeName};`)
       return
     }
@@ -1848,8 +1868,11 @@ const generateObjectParser = (
     // same sharing the parent's own fast-path literal performs (`items:
     // _items`), and it is what keeps clean array elements allocation-free.
     // Exported root parsers keep returning a fresh object so callers never
-    // alias the value they passed in.
-    if (!exported) {
+    // alias the value they passed in — and so does a strip build whose guard
+    // carries no no-extras term (fastPathNeedsKnownKeys), because there the
+    // guard says nothing about undeclared keys and only the declared-property
+    // literal below actually strips them.
+    if (!exported && fastPathNeedsKnownKeys) {
       lines.push(`  if (${deepGuardExpr}) return input as ${typeName};`)
       return
     }
@@ -1923,7 +1946,7 @@ const generateObjectParser = (
       // evaluated as the shallow guard plus only its *residual* terms (deeper
       // per-property checks and the no-extras term), so a carries-extras input
       // never runs the same typed checks twice before taking the strip build.
-      if (!exported && deepGuard) {
+      if (!exported && deepGuard && fastPathNeedsKnownKeys) {
         const residual: string[] = []
         for (let i = 0; i < fastPathChecks.length; i++) {
           const deep = fastPathChecks[i] as string
@@ -2994,12 +3017,10 @@ export const generateShapeValidator = (
   // The count form is sound only in conjunction with the typed checks above
   // (they prove every declared key present) and only for plain objects (a
   // crafted prototype could satisfy those checks through inherited
-  // properties), so it joins the chain last, prototype-guarded like the
-  // parser's own fast path.
+  // properties), so it joins the chain last — `hasExactKeyCount` carries the
+  // prototype guard, exactly like the parser's own fast path.
   if (validatorKeyCount !== null) {
-    checks.push(
-      `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${validatorKeyCount}`,
-    )
+    checks.push(`hasExactKeyCount(input, ${validatorKeyCount})`)
   }
 
   if (checks.length === 0) {
