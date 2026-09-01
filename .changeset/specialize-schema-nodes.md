@@ -17,10 +17,10 @@ Now a node is turned into a step closure the first time a validation reaches it,
 with all of that already resolved and closed over, and the node's record is
 patched so later calls go straight to it. Validating is then nested closure
 calls with the traversal, the keyword dispatch and the metadata lookups gone.
-Steady-state throughput is up **39–143%** across the bench suite (the biggest win
-on the `moltar/typescript-runtime-type-benchmarks` shape now in `bench/`, where
-guard throughput more than doubles), and the `@amritk/api` request path gains
-5–11% where validation is on the critical path.
+Steady-state throughput is up **27–179%** across the bench suite (the biggest
+win on the `moltar/typescript-runtime-type-benchmarks` shape now in `bench/`,
+where guard throughput more than doubles), and the `@amritk/api` request path
+gains 5–11% where validation is on the critical path.
 
 This is still an eval-free interpreter — no `new Function`, no code generation,
 no build step — so it runs unchanged under a strict CSP, on Cloudflare Workers,
@@ -39,12 +39,23 @@ fuzz stay green.
 Building is deferred to a node's first visit rather than done up front, so
 `validate(schema)` still returns without reading the schema, an unresolvable
 `$ref` still throws on use rather than on construction, and a one-shot check
-never pays for `$defs` its data does not reach. Cold cost does move, because a
-node's step is a few closures where its metadata was one object: a `$ref`-heavy
-schema gets ~10–15% *faster* cold (targets are specialized once and reused across
-array elements), a small schema is within noise, and the 40-property case is
-~60–75% slower cold — 0.021 ms to 0.034 ms, against Ajv's ~12 ms to compile the
-same schema.
+never pays for `$defs` its data does not reach. That deferral runs deeper than
+the node: a node's type-specific block is built only once a value of that type
+gets past the type check, and a `properties` entry only once a value reaches it.
+A `{ type: 'object', properties: … }` node meeting a string or `null` — most of
+what a union throws at it — now costs a type test and nothing else.
+
+Cold cost still moves, because a node's step is a few closures where its
+metadata was one object, and how much depends entirely on how much of the schema
+the data touches. Measured over the vendored OpenAPI corpus (982 real component
+schemas, each prepared and used once) it is **~6% slower on average**, and a
+`$ref`-heavy schema is *faster* cold, because a target is specialized once and
+reused across every array element rather than re-walked. The worst case is a
+schema whose data reaches everything it declares — the 40-property bench case,
+validated once against an instance carrying all forty — which stays around twice
+its old cold cost, against Ajv's ~11 ms to compile the same schema. There is no
+way around that one: specializing a node is the cost, and that case specializes
+all of it and then uses each step once.
 
 The published performance table was re-measured for this change, but on Bun
 1.3.11 rather than the Bun 1.4 the repo's other tables use; its caption says so,

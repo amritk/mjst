@@ -274,9 +274,32 @@ const isStringValue = (value: unknown): boolean => typeof value === 'string'
 const isNumberValue = (value: unknown): boolean => typeof value === 'number'
 
 /**
- * The node record for `schema`, creating it on first request. The step behind it
- * is built lazily on first use and patched into the record, so asking for a node
- * costs a `Map` lookup and nothing else — see the note on {@link CompiledNode}.
+ * A node record for `schema`. The step behind it is built lazily on first use
+ * and patched in, so asking for a node costs an allocation and nothing else —
+ * see the note on {@link CompiledNode}.
+ */
+const newNode = (compiler: Compiler, schema: Record<string, unknown>): CompiledNode => {
+  const node: CompiledNode = { run: NOOP }
+  node.run = (ctx, value, path, evaluation, depth, scope) => {
+    const built = buildNode(compiler, schema)
+    node.run = built
+    built(ctx, value, path, evaluation, depth, scope)
+  }
+  return node
+}
+
+/**
+ * The node record for `schema`, creating it on first request and keeping it in
+ * the compiler's map.
+ *
+ * That map is not just a memo. A *bundled* document — every `$ref` resolved in
+ * place, which is what `@amritk/resolve-refs` produces and what the vendored
+ * OpenAPI corpus is — reaches the same subschema object from many locations, and
+ * a shared graph like that is cyclic as often as not. Splitting inline children
+ * out of the map (on the theory that a parent slot already memoizes its own
+ * child) made each of those locations compile its own copy, and turned the
+ * corpus test run from 2.6s into 16s. The map is also what stops a recursive
+ * `$ref` from minting a fresh node per level.
  */
 export const compileNode = (compiler: Compiler, schema: unknown): CompiledNode => {
   if (schema === false) return REJECT_NODE
@@ -284,15 +307,33 @@ export const compileNode = (compiler: Compiler, schema: unknown): CompiledNode =
 
   const existing = compiler.nodes.get(schema)
   if (existing !== undefined) return existing
-
-  const node: CompiledNode = { run: NOOP }
-  node.run = (ctx, value, path, evaluation, depth, scope) => {
-    const built = buildNode(compiler, schema)
-    node.run = built
-    built(ctx, value, path, evaluation, depth, scope)
-  }
+  const node = newNode(compiler, schema)
   compiler.nodes.set(schema, node)
   return node
+}
+
+/**
+ * A per-parent slot holding a child node, filled the first time a value
+ * actually reaches that child.
+ *
+ * Creating the record up front looked free — it is one small object — but a
+ * schema declares far more children than any single value visits, and on the
+ * one-shot path (a fresh schema, used once) every one of those records is pure
+ * garbage. A 40-property object validating `{ a: 1 }` was minting forty of them
+ * to use one. Deferring costs a `undefined` check per visit, against the array
+ * read that was already there.
+ */
+type ChildSlots = (CompiledNode | undefined)[]
+
+const newChildSlots = (count: number): ChildSlots => new Array<CompiledNode | undefined>(count).fill(undefined)
+
+/** The child in `slots[index]`, compiling `schema` into it on first use. */
+const childNode = (compiler: Compiler, slots: ChildSlots, index: number, schema: unknown): CompiledNode => {
+  const existing = slots[index]
+  if (existing !== undefined) return existing
+  const created = compileNode(compiler, schema)
+  slots[index] = created
+  return created
 }
 
 /**
@@ -859,12 +900,19 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
   const tuple = keywords.tuple
   const start = tuple ? tuple.length : 0
   if (tuple !== undefined) {
-    const nodes = tuple.map((sub) => compileNode(compiler, sub))
+    const nodes = newChildSlots(tuple.length)
     parts.push((ctx, value, path, evaluation, depth, scope) => {
       const arr = value as unknown[]
       for (let index = 0; index < nodes.length; index++) {
         if (arr.length <= index) continue
-        ;(nodes[index] as CompiledNode).run(ctx, arr[index], childPath(ctx, path, index), null, depth + 1, scope)
+        childNode(compiler, nodes, index, tuple[index]).run(
+          ctx,
+          arr[index],
+          childPath(ctx, path, index),
+          null,
+          depth + 1,
+          scope,
+        )
         if (evaluation !== null) evaluation.items.add(index)
         if (ctx.failed) return
       }
@@ -883,9 +931,16 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
       if (evaluation !== null) evaluation.allItems = true
     })
   } else if (rest !== undefined) {
-    const node = compileNode(compiler, rest)
+    const slot = newChildSlots(1)
     parts.push((ctx, value, path, evaluation, depth, scope) => {
       const arr = value as unknown[]
+      if (arr.length <= start) {
+        // Nothing past the positional schemas, so the tail schema is never
+        // needed — and an empty tail still evaluates the (empty) rest.
+        if (evaluation !== null) evaluation.allItems = true
+        return
+      }
+      const node = childNode(compiler, slot, 0, rest)
       for (let i = start; i < arr.length; i++) {
         node.run(ctx, arr[i], childPath(ctx, path, i), null, depth + 1, scope)
         if (ctx.failed) return
@@ -966,10 +1021,14 @@ const compileProperties = (
   // list itself unless some key really does carry a `/` or `~` — one fewer array
   // to allocate per object node, which the one-shot path feels.
   const escaped = keys.some(needsPointerEscape) ? keys.map(escapePointer) : keys
-  const nodes = keys.map((key) => compileNode(compiler, properties[key]))
+  const nodes = newChildSlots(keys.length)
   // A dialect without the validation vocabulary keeps `required` as an
   // annotation, so a missing property asserts nothing and the flag is simply off.
-  const requiredFlags = keys.map((key) => compiler.asserts && required.has(key))
+  // Skipped entirely when nothing is required — which is most objects in a
+  // real document — so the node does not carry an N-element array of `false`.
+  // A dialect without the validation vocabulary keeps `required` as an
+  // annotation, so a missing property asserts nothing there either.
+  const requiredFlags = compiler.asserts && required.size > 0 ? keys.map((key) => required.has(key)) : null
   const count = keys.length
 
   return (ctx, value, path, evaluation, depth, scope) => {
@@ -984,16 +1043,19 @@ const compileProperties = (
       if (propertyValue !== undefined && Object.hasOwn(obj, key)) {
         // Build the child path from the pre-escaped key (a bare concat, no
         // per-call scan), only in error mode where it is actually read.
-        ;(nodes[i] as CompiledNode).run(
-          ctx,
-          propertyValue,
-          emitErrors ? `${path}/${escaped[i]}` : path,
-          null,
-          depth + 1,
-          scope,
-        )
+        // Inlined rather than routed through `childNode`, because an argument is
+        // evaluated whether or not it is used: `properties[key]` is a dictionary
+        // lookup on the schema, and paying it on every call to answer a question
+        // only the first call asks would put back exactly the kind of per-value
+        // lookup this whole file exists to remove.
+        let child = nodes[i]
+        if (child === undefined) {
+          child = compileNode(compiler, properties[key])
+          nodes[i] = child
+        }
+        child.run(ctx, propertyValue, emitErrors ? `${path}/${escaped[i]}` : path, null, depth + 1, scope)
         if (evaluation !== null) evaluation.props.add(key)
-      } else if (requiredFlags[i]) {
+      } else if (requiredFlags !== null && requiredFlags[i]) {
         // Built here, not per declared key up front: a missing required property
         // is the failure path, and a one-shot validation of a 40-property schema
         // should not pay for 40 strings it will never read.
@@ -1028,8 +1090,12 @@ const compileClosedProperties = (
   // list itself unless some key really does carry a `/` or `~` — one fewer array
   // to allocate per object node, which the one-shot path feels.
   const escaped = keys.some(needsPointerEscape) ? keys.map(escapePointer) : keys
-  const nodes = keys.map((key) => compileNode(compiler, properties[key]))
-  const requiredFlags = keys.map((key) => compiler.asserts && required.has(key))
+  const nodes = newChildSlots(keys.length)
+  // Skipped entirely when nothing is required — which is most objects in a
+  // real document — so the node does not carry an N-element array of `false`.
+  // A dialect without the validation vocabulary keeps `required` as an
+  // annotation, so a missing property asserts nothing there either.
+  const requiredFlags = compiler.asserts && required.size > 0 ? keys.map((key) => required.has(key)) : null
   const count = keys.length
 
   return (ctx, value, path, evaluation, depth, scope) => {
@@ -1041,16 +1107,19 @@ const compileClosedProperties = (
       const propertyValue = obj[key]
       if (propertyValue !== undefined && Object.hasOwn(obj, key)) {
         present++
-        ;(nodes[i] as CompiledNode).run(
-          ctx,
-          propertyValue,
-          emitErrors ? `${path}/${escaped[i]}` : path,
-          null,
-          depth + 1,
-          scope,
-        )
+        // Inlined rather than routed through `childNode`, because an argument is
+        // evaluated whether or not it is used: `properties[key]` is a dictionary
+        // lookup on the schema, and paying it on every call to answer a question
+        // only the first call asks would put back exactly the kind of per-value
+        // lookup this whole file exists to remove.
+        let child = nodes[i]
+        if (child === undefined) {
+          child = compileNode(compiler, properties[key])
+          nodes[i] = child
+        }
+        child.run(ctx, propertyValue, emitErrors ? `${path}/${escaped[i]}` : path, null, depth + 1, scope)
         if (evaluation !== null) evaluation.props.add(key)
-      } else if (requiredFlags[i]) {
+      } else if (requiredFlags !== null && requiredFlags[i]) {
         // Built here, not per declared key up front: a missing required property
         // is the failure path, and a one-shot validation of a 40-property schema
         // should not pay for 40 strings it will never read.
@@ -1086,7 +1155,7 @@ const compileClosedProperties = (
 const compileKeySweep = (
   compiler: Compiler,
   keywords: ObjectKeywords,
-  patternEntries: readonly (readonly [RegExp, CompiledNode])[] | null,
+  patternEntries: readonly (readonly [RegExp, unknown])[] | null,
 ): Step | null => {
   const hasAdditional = keywords.hasAdditionalProperties
   const additional = keywords.additionalProperties
@@ -1094,7 +1163,9 @@ const compileKeySweep = (
 
   const properties = keywords.properties
   const rejectsAdditional = hasAdditional && additional === false
-  const additionalNode = hasAdditional && isPlainObject(additional) ? compileNode(compiler, additional) : null
+  const hasAdditionalSchema = hasAdditional && isPlainObject(additional)
+  const additionalSlot = newChildSlots(1)
+  const patternSlots = newChildSlots(patternEntries === null ? 0 : patternEntries.length)
 
   return (ctx, value, path, evaluation, depth, scope) => {
     const obj = value as Record<string, unknown>
@@ -1106,13 +1177,20 @@ const compileKeySweep = (
       const inProperties = properties !== undefined && Object.hasOwn(properties, key)
       let matched = false
       if (patternEntries !== null) {
-        for (const [regex, node] of patternEntries) {
-          if (regex.test(key)) {
-            matched = true
-            if (evaluation !== null) evaluation.props.add(key)
-            node.run(ctx, obj[key], childPath(ctx, path, key), null, depth + 1, scope)
-            if (ctx.failed) return
-          }
+        for (let p = 0; p < patternEntries.length; p++) {
+          const entry = patternEntries[p] as readonly [RegExp, unknown]
+          if (!entry[0].test(key)) continue
+          matched = true
+          if (evaluation !== null) evaluation.props.add(key)
+          childNode(compiler, patternSlots, p, entry[1]).run(
+            ctx,
+            obj[key],
+            childPath(ctx, path, key),
+            null,
+            depth + 1,
+            scope,
+          )
+          if (ctx.failed) return
         }
       }
 
@@ -1121,9 +1199,16 @@ const compileKeySweep = (
         if (evaluation !== null) evaluation.props.add(key)
         fail(ctx, 'must NOT have additional properties', childPath(ctx, path, key))
         if (ctx.failed) return
-      } else if (additionalNode !== null) {
+      } else if (hasAdditionalSchema) {
         if (evaluation !== null) evaluation.props.add(key)
-        additionalNode.run(ctx, obj[key], childPath(ctx, path, key), null, depth + 1, scope)
+        childNode(compiler, additionalSlot, 0, additional).run(
+          ctx,
+          obj[key],
+          childPath(ctx, path, key),
+          null,
+          depth + 1,
+          scope,
+        )
         if (ctx.failed) return
       }
     }
@@ -1214,15 +1299,15 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
   // must also match the associated subschema.
   const dependentSchemas = keywords.dependentSchemas
   if (dependentSchemas !== undefined) {
-    const entries = Object.entries(dependentSchemas).map(
-      ([trigger, sub]) => [trigger, compileNode(compiler, sub)] satisfies [string, CompiledNode],
-    )
+    const entries = Object.entries(dependentSchemas)
     if (entries.length > 0) {
+      const slots = newChildSlots(entries.length)
       parts.push((ctx, value, path, evaluation, depth, scope) => {
         const obj = value as Record<string, unknown>
-        for (const [trigger, node] of entries) {
-          if (!hasProperty(obj, trigger)) continue
-          runInPlace(ctx, node, obj, path, evaluation, depth, scope)
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i] as [string, unknown]
+          if (!hasProperty(obj, entry[0])) continue
+          runInPlace(ctx, childNode(compiler, slots, i, entry[1]), obj, path, evaluation, depth, scope)
           if (ctx.failed) return
         }
       })
@@ -1244,12 +1329,14 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
           node: null,
         }
       }
-      return { trigger, keys: null, messages: null, node: compileNode(compiler, dep) }
+      return { trigger, keys: null, messages: null, node: dep }
     })
     if (entries.length > 0) {
+      const slots = newChildSlots(entries.length)
       parts.push((ctx, value, path, evaluation, depth, scope) => {
         const obj = value as Record<string, unknown>
-        for (const entry of entries) {
+        for (let i = 0; i < entries.length; i++) {
+          const entry = entries[i] as (typeof entries)[number]
           if (!hasProperty(obj, entry.trigger)) continue
           const keys = entry.keys
           if (keys !== null) {
@@ -1261,7 +1348,7 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
               }
             }
           } else {
-            runInPlace(ctx, entry.node as CompiledNode, obj, path, evaluation, depth, scope)
+            runInPlace(ctx, childNode(compiler, slots, i, entry.node), obj, path, evaluation, depth, scope)
             if (ctx.failed) return
           }
         }
@@ -1282,10 +1369,12 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
 
   // Compile each `patternProperties` regex once here (a stateless RegExp is safe
   // to share) so the per-key loop skips both a cache lookup and recompilation.
+  // The regexes are compiled here — they are needed to decide whether a key
+  // matches at all — but each subschema waits until a key actually matches it.
   const patternProperties = keywords.patternProperties
   const patternEntries = patternProperties
     ? Object.entries(patternProperties).map(
-        ([source, sub]) => [compilePattern(source), compileNode(compiler, sub)] satisfies [RegExp, CompiledNode],
+        ([source, sub]) => [compilePattern(source), sub] satisfies [RegExp, unknown],
       )
     : null
   const sweep = closed ? null : compileKeySweep(compiler, keywords, patternEntries)
@@ -1488,6 +1577,13 @@ const compileUnevaluated = (compiler: Compiler, keywords: UnevaluatedKeywords): 
 }
 
 /**
+ * Whether a node declares keywords for any runtime type — the question
+ * {@link compileTypeBlocks} answers by building, asked without building.
+ */
+const declaresTypeBlock = (compiler: Compiler, meta: NodeMeta): boolean =>
+  meta.objects !== null || meta.arrays !== null || meta.strings !== null || (meta.numbers !== null && compiler.asserts)
+
+/**
  * Dispatches to the at-most-one type-specific block that can do work for a
  * value. A value is only ever one of object / array / string / number, and each
  * block is inert for every other type, so the blocks a node does not declare
@@ -1569,20 +1665,40 @@ const buildNode = (compiler: Compiler, schema: Record<string, unknown>): Step =>
   const singleType = meta.type
   const simpleType = plain && compiler.asserts && singleType !== undefined ? typeTest(singleType) : null
 
-  const typeBlocks = compileTypeBlocks(compiler, meta, simpleType === null ? undefined : singleType)
-
   if (simpleType !== null && singleType !== undefined) {
-    if (typeBlocks === null) return typeOnlyStep(singleType) as Step
+    // Whether a block exists at all is readable off the meta, without building
+    // one — which matters, because the shape below only builds it if a value of
+    // the right type ever turns up.
+    if (!declaresTypeBlock(compiler, meta)) return typeOnlyStep(singleType) as Step
+
     const message = `must be ${singleType}`
+    // The block is built on the first value that actually gets past the type
+    // check, not when the node is built. A `{ type: 'object', properties: … }`
+    // node meeting a string, a number, or `null` — which is most of what a union
+    // or a wrongly-typed field throws at it — then costs a type test and nothing
+    // else, where it used to build the whole property loop first and discard it.
+    // Costs the hot path one null check inside the node's own frame: no extra
+    // closure, no extra call.
+    let blocks: Step | null = null
     return (ctx, value, path, evaluation, depth, scope) => {
       if (!openNode(ctx, depth)) return
       if (!simpleType(value)) {
         fail(ctx, message, path)
         return
       }
-      typeBlocks(ctx, value, path, evaluation, depth, scope)
+      let built = blocks
+      if (built === null) {
+        // Declaring the keywords is not the same as having anything to check:
+        // a node whose only string keyword is a `format` this validator was not
+        // asked to enforce compiles to nothing at all.
+        built = compileTypeBlocks(compiler, meta, singleType) ?? NOOP
+        blocks = built
+      }
+      built(ctx, value, path, evaluation, depth, scope)
     }
   }
+
+  const typeBlocks = compileTypeBlocks(compiler, meta, undefined)
 
   const parts: Step[] = []
   // The reference keywords come first, and sibling keywords still apply per
