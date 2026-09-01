@@ -17,11 +17,6 @@ consumer calls through.
   element back by reference, so `parse(x).nested === x.nested`; it is now always
   a fresh object. For a parser whose job is to strip, that is the safer default —
   a caller mutating the result can no longer reach the input.
-- **The remaining no-extras test stopped allocating.** `Object.getPrototypeOf(x)
-  === Object.prototype && Object.keys(x).length === N` becomes
-  `hasExactKeyCount(x, N)`, a new runtime helper that answers exactly the same
-  question by counting with `for..in` and bailing at the first key past the
-  budget. Same verdict for every input, including the prototype guard.
 - **A single-use nested sub-parser's fast path is inlined at its one call
   site,** with the call kept for everything it does not cover. The expansion is
   one level deep by construction and capped per parser.
@@ -31,8 +26,17 @@ consumer calls through.
   form lowers to a plain data property. Types keep the `export type { … } from`
   form. Both forms tree-shake identically in esbuild and rollup.
 
-Measured on Node 22 (best of 7 per process, median of five paired rounds) against
-the `typescript-runtime-type-benchmarks` payload — reached through the generated
-barrel under `--module commonjs`: safe parse 1.71x, strict parse 1.45x, loose
-assertion 3.91x, strict assertion 1.32x. Importing the module directly under ESM:
-safe parse 1.32x, strict parse 1.09x.
+Measured on Node 22 with `benny`, one variant per process, against the
+`typescript-runtime-type-benchmarks` payload and its four cases.
+
+Reached through the generated barrel, compiled with `--module commonjs`:
+
+| case | before | after | |
+|---|--:|--:|--:|
+| `parseSafe` | 28.2M | 43.4M | 1.54x |
+| `parseStrict` | 23.1M | 27.7M | 1.20x |
+| `assertLoose` | 61.5M | 137.2M | 2.23x |
+| `assertStrict` | 32.4M | 45.0M | 1.39x |
+
+Importing the module directly under ESM, where only the parser changes apply,
+`parseSafe` goes 34.9M → 43.3M (1.24x) and the other three are unchanged.

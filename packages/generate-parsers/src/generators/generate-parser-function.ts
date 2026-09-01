@@ -1675,14 +1675,19 @@ const generateObjectParser = (
   // required, the own-key count is equivalent and cheaper than the per-key walk —
   // but only for plain objects: a crafted prototype could satisfy the typed
   // checks through inherited properties while the own-key count still matches,
-  // so `hasExactKeyCount` rejects those, routing them to the slow path where the
-  // for..in walk keeps the historical inherited-key rejection. That helper is the
-  // whole `Object.getPrototypeOf(input) === Object.prototype &&
-  // Object.keys(input).length === N` test this used to inline: same verdict for
-  // every input, without the keys array `Object.keys` allocated on every parse.
+  // so non-plain inputs route to the slow path, where the for..in walk keeps
+  // the historical inherited-key rejection.
+  //
+  // The keys array this allocates looks like the thing to remove — but a
+  // prototype-guarded `for..in` count measured slower than it, both under the
+  // benchmark harness and one-variant-per-process: V8 scalar-replaces the array
+  // when only `.length` is read, and `Object.getPrototypeOf` is the dearer half
+  // of the pair either way. Leave it alone.
   if (fastPathNeedsKnownKeys) {
     fastPathChecks.push(
-      exactKeyCount !== null ? `hasExactKeyCount(input, ${exactKeyCount})` : `_hasOnlyKnownKeys${typeName}(input)`,
+      exactKeyCount !== null
+        ? `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`
+        : `_hasOnlyKnownKeys${typeName}(input)`,
     )
   }
 
@@ -1718,7 +1723,9 @@ const generateObjectParser = (
       stripKeys && exactKeyCount === null ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
     const shapeChecks = [...fastPathAccessorChecks]
     if (stripKeys && exactKeyCount !== null) {
-      shapeChecks.push(`hasExactKeyCount(input, ${exactKeyCount})`)
+      shapeChecks.push(
+        `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`,
+      )
     }
     const expectedShapeValidator =
       shapeChecks.length === 0
@@ -3157,10 +3164,12 @@ export const generateShapeValidator = (
   // The count form is sound only in conjunction with the typed checks above
   // (they prove every declared key present) and only for plain objects (a
   // crafted prototype could satisfy those checks through inherited
-  // properties), so it joins the chain last — `hasExactKeyCount` carries the
-  // prototype guard, exactly like the parser's own fast path.
+  // properties), so it joins the chain last, prototype-guarded like the
+  // parser's own fast path.
   if (validatorKeyCount !== null) {
-    checks.push(`hasExactKeyCount(input, ${validatorKeyCount})`)
+    checks.push(
+      `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${validatorKeyCount}`,
+    )
   }
 
   if (checks.length === 0) {

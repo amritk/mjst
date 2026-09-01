@@ -1,4 +1,3 @@
-import { hasExactKeyCount } from '@amritk/helpers/has-exact-key-count'
 import { validateArray } from '@amritk/helpers/validate-array'
 import { validateRecord } from '@amritk/helpers/validate-record'
 import { transformSync } from 'esbuild'
@@ -20,10 +19,10 @@ import { generateParserFunction, generateShapeValidator } from './generate-parse
  * real inputs through the emitted code instead of only asserting on its text.
  * esbuild strips the types — `ts.transpileModule` cost ~14ms per parser,
  * which dominated the suite across ~4k fuzz compiles; esbuild does the same
- * job in ~2ms. The `isObject`, `validateArray`, `validateRecord`, and
- * `hasExactKeyCount` runtime helpers the generated code imports are injected
- * directly — all but `isObject` are the *real* ones, so the identity-return and
- * no-extras fast paths behave exactly as shipped.
+ * job in ~2ms. The `isObject`, `validateArray`, and `validateRecord` runtime
+ * helpers the generated code imports are injected directly — the array/record
+ * helpers are the *real* ones, so the identity-return fast paths behave exactly
+ * as shipped.
  */
 export const evalGenerated = <T>(code: string, exportName: string): T => {
   const js = transformSync(code, { loader: 'ts', format: 'cjs', target: 'es2022' }).code
@@ -32,13 +31,12 @@ export const evalGenerated = <T>(code: string, exportName: string): T => {
   const mod = { exports: {} as Record<string, unknown> }
   const isObject = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value)
-  new Function('module', 'exports', 'isObject', 'validateArray', 'validateRecord', 'hasExactKeyCount', js)(
+  new Function('module', 'exports', 'isObject', 'validateArray', 'validateRecord', js)(
     mod,
     mod.exports,
     isObject,
     validateArray,
     validateRecord,
-    hasExactKeyCount,
   )
   return mod.exports[exportName] as T
 }

@@ -390,7 +390,9 @@ describe('generate-parser-function', () => {
     // than a per-key walk — so the fast path builds an explicit literal
     // (faster than a generic spread and a stable shape) rather than
     // `{ ...input }`.
-    expect(result).toContain('hasExactKeyCount(input, 2)) return {')
+    expect(result).toContain(
+      'Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2) return {',
+    )
     expect(result).toContain('    id: _id,')
     expect(result).toContain('    name: _name,')
     expect(result).not.toContain('_hasOnlyKnownKeysStrict')
@@ -2398,11 +2400,10 @@ describe('generate-parser-function', () => {
       expect(validate(smuggled)).toBe(false)
     })
 
-    // The no-extras term is `hasExactKeyCount`, which counts with for..in
-    // rather than allocating a keys array. for..in walks *inherited* enumerable
-    // keys too, so the helper's prototype guard is what keeps its verdict equal
-    // to `Object.keys(input).length === N` — pinned here in both directions
-    // against an object whose prototype carries an enumerable property.
+    // The no-extras term is an own-key count, and `Object.keys` is what makes
+    // it one: a `for..in` count would walk *inherited* enumerable keys too.
+    // Pinned here in both directions against an object whose prototype carries
+    // an enumerable property, since that is the case the two forms disagree on.
     it('counts only own keys when the prototype carries an enumerable property', () => {
       const schema: JSONSchema = {
         type: 'object',
@@ -2412,7 +2413,7 @@ describe('generate-parser-function', () => {
       }
 
       const source = generateParserFunction(schema, 'Pair', { strict: true })
-      expect(source).toContain('hasExactKeyCount(input, 2)')
+      expect(source).toContain('Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2')
       const parse = evalGenerated<(input: unknown) => unknown>(source, 'parsePair')
       const validate = evalGenerated<(input: unknown) => boolean>(
         generateShapeValidator(schema, 'Pair', false),
@@ -2586,7 +2587,7 @@ describe('generate-parser-function', () => {
       // the file also emits keep their own term; they answer a different
       // question, and callers read them.)
       const parsers = source.slice(source.indexOf('const parseDoc'))
-      expect(parsers).not.toContain('hasExactKeyCount')
+      expect(parsers).not.toContain('Object.keys(input).length')
       expect(parsers).not.toContain('_hasOnlyKnownKeys')
       expect(parsers).not.toContain('return input as')
 
