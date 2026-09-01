@@ -2438,6 +2438,130 @@ describe('generate-parser-function', () => {
       expect(validate(withInheritedDeclared)).toBe(false)
     })
 
+    // A nested sub-schema has exactly one caller by construction, so its fast
+    // path is spelled out at that call site and the call kept for everything
+    // else. Both branches must produce what the call produced.
+    it('inlines the single-use nested fast path in a strict strip build', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          nested: {
+            type: 'object',
+            properties: { foo: { type: 'string' }, num: { type: 'number', minimum: 3 } },
+            required: ['foo', 'num'],
+          },
+        },
+        required: ['id', 'nested'],
+      }
+
+      const source = generateParserFunction(schema, 'Doc', { strict: true, stripUnknown: true })
+      expect(source).toContain('? { foo: (_nested as Record<string, any>).foo')
+      // The call survives for whatever the inlined condition rejects.
+      expect(source).toContain(': parseDoc_Nested(_nested),')
+
+      const parse = evalGenerated<(input: unknown) => { nested: Record<string, unknown> }>(source, 'parseDoc')
+
+      // Inlined branch.
+      expect(parse({ id: 'a', nested: { foo: 'b', num: 4 } })).toEqual({ id: 'a', nested: { foo: 'b', num: 4 } })
+      // Call branch: extras stripped, and the sub-parser's own error survives.
+      expect(parse({ id: 'a', nested: { foo: 'b', num: 4, junk: 1 } })).toEqual({
+        id: 'a',
+        nested: { foo: 'b', num: 4 },
+      })
+      expect(() => parse({ id: 'a', nested: { foo: 'b', num: 1 } })).toThrow("field 'num' must be >= 3")
+      expect(() => parse({ id: 'a', nested: { foo: 1, num: 4 } })).toThrow("field 'foo' expected string")
+      // An array reaches the sub-parser, which rejects it as a non-object.
+      expect(() => parse({ id: 'a', nested: [] })).toThrow("field 'nested' expected object")
+    })
+
+    // A sub-parser that has to *reject* an undeclared key keeps its call: the
+    // inlined literal would drop the key instead of throwing on it.
+    it('leaves a rejecting nested parser as a call', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          nested: {
+            type: 'object',
+            properties: { foo: { type: 'string' } },
+            required: ['foo'],
+            additionalProperties: false,
+          },
+        },
+        required: ['nested'],
+      }
+
+      const source = generateParserFunction(schema, 'Doc', { strict: true, stripUnknown: true })
+      expect(source).toContain('nested: parseDoc_Nested(_nested),')
+      expect(source).not.toContain('? {')
+
+      const parse = evalGenerated<(input: unknown) => unknown>(source, 'parseDoc')
+      expect(() => parse({ nested: { foo: 'a', junk: 1 } })).toThrow('unknown property "junk"')
+    })
+
+    // Coerce mode rebuilds each field rather than reading it, and
+    // `--log-warnings` makes the sub-parser do work before its guard; neither
+    // is reproducible from the caller.
+    it('does not inline in coerce mode or under log warnings', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          nested: { type: 'object', properties: { foo: { type: 'string' } }, required: ['foo'] },
+        },
+        required: ['nested'],
+      }
+
+      expect(generateParserFunction(schema, 'Doc', { stripUnknown: true })).toContain(
+        'nested: parseDoc_Nested(_nested),',
+      )
+      expect(generateParserFunction(schema, 'Doc', { strict: true, stripUnknown: true, logWarnings: true })).toContain(
+        'nested: parseDoc_Nested(_nested),',
+      )
+    })
+
+    // The expansion is one level deep by construction — a sub-schema with
+    // nested objects of its own delegates those to further sub-parsers, so it
+    // is never inlined and a deep schema cannot expand geometrically.
+    it('keeps generated size bounded on a deep schema', () => {
+      const nest = (depth: number): JSONSchema => {
+        let node: JSONSchema = { type: 'object', properties: { leaf: { type: 'string' } }, required: ['leaf'] }
+        for (let i = 0; i < depth; i++) {
+          node = { type: 'object', properties: { child: node, tag: { type: 'string' } }, required: ['child', 'tag'] }
+        }
+        return node
+      }
+
+      const shallow = generateParserFunction(nest(8), 'Deep', { strict: true, stripUnknown: true })
+      const deep = generateParserFunction(nest(16), 'Deep', { strict: true, stripUnknown: true })
+
+      // Only the innermost object — the one with no nested object of its own —
+      // is inlined, whatever the depth.
+      expect(shallow.split('? {').length - 1).toBe(1)
+      expect(deep.split('? {').length - 1).toBe(1)
+      // Doubling the depth roughly doubles the output. An expansion that
+      // recursed into already-inlined levels would square it instead.
+      expect(deep.length).toBeLessThan(shallow.length * 2.5)
+    })
+
+    // Per-parser caps keep a wide schema from turning one parser into a wall of
+    // conditional expressions.
+    it('inlines at most a few nested fast paths per parser', () => {
+      const child: JSONSchema = {
+        type: 'object',
+        properties: { foo: { type: 'string' }, num: { type: 'number' } },
+        required: ['foo', 'num'],
+      }
+      const properties: Record<string, JSONSchema> = {}
+      for (let i = 0; i < 10; i++) properties[`n${i}`] = child
+
+      const source = generateParserFunction({ type: 'object', properties, required: Object.keys(properties) }, 'Wide', {
+        strict: true,
+        stripUnknown: true,
+      })
+      expect(source.split('? {').length - 1).toBe(4)
+      expect(source.split(/: parseWide_N\d+\(/).length - 1).toBe(10)
+    })
+
     // Issue: the strip build's fast path used to prove "no undeclared key" only
     // so it could hand the input straight back. Building the declared-property
     // literal is cheaper than that proof, so the proof is gone — and with it the
