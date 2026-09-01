@@ -26,17 +26,24 @@ consumer calls through.
   form lowers to a plain data property. Types keep the `export type { … } from`
   form. Both forms tree-shake identically in esbuild and rollup.
 
-Measured on Node 22 with `benny`, one variant per process, against the
-`typescript-runtime-type-benchmarks` payload and its four cases.
-
-Reached through the generated barrel, compiled with `--module commonjs`:
+Measured on Node 22 with `benny`, one variant per process, median of five, on
+the `typescript-runtime-type-benchmarks` payload and its four cases, with each
+result consumed so nothing is eliminated as dead. Reached through the generated
+barrel, compiled with `--module commonjs`:
 
 | case | before | after | |
 |---|--:|--:|--:|
-| `parseSafe` | 28.2M | 43.4M | 1.54x |
-| `parseStrict` | 23.1M | 27.7M | 1.20x |
-| `assertLoose` | 61.5M | 137.2M | 2.23x |
-| `assertStrict` | 32.4M | 45.0M | 1.39x |
+| `parseSafe` | 27.9M | 44.0M | 1.58x |
+| `parseStrict` | 22.8M | 27.8M | 1.22x |
+| `assertLoose` | 57.0M | 134.8M | 2.36x |
+| `assertStrict` | 32.3M | 43.8M | 1.36x |
 
 Importing the module directly under ESM, where only the parser changes apply,
-`parseSafe` goes 34.9M → 43.3M (1.24x) and the other three are unchanged.
+`parseSafe` goes 34.1M → 41.4M (1.21x) and the other three are unchanged.
+
+Absolute figures are machine-specific and two ceilings bound them: an empty
+benchmark case measures ~115M ops/s here, so `assertLoose` is already reporting
+the harness rather than the validator; and a parse whose result is discarded (as
+the harness discards it) has its allocation scalar-replaced, which flatters every
+`parse*` number. Forcing the result to escape, `parseSafe` reads 30.8M → 37.2M
+against 50.2M for a hand-written parser — 61% of hand-written before, 74% after.
