@@ -60,6 +60,11 @@ describe('buildExampleSchema', () => {
     const files = await buildExampleSchema(schema, 'Thing')
     const index = contentOf(files, 'index.ts')
 
-    expect(index).toContain("export { type Thing, ThingArbitrary, thingExample } from './thing.js';")
+    expect(index).toContain("export type { Thing } from './thing.js';")
+    expect(index).toContain(
+      "import { ThingArbitrary as ThingArbitrary$0, thingExample as thingExample$0 } from './thing.js';",
+    )
+    expect(index).toContain('export const ThingArbitrary = ThingArbitrary$0;')
+    expect(index).toContain('export const thingExample = thingExample$0;')
   })
 })
