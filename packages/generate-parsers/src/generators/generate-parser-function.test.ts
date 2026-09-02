@@ -2999,4 +2999,48 @@ describe('generate-parser-function', () => {
       })
     })
   })
+
+  describe('cold diagnostic hoisting', () => {
+    const wideSchema: JSONSchema = {
+      type: 'object',
+      properties: {
+        a: { type: 'string' },
+        b: { type: 'number' },
+        c: { type: 'boolean' },
+      },
+      required: ['a', 'b', 'c'],
+    }
+
+    it('hoists the per-property diagnostics out of the parser body', () => {
+      const source = generateParserFunction(wideSchema, 'Wide', { strict: true, stripUnknown: true })
+
+      // The parser keeps only the call; the messages live in the cold function.
+      expect(source).toContain('const _assertWide = (input: Record<string, unknown>): void => {')
+      expect(source).toContain('_assertWide(input);')
+      const parserBody = source.slice(source.indexOf('export const parseWide'))
+      expect(parserBody).not.toContain("missing required property 'a'")
+    })
+
+    it('keeps the diagnostics inline when there are too few to be worth a call', () => {
+      const narrowSchema: JSONSchema = {
+        type: 'object',
+        properties: { only: { type: 'string' } },
+        required: ['only'],
+      }
+      const source = generateParserFunction(narrowSchema, 'Narrow', { strict: true, stripUnknown: true })
+
+      expect(source).not.toContain('const _assertNarrow')
+      expect(source).toContain("missing required property 'only'")
+    })
+
+    it('reports the same failure whether the diagnostics are hoisted or inline', () => {
+      const source = generateParserFunction(wideSchema, 'Wide', { strict: true, stripUnknown: true })
+      const parse = evalGenerated<(input: unknown) => unknown>(source, 'parseWide')
+
+      expect(() => parse({ a: 'x', b: 1 })).toThrow("[Wide] missing required property 'c'")
+      expect(() => parse({ a: 'x', b: 'nope', c: true })).toThrow("[Wide] field 'b' expected number")
+      // A valid input still takes the fast path and never reaches the cold function.
+      expect(parse({ a: 'x', b: 1, c: true })).toEqual({ a: 'x', b: 1, c: true })
+    })
+  })
 })
