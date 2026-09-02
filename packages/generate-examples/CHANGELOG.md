@@ -1,5 +1,14 @@
 # @amritk/generate-examples
 
+## 0.8.1
+
+### Patch Changes
+
+- Updated dependencies [049b0e9]
+- Updated dependencies [049b0e9]
+  - @amritk/runtime-validators@0.13.0
+  - @amritk/helpers@0.18.0
+
 ## 0.8.0
 
 ### Minor Changes
