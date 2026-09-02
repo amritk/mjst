@@ -5,7 +5,7 @@
  * `.length` both accepts values the schema forbids (`"💩"` against
  * `minLength: 2`) and rejects ones it allows (`"💩💩"` against `maxLength: 2`).
  * Ajv — the differential oracle — counts code points, as does the runtime
- * interpreter (`packages/runtime-validators/src/interpreter/interpret.ts`).
+ * interpreter (`packages/runtime-validators/src/interpreter/compile.ts`).
  *
  * The exact count needs a scan, so the emitted expression pays for it only where
  * it can change the answer. `units` is an upper bound on the code-point count and

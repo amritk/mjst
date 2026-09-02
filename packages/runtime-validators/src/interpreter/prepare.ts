@@ -1,6 +1,7 @@
 import { assertsValidation } from '@/interpreter/asserts-validation'
-import { type InterpreterContext, interpret, NO_DYNAMIC_SCOPE, newValidatorCaches } from '@/interpreter/interpret'
+import { compileNode, newCompiler } from '@/interpreter/compile'
 import { limitsCacheKey, type ResolvedLimits, resolveLimits, screenSchema } from '@/interpreter/limits'
+import { type InterpreterContext, NO_DYNAMIC_SCOPE, newValidatorCaches } from '@/interpreter/runtime'
 import { buildSchemaRegistry, type SchemaDocuments } from '@/interpreter/schema-registry'
 import type { ValidateOptions, ValidationResult } from '@/types'
 
@@ -79,10 +80,12 @@ const cacheKey = (
 }
 
 /**
- * Builds a validator closure that interprets `schema` on each call. There is no
- * compile step: the closure returns immediately, and the only reusable work —
- * compiling regexes and resolving `$ref`s — is memoized on first use in caches
- * captured here, so a reused validator pays for each at most once.
+ * Builds a validator closure for `schema`. There is still no compile step in the
+ * sense that matters — the closure returns immediately, having read nothing but
+ * the root's `$id` and `$schema` — because each schema node is specialized into
+ * its own step (see `compile.ts`) the first time a validation actually reaches
+ * it. A one-shot validation therefore pays only for the nodes it visits, and a
+ * reused validator pays for each of them exactly once.
  */
 const makeValidator = (
   schema: unknown,
@@ -118,29 +121,22 @@ const makeValidator = (
   const asserts = assertsValidation(schema, registry)
 
   // One caches holder, captured here and shared across every call of this
-  // validator. Its maps stay null until the schema actually hits a `pattern` or
-  // `$ref`, so a first validation of the common map-free schema allocates
-  // nothing here beyond this tiny holder.
+  // validator. Its maps stay null until the schema actually follows a `$ref`, so
+  // a first validation of the common ref-free schema allocates nothing here
+  // beyond this tiny holder.
   const caches = newValidatorCaches()
 
-  // Whether this validator has been called before. The per-node keyword caches
-  // (see `node-meta.ts`) only start filling on the second call: a one-shot
-  // validation — the CLI path this package is built for — would write an entry
-  // per schema node and never read one back, and building that metadata is
-  // already cheaper than the scan it replaces. A validator that is being reused
-  // says so by being called twice, and from there on every node is read from the
-  // cache.
-  let called = false
+  // The compiler and the root's node record. Neither reads the schema: asking
+  // for a node hands back an empty record, and the step behind it is built the
+  // first time a validation reaches that node. So building a validator stays
+  // free, and a schema is only ever specialized as far as the data goes.
+  const compiler = newCompiler(schema, registry, asserts, formats)
+  const root = compileNode(compiler, schema)
 
   return (input: unknown): unknown => {
-    if (called) caches.nodeMeta ??= new WeakMap()
-    else called = true
-
     const ctx: InterpreterContext = {
       root: schema,
       registry,
-      assertsValidation: asserts,
-      formats,
       emitErrors,
       caches,
       errors: null,
@@ -150,7 +146,7 @@ const makeValidator = (
       // A fresh budget per call: the ceiling is per-validation, not per-validator.
       budget: { steps: limits.maxSteps },
     }
-    interpret(ctx, schema, input, '', null, 0, rootScope)
+    root.run(ctx, input, '', null, 0, rootScope)
     if (emitErrors) {
       return (ctx.errors === null ? true : { valid: false, errors: ctx.errors }) satisfies ValidationResult
     }
