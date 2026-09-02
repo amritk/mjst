@@ -19,7 +19,7 @@
  * unconditionally after a conversion.
  */
 export const reportLossyConstructs = (
-  adapter: 'Zod' | 'Valibot',
+  adapter: 'Zod' | 'Valibot' | 'Avro',
   constructs: ReadonlySet<string>,
   strict: boolean | undefined,
 ): void => {

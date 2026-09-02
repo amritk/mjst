@@ -39,19 +39,28 @@ unchanged.
 
 ## Adaptation: three ReDoS-prone patterns
 
-The upstream schemas carry three regular expressions that
-`@amritk/runtime-validators` rejects outright, because they nest unbounded
-quantifiers and are applied to attacker-controlled document content. One of the
-three is genuinely exponential; the package refuses to build a validator from
-any of them rather than guess. Each is replaced here by a **provably equivalent**
-pattern that matches the same language with a single, unambiguous quantifier —
-`schema.test.ts` asserts the equivalence over a generated corpus.
+The upstream schemas carry three regular expressions that nest unbounded
+quantifiers and are applied to attacker-controlled document content. When these
+files were vendored, `@amritk/runtime-validators` refused to build a validator
+from any of the three rather than guess which were safe. Each is replaced here
+by a **provably equivalent** pattern that matches the same language with a
+single, unambiguous quantifier — `schema.test.ts` asserts the equivalence over a
+generated corpus.
+
+Only the first is genuinely exponential. The other two are *separator-anchored*
+— every repetition must begin with a character the body cannot itself produce,
+so no input splits two ways — and the ReDoS screen now admits that shape
+deliberately, naming these two as the cases that motivated it. Their rewrites
+are therefore no longer required for the schemas to build. They are kept because
+they are proven equivalent and one flat loop reads more clearly than a nested
+pair; `schema.test.ts` pins which patterns the screen refuses today, in both
+directions, so neither a relaxation nor a re-tightening lands silently.
 
 | Upstream | Vendored | Why |
 | --- | --- | --- |
 | `^([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*)*$` | `^(?:[A-Za-z_](?:[A-Za-z0-9_]\|\.[A-Za-z_])*)?$` | The real ReDoS. The outer `*` repeats a group that can itself match a bare identifier, so `aaaa…` splits exponentially many ways and a single trailing invalid character makes the match fail only after exploring all of them. Concatenating two dotted chains always yields another dotted chain, so the outer star adds nothing beyond "or empty". |
-| `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` | `^[A-Za-z_](?:[A-Za-z0-9_]\|\.[A-Za-z_])*$` | Safe in practice — each repetition must start with `.`, which `[A-Za-z0-9_]*` cannot consume — but it still nests unbounded quantifiers, which is what the checker screens on. Rewritten as one flat loop over "identifier character, or a dot that starts a new identifier". |
-| `^\$message\.(header\|payload)#(\/(([^\/~])\|(~[01]))*)*` | `^\$message\.(header\|payload)#(?:\/(?:[^~]\|~[01])*)?` | Same story: each outer repetition must start with `/`, which the inner class excludes, so it cannot loop on empty — but it nests. After the first `/`, later `/`s only open new repetitions, so the tail is just "any run of non-`~` characters and `~0`/`~1` escapes". |
+| `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` | `^[A-Za-z_](?:[A-Za-z0-9_]\|\.[A-Za-z_])*$` | Safe — each repetition must start with `.`, which `[A-Za-z0-9_]*` cannot consume. The screen refused it when these files were vendored, and now admits it as a separator-anchored loop. Kept as one flat loop over "identifier character, or a dot that starts a new identifier", which says the same thing more plainly. |
+| `^\$message\.(header\|payload)#(\/(([^\/~])\|(~[01]))*)*` | `^\$message\.(header\|payload)#(?:\/(?:[^~]\|~[01])*)?` | Same story: each outer repetition must start with `/`, which the inner class excludes, so it cannot loop on empty. Also admitted by the screen today. After the first `/`, later `/`s only open new repetitions, so the tail is just "any run of non-`~` characters and `~0`/`~1` escapes". |
 
 ## Refreshing
 
@@ -63,5 +72,6 @@ the modules and commit both the `.json` and the `.ts`:
 cd packages/lint && node scripts/generate-schema-modules.mjs
 ```
 
-`schema.test.ts` fails if a re-vendored file reintroduces a pattern the
-validator rejects, so a missed substitution cannot land silently.
+`schema.test.ts` fails if a re-vendored file reintroduces any of the three
+upstream patterns, so a missed substitution cannot land silently — including for
+the two the validator would now accept.

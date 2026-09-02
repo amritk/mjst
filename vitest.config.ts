@@ -24,6 +24,12 @@ export default defineConfig({
       // Consumed from its built dist (not src): runtime-validators uses `@/` path
       // aliases internally, which only resolve once `tsc-alias` has rewritten them
       // to relative paths in `dist`. Requires a prior build (see root `pretest`).
+      // Subpaths first: the bare-name rule below would otherwise never be reached
+      // for them, and both resolve to dist for the reason above.
+      {
+        find: /^@amritk\/runtime-validators\/parse$/,
+        replacement: resolve(root, 'packages/runtime-validators/dist/parse/index.js'),
+      },
       {
         find: /^@amritk\/runtime-validators$/,
         replacement: resolve(root, 'packages/runtime-validators/dist/index.js'),

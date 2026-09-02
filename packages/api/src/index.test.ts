@@ -81,8 +81,14 @@ describe('index', () => {
     // elimination. The Node adapters load their built-ins through
     // `importNodeModule` instead, which no bundler can see.
     expect(valueExternals.filter((name) => name.startsWith('node:'))).toEqual([])
-    // The one runtime dependency, by design.
-    expect(valueExternals).toEqual(['@amritk/runtime-validators'])
+    // The one runtime dependency, by design — the two specifiers are the root
+    // entry and the `/parse` subpath of that same package, which is where the
+    // string-to-scalar coercion table lives so this package and the runtime
+    // parser cannot fork it.
+    expect(valueExternals).toEqual(['@amritk/runtime-validators', '@amritk/runtime-validators/parse'])
+    expect(new Set(valueExternals.map((name) => name.split('/').slice(0, 2).join('/')))).toEqual(
+      new Set(['@amritk/runtime-validators']),
+    )
     // Type-only `node:*` imports are fine — they erase at compile time — but
     // they are listed here so a change from `import type` to a value import
     // shows up as a diff rather than as a broken deploy.

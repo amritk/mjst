@@ -17,11 +17,15 @@ export type CliConfig = {
   readonly schemaDir?: string
   /**
    * The source format of the schema. Defaults to `'json'` (a plain JSON Schema file).
-   * Any other format loads `schema` as a module and converts it via the matching adapter.
+   *
+   * `'avro'` reads `schema` as a `.avsc` JSON document and converts it — no module
+   * is loaded, so `export` does not apply. Every other format loads `schema` as a
+   * module and converts the exported value via the matching adapter.
    */
   readonly input?: SourceFormat
   /**
-   * Which export of the schema module to use when `input` is not `'json'`.
+   * Which export of the schema module to use when `input` names a module format
+   * (anything but `'json'` and `'avro'`, which are parsed as data).
    * Defaults to the default export, or the sole named export when there is exactly one.
    */
   readonly export?: string

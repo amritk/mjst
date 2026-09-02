@@ -96,7 +96,28 @@ Each schema also generates a boolean type-guard `isX(input): input is X` — a s
 | assert-loose | **~189M** ops/s | ~170M ops/s | ~44M ops/s | ~78M ops/s | ~5M ops/s |
 | assert-strict | **~104M** ops/s | ~68M ops/s | ~21M ops/s | ~42M ops/s | ~1.8M ops/s |
 
-The `assert-loose` / `assert-strict` rows are the exact shape used by [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks).
+The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks) — they are not that project's numbers, and they are not comparable with its leaderboard. The shape is shared; the harness is not, and the harness is worth an order of magnitude. Every operation on the leaderboard goes through benny (benchmark.js) into a class-property call, around a single frozen module-level fixture whose verdict is discarded. Running the same generated functions under that harness (`bun run bench:moltar`, one run on Linux x64, Bun 1.3.11 / Node 22.22):
+
+| harness | runtime | assert-loose | assert-strict |
+|:--|:--|--:|--:|
+| this table (`bench/measure.ts`) | Bun | ~200M ops/s | ~185M ops/s |
+| benny, moltar's `Benchmark` class | Node | ~100M ops/s | ~38M ops/s |
+| benny, moltar's `Benchmark` class | Bun | ~70M ops/s | ~2.4M ops/s |
+| *no-op control, same harness* | *Node* | *~120M ops/s* | *~120M ops/s* |
+
+The no-op row is a "validator" that checks nothing, so it is the fastest number that harness can produce: on Node the `assert-loose` figure lands within 20% of it, which is a measurement of benny, not of validation — the leaderboard's ceiling, not any library's, and on CI hardware that ceiling sits lower still. And `assert-strict` on Bun collapses because moltar's fixture is `Object.freeze({ … })`, which costs *every* library about 100x on JavaScriptCore (details and the frozen-input benchmark: [Frozen inputs](./packages/generate-validators#frozen-inputs)).
+
+**Frozen inputs are their own workload.** Enforcing `additionalProperties: false` means proving no undeclared key is there, and every library does that by enumerating keys. On JavaScriptCore, making an object non-extensible (`Object.freeze`, `Object.seal`, `Object.preventExtensions`) disables the engine's cached own-keys fast path, so every key sweep — `Object.keys`, `for...in`, `Reflect.ownKeys` — drops to a generic walk. Property reads are unaffected; only strict schemas pay. Frozen config objects and frozen fixtures are ordinary inputs, so the bench measures them (`assert-strict (frozen)`, `small (4 fields, frozen)`):
+
+| `assert-strict`, valid input | mutable | frozen |
+|:--|--:|--:|
+| mjst (generated) | ~185M ops/s | ~1.7M ops/s |
+| typia (transformed) | ~68M ops/s | ~1.7M ops/s |
+| typebox (compiled) | ~46M ops/s | ~1.7M ops/s |
+| ajv (compiled) | ~24M ops/s | ~1.5M ops/s |
+| zod | ~1.4M ops/s | ~0.7M ops/s |
+
+Everything converges because everything is paying the same engine slow path; V8 has no such cliff. [Frozen inputs](./packages/generate-validators#frozen-inputs) has the alternatives that were measured and why the generated code keeps the key count.
 
 **Prepare-a-validator cost** (one-shot, lower is better):
 
@@ -107,7 +128,9 @@ The `assert-loose` / `assert-strict` rows are the exact shape used by [`moltar/t
 
 <sub>Measured on Bun 1.4 (Linux x64); micro-benchmark figures vary by machine and runtime. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 
-**Parsing** replicates both parse modes of the same benchmark over the libraries
+**Parsing** replicates both parse modes of the same benchmark — its modes and
+its shapes, under this repo's harness rather than the leaderboard's, with the
+same caveat as above — over the libraries
 with a pure (non-mutating) parse operation. *parseSafe* asserts the types and
 **strips** undeclared keys (zod's `.strip()`); *parseStrict* asserts the types
 and **rejects** undeclared keys (zod's `.strict()`):

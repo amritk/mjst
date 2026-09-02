@@ -30,6 +30,12 @@ describe('getAdapter', () => {
     expect(getAdapter('effect').format).toBe('effect')
   })
 
+  it('returns the Avro adapter', () => {
+    const adapter = getAdapter('avro')
+    expect(adapter.format).toBe('avro')
+    expect(adapter.toJSONSchema('string')).toEqual({ type: 'string' })
+  })
+
   it('throws an actionable error for the json format (handled directly by the CLI)', () => {
     expect(() => getAdapter('json')).toThrow(/No adapter is available for input format 'json'/)
   })

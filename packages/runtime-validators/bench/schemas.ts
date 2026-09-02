@@ -162,8 +162,59 @@ const deepInvalid = {
   tags: ['dup', 'dup'],
 }
 
+/**
+ * The shape `moltar/typescript-runtime-type-benchmarks` validates — seven scalar
+ * roots plus one nested object — in its strict form, with both objects closed by
+ * `additionalProperties: false`.
+ *
+ * It is here because it is the shape this package gets compared on, and because
+ * it exercises something the three cases above do not: a schema that is almost
+ * entirely per-property dispatch over a small, fully-present object, where fixed
+ * per-node overhead is the whole cost. `packages/generate-validators/bench` runs
+ * the same shape against the generated validators, so the two tables read as a
+ * direct interpret-versus-codegen comparison on identical input.
+ *
+ * The ~1.1k-char `longString` keeps the workload string-heavy, so this reflects a
+ * real payload rather than a degenerate all-shape check.
+ */
+const LONG_STRING = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '.repeat(20)
+
+const assertSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    number: { type: 'number' },
+    negNumber: { type: 'number' },
+    maxNumber: { type: 'number' },
+    string: { type: 'string' },
+    longString: { type: 'string' },
+    boolean: { type: 'boolean' },
+    deeplyNested: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { foo: { type: 'string' }, num: { type: 'number' }, bool: { type: 'boolean' } },
+      required: ['foo', 'num', 'bool'],
+    },
+  },
+  required: ['number', 'negNumber', 'maxNumber', 'string', 'longString', 'boolean', 'deeplyNested'],
+}
+
+const assertValid = {
+  number: 1,
+  negNumber: -1,
+  maxNumber: Number.MAX_VALUE,
+  string: 'string',
+  longString: LONG_STRING,
+  boolean: true,
+  deeplyNested: { foo: 'bar', num: 1, bool: false },
+}
+
+/** Fails deep — the nested object's `num` — so the whole root is walked first. */
+const assertInvalid = { ...assertValid, deeplyNested: { foo: 'bar', num: 'not-a-number', bool: false } }
+
 export const BENCH_CASES: readonly BenchCase[] = [
   { name: 'small', schema: smallSchema, valid: smallValid, invalid: smallInvalid },
   { name: 'wide (40 props)', schema: wideSchema, valid: wideValid, invalid: wideInvalid },
   { name: 'deep ($ref + arrays)', schema: deepSchema, valid: deepValid, invalid: deepInvalid },
+  { name: 'assert (7 scalars + nested)', schema: assertSchema, valid: assertValid, invalid: assertInvalid },
 ]

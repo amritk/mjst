@@ -1,5 +1,228 @@
 # @amritk/mjst
 
+## 0.16.1
+
+### Patch Changes
+
+- Updated dependencies [049b0e9]
+- Updated dependencies [049b0e9]
+  - @amritk/api@0.16.2
+  - @amritk/helpers@0.18.0
+  - @amritk/generate-parsers@0.20.1
+  - @amritk/generate-validators@0.15.1
+  - @amritk/adapters@0.5.2
+  - @amritk/generate-examples@0.8.1
+  - @amritk/lint@0.5.2
+  - @amritk/resolve-refs@0.7.1
+
+## 0.16.0
+
+### Minor Changes
+
+- 69fa1f6: Cut the hot-path cost of generated parsers and of every barrel a CommonJS
+  consumer calls through.
+
+  - **Strip builds no longer prove "no undeclared key" before their fast path.**
+    A strip build returns a literal naming only the declared properties, so an
+    extra is dropped by construction and proving its absence first bought nothing.
+    Parsers that must _reject_ an extra keep the proof. **This is an observable
+    change:** a stripping parser used to hand a clean nested object or array
+    element back by reference, so `parse(x).nested === x.nested`; it is now always
+    a fresh object. For a parser whose job is to strip, that is the safer default —
+    a caller mutating the result can no longer reach the input.
+  - **A single-use nested sub-parser's fast path is inlined at its one call
+    site,** with the call kept for everything it does not cover. The expansion is
+    one level deep by construction and capped per parser.
+  - **Generated `index.ts` barrels re-export values as `const` aliases.**
+    TypeScript lowers `export { x } from './x.js'` to a CommonJS _accessor_, so a
+    CJS consumer paid a property getter on every call through the barrel; the alias
+    form lowers to a plain data property. Types keep the `export type { … } from`
+    form. Both forms tree-shake identically in esbuild and rollup.
+
+  Measured on Node 22 with `benny`, one variant per process, median of five, on
+  the `typescript-runtime-type-benchmarks` payload and its four cases, with each
+  result consumed so nothing is eliminated as dead. Reached through the generated
+  barrel, compiled with `--module commonjs`:
+
+  | case           | before |  after |       |
+  | -------------- | -----: | -----: | ----: |
+  | `parseSafe`    |  27.9M |  44.0M | 1.58x |
+  | `parseStrict`  |  22.8M |  27.8M | 1.22x |
+  | `assertLoose`  |  57.0M | 134.8M | 2.36x |
+  | `assertStrict` |  32.3M |  43.8M | 1.36x |
+
+  Importing the module directly under ESM, where only the parser changes apply,
+  `parseSafe` goes 34.1M → 41.4M (1.21x) and the other three are unchanged.
+
+  Absolute figures are machine-specific and two ceilings bound them: an empty
+  benchmark case measures ~115M ops/s here, so `assertLoose` is already reporting
+  the harness rather than the validator; and a parse whose result is discarded (as
+  the harness discards it) has its allocation scalar-replaced, which flatters every
+  `parse*` number. Forcing the result to escape, `parseSafe` reads 30.8M → 37.2M
+  against 50.2M for a hand-written parser — 61% of hand-written before, 74% after.
+
+### Patch Changes
+
+- Updated dependencies [829329d]
+- Updated dependencies [5e45680]
+- Updated dependencies [69fa1f6]
+  - @amritk/generate-validators@0.15.0
+  - @amritk/generate-parsers@0.20.0
+  - @amritk/helpers@0.17.0
+  - @amritk/generate-examples@0.8.0
+  - @amritk/adapters@0.5.1
+  - @amritk/api@0.16.1
+  - @amritk/lint@0.5.1
+  - @amritk/resolve-refs@0.7.1
+
+## 0.15.0
+
+### Minor Changes
+
+- 14d06c8: Add an Apache Avro adapter at `@amritk/adapters/avro-to-json-schema`, wired into
+  the CLI as `--input avro`.
+
+  Avro is the schema language most event-driven APIs actually use, and it is the
+  one format here with no JSON Schema exporter to delegate to — so the conversion
+  is implemented in full. It still adds **no dependency**: an `.avsc` is already
+  JSON, so there is nothing to parse that `JSON.parse` does not.
+
+  ```ts
+  import { avroToJsonSchema } from "@amritk/adapters/avro-to-json-schema";
+
+  const jsonSchema = avroToJsonSchema(JSON.parse(avsc));
+  ```
+
+  ```sh
+  mjst --schema user.avsc --input avro --out-dir ./generated
+  ```
+
+  Every named type (`record`, `enum`, `fixed`) is defined once under its
+  **fullname** in `$defs` and referenced by `$ref` everywhere it appears, so a
+  recursive type stays finite and `com.example.User` generates a `ComExampleUser`
+  type rather than an inline shape repeated at each use site. Unlike the other
+  formats, `--schema` points at the JSON document itself rather than a JS/TS
+  module — nothing is imported, so `--export` does not apply.
+
+  **Pick the encoding you mean.** Avro is a binary format with a _separately
+  specified_ JSON encoding, and the two readings of "the JSON for this schema"
+  genuinely disagree, so the adapter makes you choose:
+
+  | `encoding`           | Describes                                                                  | Unions                                                   | `bytes`                   | Fields with a `default` |
+  | :------------------- | :------------------------------------------------------------------------- | :------------------------------------------------------- | :------------------------ | :---------------------- |
+  | `'json'` _(default)_ | the object your application code sees                                      | plain `anyOf`; `["null", T]` collapses to a nullable `T` | base64                    | optional                |
+  | `'avro-json'`        | the spec's JSON encoding, as sent under `application/vnd.apache.avro+json` | single-key wrappers tagged with the branch's fullname    | codepoint-per-byte string | required                |
+
+  The `default` column is not a style choice. Avro has **no optional fields** —
+  every declared field is present in the encoding, and a `default` is only
+  consulted during schema resolution, when reading data written against a
+  _different_ schema. So `'avro-json'` marks every field required, because that is
+  what is on the wire, while `'json'` treats a defaulted field as optional,
+  because that is the shape application code deals with. For the same reason a
+  latin-1 byte `default` is dropped under `'json'` rather than mistranslated:
+  `default` is not annotation-only here, since `@amritk/generate-parsers` coerces
+  with it.
+
+  Two mappings look like gaps and are deliberate:
+
+  - **A `long` gets no bounds.** Its range is ±2^63, which no JSON number can
+    represent — a stated `maximum` would round to 2^63 and be both wrong and
+    unreachable. An `int` _is_ bounded, since ±2^31 lands exactly on a double.
+  - **Date and time logical types stay integers.** Avro encodes
+    `timestamp-millis` as a `long` in its JSON encoding as much as in binary, so
+    `format: 'date-time'` would describe a string that never arrives. Only `uuid`
+    narrows its base type.
+
+  The default **value** is translated, not copied: Avro states a union's default as
+  a bare value of its first branch, so under `'avro-json'` it is wrapped to match
+  the branch tagging the data uses (`null` stays bare), and under `'json'` a
+  latin-1 byte default is dropped rather than mistranslated into base64. Both rules
+  apply at any depth, and a byte value anywhere inside a default drops the whole
+  default — a half-translated one is worse than none.
+
+  `decimal` and `duration` degrade to their base type and are reported through the
+  existing widening warning (`strict: true` throws instead). An unrecognised
+  `logicalType` falls through to its base type silently, which the Avro spec
+  requires, as does one declared on a base it is not defined for. Names are
+  validated against the spec's pattern, since a name is written straight into a
+  `$defs` key and the `$ref` pointing at it. `aliases` and field `order` describe how _two_ schemas relate during
+  resolution and have no place in a single document's shape, so they are ignored.
+  A duplicate name, a reference to an undefined name, or a malformed
+  `record`/`enum`/`fixed` throws rather than converting to something wrong.
+
+### Patch Changes
+
+- Updated dependencies [14d06c8]
+- Updated dependencies [4d5f1bb]
+- Updated dependencies [2b7901f]
+- Updated dependencies [b6dcb13]
+- Updated dependencies [0f27eeb]
+- Updated dependencies [ec764d0]
+- Updated dependencies [1c328af]
+- Updated dependencies [1a74eaa]
+- Updated dependencies [d8ceda5]
+- Updated dependencies [18b817a]
+- Updated dependencies [6771a4f]
+- Updated dependencies [69ca72b]
+- Updated dependencies [1fd154c]
+- Updated dependencies [d8ceda5]
+- Updated dependencies [3557eb5]
+- Updated dependencies [fc60a77]
+- Updated dependencies [11a280f]
+- Updated dependencies [b4be038]
+- Updated dependencies [e65a96b]
+- Updated dependencies [06261b1]
+- Updated dependencies [eb58f18]
+- Updated dependencies [118aca9]
+- Updated dependencies [be45c14]
+- Updated dependencies [178eab0]
+- Updated dependencies [5563205]
+- Updated dependencies [41b14ae]
+- Updated dependencies [7ca3bd8]
+- Updated dependencies [41f8173]
+- Updated dependencies [e65a96b]
+- Updated dependencies [cb7b35a]
+- Updated dependencies [a12b888]
+- Updated dependencies [77f2f78]
+- Updated dependencies [e091f22]
+- Updated dependencies [d8f08b9]
+- Updated dependencies [bbda384]
+- Updated dependencies [8af6bb0]
+- Updated dependencies [3a54baf]
+- Updated dependencies [543fbe8]
+- Updated dependencies [53651a1]
+- Updated dependencies [bce4aa6]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [62c81b8]
+- Updated dependencies [9a2510f]
+- Updated dependencies [1e77678]
+- Updated dependencies [ea377c7]
+- Updated dependencies [f97fac4]
+- Updated dependencies [d8ceda5]
+- Updated dependencies [892f306]
+- Updated dependencies [261f650]
+- Updated dependencies [637684a]
+- Updated dependencies [4102fdf]
+- Updated dependencies [d8ceda5]
+- Updated dependencies [4f12bad]
+- Updated dependencies [78b7972]
+- Updated dependencies [95f3cd8]
+- Updated dependencies [c90143f]
+- Updated dependencies [ae4f785]
+- Updated dependencies [f938dd7]
+- Updated dependencies [b3364fd]
+- Updated dependencies [7e452e1]
+- Updated dependencies [b957e36]
+  - @amritk/adapters@0.5.0
+  - @amritk/generate-examples@0.7.0
+  - @amritk/api@0.16.0
+  - @amritk/lint@0.5.0
+  - @amritk/generate-validators@0.14.0
+  - @amritk/generate-parsers@0.19.5
+  - @amritk/resolve-refs@0.7.1
+  - @amritk/yaml@0.7.2
+  - @amritk/helpers@0.16.0
+
 ## 0.14.9
 
 ### Patch Changes

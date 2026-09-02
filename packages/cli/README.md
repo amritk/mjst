@@ -125,6 +125,14 @@ NodeNext `./user.js` form and runs `tsc` for you), or generate with `--import-ex
 the compile-ready form without building. `--import-ext ts` together with `--build` is rejected,
 since tsc cannot emit from `.ts` specifiers.
 
+Each `index.ts` re-exports values as `const` aliases (`import { parseUser as parseUser$0 } …;
+export const parseUser = parseUser$0`) rather than `export { parseUser } from './user.js'`.
+The two are equivalent under ESM, but TypeScript lowers a re-export to CommonJS as an
+*accessor*, so a CJS consumer calling through the barrel would pay a property getter on every
+call — measurably, up to ~3.7x on the cheapest predicates. Importing from the barrel and
+importing from the module directly now cost the same in both module formats, and both forms
+tree-shake identically (verified against esbuild and rollup).
+
 > [!NOTE]
 > **Breaking change (0.9.0):** the root type is no longer always named `Document`. It is derived
 > from the schema `title`, falling back to the schema filename (`spec-plan.json` → `SpecPlan`,
@@ -295,7 +303,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"><code>"json"</code></td>
 </tr>
 <tr>
-<td colspan="4">Source format of the schema. 'json' (default) reads a JSON Schema file directly. 'asyncapi' reads an AsyncAPI 2.x/3.0 document (JSON or YAML) and generates from every message payload/headers schema it declares. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"typebox"</code>, <code>"zod"</code>, <code>"valibot"</code>, <code>"effect"</code>, <code>"asyncapi"</code></td>
+<td colspan="4">Source format of the schema. 'json' (default) reads a JSON Schema file directly. 'avro' reads an Apache Avro '.avsc' JSON document and converts it, needing no extra library. 'asyncapi' reads an AsyncAPI 2.x/3.0 document (JSON or YAML) and generates from every message payload/headers schema it declares. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"typebox"</code>, <code>"zod"</code>, <code>"valibot"</code>, <code>"effect"</code>, <code>"avro"</code>, <code>"asyncapi"</code></td>
 </tr>
 <tr>
 <td>📦 <code>export</code></td>
@@ -304,7 +312,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Which export of the schema module to use when 'input' is not 'json'. Defaults to the default export, or the sole named export when the module has exactly one.</td>
+<td colspan="4">Which export of the schema module to use when 'input' names a module format (anything but 'json', 'avro', and 'asyncapi', which are read as data). Defaults to the default export, or the sole named export when the module has exactly one.</td>
 </tr>
 <tr>
 <td>📁 <code>outDir</code></td>

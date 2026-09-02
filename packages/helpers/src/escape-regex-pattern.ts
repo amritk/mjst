@@ -146,7 +146,7 @@ export const escapeRegexPattern = (pattern: string): string => {
  *
  * A 2020-12 `pattern` is meant to be read as Unicode — Ajv compiles with `u` by
  * default, and so does `@amritk/runtime-validators` (`compilePattern` in
- * `interpreter/interpret.ts`) — and without the flag `\p{L}` is misread as a
+ * `interpreter/compile.ts`) — and without the flag `\p{L}` is misread as a
  * literal `p` and `^.$` rejects a single astral character. The flag is not
  * unconditional because `u` also outlaws escapes that are legal without it
  * (`\-`, a bare `\p`), and a pattern using one would turn into a syntax error in

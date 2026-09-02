@@ -26,7 +26,7 @@ type ConfigKeySpec = {
 export const CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   schema: { type: 'string' },
   schemaDir: { type: 'string' },
-  input: { type: 'string', enum: ['json', 'typebox', 'zod', 'valibot', 'effect', 'asyncapi'] },
+  input: { type: 'string', enum: ['json', 'typebox', 'zod', 'valibot', 'effect', 'avro', 'asyncapi'] },
   export: { type: 'string' },
   outDir: { type: 'string' },
   outFile: { type: 'string' },
@@ -82,7 +82,8 @@ const matchesType = (value: unknown, type: ConfigValueType): boolean => {
  * file has to be at least as strict as the flags it stands in for.
  *
  * Note what this does *not* buy: a config is still trusted code. `schema` plus a
- * non-`json` `input` makes `load-schema-module.ts` `import()` whatever path the
+ * module-loading `input` (every format except `json` and `avro`, both of which
+ * are parsed as data) makes `load-schema-module.ts` `import()` whatever path the
  * config names, so an untrusted `mjst.config.json` still reaches arbitrary module
  * evaluation. Validating the shape does not change that — do not run mjst against
  * a config file you would not run as a script.

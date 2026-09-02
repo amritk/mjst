@@ -1,5 +1,313 @@
 # @amritk/generate-validators
 
+## 0.15.1
+
+### Patch Changes
+
+- 049b0e9: Give the numeric bound keywords one home, and pin the generated parsers to the
+  interpreter's verdict.
+
+  `minimum` / `maximum` / `exclusiveMinimum` / `exclusiveMaximum` have exactly one
+  rule that is easy to get wrong: a bound must be spelled as the _pass_ condition
+  and negated (`!(x >= min)`), never as a failure condition directly (`x < min`).
+  The two are identical for every ordinary number and opposite for `NaN`, which
+  compares `false` against every relational operator — so the direct form silently
+  _accepts_ a `NaN` the interpreter and Ajv both reject. `@amritk/generate-
+validators` drifted on precisely this once already.
+
+  The rule now lives in `@amritk/helpers/numeric-bound-check`, next to
+  `multiple-of-check`, and the four emitters that restated it —
+  `generate-validator-function` (both its error-collecting and guard forms),
+  `generate-schema-checks`, and `generate-strict-assertion` — call it instead.
+  Emitted output is unchanged apart from parentheses.
+
+  `@amritk/generate-parsers` also gains an `interpreter-parity.test.ts`, the
+  coverage gap that let the drift happen in the first place: its differential
+  suites fuzz against Ajv over inputs built from the schema, and those inputs are
+  JSON, which cannot hold a `NaN`, an `±Infinity`, or a value large enough to
+  overflow a `multipleOf` quotient. The new test runs the generated strict parser
+  and the runtime interpreter over exactly those values and requires the same
+  verdict.
+
+- Updated dependencies [049b0e9]
+  - @amritk/helpers@0.18.0
+
+## 0.15.0
+
+### Minor Changes
+
+- 69fa1f6: Cut the hot-path cost of generated parsers and of every barrel a CommonJS
+  consumer calls through.
+
+  - **Strip builds no longer prove "no undeclared key" before their fast path.**
+    A strip build returns a literal naming only the declared properties, so an
+    extra is dropped by construction and proving its absence first bought nothing.
+    Parsers that must _reject_ an extra keep the proof. **This is an observable
+    change:** a stripping parser used to hand a clean nested object or array
+    element back by reference, so `parse(x).nested === x.nested`; it is now always
+    a fresh object. For a parser whose job is to strip, that is the safer default —
+    a caller mutating the result can no longer reach the input.
+  - **A single-use nested sub-parser's fast path is inlined at its one call
+    site,** with the call kept for everything it does not cover. The expansion is
+    one level deep by construction and capped per parser.
+  - **Generated `index.ts` barrels re-export values as `const` aliases.**
+    TypeScript lowers `export { x } from './x.js'` to a CommonJS _accessor_, so a
+    CJS consumer paid a property getter on every call through the barrel; the alias
+    form lowers to a plain data property. Types keep the `export type { … } from`
+    form. Both forms tree-shake identically in esbuild and rollup.
+
+  Measured on Node 22 with `benny`, one variant per process, median of five, on
+  the `typescript-runtime-type-benchmarks` payload and its four cases, with each
+  result consumed so nothing is eliminated as dead. Reached through the generated
+  barrel, compiled with `--module commonjs`:
+
+  | case           | before |  after |       |
+  | -------------- | -----: | -----: | ----: |
+  | `parseSafe`    |  27.9M |  44.0M | 1.58x |
+  | `parseStrict`  |  22.8M |  27.8M | 1.22x |
+  | `assertLoose`  |  57.0M | 134.8M | 2.36x |
+  | `assertStrict` |  32.3M |  43.8M | 1.36x |
+
+  Importing the module directly under ESM, where only the parser changes apply,
+  `parseSafe` goes 34.1M → 41.4M (1.21x) and the other three are unchanged.
+
+  Absolute figures are machine-specific and two ceilings bound them: an empty
+  benchmark case measures ~115M ops/s here, so `assertLoose` is already reporting
+  the harness rather than the validator; and a parse whose result is discarded (as
+  the harness discards it) has its allocation scalar-replaced, which flatters every
+  `parse*` number. Forcing the result to escape, `parseSafe` reads 30.8M → 37.2M
+  against 50.2M for a hand-written parser — 61% of hand-written before, 74% after.
+
+### Patch Changes
+
+- 829329d: Benchmark honesty: measure frozen inputs, and separate this repo's harness from
+  the moltar leaderboard's.
+
+  **Frozen inputs.** Enforcing `additionalProperties: false` means proving no
+  undeclared key is present, and every library answers that by enumerating keys
+  (mjst's guard counts them with `Object.keys(obj).length === n`; Ajv and Zod
+  sweep with `for...in`). On JavaScriptCore, making an object non-extensible —
+  `Object.freeze`, `Object.seal`, or a bare `Object.preventExtensions` — turns off
+  the engine's cached own-keys fast path, and every enumeration form drops to a
+  generic walk. Property reads are untouched, so the whole cost lands on strict
+  schemas. On the `assert-strict` shape that is ~185M → ~1.7M ops/s for mjst on
+  Bun, and it takes every other library down with it (typia ~68M → ~1.7M, TypeBox
+  ~46M → ~1.7M, Ajv ~24M → ~1.5M). V8 has no such cliff.
+
+  Frozen config objects and frozen fixtures are ordinary inputs, so `bun run bench`
+  now carries `small (4 fields, frozen)` and `assert-strict (frozen)` cases — the
+  old suite built fresh mutable objects and could not see this at all — and
+  `src/generators/frozen-input.test.ts` pins the verdicts, which do not change.
+  The generated key count stays as it is: every alternative was measured and every
+  one is worse overall (`Object.values` and `Object.keys({ ...obj })` dodge the
+  cliff but cost 28–37× on the ordinary mutable path under JSC and 2–7× under V8,
+  and an `Object.isExtensible` branch costs ~4× under JSC while making V8 ~2×
+  slower on mutable input and ~7× slower on frozen — where there was no cliff).
+
+  **Harness.** The `assert-loose` / `assert-strict` rows share a _shape_ with
+  `moltar/typescript-runtime-type-benchmarks`, not a harness, and the README said
+  so in a way that read as "we score this on that benchmark". It now says what
+  each number is, and `bun run bench:moltar` measures the same functions under the
+  leaderboard's own conditions — benny driving moltar's `Benchmark` class over its
+  frozen fixture, on Bun and Node, with the verdict discarded (as upstream does)
+  and observed, always beside a no-op control. The control is the point: on Node a
+  "validator" that checks nothing scores ~120M ops/s under that harness, so
+  mjst's ~100M `assert-loose` there is a measurement of benny, not of validation.
+
+- Updated dependencies [5e45680]
+- Updated dependencies [69fa1f6]
+  - @amritk/helpers@0.17.0
+
+## 0.14.0
+
+### Minor Changes
+
+- 18b817a: Judge a combinator branch against a value that is there, and count `contains` by
+  index.
+
+  Both are verdict changes for values JSON cannot hold — an array hole, or an
+  explicit `undefined` — and both move the generated validator onto the answer
+  `@amritk/runtime-validators` and Ajv already give.
+
+  A combinator's branches were evaluated in optional mode even where the caller had
+  already established the value is present, so every leaf check inside them read
+  `x !== undefined && …` and a hole satisfied all of them: `prefixItems: [{ allOf:
+[{ type: 'string' }] }]` accepted `[<hole>]` that `prefixItems: [{ type: 'string' }]`
+  rejected. `contains` counted matches with `filter`, which skips holes outright, so
+  a sparse array came up an element short — and against `contains: { not: { type:
+'string' } }` the hole is the matching item.
+
+  The `contains` loop stops at `minContains` when there is no `maxContains` to
+  count for, and emits nothing at all for a `minContains: 0` that no array can fail.
+  A schema-form `additionalProperties` now tests declared keys through the shared
+  `unknownKeyCheck` instead of rebuilding an array literal for every key of every
+  object it validates.
+
+- 62c81b8: Stop reading schema text as code, and fix `uniqueItems` on values JSON cannot hold.
+
+  The emitters used to write `errors.push(` and let a `replaceAll` over the finished
+  function text rewrite it into the create-on-first-use form (and an unread
+  `(input: unknown` parameter into `(_input: unknown`). Both substrings are ordinary
+  schema content, so a schema that spelled one had it rewritten inside its own data:
+  `pattern: "errors.push(x)"` compiled to `/(errors ??= []).push(x)/`, a regex that
+  matches nothing, and an `enum` member or property name spelling it was compared
+  against a string nobody wrote. `isX` was built without the rewrite, so the two
+  disagreed on the same input. The error sink is now carried through the emitters,
+  so the final spelling is written the first time and no generated text is ever
+  rewritten. Output is byte-identical for every schema that does not spell one of
+  those substrings.
+
+  `uniqueItems` over provably-scalar items now dedupes with a bare `Set` instead of
+  a `JSON.stringify` projection: SameValueZero is JSON Schema's equality for
+  primitives exactly, where stringifying printed both `NaN` and `null` as `"null"`
+  and called `[NaN, null]` a duplicate pair.
+
+  The emitted `validation-result.ts` changes with it. `valuesEqual` now counts `NaN`
+  equal to itself, matching Ajv and `@amritk/runtime-validators`, and caps its walk
+  at 512 levels so a self-referential value returns a verdict instead of throwing a
+  `RangeError` out of a function whose signature promises a `ValidationResult`.
+  `allUnique` buckets by a structural hash before comparing, the same way the
+  interpreter does — an array of 4 000 distinct objects took 570ms of pairwise
+  comparison and now takes 7ms.
+
+- 78b7972: Judge a dynamic key's value, and an array hole, as the value it is.
+
+  A `patternProperties` / `additionalProperties` / `unevaluatedProperties` value was
+  checked in optional mode, so every check wore a leading `value !== undefined &&`
+  and a property whose value _is_ `undefined` satisfied all of them at once:
+  `{ a: undefined }` passed an `additionalProperties: { type: 'string' }`. The key
+  came out of a sweep over the object, so it is present by construction and its
+  value is there to be judged — which is what Ajv and `@amritk/runtime-validators`
+  both do. `unevaluatedItems` swept with `every`, which skips holes outright, so an
+  index nothing evaluated went unchecked and `[<hole>]` passed an
+  `unevaluatedItems: { type: 'string' }`; it materialises the array first now, the
+  same way the boolean guard already did.
+
+  Neither value can come out of `JSON.parse`, so this changes no verdict for a
+  document parsed from JSON.
+
+### Patch Changes
+
+- 0f27eeb: Re-measure every published benchmark table on Bun 1.4.
+
+  The tables were labelled Bun 1.3 and predate both the runtime upgrade and this
+  release's interpreter work, so every one of them was re-run rather than
+  relabelled. All measurements come from one Linux x64 box with nothing else on
+  it, each package's own `bun run bench`, and the machine is named in each table's
+  caption — compare columns within a table, not against a figure you remember.
+
+  Three of them changed in ways a version label would have hidden:
+
+  - **`@amritk/lint`** — Spectral's JSONPath engine used to throw on the 2.8 MB
+    OpenAI spec under Bun, so that row was published as mjst-only. It no longer
+    throws, and the row is a real comparison now (~0.73 s against ~7.4 s). The
+    bench keeps its guard, since that failure was runtime-specific.
+  - **`@amritk/api`** — Bun 1.4 made web-standard `Request`/`Response`
+    construction far cheaper, which lifted every column of the Bun table (bare
+    Hono went ~185k → ~503k ops/s). The compiled engine still leads the
+    like-for-like `hono + zod` column on Bun and Node, but it no longer leads
+    _unvalidated_ Hono on the GET cases, and under workerd it now trails
+    `hono + zod` on the static GET. The prose says so.
+  - **`@amritk/runtime-validators`** — the interpreter is much faster than when
+    the ratios against Ajv were written, so the cold-path win narrows to ~96–870×
+    (from ~90–1600×) and the steady-state loss narrows to ~6–11× (from ~15–25×).
+
+  `@amritk/generate-parsers`, `@amritk/generate-validators`, `@amritk/resolve-refs`
+  and `@amritk/yaml` keep the same shape and conclusions with refreshed numbers.
+
+- ec764d0: Emit no symbol the generated file never reads, so the output compiles clean under
+  `noUnusedLocals` / `noUnusedParameters` — the flags this repo holds itself to and
+  any consumer inheriting them.
+
+  A `$ref`'s import carries the type, the validator, or both, decided from the text
+  that was emitted: a ref in a position the type generator does not read (an `if`
+  arm, whose whole node it types `unknown`) is called and never named, and one in a
+  position only the type reads (a tuple's rest taken from `additionalItems`) is
+  named and never called. A `contains` whose match is decidable (`contains: true` /
+  `contains: false`) needs no loop at all, so it no longer binds an element nothing
+  looks at, and the `_item0` / `_root` bindings are emitted only where a check reads
+  them.
+
+  The compile suite now runs every case under those flags rather than holding a
+  list of known gaps.
+
+- fc60a77: Refuse a type name TypeScript will not take. The root type name is used verbatim
+  and the type suffix is appended to every name derived from a `$ref`, so
+  `buildValidatorSchema(schema, 'my-doc')` emitted `export type my-doc = …` — output
+  that does not parse, discovered in the consumer's build with nothing to say about
+  where it came from. Generation now stops with the name and the reason.
+- 77f2f78: Refuse a definition named after the runtime contract, and keep a control
+  character in a property name out of the emitted source.
+
+  A `$defs` entry whose type name comes out as `ValidationError` (written that way,
+  or as `validation-error`, or `validation_error`) emitted a file importing that
+  name twice — once from `validation-result.ts`, which every generated file imports,
+  and once from its own module. That is a `TS2300` for anyone building the output
+  and a duplicate binding Node ESM never loads past. Generation now refuses, the way
+  it already refuses a definition that wants the `validation-result.ts` filename; a
+  `typeSuffix` that moves the name clear still generates.
+
+  Error-path segments are escaped the way JSON escapes a string, so a property name
+  holding a control character survives into the emitted template literal. A raw
+  carriage return did not: a template normalises `<CR>` to `<LF>`, so the error for
+  a `"foo\rbar"` property pointed at `"foo\nbar"` — a different property, and one
+  the same document is free to declare beside it.
+
+- bbda384: Sweep an object's keys once. `patternProperties` opened a `for…in` per pattern and
+  a schema-form `additionalProperties` opened another, so three patterns beside an
+  `additionalProperties` schema walked the object four times over for a body that is
+  a handful of `if`s. They share one loop now — same checks, same verdicts, one
+  pass.
+- 543fbe8: Read every schema keyword as the node's own property.
+
+  The generators asked `'items' in schema` and read `schema.type` straight off the
+  node, and both walk the prototype chain. With `Object.prototype.items` set — by a
+  dependency with a prototype-pollution bug, or simply by a schema built over a base
+  object — every node in the document answered "yes" to keywords none of them
+  declared, and the result was a _different validator_: an inherited `items: false`
+  made every array have to be empty, an inherited `patternProperties` swallowed the
+  `additionalProperties` sweep so unknown keys stopped being reported, and an
+  inherited `if`/`then`, `allOf` or `contains` sent a walker into unbounded
+  recursion, so `buildValidatorSchema` threw a `RangeError` instead of generating.
+
+  `@amritk/helpers/own-keyword` is the shared reader — the question
+  `@amritk/helpers/schema-guards` and `@amritk/runtime-validators` already ask, for
+  the keywords with no named guard. Generated output is unchanged for every schema
+  in the conformance corpus and the vendored OpenAPI fixtures.
+
+- 4102fdf: Docs: correct two invariants that had gone stale, and write down what the
+  generator refuses.
+
+  `AGENTS.md` and `AI.md` both said `NaN` satisfies numeric bounds and differs from
+  Ajv. It has not for some time: every bound is emitted as the negated pass
+  condition, so `NaN` fails a _constrained_ number and satisfies a bare
+  `{ "type": "number" }` — which is Ajv's answer too, and the interpreter's, pinned
+  value-by-value in `interpreter-parity.test.ts`. `AGENTS.md` also still said
+  `unevaluatedProperties` / `unevaluatedItems` throw, where they have been generated
+  (with four named refusing shapes) for a while.
+
+  The README gains the names generation will not emit, and a note on the values
+  JSON cannot hold — an `undefined` at a swept key, a hole in a sparse array, `NaN`
+  under `const` / `enum` / `uniqueItems`, and a self-referential object — each of
+  which now answers the way the interpreter and Ajv answer.
+
+- 95f3cd8: Add a differential fuzz over the whole generated set: random schemas carrying a
+  `$ref` into `$defs`, combinators, tuples, `contains` and hostile property names
+  are built, linked and run, and every verdict is held against both the runtime
+  interpreter and Ajv, with `isX` held against `validateX`. The existing fuzz
+  covers one emitted function against Ajv; this covers what only appears once the
+  output is several files that have to import and call each other.
+- Updated dependencies [1c328af]
+- Updated dependencies [1fd154c]
+- Updated dependencies [3557eb5]
+- Updated dependencies [11a280f]
+- Updated dependencies [e091f22]
+- Updated dependencies [3a54baf]
+- Updated dependencies [543fbe8]
+- Updated dependencies [c6a1f16]
+- Updated dependencies [261f650]
+  - @amritk/helpers@0.16.0
+
 ## 0.13.1
 
 ### Patch Changes

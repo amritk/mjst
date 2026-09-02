@@ -70,7 +70,7 @@ describe('generate-schema-checks', () => {
     const result = generateSchemaChecks('value', {
       minimum: 0,
     })
-    expect(result).toEqual(['typeof value === "number"', 'value >= 0'])
+    expect(result).toEqual(['typeof value === "number"', '(value >= 0)'])
   })
 
   it('infers number type from multipleOf keyword', () => {
@@ -132,8 +132,8 @@ describe('generate-schema-checks', () => {
       enum: [0, 5, 10],
     })
     expect(result).toContain('typeof value === "number"')
-    expect(result).toContain('value >= 0')
-    expect(result).toContain('value <= 10')
+    expect(result).toContain('(value >= 0)')
+    expect(result).toContain('(value <= 10)')
     expect(result).toContain('(value === 0 || value === 5 || value === 10)')
   })
 
@@ -181,22 +181,22 @@ describe('generate-schema-checks', () => {
 
   it('generates number check with minimum', () => {
     const result = generateSchemaChecks('value', { type: 'number', minimum: 0 })
-    expect(result).toEqual(['typeof value === "number"', 'value >= 0'])
+    expect(result).toEqual(['typeof value === "number"', '(value >= 0)'])
   })
 
   it('generates number check with maximum', () => {
     const result = generateSchemaChecks('value', { type: 'number', maximum: 100 })
-    expect(result).toEqual(['typeof value === "number"', 'value <= 100'])
+    expect(result).toEqual(['typeof value === "number"', '(value <= 100)'])
   })
 
   it('generates number check with exclusiveMinimum', () => {
     const result = generateSchemaChecks('value', { type: 'number', exclusiveMinimum: 0 })
-    expect(result).toEqual(['typeof value === "number"', 'value > 0'])
+    expect(result).toEqual(['typeof value === "number"', '(value > 0)'])
   })
 
   it('generates number check with exclusiveMaximum', () => {
     const result = generateSchemaChecks('value', { type: 'number', exclusiveMaximum: 100 })
-    expect(result).toEqual(['typeof value === "number"', 'value < 100'])
+    expect(result).toEqual(['typeof value === "number"', '(value < 100)'])
   })
 
   it('generates number check with multipleOf', () => {
@@ -223,10 +223,10 @@ describe('generate-schema-checks', () => {
     expect(result).toEqual([
       'typeof value === "number"',
       'Number.isInteger(value)',
-      'value >= 1',
-      'value <= 10',
-      'value > 0',
-      'value < 11',
+      '(value >= 1)',
+      '(value <= 10)',
+      '(value > 0)',
+      '(value < 11)',
       '(Number.isInteger(value) && value % 2 === 0)',
     ])
   })

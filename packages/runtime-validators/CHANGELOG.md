@@ -1,5 +1,283 @@
 # @amritk/runtime-validators
 
+## 0.13.0
+
+### Minor Changes
+
+- 049b0e9: Add `@amritk/runtime-validators/parse` — a runtime parser to sit beside the
+  runtime validator.
+
+  `validate` is the right tool for data that arrived as JSON. This is for data
+  that did not: an HTTP query string, a path segment, a header, a form body, an
+  environment variable, a CSV row. All of those deliver every scalar as a string,
+  so a schema saying `{ type: 'integer' }` and an input saying `'42'` are
+  describing the same thing, and only a parser can say so.
+
+  `parse(schema)` coerces its input toward the schema, then validates the result,
+  returning `{ ok: true, value } | { ok: false, errors }`. Coercion never decides a
+  verdict — it converts and defers, so a parse can only ever accept something
+  `validate` would have accepted, and a string that does not actually denote its
+  declared type is passed through unchanged to be rejected with a proper type
+  error rather than guessed at. It applies only where a subschema names a single
+  scalar `type`: a `type: ['number','string']`, `anyOf`, `oneOf` or `if` leaves the
+  target ambiguous, and `'42'` is a legitimate value under the string branch of
+  each. Absent object properties are filled from their `default`, deep-copied so a
+  caller mutating the result cannot corrupt a schema held as a constant. Input is
+  never mutated, and a value that already has the declared types is returned by
+  identity.
+
+  The string-to-scalar table is exported as `coerceScalar` and is now the
+  monorepo's only copy of those rules. `@amritk/api` imports it instead of
+  restating it: its request pipeline fuses coercion into building the
+  params/query/headers object straight from the transport, so it cannot call
+  `parse` itself, but each of the table's guards — blank strings, the non-finite
+  `'Infinity'` that would otherwise serialize back out as JSON `null` — was
+  written there after a bug, and a second copy would have to learn each one again.
+  No behavior change to `@amritk/api`.
+
+## 0.12.1
+
+### Patch Changes
+
+- 5e45680: Specialize each schema node into a closure on first visit, instead of re-walking
+  the schema on every call.
+
+  The interpreter rediscovered the same things for every value it validated: which
+  keywords a node carried (a `WeakMap` lookup per node), its property key list, its
+  `required` membership, its compiled `pattern`s, and which of the type-specific
+  keyword blocks could possibly do work. None of that depends on the value — it is
+  a pure function of the schema node — so a CPU profile of the steady-state
+  benchmark spent essentially all of its time in dispatch rather than in checks.
+
+  Now a node is turned into a step closure the first time a validation reaches it,
+  with all of that already resolved and closed over, and the node's record is
+  patched so later calls go straight to it. Validating is then nested closure
+  calls with the traversal, the keyword dispatch and the metadata lookups gone.
+  Steady-state throughput is up **27–179%** across the bench suite (the biggest
+  win on the `moltar/typescript-runtime-type-benchmarks` shape now in `bench/`,
+  where guard throughput more than doubles), and the `@amritk/api` request path
+  gains 5–11% where validation is on the critical path.
+
+  This is still an eval-free interpreter — no `new Function`, no code generation,
+  no build step — so it runs unchanged under a strict CSP, on Cloudflare Workers,
+  and on React Native/Hermes. The specialized form is a tree of ordinary closures.
+  Closing the rest of the gap to generated code is not something closures can do:
+  what makes `@amritk/generate-validators` fast is a single inlined function body,
+  and an indirect call per node is the floor for anything that does not emit one.
+
+  Nothing observable changes. Error messages, JSON Pointer paths, the `maxSteps` /
+  `maxDepth` accounting, the ReDoS pattern screen, and `$ref` / `$dynamicRef` /
+  `$recursiveRef` resolution — including the dynamic scope, which stays a runtime
+  parameter because that is exactly what `$dynamicRef` late-binds against — are all
+  preserved as they were. The full JSON Schema Test Suite and the Ajv differential
+  fuzz stay green.
+
+  Building is deferred to a node's first visit rather than done up front, so
+  `validate(schema)` still returns without reading the schema, an unresolvable
+  `$ref` still throws on use rather than on construction, and a one-shot check
+  never pays for `$defs` its data does not reach. That deferral runs deeper than
+  the node: a node's type-specific block is built only once a value of that type
+  gets past the type check, and a `properties` entry only once a value reaches it.
+  A `{ type: 'object', properties: … }` node meeting a string or `null` — most of
+  what a union throws at it — now costs a type test and nothing else.
+
+  Cold cost still moves, because a node's step is a few closures where its
+  metadata was one object, and how much depends entirely on how much of the schema
+  the data touches. Measured over the vendored OpenAPI corpus (982 real component
+  schemas, each prepared and used once) it is **~6% slower on average**, and a
+  `$ref`-heavy schema is _faster_ cold, because a target is specialized once and
+  reused across every array element rather than re-walked. The worst case is a
+  schema whose data reaches everything it declares — the 40-property bench case,
+  validated once against an instance carrying all forty — which stays around twice
+  its old cold cost, against Ajv's ~11 ms to compile the same schema. There is no
+  way around that one: specializing a node is the cost, and that case specializes
+  all of it and then uses each step once.
+
+  The published performance table was re-measured for this change, but on Bun
+  1.3.11 rather than the Bun 1.4 the repo's other tables use; its caption says so,
+  and it is worth re-running at release time.
+
+  `@amritk/helpers` is here only because three of its comments name the
+  interpreter file that this change renames; nothing it emits changes.
+
+## 0.12.0
+
+### Minor Changes
+
+- 4d5f1bb: The ReDoS screen now admits separator-delimited repetitions it used to reject.
+
+  **What changes for you:** a `pattern` of the shape `(<sep><body>)*` or
+  `(<body><sep>)*` — a dotted identifier chain, a slash-delimited pointer, a
+  comma-separated list — is no longer refused as "nested unbounded quantifiers".
+  Schemas that previously threw at `validate()` time, or needed
+  `limits: { allowUnsafePatterns: true }`, now build. That part is one-directional:
+  across 1.5 million generated patterns the exemption never turned an accepted
+  pattern into a rejected one.
+
+  **One such loop per concatenation.** Two of them side by side keep being refused,
+  because two nullable loops compose — see below — and the rule does not try to work
+  out whether a particular pair can. So `^\d+(\.\d+)*$` builds where it used to
+  throw, while `^\d+(\.\d+)*(-[a-z]+)*$` still throws, even though its two loops
+  have disjoint separators and it is in fact linear. Both were refused before this
+  release, so nothing regresses; but if you were hoping a semver or host-and-port
+  pattern would start building, it will not. `allowUnsafePatterns` remains the
+  escape hatch, and a rule that proved the two loops' alphabets disjoint would be
+  the way to lift it.
+
+  **Two parser fixes ride along, and they do newly reject a narrow set.** Both were
+  pre-existing bugs that let a genuinely exponential pattern through:
+
+  - The class scanner applied the POSIX "a leading `]` is a literal member" rule,
+    which ECMAScript does not have — `[]` is the empty class and `[^]` is any
+    character. A `[^]` therefore swallowed the rest of the pattern into one atom
+    and hid whatever followed: `^[^]*(a+)+$` contains a textbook `(a+)+` and was
+    accepted, at 4 seconds on 28 characters.
+  - A braced escape (`\u{61}`, `\p{L}`) was read as two code units, leaving `{61}`
+    to be taken for a bounded quantifier that then swallowed the real `+` — so
+    `^(\u{61}+)+$`, which _is_ `^(a+)+$`, lost a level of star height. Its payload
+    is now validated as it is scanned, since a span the escape cannot legally
+    carry is not an escape under either compile mode: `\p{(a+)+}` is a
+    `SyntaxError` with `u`, so the fallback compile runs the `(a+)+` inside it.
+
+  Most of what these newly reject is genuinely unsafe, but not all of it: rule 1 is
+  an over-approximation, and a braced escape in atom position now costs the
+  anchored exemption even where the same pattern spelled in ASCII keeps it — so
+  `^(\u{61}+x)+$` is refused while `^(a+x)+$`, which it is identical to, is
+  admitted. Both are linear; the refusal is a false positive, in the safe
+  direction. Ordinary standalone uses (`\u{61}+`, `\p{Script=Latin}+`,
+  `[\u{61}-\u{7A}]+`, `[^]*`) keep their previous verdicts.
+
+  `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$` and
+  `^\$message\.(header|payload)#(\/(([^\/~])|(~[01]))*)*` — both from the official
+  AsyncAPI meta-schemas — are the motivating cases. Star height alone called them
+  catastrophic; on V8 they match a failing 30-character input in under 0.05 ms.
+
+  **Why it is sound.** Star height >= 2 is still the rule; a repetition is now
+  exempt from _counting toward_ it when two things hold together. First, the body
+  carries a literal character at a fixed end that no other atom in it can produce,
+  so the positions of that character are the word boundaries and no input can be
+  split two ways. Second, the body derives each word exactly once — checked over a
+  deliberately small grammar (no `?`, no `{n,m}`, a repeated atom may not run into
+  what follows it, a trailing alternation must be settled by its first character).
+
+  The waived level comes back whenever something can compose the exempted loop with
+  itself. What the exemption establishes holds for one pass; `(BODY)*` still matches
+  the empty string however unambiguous BODY is. A quantifier around it composes
+  those matches — a _bounded_ one too, which is the case that looks harmless, and
+  `^((-a*)*){0,50}$` is 2^n. So does simply writing the loop twice in a row:
+  nothing pins which copy owns which word, and `^(-a*)*(-a*)*…$` with eight of them
+  is degree-8 polynomial, 5.6 seconds on 43 characters. One loop is the case the
+  exemption is for; two is where it stops holding.
+
+  The second condition is the one that is easy to miss, and omitting it is not
+  safe: a backtracking engine explores derivations, not splits, so a body that
+  matches its own substring k ways costs k^n over n repetitions even with every
+  boundary pinned. `^(\.((\w[a-z]?|b\w+)?|(a*[a-z0-9]?)?))*$` is separator-anchored
+  and takes 94 ms on 22 characters where its body alone takes none.
+  `^([A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*)*$` — genuinely exponential,
+  8.9 seconds on 30 characters — is still refused, as is every classic shape
+  (`(a+)+`, `(a*)*`, `(a|a)+`).
+
+  The screen remains a best-effort filter rather than a proof of safety, with the
+  same known gaps. The new analysis is capped by its own shared budget, charged by
+  span for every character it examines and every character-class comparison it
+  makes, and its cost against a hostile source plateaus around 15 ms. That is
+  not a claim about the screen as a whole: the pre-existing ambiguous-alternation
+  rule spends its budget per branch
+  pair while each comparison may compile a character class, so a 176 KB alternation
+  of literals and long classes costs ~200 ms to screen. Unchanged here, and
+  unchanged by this release.
+
+  `@amritk/generate-examples` only retargets a test fixture that had used
+  `^(repeat+)+once$` to stand for a refused pattern — that one is admitted now,
+  and measures linear.
+
+- dcfe9a9: Harden the interpreter against hostile schemas, and share one copy of the keyword sets.
+
+  - `$schema`/`$vocabulary` are now read as own keys. A polluted `Object.prototype.$vocabulary` alongside a `$schema` naming a registered document turned the whole 2020-12 validation vocabulary into annotations, so `type`, `enum`, `required` and the bounds stopped asserting and every value validated.
+  - The ReDoS screen no longer becomes a denial of service itself. Its group descent is depth-capped (a deeply nested pattern raised an uncatchable `RangeError` instead of a `ValidationLimitError`), and its pairwise ambiguity scan runs on a shared comparison budget (a few kilobytes of `(a|b|c|…)+` pinned a CPU for minutes at build time).
+  - `$ref`, `$dynamicRef` and `$recursiveRef` each resolve through their own target cache. They shared one map under prefixed keys, so a `$ref` to an unregistered URI spelled `dyn:#x` read back the target of an earlier `$dynamicRef: '#x'` instead of failing loudly.
+
+### Patch Changes
+
+- 0f27eeb: Re-measure every published benchmark table on Bun 1.4.
+
+  The tables were labelled Bun 1.3 and predate both the runtime upgrade and this
+  release's interpreter work, so every one of them was re-run rather than
+  relabelled. All measurements come from one Linux x64 box with nothing else on
+  it, each package's own `bun run bench`, and the machine is named in each table's
+  caption — compare columns within a table, not against a figure you remember.
+
+  Three of them changed in ways a version label would have hidden:
+
+  - **`@amritk/lint`** — Spectral's JSONPath engine used to throw on the 2.8 MB
+    OpenAI spec under Bun, so that row was published as mjst-only. It no longer
+    throws, and the row is a real comparison now (~0.73 s against ~7.4 s). The
+    bench keeps its guard, since that failure was runtime-specific.
+  - **`@amritk/api`** — Bun 1.4 made web-standard `Request`/`Response`
+    construction far cheaper, which lifted every column of the Bun table (bare
+    Hono went ~185k → ~503k ops/s). The compiled engine still leads the
+    like-for-like `hono + zod` column on Bun and Node, but it no longer leads
+    _unvalidated_ Hono on the GET cases, and under workerd it now trails
+    `hono + zod` on the static GET. The prose says so.
+  - **`@amritk/runtime-validators`** — the interpreter is much faster than when
+    the ratios against Ajv were written, so the cold-path win narrows to ~96–870×
+    (from ~90–1600×) and the steady-state loss narrows to ~6–11× (from ~15–25×).
+
+  `@amritk/generate-parsers`, `@amritk/generate-validators`, `@amritk/resolve-refs`
+  and `@amritk/yaml` keep the same shape and conclusions with refreshed numbers.
+
+- 2162f87: Group each schema node's keywords so a node only allocates what it declares.
+
+  `NodeMeta` — the per-node keyword record the interpreter reads instead of asking
+  the schema for every keyword it might carry — was one flat object of 64 fields,
+  and the engine pays for a field whether or not the node declares it. The
+  overwhelmingly common node (`{ type: 'string', minLength: 1 }`) allocated 64
+  slots to hold two answers and 62 `undefined`s: 662 bytes, retained for the life
+  of the prepared validator. The AsyncAPI 3.0 meta-schema (2351 schema nodes)
+  carried ~1.5 MB of mostly-empty records.
+
+  The per-vocabulary keywords now live in sub-objects built only when the node
+  declares one of them — the string, number, array, object, reference, branching
+  and `unevaluated*` groups, each `null` otherwise. Averaged over that
+  meta-schema's nodes the record is 132 bytes (5× smaller) and the document ~300
+  KB. The walker was already gated on a `has…Keywords` boolean before reading any
+  of these fields, so the group pointer _is_ that boolean and the hot path keeps
+  the same number of loads; steady-state throughput measured unchanged, and the
+  cold one-shot path got faster because a node no longer initializes 64 slots to
+  answer two questions (the 40-property benchmark's schema-to-first-result went
+  0.063 ms → 0.045 ms).
+
+  `@amritk/api`'s runtime engine and `@amritk/lint`'s `schema` rule both run this
+  interpreter, so both inherit the reduction.
+
+- c6a1f16: Read each schema node's keywords once, compile lint filters, and match descents by key.
+
+  - **`@amritk/runtime-validators`** — the interpreter walked the schema afresh for
+    every value and asked each node for every keyword it might carry on every one of
+    those walks: about two dozen `Object.hasOwn` plus dynamic-key reads per node, per
+    validation. A CPU profile of the steady-state benchmark put 31% of the whole run
+    inside that one reader. A node's keywords are now read once into a fixed-shape
+    record and reused, which makes each read a fixed-offset field load instead of a
+    megamorphic dictionary lookup, moves the `typeof` narrowing off the hot path, and
+    lets group flags skip the reference, branching and type-specific blocks outright.
+    Steady-state throughput is 2.1–3.6× on the benchmark cases. Building the record
+    walks the node's own keys — three or four, rather than two dozen questions — so it
+    is cheaper than a single old scan, and the cache only starts filling on a
+    validator's _second_ call, leaving the cold one-shot path unchanged-to-better.
+    `@amritk/api`'s runtime engine and `@amritk/lint`'s `schema` rule both run this
+    interpreter, so both inherit it.
+  - **`@amritk/helpers`** — `generateIndexBarrel` read every character of every
+    generated file looking for `export` at a line start, which was ~18% of a
+    generation run. It now jumps between `export ` occurrences with `indexOf`, taking
+    roughly a quarter off generation time per parser.
+  - **`@amritk/lint`** — `[?(...)]` filter bodies compile to closures once instead of
+    being walked as an AST on every document node (still no `eval`/`new Function`;
+    these are ordinary closures over the parsed tree), recursive descents ask which
+    paths wanted each key the node has rather than asking every path in turn, and two
+    `/^\d+$/` tests moved off the hot path. Linting the vendored real-world specs:
+    petstore 11.1 → 7.4 ms, openai 1780 → 1110 ms.
+
 ## 0.11.0
 
 ### Minor Changes

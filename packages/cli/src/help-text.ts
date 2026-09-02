@@ -18,9 +18,9 @@ Subcommands (each with its own flags and --help):
 Input:
   --schema <path>       Schema to process: a JSON Schema file, or a module when --input is set
   --schema-dir <dir>    Directory of JSON Schemas, processed recursively (instead of --schema)
-  --input <format>      Schema source format: json (default), typebox, zod, valibot, effect,
+  --input <format>      Schema source format: json (default), typebox, zod, valibot, effect, avro,
                         or asyncapi (an AsyncAPI 2.x/3.0 document, JSON or YAML)
-  --export <name>       Which export of the schema module to use when --input is not json
+  --export <name>       Which export of the schema module to use when --input names a module format
 
 Output:
   --out-dir <dir>       Output directory for the generated files

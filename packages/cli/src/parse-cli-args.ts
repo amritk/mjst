@@ -2,7 +2,7 @@ import type { SourceFormat } from '@amritk/adapters/source-format'
 
 import type { CliConfig } from './cli-config'
 
-const SOURCE_FORMATS: readonly SourceFormat[] = ['json', 'typebox', 'zod', 'valibot', 'effect', 'asyncapi']
+const SOURCE_FORMATS: readonly SourceFormat[] = ['json', 'typebox', 'zod', 'valibot', 'effect', 'avro', 'asyncapi']
 
 // Mutable shape used while building, returned as Partial<CliConfig>.
 type MutableConfig = {
