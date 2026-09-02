@@ -1,5 +1,12 @@
 # @amritk/lint
 
+## 0.5.1
+
+### Patch Changes
+
+- Updated dependencies [5e45680]
+  - @amritk/runtime-validators@0.12.1
+
 ## 0.5.0
 
 ### Minor Changes
