@@ -1,6 +1,6 @@
 /**
  * Emits code for a JSON Schema `multipleOf` check that agrees with the runtime
- * interpreter (`packages/runtime-validators/src/interpreter/interpret.ts`).
+ * interpreter (`packages/runtime-validators/src/interpreter/compile.ts`).
  *
  * The interpreter answers the keyword in two ways depending on the divisor, and
  * so does this emitter — the two must not diverge, or a generated validator and

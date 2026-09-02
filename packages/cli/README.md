@@ -125,6 +125,14 @@ NodeNext `./user.js` form and runs `tsc` for you), or generate with `--import-ex
 the compile-ready form without building. `--import-ext ts` together with `--build` is rejected,
 since tsc cannot emit from `.ts` specifiers.
 
+Each `index.ts` re-exports values as `const` aliases (`import { parseUser as parseUser$0 } …;
+export const parseUser = parseUser$0`) rather than `export { parseUser } from './user.js'`.
+The two are equivalent under ESM, but TypeScript lowers a re-export to CommonJS as an
+*accessor*, so a CJS consumer calling through the barrel would pay a property getter on every
+call — measurably, up to ~3.7x on the cheapest predicates. Importing from the barrel and
+importing from the module directly now cost the same in both module formats, and both forms
+tree-shake identically (verified against esbuild and rollup).
+
 > [!NOTE]
 > **Breaking change (0.9.0):** the root type is no longer always named `Document`. It is derived
 > from the schema `title`, falling back to the schema filename (`spec-plan.json` → `SpecPlan`,

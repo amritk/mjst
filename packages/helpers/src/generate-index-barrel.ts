@@ -99,7 +99,19 @@ const collectExportNames = (content: string, typeNames: string[], constNames: st
  * Builds the `index.ts` barrel that re-exports every generated module. This is
  * the shared version of the near-identical barrel each generator used to build
  * inline: it scans each file's source for `export type` / `export const`
- * declarations and emits one re-export line per module, sorted by filename.
+ * declarations and emits re-exports per module, sorted by filename.
+ *
+ * Values are re-exported as `const` aliases (`import { parseFoo as parseFoo$0 }
+ * … export const parseFoo = parseFoo$0`) rather than through `export { parseFoo }
+ * from './foo.js'`. Under ESM the two are equivalent, but TypeScript lowers a
+ * re-export to CommonJS as an **accessor**
+ * (`Object.defineProperty(exports, 'parseFoo', { get() { … } })`), so every call
+ * reached through the barrel pays a getter — and a consumer importing from a
+ * barrel that itself barrels a subdirectory pays one per hop. The alias form
+ * lowers to a plain data property (`exports.parseFoo = foo_1.parseFoo`), which
+ * costs nothing, and stays statically analysable for tree-shaking in esbuild and
+ * rollup. Types keep the `export type { … } from` form: a type cannot be aliased
+ * through a `const`, and a type re-export emits no runtime code either way.
  *
  * Files under `_helpers/` are internal runtime helpers (embedded-mode output)
  * and are never re-exported. Modules that expose nothing are skipped.
@@ -116,7 +128,12 @@ export const generateIndexBarrel = (files: IndexBarrelFile[], options: GenerateI
     .filter((file) => !file.filename.startsWith('_helpers/'))
     .sort((a, b) => a.filename.localeCompare(b.filename))
 
-  let indexContent = ''
+  const modules: { readonly specifier: string; readonly typeNames: string[]; readonly constNames: string[] }[] = []
+  // Every name the barrel itself will declare, so an alias can be proven not to
+  // shadow one. Two modules exporting the same name is already a barrel that
+  // does not compile, so uniqueness across modules comes for free.
+  const declaredNames = new Set<string>()
+
   for (const file of sortedFiles) {
     const moduleName = file.filename.replace(/\.ts$/, '')
     const typeNames: string[] = []
@@ -127,13 +144,41 @@ export const generateIndexBarrel = (files: IndexBarrelFile[], options: GenerateI
     if (typeNames.length === 0 && constNames.length === 0) continue
 
     // An explicit extension so the barrel resolves under Node ESM, not only Bun.
-    if (typesOnly) {
-      indexContent += `export type { ${typeNames.join(', ')} } from './${moduleName}.${importExt}';\n`
-    } else {
-      const typeExports = typeNames.map((name) => `type ${name}`)
-      indexContent += `export { ${[...typeExports, ...constNames].join(', ')} } from './${moduleName}.${importExt}';\n`
-    }
+    modules.push({ specifier: `./${moduleName}.${importExt}`, typeNames, constNames })
+    for (const name of constNames) declaredNames.add(name)
   }
 
-  return indexContent
+  if (typesOnly) {
+    let indexContent = ''
+    for (const { specifier, typeNames } of modules) {
+      indexContent += `export type { ${typeNames.join(', ')} } from '${specifier}';\n`
+    }
+    return indexContent
+  }
+
+  const importLines: string[] = []
+  const typeLines: string[] = []
+  const valueLines: string[] = []
+
+  modules.forEach(({ specifier, typeNames, constNames }, index) => {
+    if (typeNames.length > 0) {
+      typeLines.push(`export type { ${typeNames.join(', ')} } from '${specifier}';`)
+    }
+    if (constNames.length === 0) return
+    const aliases = constNames.map((name) => {
+      // `$<module index>` cannot collide with another module's alias; the loop
+      // covers the pathological case of a module exporting that exact name.
+      let alias = `${name}$${index}`
+      while (declaredNames.has(alias)) alias += '$'
+      declaredNames.add(alias)
+      return alias
+    })
+    importLines.push(
+      `import { ${constNames.map((name, i) => `${name} as ${aliases[i]}`).join(', ')} } from '${specifier}';`,
+    )
+    for (const [i, name] of constNames.entries()) valueLines.push(`export const ${name} = ${aliases[i]};`)
+  })
+
+  const sections = [importLines, typeLines, valueLines].filter((section) => section.length > 0)
+  return sections.map((section) => `${section.join('\n')}\n`).join('\n')
 }

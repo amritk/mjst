@@ -1,6 +1,6 @@
 {
   "name": "@amritk/generate-validators",
-  "version": "0.13.1",
+  "version": "0.15.0",
   "description": "Generate TypeScript validation functions from JSON Schemas.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -41,7 +41,8 @@
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
-    "bench": "bun --conditions development ./bench/run.ts"
+    "bench": "bun --conditions development ./bench/run.ts",
+    "bench:moltar": "bun --conditions development ./bench/moltar.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts"
@@ -64,6 +65,7 @@
     "@sinclair/typebox": "^0.34.49",
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
+    "benny": "^3.7.1",
     "typia": "^12.1.1",
     "zod": "^4.4.3"
   }

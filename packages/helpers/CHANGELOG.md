@@ -1,5 +1,303 @@
 # @amritk/helpers
 
+## 0.17.0
+
+### Minor Changes
+
+- 69fa1f6: Cut the hot-path cost of generated parsers and of every barrel a CommonJS
+  consumer calls through.
+
+  - **Strip builds no longer prove "no undeclared key" before their fast path.**
+    A strip build returns a literal naming only the declared properties, so an
+    extra is dropped by construction and proving its absence first bought nothing.
+    Parsers that must _reject_ an extra keep the proof. **This is an observable
+    change:** a stripping parser used to hand a clean nested object or array
+    element back by reference, so `parse(x).nested === x.nested`; it is now always
+    a fresh object. For a parser whose job is to strip, that is the safer default —
+    a caller mutating the result can no longer reach the input.
+  - **A single-use nested sub-parser's fast path is inlined at its one call
+    site,** with the call kept for everything it does not cover. The expansion is
+    one level deep by construction and capped per parser.
+  - **Generated `index.ts` barrels re-export values as `const` aliases.**
+    TypeScript lowers `export { x } from './x.js'` to a CommonJS _accessor_, so a
+    CJS consumer paid a property getter on every call through the barrel; the alias
+    form lowers to a plain data property. Types keep the `export type { … } from`
+    form. Both forms tree-shake identically in esbuild and rollup.
+
+  Measured on Node 22 with `benny`, one variant per process, median of five, on
+  the `typescript-runtime-type-benchmarks` payload and its four cases, with each
+  result consumed so nothing is eliminated as dead. Reached through the generated
+  barrel, compiled with `--module commonjs`:
+
+  | case           | before |  after |       |
+  | -------------- | -----: | -----: | ----: |
+  | `parseSafe`    |  27.9M |  44.0M | 1.58x |
+  | `parseStrict`  |  22.8M |  27.8M | 1.22x |
+  | `assertLoose`  |  57.0M | 134.8M | 2.36x |
+  | `assertStrict` |  32.3M |  43.8M | 1.36x |
+
+  Importing the module directly under ESM, where only the parser changes apply,
+  `parseSafe` goes 34.1M → 41.4M (1.21x) and the other three are unchanged.
+
+  Absolute figures are machine-specific and two ceilings bound them: an empty
+  benchmark case measures ~115M ops/s here, so `assertLoose` is already reporting
+  the harness rather than the validator; and a parse whose result is discarded (as
+  the harness discards it) has its allocation scalar-replaced, which flatters every
+  `parse*` number. Forcing the result to escape, `parseSafe` reads 30.8M → 37.2M
+  against 50.2M for a hand-written parser — 61% of hand-written before, 74% after.
+
+### Patch Changes
+
+- 5e45680: Specialize each schema node into a closure on first visit, instead of re-walking
+  the schema on every call.
+
+  The interpreter rediscovered the same things for every value it validated: which
+  keywords a node carried (a `WeakMap` lookup per node), its property key list, its
+  `required` membership, its compiled `pattern`s, and which of the type-specific
+  keyword blocks could possibly do work. None of that depends on the value — it is
+  a pure function of the schema node — so a CPU profile of the steady-state
+  benchmark spent essentially all of its time in dispatch rather than in checks.
+
+  Now a node is turned into a step closure the first time a validation reaches it,
+  with all of that already resolved and closed over, and the node's record is
+  patched so later calls go straight to it. Validating is then nested closure
+  calls with the traversal, the keyword dispatch and the metadata lookups gone.
+  Steady-state throughput is up **27–179%** across the bench suite (the biggest
+  win on the `moltar/typescript-runtime-type-benchmarks` shape now in `bench/`,
+  where guard throughput more than doubles), and the `@amritk/api` request path
+  gains 5–11% where validation is on the critical path.
+
+  This is still an eval-free interpreter — no `new Function`, no code generation,
+  no build step — so it runs unchanged under a strict CSP, on Cloudflare Workers,
+  and on React Native/Hermes. The specialized form is a tree of ordinary closures.
+  Closing the rest of the gap to generated code is not something closures can do:
+  what makes `@amritk/generate-validators` fast is a single inlined function body,
+  and an indirect call per node is the floor for anything that does not emit one.
+
+  Nothing observable changes. Error messages, JSON Pointer paths, the `maxSteps` /
+  `maxDepth` accounting, the ReDoS pattern screen, and `$ref` / `$dynamicRef` /
+  `$recursiveRef` resolution — including the dynamic scope, which stays a runtime
+  parameter because that is exactly what `$dynamicRef` late-binds against — are all
+  preserved as they were. The full JSON Schema Test Suite and the Ajv differential
+  fuzz stay green.
+
+  Building is deferred to a node's first visit rather than done up front, so
+  `validate(schema)` still returns without reading the schema, an unresolvable
+  `$ref` still throws on use rather than on construction, and a one-shot check
+  never pays for `$defs` its data does not reach. That deferral runs deeper than
+  the node: a node's type-specific block is built only once a value of that type
+  gets past the type check, and a `properties` entry only once a value reaches it.
+  A `{ type: 'object', properties: … }` node meeting a string or `null` — most of
+  what a union throws at it — now costs a type test and nothing else.
+
+  Cold cost still moves, because a node's step is a few closures where its
+  metadata was one object, and how much depends entirely on how much of the schema
+  the data touches. Measured over the vendored OpenAPI corpus (982 real component
+  schemas, each prepared and used once) it is **~6% slower on average**, and a
+  `$ref`-heavy schema is _faster_ cold, because a target is specialized once and
+  reused across every array element rather than re-walked. The worst case is a
+  schema whose data reaches everything it declares — the 40-property bench case,
+  validated once against an instance carrying all forty — which stays around twice
+  its old cold cost, against Ajv's ~11 ms to compile the same schema. There is no
+  way around that one: specializing a node is the cost, and that case specializes
+  all of it and then uses each step once.
+
+  The published performance table was re-measured for this change, but on Bun
+  1.3.11 rather than the Bun 1.4 the repo's other tables use; its caption says so,
+  and it is worth re-running at release time.
+
+  `@amritk/helpers` is here only because three of its comments name the
+  interpreter file that this change renames; nothing it emits changes.
+
+## 0.16.0
+
+### Minor Changes
+
+- 1c328af: `escapeRegexPattern` rejected patterns that are legal in Unicode mode.
+
+  Its validating `new RegExp(pattern)` omitted the `u` flag, while `regexFlagsFor`
+  adds that flag whenever the pattern compiles with it. A pattern that is legal
+  _only_ in Unicode mode — an astral range like `[😀-😜]`, or `[\u{61}-\u{7A}]` —
+  therefore failed generation with "Invalid regex pattern", even though the
+  emitter would have given it the `u` flag that makes it legal, and even though
+  Ajv (the differential oracle this package tracks) accepts it.
+
+  Both functions now read one cached compile decision: `u` where the pattern is a
+  legal Unicode-mode regex, no flag where it is legal only without one, and an
+  error only where it is a regex in neither mode. A pattern that is legal only
+  without the flag (`\-`, a bare `\p`) is unaffected.
+
+- 11a280f: Fix five correctness and robustness defects found in a review of the package.
+
+  - `resolveDynamicRefs` skipped the whole document when its only `$dynamicRef`
+    sat under a property genuinely _named_ `enum`, `const`, `default`, `example`
+    or `examples`. The cheap pre-scan that decides whether to rewrite at all
+    tested key names without tracking whether it was inside a name-to-schema map,
+    so the ref survived into generation — where the type generator names the type
+    after the anchor and, for the conventional anchor `node`, silently binds to
+    the DOM's `Node` interface. The pre-scan now asks the same shared position
+    rule the rewrite does.
+
+  - `generateTypeDefinition` and `mjst-extension` read schema keywords straight
+    off the node, so a polluted `Object.prototype` was indistinguishable from an
+    authored keyword: with `Object.prototype.additionalProperties` set, a bare
+    `{ type: 'string' }` rendered as `{ [key: string]: number }`, and an inherited
+    `if`/`then` pair recursed until the stack ran out. Both now read own
+    properties only, matching what `schema-guards` already does for the keywords
+    it guards.
+
+  - `graftExternalSchemas` and `pruneExternalSchemas` rebuilt `$defs` with plain
+    assignment, so a definition named `__proto__` — including one the author
+    wrote, and one derived from a registered URI ending in `__proto__.json` —
+    ran the prototype setter instead of becoming a property: the definition
+    disappeared while every reference to it stayed, and the map inherited the
+    definition's own keywords. Both now use the package's `assignKey`.
+
+  - Six recursive walkers had no depth guard, so a pathologically nested document
+    died with a bare `RangeError` instead of the message `MAX_SCHEMA_DEPTH`
+    exists to produce — including on `walkRefGraph`, the package's main entry
+    point. `assertSchemaDepth` now takes an optional limit, and the type renderer
+    passes a lower one: it spends about five stack frames per schema level where
+    the document walkers spend one, so at the shared cap the stack ran out first
+    and the guard could never fire. Documents nesting deeper than 400 levels are
+    now reported by name rather than crashing.
+
+  - `walkRefGraph` generated an output file for a definition referenced only from
+    a `default` value, because the `$dynamicRef` pointer scan walked instance
+    data. It now skips data positions, as its sibling scans already did.
+
+  Also: the `minLength: 1` fast paths in `string-length-check` are now
+  self-parenthesized, so every emitted expression can be negated with a bare `!`
+  the way `multiple-of-check` documents (`!x.length >= 1` parsed as
+  `(!x.length) >= 1` — a constant `false` that passed every string).
+
+- e091f22: `deriveRootTypeName` mangled non-ASCII titles. It split words on
+  `[^a-zA-Z0-9]+`, which is the ASCII-only class `ref-to-name` documents having
+  fixed for `$ref`-derived names — so a document titled `中文` or `Приложение`
+  reduced to nothing and was named `Document`, `Café Menu` came back as
+  `CafMenu` with the `é` deleted from the middle of a word, and `Ünïcödé Doc` as
+  `NCDDoc`. A `$ref` to a definition of the same name was spelled correctly, so
+  the root type and the refs into it disagreed. Both now go through one shared
+  `toPascalWords`, so they cannot drift again. Leading digits are still dropped
+  from a title (`3 amigos` → `Amigos`), which is where the two policies
+  legitimately differ.
+
+  `isDraft07Schema`, `hoistNestedDefs` and `deriveRootTypeName` also read
+  `$schema`, `$defs` and `title` straight off the object, so a polluted
+  `Object.prototype` was indistinguishable from a declared keyword — an inherited
+  `$schema` put every document through the draft-07 rewrite. All three now read
+  own properties only.
+
+- 3a54baf: `unknownKeyCheck`'s `isUnknown` / `isKnown` now return self-parenthesized
+  expressions, matching what `multiple-of-check` and `string-length-check`
+  already promise.
+
+  The two forms were not interchangeable: above `INLINE_KEY_LIMIT` the result is
+  an atomic `set.has(k)`, below it a bare `a || b`. A caller writing
+  `x && check.isKnown(k)` therefore got `(x && a) || b` for a 16-key object and
+  correct code for a 17-key one — a precedence bug that appears and disappears
+  with a performance threshold rather than with anything the caller wrote.
+  Generated sweeps gain one pair of parentheses; nothing they mean changes.
+
+- 261f650: `quoteJsString` and `escapeRegexPattern` lost unpaired surrogates.
+
+  A lone surrogate is a legal JSON string (`"\ud800"`), so it is a legal property
+  name, `pattern`, or enum member — but it has no UTF-8 encoding. Both helpers
+  passed one through raw, and writing the generated file replaced it with U+FFFD:
+  the string literal on disk was a _different string_ than the schema declared, so
+  the emitted check rejected a value the document says is valid, and an emitted
+  regex matched a different character than its author wrote. Both now escape an
+  unpaired surrogate (`\ud800`, matching the identical character). A well-formed
+  surrogate pair encodes fine and stays on the fast path, so emoji in a property
+  name cost nothing.
+
+### Patch Changes
+
+- 1fd154c: Fix five shape combinations where the generated TypeScript did not compile.
+
+  Found by a new fuzz suite that type-checks _fuzzed_ documents — `$defs`, `$ref`s,
+  embedded helpers and the index barrel compiled as one program, the way a consumer
+  compiles them — across every option the generator exposes. The existing
+  `generated-code-types` corpus is hand-picked, and none of these shapes were in it.
+
+  Four of the five have one cause: an expression TypeScript cannot narrow, read
+  twice. A property named after an `Object.prototype` member is read through a
+  conditional (`Object.hasOwn(input, "constructor") ? … : undefined`), so
+  `Array.isArray(<expr>) && <expr>.length` reported "Object is of type 'unknown'";
+  the subschema matcher's record view (`x as Record<string, unknown>`) and its
+  tuple-element view (`x as unknown[]`) are cast expressions with the same problem.
+  Each now carries a type the repeated read can use — nothing real is given up,
+  since the value behind it genuinely is unknown and every read sits inside a
+  runtime guard that tests it. The `.every` callbacks that hang off those accessors
+  carry an explicit parameter type, so they cannot come out implicitly `any`.
+
+  The fast path's object literal was asserted with a plain `as T`. That looked
+  checkable and was not: `_x !== undefined` narrows an `unknown` read to
+  `{} | null`, which TypeScript then refuses to convert to a `$ref` type, and
+  `Array.isArray(_x)` narrows it to `any[]`, which it refuses to convert to a
+  tuple. It is `as unknown as T` now — the guard above it is what proves the shape.
+
+  Finally, the non-object fallback literal is asserted whenever a prototype-member
+  name appears anywhere in the subtree it builds, not only at the top level: a
+  nested `{ "0": "" }` against an item type declaring `constructor?: true` carries
+  an inherited `constructor: Function` that does not assign. The assertion is
+  `as unknown as T` for the same index-signature reason.
+
+- 3557eb5: Treat a non-map `properties` / `patternProperties` as absent instead of crashing.
+
+  `typeof null === 'object'`, so a document carrying `{"patternProperties": null}`
+  slipped past the `!== undefined` check and reached `Object.keys(null)` — which
+  throws a `TypeError` and took the whole generation run down with it, rather than
+  producing a type for the one bad schema. Schemas come from the caller and
+  malformed ones are ordinary input, so a keyword whose value is not a map of
+  names to schemas is now read as absent. The same applies to a `null`
+  `additionalProperties`, which previously counted as present and was rendered as
+  an index signature's value type.
+
+- 543fbe8: Read every schema keyword as the node's own property.
+
+  The generators asked `'items' in schema` and read `schema.type` straight off the
+  node, and both walk the prototype chain. With `Object.prototype.items` set — by a
+  dependency with a prototype-pollution bug, or simply by a schema built over a base
+  object — every node in the document answered "yes" to keywords none of them
+  declared, and the result was a _different validator_: an inherited `items: false`
+  made every array have to be empty, an inherited `patternProperties` swallowed the
+  `additionalProperties` sweep so unknown keys stopped being reported, and an
+  inherited `if`/`then`, `allOf` or `contains` sent a walker into unbounded
+  recursion, so `buildValidatorSchema` threw a `RangeError` instead of generating.
+
+  `@amritk/helpers/own-keyword` is the shared reader — the question
+  `@amritk/helpers/schema-guards` and `@amritk/runtime-validators` already ask, for
+  the keywords with no named guard. Generated output is unchanged for every schema
+  in the conformance corpus and the vendored OpenAPI fixtures.
+
+- c6a1f16: Read each schema node's keywords once, compile lint filters, and match descents by key.
+
+  - **`@amritk/runtime-validators`** — the interpreter walked the schema afresh for
+    every value and asked each node for every keyword it might carry on every one of
+    those walks: about two dozen `Object.hasOwn` plus dynamic-key reads per node, per
+    validation. A CPU profile of the steady-state benchmark put 31% of the whole run
+    inside that one reader. A node's keywords are now read once into a fixed-shape
+    record and reused, which makes each read a fixed-offset field load instead of a
+    megamorphic dictionary lookup, moves the `typeof` narrowing off the hot path, and
+    lets group flags skip the reference, branching and type-specific blocks outright.
+    Steady-state throughput is 2.1–3.6× on the benchmark cases. Building the record
+    walks the node's own keys — three or four, rather than two dozen questions — so it
+    is cheaper than a single old scan, and the cache only starts filling on a
+    validator's _second_ call, leaving the cold one-shot path unchanged-to-better.
+    `@amritk/api`'s runtime engine and `@amritk/lint`'s `schema` rule both run this
+    interpreter, so both inherit it.
+  - **`@amritk/helpers`** — `generateIndexBarrel` read every character of every
+    generated file looking for `export` at a line start, which was ~18% of a
+    generation run. It now jumps between `export ` occurrences with `indexOf`, taking
+    roughly a quarter off generation time per parser.
+  - **`@amritk/lint`** — `[?(...)]` filter bodies compile to closures once instead of
+    being walked as an AST on every document node (still no `eval`/`new Function`;
+    these are ordinary closures over the parsed tree), recursive descents ask which
+    paths wanted each key the node has rather than asking every path in turn, and two
+    `/^\d+$/` tests moved off the hot path. Linting the vendored real-world specs:
+    petstore 11.1 → 7.4 ms, openai 1780 → 1110 ms.
+
 ## 0.15.4
 
 ### Patch Changes

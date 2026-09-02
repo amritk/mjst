@@ -247,7 +247,7 @@ happy path it runs a single allocation-free boolean guard — a pure `&&` chain 
 `typeof` checks (plus an `Object.keys().length` count when an object is closed
 with `additionalProperties: false`) — and `return true`s straight away, only
 calling a separate error-collecting function when something is actually wrong.
-Keeping the hot function tiny lets V8 optimise it aggressively, so a valid-input
+Keeping the hot function tiny lets the JIT optimise it aggressively, so a valid-input
 check beats every other library measured — including the build-time transformer
 typia — while still emitting full JSON-Pointer errors for invalid input, and
 emitting the validator stays far cheaper than compiling a schema at startup.
@@ -260,7 +260,7 @@ Measured on Bun 1.4 (Linux x64), validating valid input at steady state:
 | assert-loose | **~189M** ops/s | ~170M ops/s | ~44M ops/s | ~78M ops/s | ~5M ops/s |
 | assert-strict | **~104M** ops/s | ~68M ops/s | ~21M ops/s | ~42M ops/s | ~1.8M ops/s |
 
-The `assert-loose` / `assert-strict` rows are the exact shape used by
+The `assert-loose` / `assert-strict` rows use the same *shape* as
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
 (seven scalar roots plus a nested object): the boolean guard keeps mjst ahead of
 typia on both, by ~11% on `assert-loose` — close enough that the two can trade
@@ -268,6 +268,12 @@ the lead run-to-run — and by ~52% on `assert-strict` (with
 `additionalProperties: false`), where mjst counts keys once and typia does not.
 (typia and TypeBox still win the *invalid* path, where they bail on the first
 error rather than collecting a full error list.)
+
+They are **not** that project's numbers and they do not belong next to its
+leaderboard: the shape is shared, the harness is not, and the harness is worth
+an order of magnitude. See
+[Against the moltar harness](#against-the-moltar-harness) for the same functions
+measured under benny, the way the leaderboard measures them.
 
 Preparing a validator costs ~0.3–0.7 ms for mjst codegen and ~0.05–0.2 ms for a
 TypeBox `TypeCompiler` compile, versus ~13–17 ms for an Ajv compile. Every library
@@ -288,6 +294,94 @@ reproduce with:
 ```bash
 bun run bench
 ```
+
+### Against the moltar harness
+
+The table above is this package's own harness (`bench/measure.ts`): the
+validator is called directly over a pool of 32 distinct inputs, its verdict is
+folded into an escaping sink so nothing can be optimised away, and the median of
+21 timed trials is reported.
+
+The public leaderboard measures differently. Every operation there goes through
+[benny](https://github.com/caderek/benny) (benchmark.js) into moltar's
+`Benchmark` class, so the timed work is a call inside benchmark.js's compiled
+loop, then a second call through a class property, around a fixture that is one
+shared frozen module-level constant whose verdict `run()` throws away. That
+harness has a floor, and near the top of the range the floor is what gets
+measured.
+
+`bun run bench:moltar` runs exactly that harness over the same functions, always
+alongside a **no-op** control — a "validator" that checks nothing, which is the
+fastest number the harness can physically produce. One run on this machine
+(Linux x64, Bun 1.3.11 / Node 22.22, valid input):
+
+| harness | runtime | `assert-loose` | `assert-strict` |
+|:--|:--|--:|--:|
+| this package (`measure.ts`) | Bun | ~200M ops/s | ~185M ops/s |
+| benny, moltar's `Benchmark` | Node | ~100M ops/s | ~38M ops/s |
+| benny, moltar's `Benchmark` | Bun | ~70M ops/s | ~2.4M ops/s |
+| *no-op control, benny* | *Node* | *~120M ops/s* | *~120M ops/s* |
+| *no-op control, benny* | *Bun* | *~325M ops/s (±75%)* | *~325M ops/s (±75%)* |
+
+Read two things out of that. First, on Node the `assert-loose` figure sits
+within 20% of a validator that does nothing, so under that harness it is not a
+validator measurement at all: above that floor a faster validator cannot show
+up as a faster number, and the published leaderboard runs on CI hardware slower
+than this box, where the floor sits lower still. Second, `assert-strict` on Bun collapses to
+~2.4M because moltar's fixture is `Object.freeze({ … })` — see
+[Frozen inputs](#frozen-inputs).
+
+The harness makes no difference to correctness and every difference to the
+number, so quote the two separately or not at all. Both are reproducible here:
+
+```bash
+bun run bench          # this package's harness
+bun run bench:moltar   # benny, under the leaderboard's conditions
+```
+
+### Frozen inputs
+
+Closing an object with `additionalProperties: false` means proving no
+undeclared key is present, and every library answers that by enumerating keys:
+mjst's guard counts them (`Object.keys(obj).length === n`, exact because each
+declared property is required and already proven present), Ajv and Zod sweep
+with `for...in`, TypeBox runs its own sweep. On V8 that costs the same whatever
+the input looks like.
+
+On JavaScriptCore (Bun) it does not. Making an object non-extensible —
+`Object.freeze`, `Object.seal` or a bare `Object.preventExtensions` — turns off
+the engine's cached own-keys fast path, and *every* form of key enumeration
+falls back to a generic walk: `Object.keys`, `Object.getOwnPropertyNames`,
+`Reflect.ownKeys` and `for...in` alike. Property reads are untouched (a frozen
+object reads at full speed), so the whole cost lands on the extra-key sweep, and
+therefore on strict schemas only. Frozen inputs are ordinary — a config object
+frozen at startup, a shared fixture, a module-level constant — so `bun run bench`
+carries `small (4 fields, frozen)` and `assert-strict (frozen)` cases to keep it
+measured. One run on this machine (Linux x64, Bun 1.3.11), valid input:
+
+| `assert-strict` | mutable input | frozen input |
+|:--|--:|--:|
+| mjst (generated) | ~185M ops/s | ~1.7M ops/s |
+| typia (transformed) | ~68M ops/s | ~1.7M ops/s |
+| typebox (compiled) | ~46M ops/s | ~1.7M ops/s |
+| ajv (compiled) | ~24M ops/s | ~1.5M ops/s |
+| zod | ~1.4M ops/s | ~0.7M ops/s |
+
+It is an engine-level cliff, not an mjst one: every compiled or generated strict
+validator lands within a hair of the same number, because they are all paying
+the same engine slow path. The generated code keeps the key count anyway. Every
+alternative was measured and every one is worse overall. `Object.values(obj)`
+and `Object.keys({ ...obj })` sidestep the cliff, but on the ordinary mutable
+path they cost 28–37× under JSC and 2–7× under V8. Branching on
+`Object.isExtensible(obj)` first keeps the mutable path recognisable, at ~4×
+under JSC — and makes V8 slower in *both* directions (~2× mutable, ~7× frozen),
+where there was no cliff to fix in the first place. Trading a large, portable
+regression for a smaller win on one engine is not a good deal, so the sweep
+stays as it is.
+
+If it matters for your workload: validate before freezing (the verdict is the
+same either way — `src/generators/frozen-input.test.ts` pins that), or run on a
+V8 runtime, where the cliff does not exist.
 
 ---
 

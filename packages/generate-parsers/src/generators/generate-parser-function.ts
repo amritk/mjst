@@ -1246,6 +1246,125 @@ const shouldCacheVariable = (propSchema: JSONSchema): boolean => {
 }
 
 /**
+ * How many properties a nested sub-parser may carry before its fast path is left
+ * as a call, and how many such fast paths one parser may inline. The expansion
+ * is one level deep by construction — a sub-schema that has nested objects of
+ * its own is never inlined — so these two caps are the whole size budget, and
+ * they are what keeps a wide schema from turning one parser into a wall of
+ * conditional expressions.
+ */
+const INLINE_NESTED_MAX_PROPERTIES = 12
+const INLINE_NESTED_MAX_SITES = 4
+const INLINE_NESTED_MAX_TOTAL_PROPERTIES = 24
+
+/**
+ * The fast path of a single-use nested sub-parser, rendered as an expression to
+ * drop in at its one call site:
+ *
+ * ```
+ * nested: (typeof _nested === "object" && … && typeof _nested.foo === "string")
+ *   ? { foo: _nested.foo }
+ *   : parseDoc_Nested(_nested),
+ * ```
+ *
+ * An inline sub-schema has exactly one caller by construction (it is one
+ * property of one parent) and cannot be recursive — recursion needs a `$ref`,
+ * and a `$ref` resolves to its own file's parser — so the single-use and
+ * no-recursion conditions are structural here rather than something to prove.
+ *
+ * The condition is the sub-parser's own fast-path guard, term for term (the
+ * same `generatePropertyTypeCheck` chain, rooted at the caller's accessor
+ * instead of the sub-parser's `input`), and the literal is the same declared-key
+ * literal it would have built from the same reads — so an input that takes this
+ * branch gets exactly what the call returned. Everything else falls through to
+ * the call, which keeps every error message and every cold-path check where it
+ * was.
+ *
+ * `isObject` is spelled out rather than called: the call measured ~7% of a whole
+ * parse here, where the same three tests inlined measured free. (It is the one
+ * place in the emitter that does this — everywhere else `isObject` is a
+ * statement of its own, which V8 does inline.)
+ *
+ * Returns null whenever any of that cannot be reproduced faithfully, which
+ * includes every case where the sub-parser does more than check-and-build:
+ * rejecting an undeclared key, coercing, warning, composing, or recursing into
+ * a nested object of its own.
+ */
+const inlineNestedFastPath = (
+  childSchema: JSONSchema,
+  childTypeName: string,
+  objectExpr: string,
+  useRefImports: boolean,
+  suffix: string,
+  stripUnknown: boolean,
+  reservedNames: ReadonlySet<string>,
+): { readonly condition: string; readonly literal: string; readonly propertyCount: number } | null => {
+  if (!isSchemaObject(childSchema) || !hasProperties(childSchema)) return null
+  // The sub-parser must build a literal of its declared properties (so the
+  // inlined literal is the same object) and must not have to *reject* an
+  // undeclared key (so skipping its key loop cannot skip a throw). That is
+  // exactly a strip build without `additionalProperties: false`.
+  if (!stripUnknown) return null
+  if (hasAdditionalProperties(childSchema) && childSchema.additionalProperties === false) return null
+  if (hasAllOf(childSchema) || hasOneOf(childSchema) || hasAnyOf(childSchema)) return null
+  // The same keywords that deny the sub-parser a fast path of its own: with no
+  // fast path there is no guard to reproduce.
+  if (hasFastPathBlockingKeyword(childSchema)) return null
+  // Size bounds would have to join the condition; a sub-schema carrying them is
+  // rare enough not to be worth the extra terms.
+  if (hasMinProperties(childSchema) || hasMaxProperties(childSchema)) return null
+  // Every declared property required and a real schema — an optional one would
+  // need a conditional spread in the literal and an `=== undefined ||` branch in
+  // the condition.
+  if (exactKeyCountOf(childSchema) === null) return null
+  // A sub-schema with nested objects of its own delegates those to further
+  // sub-parsers, so its literal is not built from plain reads — and inlining it
+  // would be the first step of an expansion with no natural floor.
+  const { objects, arrayItems } = collectInlineSubTypes(childSchema, childTypeName, reservedNames)
+  if (objects.size > 0 || arrayItems.size > 0) return null
+
+  const props = (childSchema as { properties: Record<string, JSONSchema> }).properties
+  const keys = Object.keys(props)
+  if (keys.length === 0 || keys.length > INLINE_NESTED_MAX_PROPERTIES) return null
+
+  const checks: string[] = []
+  const fields: string[] = []
+  // The caller's variable holds `unknown`. Inside the sub-parser these reads go
+  // through an `isObject`-narrowed `input` and each one is bound to a `const`,
+  // so `Array.isArray(_x) && _x.length` narrows; here every read is a fresh
+  // expression that narrows nothing, and a `Record<string, unknown>` cast would
+  // leave `.length` and `>= 3` un-typeable. `any` is what the surrounding
+  // generated code already uses for exactly this (see the `allOf` and
+  // prototype-member accessors) — the whole literal lands in `as unknown as T`
+  // regardless, and type erasure leaves `_nested.foo` either way.
+  const readRoot = `(${objectExpr} as Record<string, any>)`
+  for (const key of keys) {
+    const propSchema = props[key] as JSONSchema
+    // A property that delegates to an imported parser is not a plain read.
+    if (
+      shouldUseRefImport(propSchema, useRefImports) ||
+      shouldUseArrayRefImport(propSchema, useRefImports) ||
+      shouldUseRecordRefImport(propSchema, useRefImports)
+    ) {
+      return null
+    }
+    const accessor = safeAccessor(readRoot, key)
+    const check = generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix)
+    if (check === null) return null
+    checks.push(check)
+    fields.push(`${safeLiteralKey(key)}: ${accessor}`)
+  }
+
+  const condition = [
+    `typeof ${objectExpr} === "object"`,
+    `${objectExpr} !== null`,
+    `!Array.isArray(${objectExpr})`,
+    ...checks,
+  ].join(' && ')
+  return { condition, literal: `{ ${fields.join(', ')} }`, propertyCount: keys.length }
+}
+
+/**
  * Generates a parser for object schemas with properties.
  *
  * Uses an optimized function body with:
@@ -1399,13 +1518,31 @@ const generateObjectParser = (
   // fast-path guard, or a clean-looking input carrying an extra would be handed
   // straight back before the rejection ran.
   const guardKeys = stripKeys || rejectsUnknownKeys
+  // What the fast path hands back decides whether it has to prove anything
+  // about undeclared keys. A strip build returns a literal naming only the
+  // declared properties, so an extra is dropped by construction and the
+  // no-extras term is pure cost on every clean parse — measurably so, since its
+  // cheap form still walks the key set and its cheapest-looking form allocates
+  // a keys array. `allOf` keeps the `{ ...input }` spread (this propInfo list
+  // does not carry the merged-in properties), which does carry extras across,
+  // so it still has to prove their absence.
+  const fastPathBuildsDeclaredLiteral = stripKeys && !(isSchemaObject(schema) && hasAllOf(schema))
+  // Rejecting parsers keep the term whatever they return: an undeclared key has
+  // to throw, and a fast path that silently dropped it would never reach the
+  // rejection loop.
+  const fastPathNeedsKnownKeys = guardKeys && (rejectsUnknownKeys || !fastPathBuildsDeclaredLiteral)
+  const droppedKnownKeysTerm = guardKeys && !fastPathNeedsKnownKeys
   // When every declared property is required, the fast-path no-extras test is
   // the cheaper own-key count (see exactKeyCountOf) and the `_hasOnlyKnownKeys`
   // predicate is not emitted at all — the shape validator derives the same
   // decision from the schema, so the cross-function contract stays in sync.
   const exactKeyCount = guardKeys ? exactKeyCountOf(schema) : null
   const strictKeyCheck = unknownKeyCheck(propertyKeys, `_knownKeys${typeName}`)
-  if (guardKeys && exactKeyCount === null) {
+  // The shape validator emitted alongside this parser reads the same predicate
+  // under its own (schema-derived) conditions, so the declaration survives a
+  // parser that no longer names it.
+  const shapeValidatorNeedsKnownKeys = shapeValidatorSource?.includes(`_hasOnlyKnownKeys${typeName}(`) ?? false
+  if ((fastPathNeedsKnownKeys || shapeValidatorNeedsKnownKeys) && exactKeyCount === null) {
     for (const declaration of strictKeyCheck.declarations) {
       preamble.push(`${declaration};`)
     }
@@ -1540,7 +1677,13 @@ const generateObjectParser = (
   // checks through inherited properties while the own-key count still matches,
   // so non-plain inputs route to the slow path, where the for..in walk keeps
   // the historical inherited-key rejection.
-  if (guardKeys) {
+  //
+  // The keys array this allocates looks like the thing to remove — but a
+  // prototype-guarded `for..in` count measured slower than it, both under the
+  // benchmark harness and one-variant-per-process: V8 scalar-replaces the array
+  // when only `.length` is read, and `Object.getPrototypeOf` is the dearer half
+  // of the pair either way. Leave it alone.
+  if (fastPathNeedsKnownKeys) {
     fastPathChecks.push(
       exactKeyCount !== null
         ? `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`
@@ -1570,7 +1713,11 @@ const generateObjectParser = (
   // caller actually emitted; any difference — a stub, an alias or union
   // predicate, a schema transformed on the way here — keeps the inline guard.
   let deepGuardExpr = deepGuard
-  if (deepGuard !== null && shapeValidatorSource !== undefined && !literalReturnUsesVars) {
+  // A guard that dropped the no-extras term (see fastPathNeedsKnownKeys) is
+  // deliberately weaker than the shape validator, which still carries one:
+  // delegating would silently reinstate the very check the strip build does
+  // not need.
+  if (deepGuard !== null && shapeValidatorSource !== undefined && !literalReturnUsesVars && !droppedKnownKeysTerm) {
     const shapeFnName = shapeValidatorName(typeName)
     const shapeStrictKeysGuard =
       stripKeys && exactKeyCount === null ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
@@ -1670,6 +1817,10 @@ const generateObjectParser = (
   // parser in both modes; the input spread is dropped whenever stripping.
   const buildObjectLines = (directAssign: boolean): string[] => {
     const objectLines: string[] = []
+    // Per-call so a second build (should one ever be emitted) gets the same
+    // budget rather than the leftovers of the first.
+    let inlinedSites = 0
+    let inlinedProperties = 0
     if (!stripKeys) {
       objectLines.push('    ...input,')
     }
@@ -1695,6 +1846,23 @@ const generateObjectParser = (
       if (subName) {
         const subParserName = generateParserName(subName)
         if (isRequired) {
+          // The sub-parser has exactly one call site — this one — so its fast
+          // path can be spelled out here and the call kept only for what the
+          // fast path does not cover. Coerce mode and `--log-warnings` opt out:
+          // the first rebuilds each field rather than reading it, the second
+          // makes the sub-parser do work before its guard.
+          const inlined =
+            directAssign && !logWarnings && inlinedSites < INLINE_NESTED_MAX_SITES
+              ? inlineNestedFastPath(propSchema, subName, accessor, useRefImports, suffix, stripUnknown, reservedNames)
+              : null
+          if (inlined !== null && inlinedProperties + inlined.propertyCount <= INLINE_NESTED_MAX_TOTAL_PROPERTIES) {
+            inlinedSites++
+            inlinedProperties += inlined.propertyCount
+            objectLines.push(
+              `    ${safeLiteralKey(key)}: (${inlined.condition})\n      ? ${inlined.literal}\n      : ${subParserName}(${accessor}),`,
+            )
+            continue
+          }
           objectLines.push(`    ${safeLiteralKey(key)}: ${subParserName}(${accessor}),`)
         } else {
           objectLines.push(
@@ -1836,8 +2004,7 @@ const generateObjectParser = (
   // it never re-parses an already-validated nested object. allOf merges in
   // properties this `propInfo` list doesn't carry, so it keeps the spread.
   const emitDeepGuardReturn = (lines: string[]): void => {
-    const canLiteral = stripKeys && !(isSchemaObject(schema) && hasAllOf(schema))
-    if (!canLiteral) {
+    if (!fastPathBuildsDeclaredLiteral) {
       lines.push(`  if (${deepGuardExpr}) return { ...input } as ${typeName};`)
       return
     }
@@ -1848,8 +2015,11 @@ const generateObjectParser = (
     // same sharing the parent's own fast-path literal performs (`items:
     // _items`), and it is what keeps clean array elements allocation-free.
     // Exported root parsers keep returning a fresh object so callers never
-    // alias the value they passed in.
-    if (!exported) {
+    // alias the value they passed in — and so does a strip build whose guard
+    // carries no no-extras term (fastPathNeedsKnownKeys), because there the
+    // guard says nothing about undeclared keys and only the declared-property
+    // literal below actually strips them.
+    if (!exported && fastPathNeedsKnownKeys) {
       lines.push(`  if (${deepGuardExpr}) return input as ${typeName};`)
       return
     }
@@ -1923,7 +2093,7 @@ const generateObjectParser = (
       // evaluated as the shallow guard plus only its *residual* terms (deeper
       // per-property checks and the no-extras term), so a carries-extras input
       // never runs the same typed checks twice before taking the strip build.
-      if (!exported && deepGuard) {
+      if (!exported && deepGuard && fastPathNeedsKnownKeys) {
         const residual: string[] = []
         for (let i = 0; i < fastPathChecks.length; i++) {
           const deep = fastPathChecks[i] as string

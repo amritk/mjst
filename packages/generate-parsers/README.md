@@ -311,6 +311,15 @@ still — ~51M ops/s strict, ~127M safe — but at that size the numbers swing e
 run-to-run that the ratio, not the absolute, is the honest signal: mjst lands
 ~5–29× ahead of zod across every case above.
 
+What is replicated upstream is the *cases* — the two parse modes and their
+shapes — not the harness. These numbers come from this repo's own measurement
+core (direct calls over a pool of distinct inputs, median of many trials) and
+are not comparable with the public leaderboard, which measures every operation
+through benny and reports something an order of magnitude smaller for the same
+function. `@amritk/generate-validators` carries the side-by-side and a
+reproducible run of both harnesses:
+[Against the moltar harness](../generate-validators#against-the-moltar-harness).
+
 The trade is a one-shot **prepare** cost that only mjst pays — generating the
 parser source — which measures **~0.2–0.8 ms** per schema here (zod and TypeBox
 author or interpret their parsers with no separate build step, so there is

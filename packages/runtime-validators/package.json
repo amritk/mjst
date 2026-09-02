@@ -1,7 +1,7 @@
 {
   "name": "@amritk/runtime-validators",
-  "version": "0.11.0",
-  "description": "Extremely fast, eval-free runtime JSON Schema validation. Interprets a schema you do not know ahead of time \u2014 no new Function, no build step, runs anywhere.",
+  "version": "0.12.1",
+  "description": "Extremely fast, eval-free runtime JSON Schema validation. Interprets a schema you do not know ahead of time — no new Function, no build step, runs anywhere.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -47,7 +47,6 @@
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. runtime-validators",
     "bench": "bun run ./bench/run.ts",
-    "bench:compile": "bun --conditions development ./bench/compile.ts",
     "bench:dynamic": "bun --conditions development ./bench/dynamic-refs.ts"
   },
   "exports": {
@@ -60,11 +59,6 @@
       "development": "./src/parse/index.ts",
       "types": "./dist/parse/index.d.ts",
       "default": "./dist/parse/index.js"
-    },
-    "./compile": {
-      "development": "./src/compile/index.ts",
-      "types": "./dist/compile/index.d.ts",
-      "default": "./dist/compile/index.js"
     },
     "./metaschema": {
       "development": "./src/metaschema/index.ts",

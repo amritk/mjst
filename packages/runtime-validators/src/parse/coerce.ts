@@ -1,7 +1,7 @@
-import { compilePattern } from '@/interpreter/interpret'
 import { validationLimitError } from '@/interpreter/limits'
 import { getNodeMeta, type NodeMeta } from '@/interpreter/node-meta'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
+import { compilePattern } from '@/interpreter/runtime'
 
 /**
  * The state one coercion pass threads through the walk: what to coerce toward

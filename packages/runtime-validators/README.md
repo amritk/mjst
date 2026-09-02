@@ -19,7 +19,7 @@
 
 [`@amritk/generate-validators`](../generate-validators) writes validator **source files** at build time from a schema you already have. This package is its runtime sibling: it validates against a schema **you only discover at runtime** — a plugin config, a user-supplied schema, an OpenAPI fragment.
 
-It is an **eval-free interpreter**: it walks the schema directly, with **no `new Function`, no code generation, and no build step**. That buys two things. First, **zero startup cost** — there is nothing to compile, so building a validator is essentially free and you only pay to walk the data you actually validate. Second, it **runs anywhere** — under a strict `Content-Security-Policy` (no `unsafe-eval`), on Cloudflare Workers, in React Native/Hermes, and in any sandbox that forbids `eval`/`new Function`, all of which rule out a code-generating validator.
+It is an **eval-free interpreter**: it reads the schema itself, with **no `new Function`, no code generation, and no build step**. Each schema node is specialized into a closure the first time a validation actually reaches it — a tree of ordinary functions, not generated source — so the keyword dispatch happens once per node rather than once per value. That buys two things. First, **zero startup cost** — there is nothing to compile up front, so building a validator is essentially free and you only pay for the part of the schema your data actually reaches. Second, it **runs anywhere** — under a strict `Content-Security-Policy` (no `unsafe-eval`), on Cloudflare Workers, in React Native/Hermes, and in any sandbox that forbids `eval`/`new Function`, all of which rule out a code-generating validator.
 
 The trade is steady-state throughput: a JIT-compiled validator (like Ajv after it compiles) validates a *single fixed schema* against *millions of values* faster than an interpreter can. So this package is tuned for the opposite shape — **validate a few values per schema, in a cold process** (CLI checks, one-shot config validation, edge requests), where there is no compile cost to amortize. See [Performance](#performance).
 
@@ -133,34 +133,23 @@ const isTree = validateGuard({
 
 Pick the right tool for the shape of your workload. There are two regimes, and they have opposite winners.
 
-**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step, so the cost is essentially one walk of the data. Ajv must compile the schema (build and JIT a function) before it can validate even once. Representative numbers from `bun run bench` (Bun 1.4, Linux x64 — your hardware will differ, run it yourself):
+**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Representative numbers from `bun run bench` (Bun 1.3.11, Linux x64 — your hardware will differ, run it yourself; the other tables in this repo are on Bun 1.4, so compare within a table rather than across):
 
 | schema | `validate` (cold) | Ajv (compile + run) | speedup |
 |:---|---:|---:|---:|
-| small | ~0.016 ms | ~14 ms | **~870×** |
-| wide (40 props) | ~0.031 ms | ~16 ms | **~530×** |
-| deep (`$ref`) | ~0.17 ms | ~17 ms | **~96×** |
+| small | ~0.015 ms | ~8.5 ms | **~570×** |
+| wide (40 props) | ~0.09 ms | ~12 ms | **~140×** |
+| deep (`$ref`) | ~0.17 ms | ~11 ms | **~66×** |
 
-**Steady state — one schema, many values.** Here Ajv wins: once compiled, its JIT'd function outruns a tree-walking interpreter by roughly **6–11×** per call. If you validate one schema against a high-throughput stream, an interpreter is the wrong tool, and this package does not pretend otherwise.
+**Steady state — one schema, many values.** Here Ajv still wins: once compiled, its JIT'd function outruns this one by roughly **3–6×** per call (`validate`; the guard path is closer). If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — nothing that stops short of emitting a function will match generated straight-line code, and this package does not pretend otherwise.
 
-For that case there is [`compileGuard`](#compileguardtschema-options--amritkruntime-validatorscompile), which partially evaluates the schema into a tree of closures once and then runs it — still eval-free. It closes part of the gap, not all of it (`bun run bench:compile`, same machine as above):
-
-| schema | `validateGuard` | `compileGuard` | Ajv | vs interpreter | vs Ajv |
-|:---|---:|---:|---:|---:|---:|
-| small | ~2.0M/s | ~5.5M/s | ~8.0M/s | **2.8×** | 0.70× |
-| wide (40 props) | ~375k/s | ~545k/s | ~1.63M/s | **1.45×** | 0.33× |
-| deep (`$ref`) | ~68k/s | ~118k/s | ~385k/s | **1.7×** | 0.31× |
-
-The compile is not free, and on the cold path it is a cost rather than a saving — ~0.014 ms vs 0.013 ms (small) and ~0.105 ms vs 0.042 ms (wide), though a `$ref`-heavy schema comes out slightly *ahead* (~0.12 ms vs 0.15 ms) because linking each reference once beats resolving it per value. Both remain two orders of magnitude ahead of Ajv cold.
-
-If you need Ajv-class throughput and can afford a build step, generate the validator ahead of time with [`@amritk/generate-validators`](../generate-validators) instead.
-
-So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → `compileGuard`, or generate ahead of time**.
+So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → generate ahead of time**.
 
 What keeps the interpreter lean:
 
-- **No compile step.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up.
-- **Lazy, reused caches.** The only reusable work — compiling `pattern` regexes and resolving `$ref` targets — is memoized the first time it is hit and reused on later calls.
+- **No compile step up front.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up. A node is specialized the first time a validation reaches it, so a one-shot check never pays for the `$defs` it does not touch, and an unresolvable `$ref` still surfaces on use rather than on construction.
+- **Every per-node question answered once.** Which keywords a node carries, its property key list, its `required` set, its compiled `pattern`s, which type-specific checks can possibly apply — all of it is settled when the node is specialized and closed over by its step, instead of being rediscovered on every value.
+- **Lazy, reused caches.** The one thing a node cannot settle is where a `$ref` points when the document declares `$id`s, because that depends on the base URI in scope at call time. Those targets are memoized the first time they are followed and reused on later calls.
 - **Nothing built for errors that never happen.** The error array and every failure message are created only when a failure is actually recorded and will actually be read, so valid input — and the whole guard path — never builds one. That is not the same as zero allocation: a branch probe (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) allocates a small context, `unevaluatedProperties`/`unevaluatedItems` allocate an annotation tracker, and `uniqueItems` builds a `Set`. Everything genuinely reusable — property keys, the `required` set, compiled `patternProperties`, dependency entry lists — is memoized per schema node instead of rebuilt per call.
 - **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats)`.
 
@@ -239,42 +228,6 @@ Input is never mutated, and a value that already has the declared types comes
 back as the very object that went in.
 
 Options are `validate`'s, plus those two switches.
-
-### `compileGuard<T>(schema, options?)` — `@amritk/runtime-validators/compile`
-
-The same boolean guard `validateGuard` returns, built by partially evaluating
-the schema into a **tree of closures** once, up front — regexes compiled,
-property lists flattened, bounds and divisor cases specialized, `$ref`s resolved
-and linked. Validation is then a tree of direct calls with no schema inspection
-left in it. Still eval-free: closures, not `new Function`, so a strict CSP,
-Workers and Hermes are unaffected.
-
-```typescript
-import { compileGuard } from '@amritk/runtime-validators/compile'
-
-const isUser = compileGuard({
-  type: 'object',
-  properties: { id: { type: 'integer' }, name: { type: 'string' } },
-  required: ['id', 'name'],
-})
-
-for (const row of millionsOfRows) if (isUser(row)) handle(row)
-```
-
-**Reach for it only when one schema validates many values.** It is not a
-free upgrade — see the numbers below. For the cold one-shot path this package is
-built around, `validateGuard` is still the right tool, which is why this is a
-separate entry point rather than the default.
-
-Correctness comes from deferral, not from a second implementation. A node
-carrying a keyword the compiler does not answer itself — `if`/`then`/`else`,
-`unevaluated*`, `patternProperties`, `propertyNames`, `contains`, `dependent*`,
-`format`, `uniqueItems` — is handed to the interpreter whole, subtree included.
-A document containing `$dynamicRef` / `$recursiveRef` (they resolve against a
-dynamic scope that only exists while a walk is in progress) or validated against
-a `schemas` registry is not compiled at all. `compile-parity.test.ts` holds the
-compiled guard to the interpreter's verdict across the entire JSON Schema Test
-Suite.
 
 ### `assert(schema, value, options?)`
 
