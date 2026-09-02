@@ -1,6 +1,7 @@
 import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
+import { boundFailExpr } from '@amritk/helpers/numeric-bound-check'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { hasOwnCheck, missingCheck, safeAccessor } from '@amritk/helpers/safe-accessor'
@@ -344,30 +345,29 @@ const generateConstraintChecks = (
   }
 
   if (t === 'number' || t === 'integer') {
-    // Each bound is the *pass* condition, negated — `!(x >= min)`, not `x < min`.
-    // They differ only for `NaN`, which compares `false` against every operator:
-    // the direct form reads that as "not out of bounds" and lets a `NaN` through,
-    // where the interpreter, Ajv, and this package's own inline matchers
-    // (`generate-schema-checks`, `subschema-match`, which emit the un-negated
-    // `x >= min`) all reject it.
+    // Bounds come from `@amritk/helpers/numeric-bound-check`, which spells each
+    // one as the *pass* condition negated. That module explains why the direct
+    // failure form is wrong; the point of taking it from there is that this
+    // emitter, `generate-schema-checks`, `subschema-match` and
+    // `@amritk/generate-validators` cannot answer the question differently.
     if (hasMinimum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && !(${acc} >= ${propSchema.minimum})) ${throwError(`${field} must be >= ${propSchema.minimum}`)};`,
+        `  if (typeof ${acc} === "number" && ${boundFailExpr(acc, 'minimum', propSchema.minimum)}) ${throwError(`${field} must be >= ${propSchema.minimum}`)};`,
       )
     }
     if (hasMaximum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && !(${acc} <= ${propSchema.maximum})) ${throwError(`${field} must be <= ${propSchema.maximum}`)};`,
+        `  if (typeof ${acc} === "number" && ${boundFailExpr(acc, 'maximum', propSchema.maximum)}) ${throwError(`${field} must be <= ${propSchema.maximum}`)};`,
       )
     }
     if (hasExclusiveMinimum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && !(${acc} > ${propSchema.exclusiveMinimum})) ${throwError(`${field} must be > ${propSchema.exclusiveMinimum}`)};`,
+        `  if (typeof ${acc} === "number" && ${boundFailExpr(acc, 'minimum', propSchema.exclusiveMinimum, true)}) ${throwError(`${field} must be > ${propSchema.exclusiveMinimum}`)};`,
       )
     }
     if (hasExclusiveMaximum(propSchema)) {
       lines.push(
-        `  if (typeof ${acc} === "number" && !(${acc} < ${propSchema.exclusiveMaximum})) ${throwError(`${field} must be < ${propSchema.exclusiveMaximum}`)};`,
+        `  if (typeof ${acc} === "number" && ${boundFailExpr(acc, 'maximum', propSchema.exclusiveMaximum, true)}) ${throwError(`${field} must be < ${propSchema.exclusiveMaximum}`)};`,
       )
     }
     if (hasMultipleOf(propSchema)) {
