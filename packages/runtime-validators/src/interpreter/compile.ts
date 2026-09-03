@@ -30,8 +30,8 @@ import {
   isPrimitiveEnumValue,
   matchesType,
   mergeEvaluation,
-  newBranchContext,
   newEvaluation,
+  probeContext,
   resolveDyn,
   resolvePlainRef,
   resolveRec,
@@ -339,8 +339,9 @@ const childNode = (compiler: Compiler, slots: ChildSlots, index: number, schema:
 /**
  * Validates `value` against `node` in a pure boolean context — the branches of
  * `anyOf` / `oneOf` / `not` / `if`, where a failing branch is expected and must
- * not pollute the caller's error list. Shares the ref caches and the work budget
- * so the isolation costs nothing beyond a small context object.
+ * not pollute the caller's error list. Runs in the caller's own context on the
+ * guard path and in the run's one reusable boolean child otherwise (see
+ * {@link probeContext}), so a probe allocates nothing.
  */
 const probe = (
   ctx: InterpreterContext,
@@ -350,13 +351,18 @@ const probe = (
   scope: DynamicScope,
   collect: Evaluation | null,
 ): boolean => {
-  const sub = newBranchContext(ctx)
+  const sub = probeContext(ctx)
+  // Cleared going in as well as coming out: a probe that threw (a limit, an
+  // unresolvable ref) can leave the shared child flagged, and the next run's
+  // first probe must not inherit that verdict.
+  sub.failed = false
   // When the caller is tracking annotations, evaluate the branch into a private
   // tracker and fold it in only if the branch matched — annotations from a
   // failing branch never count toward `unevaluated*`.
   const branchEval = collect !== null ? newEvaluation() : null
   node.run(sub, value, '', branchEval, depth + 1, scope)
   const ok = !sub.failed
+  sub.failed = false
   if (ok && collect !== null && branchEval !== null) mergeEvaluation(collect, branchEval)
   return ok
 }
@@ -429,7 +435,10 @@ const runRef = (
   }
   stack.push(target, value)
   runInPlace(ctx, node, value, path, evaluation, depth, scope)
-  stack.length -= 2
+  // Two pops rather than a length write: truncating through `length` goes
+  // through the generic property setter, and this runs once per `$ref` visit.
+  stack.pop()
+  stack.pop()
 }
 
 /**
@@ -455,20 +464,38 @@ const compilePlainRef = (compiler: Compiler, ref: string): Step => {
 
 /**
  * `$ref` inside a document that declares an `$id`. The base URI in scope decides
- * the target, and the scope is a run-time value, so this stays a lookup per
- * visit — memoized per `(base, ref)` by {@link resolveScoped} exactly as before.
+ * the target, and the scope is a run-time value, so the answer is looked up per
+ * visit — memoized per `(base, ref)` by {@link resolveScoped}.
+ *
+ * In front of that memo sits a one-entry inline cache on the base last seen.
+ * A reference is nearly always reached from the same resource every time — an
+ * `items: { $ref }` under a document with one `$id` is reached from that one
+ * base, once per element — and the memo answers that with three map lookups per
+ * visit (the scope, the ref, then the target's node). The inline cache answers
+ * it with a string comparison. It is exact: the registry and the memo are fixed
+ * for the validator this step belongs to, so the same base always yields the
+ * same target and node.
  */
 const compileScopedRef = (compiler: Compiler, ref: string, registry: SchemaRegistry): Step => {
   const plain = compilePlainRef(compiler, ref)
+  let lastBase: string | undefined
+  let lastTarget: unknown
+  let lastTargetBase = ''
+  let lastNode: CompiledNode = ACCEPT_NODE
   return (ctx, value, path, evaluation, depth, scope) => {
     const base = scope[scope.length - 1]
     if (base === undefined) {
       plain(ctx, value, path, evaluation, depth, scope)
       return
     }
-    const target = resolveScoped(ctx, registry, ref, base)
-    const node = compileNode(compiler, target.value)
-    runRef(ctx, target.value, node, value, path, evaluation, depth, enterResource(scope, target.base))
+    if (base !== lastBase) {
+      const target = resolveScoped(ctx, registry, ref, base)
+      lastTarget = target.value
+      lastTargetBase = target.base
+      lastNode = compileNode(compiler, target.value)
+      lastBase = base
+    }
+    runRef(ctx, lastTarget, lastNode, value, path, evaluation, depth, enterResource(scope, lastTargetBase))
   }
 }
 
@@ -1404,19 +1431,17 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
     const node = compileNode(compiler, keywords.propertyNames)
     parts.push((ctx, value, path, _evaluation, depth, scope) => {
       const obj = value as Record<string, unknown>
-      // One scratch context for the whole key loop instead of a fresh one per
-      // key — on a 20-key object that was 20 context allocations for what is
-      // usually a one-keyword string check. Reuse is safe because the only
-      // per-probe state is `failed` (we reset it): the caches, ref stack and
-      // budget are shared by design, `errors` stays null in boolean mode, and
-      // these probes cannot nest, since the key is a string and the inner walk
-      // never reaches another `propertyNames` at this instance location.
-      let scratch: InterpreterContext | null = null
+      // Every key is probed in the run's boolean context (the run itself on
+      // the guard path), so a 20-key object costs no context allocations for
+      // what is usually a one-keyword string check — see {@link probeContext}.
+      // The key is a string, so the inner walk never reaches another
+      // `propertyNames` at this instance location and the probes cannot nest.
+      const scratch = probeContext(ctx)
       for (const key of Object.keys(obj)) {
-        if (scratch === null) scratch = newBranchContext(ctx)
-        else scratch.failed = false
+        scratch.failed = false
         node.run(scratch, key, '', null, depth + 1, scope)
         if (scratch.failed) {
+          scratch.failed = false
           fail(ctx, `property name "${key}" is invalid`, childPath(ctx, path, key))
           if (ctx.failed) return
         }

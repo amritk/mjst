@@ -1035,7 +1035,7 @@ const generateConstraintChecks = (
     // `filter` *skips holes*, so a sparse `[, "a"]` came up one element short of
     // what the interpreter counts — it reads the hole as `undefined`, and against
     // `contains: { not: { type: "string" } }` that hole is the matching item.
-    // (`booleanArrayExpr` materialises with `Array.from` over the same question.)
+    // (`booleanArrayExpr` loops by index through `everyItem` over the same question.)
     // And `filter` builds a whole array to measure its length, on every call, for
     // a number the loop already has; with no upper bound the loop can stop at the
     // lower one rather than walk the rest.
@@ -1098,8 +1098,8 @@ const generateConstraintChecks = (
         // `required` mode, like the tail loop: the position is inside the array
         // (the length test in front of it says so), and a sparse hole there reads
         // as `undefined` and has to FAIL its check rather than be skipped as an
-        // absent optional value. `booleanArrayExpr` already materialises with
-        // `Array.from` for exactly this, so leaving the tuple positions guarded
+        // absent optional value. `booleanArrayExpr` already loops by index
+        // (`everyItem`) for exactly this, so leaving the tuple positions guarded
         // put the two halves of the same package on opposite answers.
         //
         // A combinator beneath the position answers the same way:
@@ -2308,11 +2308,13 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
  * {@link booleanLeafExpr}. Returns `null` for `$ref` items, or when an item schema
  * can't be expressed flat, so the whole guard defers to the validator.
  *
- * Item iteration goes through `Array.from` rather than `Array.prototype.every`
- * because `every` *skips holes* in a sparse array (`[, 'x']`), whereas the
- * validator's index-based `for` loop reads a hole as `undefined` and rejects it.
- * Materialising the array first makes the guard's verdict match the slow path's
- * on sparse input — the guard must never accept what the slow path would reject.
+ * Item iteration goes through the runtime `everyItem` helper rather than
+ * `Array.prototype.every` because `every` *skips holes* in a sparse array
+ * (`[, 'x']`), whereas the validator's index-based `for` loop reads a hole as
+ * `undefined` and rejects it. The helper is the same index loop, so the guard's
+ * verdict matches the slow path's on sparse input — the guard must never accept
+ * what the slow path would reject — without the array copy that materialising
+ * with `Array.from` used to cost every guard call.
  */
 const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): string | null => {
   // `Array.isArray` narrows a reference but not a cast expression — see the note
@@ -2354,7 +2356,7 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
   // guard from ever accepting what the slow path would reject.
   const itemExpr = booleanLeafExpr(items, '_it')
   if (itemExpr === null) return null
-  return `${base} && Array.from(${acc} as unknown[]).every((_it) => (${itemExpr}))`
+  return `${base} && everyItem(${acc} as unknown[], (_it) => (${itemExpr}))`
 }
 
 /**
