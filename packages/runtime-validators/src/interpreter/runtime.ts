@@ -351,15 +351,15 @@ export const allUnique = (ctx: InterpreterContext, arr: readonly unknown[]): boo
     // A handful of primitives is compared pairwise: at most 28 comparisons for
     // eight elements, against allocating and filling a `Set` — which on a
     // typical short `tags` array was a double-digit share of validating the
-    // whole document. `NaN` is equal to itself here too (SameValueZero, as
-    // the `Set` path below), and a `NaN` is the only value not equal to
-    // itself, so that is the whole test.
+    // whole document. `NaN` is equal to itself here too — SameValueZero, as
+    // the `Set` path below and {@link deepEqual} — so the test is `===` plus
+    // the one pair `===` gets wrong.
     if (len <= 8) {
       for (let i = 0; i < len; i++) {
         const a = arr[i]
         for (let j = i + 1; j < len; j++) {
           const b = arr[j]
-          if (a === b || (a !== a && b !== b)) return false
+          if (a === b || (Number.isNaN(a) && Number.isNaN(b))) return false
         }
       }
       return true
