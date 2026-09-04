@@ -326,7 +326,7 @@ describe('build-schema', () => {
     const files = await buildValidatorSchema(schema, 'Doc')
     const docFile = files.find((f) => f.filename === 'doc.ts')
 
-    expect(docFile?.content).toContain("import { allUnique } from './validation-result.js'")
+    expect(docFile?.content).toContain("import { allUnique, everyItem } from './validation-result.js'")
     expect(docFile?.content).toContain('!allUnique(obj.rows as unknown[])')
     // Scalar-item arrays dedupe with a bare `Set`, which needs no import at all.
     expect(docFile?.content).toContain('new Set(obj.tags as unknown[]).size !== obj.tags.length')

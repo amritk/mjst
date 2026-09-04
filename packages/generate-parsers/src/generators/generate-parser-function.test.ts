@@ -24,11 +24,12 @@ describe('generate-parser-function', () => {
   const _name = input.name;
   const _age = input.age;
   if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
-  } as unknown as User;
+  };
+  if (_age !== undefined) out.age = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
+  return out as unknown as User;
 }`,
     )
   })
@@ -47,10 +48,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as Product;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return { ...input } as Product;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
-  } as unknown as Product;
+  };
+  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  return out as unknown as Product;
 }`,
     )
   })
@@ -100,12 +102,13 @@ describe('generate-parser-function', () => {
   const _name = input.name;
   const _email = input.email;
   if (typeof _id === "number" && typeof _name === "string" && (_email === undefined || typeof _email === "string")) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    ...(_email !== undefined && { email: typeof _email === "string" ? _email : String(_email) }),
-  } as unknown as User;
+  };
+  if (_email !== undefined) out.email = typeof _email === "string" ? _email : String(_email);
+  return out as unknown as User;
 }`,
     )
   })
@@ -130,11 +133,12 @@ describe('generate-parser-function', () => {
   const _id = input.id;
   const _description = input.description;
   if (typeof _id === "number" && (_description === undefined || typeof _description === "string")) return { ...input } as Item;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
-    ...(_description !== undefined && { description: typeof _description === "string" ? _description : String(_description) }),
-  } as unknown as Item;
+  };
+  if (_description !== undefined) out.description = typeof _description === "string" ? _description : String(_description);
+  return out as unknown as Item;
 }`,
     )
   })
@@ -154,10 +158,11 @@ describe('generate-parser-function', () => {
       `export const parseMixed = (input: unknown): Mixed => {
   if (!isObject(input)) return {} as Mixed;
   const _validProp = input.validProp;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_validProp !== undefined && { validProp: typeof _validProp === "string" ? _validProp : String(_validProp) }),
-  } as unknown as Mixed;
+  };
+  if (_validProp !== undefined) out.validProp = typeof _validProp === "string" ? _validProp : String(_validProp);
+  return out as unknown as Mixed;
 }`,
     )
   })
@@ -176,10 +181,11 @@ describe('generate-parser-function', () => {
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _contact = input.contact;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_contact !== undefined && { contact: _contact ?? undefined }),
-  } as unknown as User;
+  };
+  if (_contact !== undefined) out.contact = _contact ?? undefined;
+  return out as unknown as User;
 }`,
     )
   })
@@ -225,10 +231,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as User;
   const _contact = input.contact;
   if ((_contact === undefined || validateContactShape(_contact))) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_contact !== undefined && { contact: parseContact(_contact) }),
-  } as unknown as User;
+  };
+  if (_contact !== undefined) out.contact = parseContact(_contact);
+  return out as unknown as User;
 }`,
     )
   })
@@ -280,10 +287,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as User;
   const _contacts = input.contacts;
   if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape))) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContact) }),
-  } as unknown as User;
+  };
+  if (_contacts !== undefined) out.contacts = validateArray(_contacts, parseContact);
+  return out as unknown as User;
 }`,
     )
   })
@@ -306,10 +314,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as User;
   const _contacts = input.contacts;
   if ((_contacts === undefined || Array.isArray(_contacts))) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_contacts !== undefined && { contacts: Array.isArray(_contacts) ? _contacts : [] }),
-  } as unknown as User;
+  };
+  if (_contacts !== undefined) out.contacts = Array.isArray(_contacts) ? _contacts : [];
+  return out as unknown as User;
 }`,
     )
   })
@@ -440,14 +449,15 @@ describe('generate-parser-function', () => {
   const _metadata = input.metadata;
   const _isActive = input.isActive;
   if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string")) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
-    ...(_metadata !== undefined && { metadata: isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {} }),
-    ...(_isActive !== undefined && { isActive: typeof _isActive === "boolean" ? _isActive : Boolean(_isActive) }),
-  } as unknown as Complex;
+  };
+  if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
+  if (_metadata !== undefined) out.metadata = isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {};
+  if (_isActive !== undefined) out.isActive = typeof _isActive === "boolean" ? _isActive : Boolean(_isActive);
+  return out as unknown as Complex;
 }`,
     )
   })
@@ -467,10 +477,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as ApiSpec;
   const _externalDoc = input.externalDoc;
   if ((_externalDoc === undefined || validateExternalDocumentationShape(_externalDoc))) return { ...input } as ApiSpec;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_externalDoc !== undefined && { externalDoc: parseExternalDocumentation(_externalDoc) }),
-  } as unknown as ApiSpec;
+  };
+  if (_externalDoc !== undefined) out.externalDoc = parseExternalDocumentation(_externalDoc);
+  return out as unknown as ApiSpec;
 }`,
     )
   })
@@ -497,12 +508,13 @@ describe('generate-parser-function', () => {
   const _address = input.address;
   const _company = input.company;
   if (validateContactShape(_contact) && (_address === undefined || validateAddressShape(_address)) && (_company === undefined || validateCompanyShape(_company))) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     contact: parseContact(_contact),
-    ...(_address !== undefined && { address: parseAddress(_address) }),
-    ...(_company !== undefined && { company: parseCompany(_company) }),
-  } as unknown as User;
+  };
+  if (_address !== undefined) out.address = parseAddress(_address);
+  if (_company !== undefined) out.company = parseCompany(_company);
+  return out as unknown as User;
 }`,
     )
   })
@@ -530,12 +542,13 @@ describe('generate-parser-function', () => {
   const _contact = input.contact;
   const _name = input.name;
   if (typeof _id === "number" && (_contact === undefined || validateContactShape(_contact)) && typeof _name === "string") return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
-    ...(_contact !== undefined && { contact: parseContact(_contact) }),
-    name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-  } as unknown as User;
+  };
+  if (_contact !== undefined) out.contact = parseContact(_contact);
+  out.name = typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : "");
+  return out as unknown as User;
 }`,
     )
   })
@@ -558,10 +571,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as Tagged;
   const _tags = input.tags;
   if ((_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Tagged;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
-  } as unknown as Tagged;
+  };
+  if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
+  return out as unknown as Tagged;
 }`,
     )
   })
@@ -583,10 +597,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as ItemsContainer;
   const _items = input.items;
   if ((_items === undefined || Array.isArray(_items))) return { ...input } as ItemsContainer;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_items !== undefined && { items: Array.isArray(_items) ? _items : [] }),
-  } as unknown as ItemsContainer;
+  };
+  if (_items !== undefined) out.items = Array.isArray(_items) ? _items : [];
+  return out as unknown as ItemsContainer;
 }`,
     )
   })
@@ -608,11 +623,12 @@ describe('generate-parser-function', () => {
   const _contact = input.contact;
   const _age = input.age;
   if ((_contact === undefined || validateContactShape(_contact)) && (_age === undefined || typeof _age === "number")) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_contact !== undefined && { contact: parseContact(_contact) }),
-    ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
-  } as unknown as User;
+  };
+  if (_contact !== undefined) out.contact = parseContact(_contact);
+  if (_age !== undefined) out.age = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
+  return out as unknown as User;
 }`,
     )
   })
@@ -672,10 +688,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as MyCustomType;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return { ...input } as MyCustomType;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
-  } as unknown as MyCustomType;
+  };
+  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  return out as unknown as MyCustomType;
 }`,
     )
   })
@@ -695,10 +712,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as myCustomType;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return { ...input } as myCustomType;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
-  } as unknown as myCustomType;
+  };
+  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  return out as unknown as myCustomType;
 }`,
     )
   })
@@ -717,10 +735,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as Implicit;
   const _name = input.name;
   if ((_name === undefined || typeof _name === "string")) return { ...input } as Implicit;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
-  } as unknown as Implicit;
+  };
+  if (_name !== undefined) out.name = typeof _name === "string" ? _name : String(_name);
+  return out as unknown as Implicit;
 }`,
     )
   })
@@ -789,10 +808,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as Container;
   const _data = input.data;
   if ((_data === undefined || Array.isArray(_data))) return { ...input } as Container;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_data !== undefined && { data: Array.isArray(_data) ? _data : [] }),
-  } as unknown as Container;
+  };
+  if (_data !== undefined) out.data = Array.isArray(_data) ? _data : [];
+  return out as unknown as Container;
 }`,
     )
   })
@@ -812,10 +832,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as User;
   const _nested = input.nested;
   if ((_nested === undefined || validateTypeShape(_nested))) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_nested !== undefined && { nested: parseType(_nested) }),
-  } as unknown as User;
+  };
+  if (_nested !== undefined) out.nested = parseType(_nested);
+  return out as unknown as User;
 }`,
     )
   })
@@ -843,11 +864,12 @@ describe('generate-parser-function', () => {
   const _contacts = input.contacts;
   const _addresses = input.addresses;
   if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape)) && (_addresses === undefined || Array.isArray(_addresses) && _addresses.every(validateAddressShape))) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContact) }),
-    ...(_addresses !== undefined && { addresses: validateArray(_addresses, parseAddress) }),
-  } as unknown as User;
+  };
+  if (_contacts !== undefined) out.contacts = validateArray(_contacts, parseContact);
+  if (_addresses !== undefined) out.addresses = validateArray(_addresses, parseAddress);
+  return out as unknown as User;
 }`,
     )
   })
@@ -870,11 +892,12 @@ describe('generate-parser-function', () => {
   const _id = input.id;
   const _name = input.name;
   if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
-    ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
-  } as unknown as User;
+  };
+  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  if (_name !== undefined) out.name = typeof _name === "string" ? _name : String(_name);
+  return out as unknown as User;
 }`,
     )
   })
@@ -894,10 +917,11 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {} as User;
   const _id = input.id;
   if ((_id === undefined || typeof _id === "number")) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
-  } as unknown as User;
+  };
+  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  return out as unknown as User;
 }`,
     )
   })
@@ -961,13 +985,14 @@ describe('generate-parser-function', () => {
   const _parameters = input.parameters;
   const _headers = input.headers;
   const _pathItems = input.pathItems;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_responses !== undefined && { responses: validateRecord(_responses, parseResponse) }),
-    ...(_parameters !== undefined && { parameters: validateRecord(_parameters, parseParameter) }),
-    ...(_headers !== undefined && { headers: validateRecord(_headers, parseHeader) }),
-    ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItem) }),
-  } as unknown as Components;
+  };
+  if (_responses !== undefined) out.responses = validateRecord(_responses, parseResponse);
+  if (_parameters !== undefined) out.parameters = validateRecord(_parameters, parseParameter);
+  if (_headers !== undefined) out.headers = validateRecord(_headers, parseHeader);
+  if (_pathItems !== undefined) out.pathItems = validateRecord(_pathItems, parsePathItem);
+  return out as unknown as Components;
 }`,
     )
   })
@@ -1121,16 +1146,17 @@ describe('generate-parser-function', () => {
   const _webhooks = input.webhooks;
   const _components = input.components;
   const _externalDocs = input.externalDocs;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     openapi: typeof _openapi === "string" ? _openapi : (_openapi !== undefined ? String(_openapi) : ""),
     info: parseInfo(_info),
-    ...(_servers !== undefined && { servers: validateArray(_servers, parseServer) }),
-    ...(_paths !== undefined && { paths: parsePaths(_paths) }),
-    ...(_webhooks !== undefined && { webhooks: validateRecord(_webhooks, parsePathItem) }),
-    ...(_components !== undefined && { components: parseComponents(_components) }),
-    ...(_externalDocs !== undefined && { externalDocs: parseExternalDocumentation(_externalDocs) }),
-  } as unknown as Document;
+  };
+  if (_servers !== undefined) out.servers = validateArray(_servers, parseServer);
+  if (_paths !== undefined) out.paths = parsePaths(_paths);
+  if (_webhooks !== undefined) out.webhooks = validateRecord(_webhooks, parsePathItem);
+  if (_components !== undefined) out.components = parseComponents(_components);
+  if (_externalDocs !== undefined) out.externalDocs = parseExternalDocumentation(_externalDocs);
+  return out as unknown as Document;
 }`)
   })
 
@@ -1167,13 +1193,14 @@ describe('generate-parser-function', () => {
   const _responses = input.responses;
   const _parameters = input.parameters;
   const _pathItems = input.pathItems;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_schemas !== undefined && { schemas: isObject(_schemas) ? _schemas : typeof _schemas === "object" && _schemas !== null ? _schemas : {} }),
-    ...(_responses !== undefined && { responses: validateRecord(_responses, parseResponse) }),
-    ...(_parameters !== undefined && { parameters: validateRecord(_parameters, parseParameter) }),
-    ...(_pathItems !== undefined && { pathItems: validateRecord(_pathItems, parsePathItem) }),
-  } as unknown as Components;
+  };
+  if (_schemas !== undefined) out.schemas = isObject(_schemas) ? _schemas : typeof _schemas === "object" && _schemas !== null ? _schemas : {};
+  if (_responses !== undefined) out.responses = validateRecord(_responses, parseResponse);
+  if (_parameters !== undefined) out.parameters = validateRecord(_parameters, parseParameter);
+  if (_pathItems !== undefined) out.pathItems = validateRecord(_pathItems, parsePathItem);
+  return out as unknown as Components;
 }`,
     )
   })
@@ -1227,7 +1254,7 @@ describe('generate-parser-function', () => {
 
     // Without useRefImports, falls back to regular object parser
     expect(result).toContain('isObject(input)')
-    expect(result).toContain('default:')
+    expect(result).toContain('out.default = ')
     expect(result).not.toContain('for (const [key, value]')
   })
 
@@ -1281,7 +1308,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'InfoExtensions', { useRefImports: true })
 
     expect(result).toContain('input["x-linkedin"]')
-    expect(result).toContain('"x-linkedin":')
+    expect(result).toContain('out["x-linkedin"] = ')
     expect(result).not.toContain('input.x-linkedin')
   })
 
@@ -1296,7 +1323,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Test')
 
     expect(result).toContain('input["x-custom"]')
-    expect(result).toContain('"x-custom":')
+    expect(result).toContain('out["x-custom"] = ')
     expect(result).not.toContain('input.x-custom')
   })
 
@@ -1488,7 +1515,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Example')
 
     // The generated code should have the outer undefined check
-    expect(result).toContain('!== undefined &&')
+    expect(result).toContain('if (_summary !== undefined) out.summary = ')
     // But should NOT have redundant nested undefined checks in the coercion
     // Count occurrences - should only appear in the outer check, not in String() coercion
     const matches = result.match(/!== undefined/g) || []
@@ -1667,14 +1694,15 @@ describe('generate-parser-function', () => {
   const _inStock = input.inStock;
   const _tags = input.tags;
   if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Product;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? ((_n) => Number.isFinite(_n) && _n >= 0 ? _n : 0)(Number(_price)) : 0),
-    ...(_inStock !== undefined && { inStock: typeof _inStock === "boolean" ? _inStock : Boolean(_inStock) }),
-    ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
-  } as unknown as Product;
+  };
+  if (_inStock !== undefined) out.inStock = typeof _inStock === "boolean" ? _inStock : Boolean(_inStock);
+  if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
+  return out as unknown as Product;
 }`,
     )
   })
@@ -1699,12 +1727,13 @@ describe('generate-parser-function', () => {
   const _perPage = input.perPage;
   const _search = input.search;
   if ((_page === undefined || typeof _page === "number" && Number.isInteger(_page) && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
-    ...(_page !== undefined && { page: typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : ((_n) => Number.isInteger(_n) && _n >= 1 ? _n : 1)(Number(_page)) }),
-    ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : ((_n) => Number.isInteger(_n) && _n >= 1 && _n <= 100 ? _n : 1)(Number(_perPage)) }),
-    ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
-  } as unknown as PageParams;
+  };
+  if (_page !== undefined) out.page = typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : ((_n) => Number.isInteger(_n) && _n >= 1 ? _n : 1)(Number(_page));
+  if (_perPage !== undefined) out.perPage = typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : ((_n) => Number.isInteger(_n) && _n >= 1 && _n <= 100 ? _n : 1)(Number(_perPage));
+  if (_search !== undefined) out.search = typeof _search === "string" ? _search : String(_search);
+  return out as unknown as PageParams;
 }`,
     )
   })
@@ -1752,13 +1781,14 @@ describe('generate-parser-function', () => {
   const _altitude = input.altitude;
   const _label = input.label;
   if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return { ...input } as GeoCoordinate;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? ((_n) => Number.isFinite(_n) && _n >= -90 && _n <= 90 ? _n : 0)(Number(_latitude)) : 0),
     longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? ((_n) => Number.isFinite(_n) && _n >= -180 && _n <= 180 ? _n : 0)(Number(_longitude)) : 0),
-    ...(_altitude !== undefined && { altitude: typeof _altitude === "number" ? _altitude : (Number.isFinite(Number(_altitude)) ? Number(_altitude) : 0) }),
-    ...(_label !== undefined && { label: typeof _label === "string" ? _label : String(_label) }),
-  } as unknown as GeoCoordinate;
+  };
+  if (_altitude !== undefined) out.altitude = typeof _altitude === "number" ? _altitude : (Number.isFinite(Number(_altitude)) ? Number(_altitude) : 0);
+  if (_label !== undefined) out.label = typeof _label === "string" ? _label : String(_label);
+  return out as unknown as GeoCoordinate;
 }`,
     )
   })
@@ -1788,11 +1818,12 @@ describe('generate-parser-function', () => {
     }
   }
   if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return { ...input } as User;
-  return {
+  const out: Record<string, unknown> = {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
-    ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
-  } as unknown as User;
+  };
+  if (_age !== undefined) out.age = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
+  return out as unknown as User;
 }`,
       )
     })
@@ -2466,7 +2497,7 @@ describe('generate-parser-function', () => {
       const source = generateParserFunction(schema, 'Tagged', { strict: true })
       // The typed chain proves nothing about `tag`'s presence, so a count would
       // let `{ id, extra }` through: the per-key walk guards the fast path.
-      expect(source).toContain('_hasOnlyKnownKeysTagged(input)) return {')
+      expect(source).toContain('_hasOnlyKnownKeysTagged(input)) {')
       expect(source).not.toContain('_keyCount')
       const validatorSource = generateShapeValidator(schema, 'Tagged', false)
       expect(validatorSource).toContain('if (!_hasOnlyKnownKeysTagged(input)) return false;')
