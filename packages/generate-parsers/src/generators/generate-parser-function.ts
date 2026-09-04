@@ -1258,12 +1258,14 @@ const INLINE_NESTED_MAX_SITES = 4
 const INLINE_NESTED_MAX_TOTAL_PROPERTIES = 24
 
 /**
- * The fast path of a single-use nested sub-parser, rendered as an expression to
- * drop in at its one call site:
+ * The fast path of a single-use nested sub-parser, rendered as a `const` per
+ * field plus an expression to drop in at its one call site:
  *
  * ```
- * nested: (typeof _nested === "object" && … && typeof _nested.foo === "string")
- *   ? { foo: _nested.foo }
+ * const _nested_foo = (_nested as Record<string, any>).foo;
+ * …
+ * nested: (typeof _nested_foo === "string" && …)
+ *   ? { foo: _nested_foo }
  *   : parseDoc_Nested(_nested),
  * ```
  *
@@ -1273,17 +1275,17 @@ const INLINE_NESTED_MAX_TOTAL_PROPERTIES = 24
  * no-recursion conditions are structural here rather than something to prove.
  *
  * The condition is the sub-parser's own fast-path guard, term for term (the
- * same `generatePropertyTypeCheck` chain, rooted at the caller's accessor
- * instead of the sub-parser's `input`), and the literal is the same declared-key
- * literal it would have built from the same reads — so an input that takes this
- * branch gets exactly what the call returned. Everything else falls through to
- * the call, which keeps every error message and every cold-path check where it
- * was.
+ * same `generatePropertyTypeCheck` chain, rooted at the caller's reads instead
+ * of the sub-parser's `input`), and the literal is the same declared-key literal
+ * it would have built from the same reads — so an input that takes this branch
+ * gets exactly what the call returned. Everything else falls through to the
+ * call, which keeps every error message and every cold-path check where it was.
  *
- * `isObject` is spelled out rather than called: the call measured ~7% of a whole
- * parse here, where the same three tests inlined measured free. (It is the one
- * place in the emitter that does this — everywhere else `isObject` is a
- * statement of its own, which V8 does inline.)
+ * **The caller must have proven `objectExpr` is an object.** The reads are
+ * hoisted out of the short-circuiting condition so each field is loaded once,
+ * and a hoisted `null.foo` throws where the expression form merely returned
+ * false. Only the fast-path build calls this, and its guard carries an
+ * `isObject` per inlined property.
  *
  * Returns null whenever any of that cannot be reproduced faithfully, which
  * includes every case where the sub-parser does more than check-and-build:
@@ -1298,7 +1300,13 @@ const inlineNestedFastPath = (
   suffix: string,
   stripUnknown: boolean,
   reservedNames: ReadonlySet<string>,
-): { readonly condition: string; readonly literal: string; readonly propertyCount: number } | null => {
+  claimVarName: (base: string) => string,
+): {
+  readonly declarations: readonly string[]
+  readonly condition: string
+  readonly literal: string
+  readonly propertyCount: number
+} | null => {
   if (!isSchemaObject(childSchema) || !hasProperties(childSchema)) return null
   // The sub-parser must build a literal of its declared properties (so the
   // inlined literal is the same object) and must not have to *reject* an
@@ -1327,6 +1335,7 @@ const inlineNestedFastPath = (
   const keys = Object.keys(props)
   if (keys.length === 0 || keys.length > INLINE_NESTED_MAX_PROPERTIES) return null
 
+  const declarations: string[] = []
   const checks: string[] = []
   const fields: string[] = []
   // The caller's variable holds `unknown`. Inside the sub-parser these reads go
@@ -1348,20 +1357,26 @@ const inlineNestedFastPath = (
     ) {
       return null
     }
-    const accessor = safeAccessor(readRoot, key)
+    // One load per field, bound ahead of the condition so the check and the
+    // literal share it — `{ foo: n.foo }` after `typeof n.foo === "string"` is
+    // two loads of the same slot. Hoisting them out of the short-circuiting
+    // condition is only safe because the caller has already proven the object
+    // (see the contract above); a hoisted `null.foo` would throw where the
+    // expression form merely returned false.
+    const accessor = claimVarName(`${objectExpr}_${toVarName(key).slice(1)}`)
+    declarations.push(`  const ${accessor} = ${safeAccessor(readRoot, key)};`)
     const check = generatePropertyTypeCheck(accessor, propSchema, useRefImports, suffix)
     if (check === null) return null
     checks.push(check)
     fields.push(`${safeLiteralKey(key)}: ${accessor}`)
   }
 
-  const condition = [
-    `typeof ${objectExpr} === "object"`,
-    `${objectExpr} !== null`,
-    `!Array.isArray(${objectExpr})`,
-    ...checks,
-  ].join(' && ')
-  return { condition, literal: `{ ${fields.join(', ')} }`, propertyCount: keys.length }
+  // No `typeof … === "object" && … !== null && !Array.isArray(…)` prefix: the
+  // caller's guard has already proven all three, and `!Array.isArray` would be
+  // redundant even without it — an array reaching the typed checks fails them,
+  // since every key it does not own reads back `undefined`.
+  const condition = checks.join(' && ')
+  return { declarations, condition, literal: `{ ${fields.join(', ')} }`, propertyCount: keys.length }
 }
 
 /**
@@ -1906,7 +1921,23 @@ const generateObjectParser = (
   // Coerce mode keeps the type-checking-and-coercing expression. Refs, arrays of
   // refs, records of refs and inline nested objects always delegate to their
   // parser in both modes; the input spread is dropped whenever stripping.
-  const buildObjectLines = (directAssign: boolean): ResultEntry[] => {
+  // Local names claimed by an inlined nested fast path, kept out of the parent's
+  // property variables (and out of each other) the same way `toVarName` collisions
+  // are resolved above.
+  const claimNestedVarName = (base: string): string => {
+    let name = base
+    while (usedVarNames.has(name)) name = `${name}_`
+    usedVarNames.add(name)
+    return name
+  }
+
+  /**
+   * Builds the result entries. `hoistLines`, when given, collects the `const`
+   * declarations an inlined nested fast path needs ahead of the `return` — the
+   * caller passes it only for a build whose nested objects the guard has already
+   * proven, which is what lets those reads happen once instead of twice.
+   */
+  const buildObjectLines = (directAssign: boolean, hoistLines?: string[]): ResultEntry[] => {
     const entries: ResultEntry[] = []
     // Per-call so a second build (should one ever be emitted) gets the same
     // budget rather than the leftovers of the first.
@@ -1942,13 +1973,27 @@ const generateObjectParser = (
           // fast path does not cover. Coerce mode and `--log-warnings` opt out:
           // the first rebuilds each field rather than reading it, the second
           // makes the sub-parser do work before its guard.
+          // Only the hot build inlines: the sub-parser's fast path is an
+          // optimization, and repeating it in the cold function would cost the
+          // bytes that split the parser in the first place (and spend the same
+          // budget twice).
           const inlined =
-            directAssign && !logWarnings && inlinedSites < INLINE_NESTED_MAX_SITES
-              ? inlineNestedFastPath(propSchema, subName, accessor, useRefImports, suffix, stripUnknown, reservedNames)
+            hoistLines !== undefined && directAssign && !logWarnings && inlinedSites < INLINE_NESTED_MAX_SITES
+              ? inlineNestedFastPath(
+                  propSchema,
+                  subName,
+                  accessor,
+                  useRefImports,
+                  suffix,
+                  stripUnknown,
+                  reservedNames,
+                  claimNestedVarName,
+                )
               : null
           if (inlined !== null && inlinedProperties + inlined.propertyCount <= INLINE_NESTED_MAX_TOTAL_PROPERTIES) {
             inlinedSites++
             inlinedProperties += inlined.propertyCount
+            hoistLines?.push(...inlined.declarations)
             entries.push({
               kind: 'field',
               key,
@@ -2141,8 +2186,32 @@ const generateObjectParser = (
     lines.push(...renderResultObject(fields, typeName, deepGuardExpr as string))
   }
 
-  const lines: string[] = []
-  lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
+  // The per-property diagnostics. Line 0 is the `isObject` throw every emission
+  // below puts first; the rest pinpoint which field failed and in what way.
+  const assertionLines = strict
+    ? generateObjectStrictAssertion(schema, typeName, {
+        useRefImports,
+        suffix,
+        stripUnknown,
+        ...(rootSchema !== undefined ? { rootSchema } : {}),
+      })
+    : []
+
+  // for..in (not Object.keys) deliberately: this loop is cold — the fast
+  // path already proved the key set — but swapping in the keys-array
+  // iterator here once regressed the *hot* path several percent on CI:
+  // the extra dead-path bytecode changed the engine's inlining of the
+  // whole parser. The fast-path no-extras test uses own-key semantics;
+  // an inherited-key mismatch merely lands here and keeps the historical
+  // for..in rejection.
+  const unknownKeyThrowLines = (): string[] =>
+    rejectsUnknownKeys
+      ? [
+          `  for (const _k in input) {`,
+          `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
+          `  }`,
+        ]
+      : []
 
   // With the guard delegated to the shape validator, the cached property reads
   // feed only the slow path — declaring them after the fast-path return spares
@@ -2150,25 +2219,72 @@ const generateObjectParser = (
   // the vars in its own guard, so it always keeps them first.
   const varsAfterGuard = deepGuardCallsShape && shallowGuard === null
 
-  if (strict) {
-    // Guard first: a non-object throws straight away; a clean, well-typed input
-    // then short-circuits past the per-property assertions, which only run to
-    // pinpoint the failure when the guard rejects the input.
-    lines.push(
-      `  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`,
-    )
+  // A parser with a fast path is emitted with its diagnostics in a separate
+  // function. What made the single-function form slow was never the checks: it
+  // was that a `throw new Error(...)` per field, each with its own template
+  // literal and `"x" in input` probe, sat in the same body, and a body that
+  // large blows V8's inlining budget. The caller then pays a real call and a
+  // real allocation for a parse the engine could otherwise have inlined and
+  // escape-analysed away.
+  //
+  // What moves out is *only* the assertions. The build stays, so the fast path
+  // keeps the same `return` it always had. That distinction is the whole design:
+  // an earlier version moved the build out too and handed off with
+  // `return _parse…Slow(input)`, which makes the returned value a phi of the
+  // local literal and an opaque call result. JavaScriptCore then cannot
+  // scalar-replace the literal, and every flat parser under ~24 properties ran
+  // ~3x slower on Bun with a caller that reads the parsed fields. Calling a
+  // `void` assertion helper as a *statement* keeps the single return, and
+  // measured level with the unsplit form on Bun while keeping the inlining win
+  // on V8.
+  //
+  // The split needs a fast path to protect and diagnostics to move, so a parser
+  // without either is emitted whole. Coerce parsers have no diagnostics at all —
+  // their cold half *is* the returned value — so they keep the single-function
+  // form. `--log-warnings` opts out too: its `console.warn` loop has to run for
+  // every input, fast path included.
+  const assertBodyLines = [...assertionLines.slice(1), ...(shallowGuard === null ? unknownKeyThrowLines() : [])]
+  const canSplit =
+    !logWarnings && strict === true && (deepGuard !== null || shallowGuard !== null) && assertBodyLines.length > 0
+  // Underscore-prefixed so the names can never collide with a parser: those are
+  // all `parse${TypeName}`, and no type name starts with one.
+  const assertName = `_assert${typeName}`
+  const assertObjectName = `_assert${typeName}Object`
+
+  /**
+   * The object check, as a TypeScript assertion function. Spelling it this way
+   * rather than leaving `if (!isObject(input)) throw …` inline is what keeps the
+   * fast path free of both a throw and a template literal while still narrowing
+   * `input` for the reads that follow — a `never`-returning helper would have to
+   * be called in `return` position, which reintroduces the phi the split exists
+   * to avoid. The message is `generateObjectStrictAssertion`'s own first line,
+   * so it is unchanged.
+   */
+  const emitAssertObjectFunction = (): string =>
+    `const ${assertObjectName}: (input: unknown) => asserts input is Record<string, unknown> = (input) => {\n` +
+    `${assertionLines[0] as string}\n};`
+
+  /**
+   * The per-property diagnostics, in the order the single-function form ran
+   * them, plus the undeclared-key rejection where that form emitted one. Returns
+   * nothing: it either throws or leaves the caller to build, exactly as the
+   * inline assertion block did.
+   */
+  const emitAssertFunction = (): string =>
+    `const ${assertName} = (input: Record<string, unknown>): void => {\n${assertBodyLines.join('\n')}\n};`
+
+  const lines: string[] = []
+  lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
+
+  if (canSplit) {
+    preamble.push(emitAssertObjectFunction())
+    preamble.push(emitAssertFunction())
+    lines.push(`  ${assertObjectName}(input);`)
     if (!varsAfterGuard) lines.push(...varDeclLines)
-    lines.push(...warnLines)
-
-    // The first assertion line is the `isObject` check, already done above.
-    const assertionLines = generateObjectStrictAssertion(schema, typeName, {
-      useRefImports,
-      suffix,
-      stripUnknown,
-      ...(rootSchema !== undefined ? { rootSchema } : {}),
-    }).slice(1)
-
     if (shallowGuard) {
+      // A statement, not a `return` — see the split's note above: making the
+      // returned value a phi with a call result is what costs JSC the literal.
+      lines.push(`  if (!(${shallowGuard})) ${assertName}(input);`)
       // A private sub-parser hands input that is already exactly the declared
       // shape (no extras at any level) back by reference, so a clean array
       // element or nested object costs no allocation. The deep guard is
@@ -2189,6 +2305,49 @@ const generateObjectParser = (
             shallow !== undefined && deep.startsWith(`${shallow} && `) ? deep.slice(shallow.length + 4) : deep,
           )
         }
+        lines.push(
+          residual.length > 0
+            ? `  if (${residual.join(' && ')}) return input as ${typeName};`
+            : `  return input as ${typeName};`,
+        )
+      }
+      // The shallow guard has proven every nested object *is* an object, which
+      // is what lets the build bind each nested field to a `const` up here and
+      // read it once — the condition and the literal then share the load.
+      const hoisted: string[] = []
+      const objectLines = buildObjectLines(true, hoisted)
+      lines.push(...hoisted)
+      emitReturn(lines, objectLines)
+    } else {
+      // The deep-guard form already had two returns before the split (the guard
+      // literal and the general build), so extracting the assertions costs it no
+      // scalar replacement it still had.
+      emitDeepGuardReturn(lines)
+      if (varsAfterGuard) lines.push(...varDeclLines)
+      lines.push(`  ${assertName}(input);`)
+      emitReturn(lines, buildObjectLines(true))
+    }
+  } else if (strict) {
+    // Guard first: a non-object throws straight away; a clean, well-typed input
+    // then short-circuits past the per-property assertions, which only run to
+    // pinpoint the failure when the guard rejects the input.
+    lines.push(
+      `  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`,
+    )
+    if (!varsAfterGuard) lines.push(...varDeclLines)
+    lines.push(...warnLines)
+
+    if (shallowGuard) {
+      if (!exported && deepGuard && fastPathNeedsKnownKeys) {
+        const residual: string[] = []
+        for (let i = 0; i < fastPathChecks.length; i++) {
+          const deep = fastPathChecks[i] as string
+          const shallow = shallowChecks[i]
+          if (deep === shallow) continue
+          residual.push(
+            shallow !== undefined && deep.startsWith(`${shallow} && `) ? deep.slice(shallow.length + 4) : deep,
+          )
+        }
         lines.push(`  if (${shallowGuard}) {`)
         lines.push(
           residual.length > 0
@@ -2196,18 +2355,14 @@ const generateObjectParser = (
             : `    return input as ${typeName};`,
         )
         lines.push(`  } else {`)
-        for (const assertionLine of assertionLines) {
-          lines.push(`  ${assertionLine}`)
-        }
+        for (const assertionLine of assertionLines.slice(1)) lines.push(`  ${assertionLine}`)
         lines.push(`  }`)
       } else {
         // stripUnknown: a well-typed input skips the assertions and goes
         // straight to the strip build (which removes extras and recurses into
         // sub-parsers).
         lines.push(`  if (!(${shallowGuard})) {`)
-        for (const assertionLine of assertionLines) {
-          lines.push(`  ${assertionLine}`)
-        }
+        for (const assertionLine of assertionLines.slice(1)) lines.push(`  ${assertionLine}`)
         lines.push(`  }`)
       }
       emitReturn(lines, buildObjectLines(true))
@@ -2216,23 +2371,8 @@ const generateObjectParser = (
         emitDeepGuardReturn(lines)
       }
       if (varsAfterGuard) lines.push(...varDeclLines)
-      for (const assertionLine of assertionLines) {
-        lines.push(assertionLine)
-      }
-      if (rejectsUnknownKeys) {
-        // for..in (not Object.keys) deliberately: this loop is cold — the fast
-        // path already proved the key set — but swapping in the keys-array
-        // iterator here once regressed the *hot* path several percent on CI:
-        // the extra dead-path bytecode changed the engine's inlining of the
-        // whole parser. The fast-path no-extras test uses own-key semantics;
-        // an inherited-key mismatch merely lands here and keeps the historical
-        // for..in rejection.
-        lines.push(`  for (const _k in input) {`)
-        lines.push(
-          `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
-        )
-        lines.push(`  }`)
-      }
+      for (const assertionLine of assertionLines.slice(1)) lines.push(assertionLine)
+      lines.push(...unknownKeyThrowLines())
       emitReturn(lines, buildObjectLines(true))
     }
   } else {
