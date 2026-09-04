@@ -249,29 +249,60 @@ happy path it runs a single allocation-free boolean guard — a pure `&&` chain 
 when an object is closed with `additionalProperties: false` — and `return true`s
 straight away, only calling a separate error-collecting function when something
 is actually wrong.
-Keeping the hot function tiny lets the JIT optimise it aggressively, so a valid-input
-check beats every other library measured — including the build-time transformer
-typia — while still emitting full JSON-Pointer errors for invalid input, and
-emitting the validator stays far cheaper than compiling a schema at startup.
-Measured on Bun 1.4.0 (Linux x64, a 4-vCPU cloud box — every table in this
-repo comes from the same machine and runtime), validating valid input at steady
-state:
+Keeping the hot function tiny lets the JIT optimise it aggressively, so a
+valid-input check beats every other library measured on JavaScriptCore — the
+build-time transformer typia included — while still emitting full JSON-Pointer
+errors for invalid input, and emitting the validator stays far cheaper than
+compiling a schema at startup. On V8 that lead is not universal: TypeBox's
+compiled checker wins the `assert-loose` shape outright and draws level on
+`assert-strict`, which is why both engines get a table rather than one standing
+in for the other.
+
+Both were measured together on one machine (Linux x64, a 4-vCPU cloud box, Bun
+1.4.0 and Node 26.8.1 — the same machine and runtimes as every table in this
+repo). Each cell is the median of three separate runs of the whole suite. Treat
+the absolutes as a property of that box: within one sitting a cell repeats to
+within a few percent, but the same suite measured again hours later moved by
+~60% across every case at once, so the ratios are the durable part and a
+remembered number is not a baseline.
+
+**Bun 1.4.0 / JavaScriptCore**, validating valid input at steady state:
 
 | schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|--:|
-| small (4 fields) | **~33M** ops/s | ~4.2M ops/s | ~6.1M ops/s | ~5.6M ops/s | ~1.7M ops/s |
-| order (nested + array) | **~6.3M** ops/s | ~1.6M ops/s | ~2.6M ops/s | ~2.5M ops/s | ~0.41M ops/s |
-| assert-loose | **~111M** ops/s | ~88M ops/s | ~27M ops/s | ~48M ops/s | ~2.8M ops/s |
-| assert-strict | **~63M** ops/s | ~34M ops/s | ~13M ops/s | ~29M ops/s | ~0.99M ops/s |
+| small (4 fields) | **~59M** ops/s | ~6.7M ops/s | ~11M ops/s | ~8.9M ops/s | ~2.4M ops/s |
+| order (nested + array) | **~10M** ops/s | ~2.6M ops/s | ~4.1M ops/s | ~3.6M ops/s | ~0.50M ops/s |
+| assert-loose | **~190M** ops/s | ~170M ops/s | ~46M ops/s | ~80M ops/s | ~3.6M ops/s |
+| assert-strict | **~171M** ops/s | ~58M ops/s | ~23M ops/s | ~45M ops/s | ~1.4M ops/s |
+
+**Node 26.8.1 / V8**, the same cases. typia is absent because its checks come
+from a compile-time transform delivered as a Bun preload, so the Node run cannot
+build one at all:
+
+| schema | mjst (generated) | ajv (compiled) | typebox (compiled) | zod |
+|:--|--:|--:|--:|--:|
+| small (4 fields) | **~56M** ops/s | ~7.0M ops/s | ~6.6M ops/s | ~2.2M ops/s |
+| order (nested + array) | **~8.9M** ops/s | ~2.8M ops/s | ~2.9M ops/s | ~0.48M ops/s |
+| assert-loose | ~90M ops/s | ~71M ops/s | **~138M** ops/s | ~6.0M ops/s |
+| assert-strict | ~37M ops/s | ~25M ops/s | **~37M** ops/s | ~3.6M ops/s |
+
+Read the two together. On the object schemas — the shapes an application
+actually validates — the generated validator leads on both engines, by 5–9× over
+the next-fastest on Bun and 2.4–8× on Node. On the moltar shapes it leads
+everything on JavaScriptCore and loses the loose one to TypeBox on V8 (~138M
+against ~90M), with `assert-strict` a coin toss. Those two cases are seven
+scalar roots and a nested object: near-trivial work where the engine's own
+inlining decides the winner, not the validator's design.
 
 The `assert-loose` / `assert-strict` rows use the same *shape* as
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
-(seven scalar roots plus a nested object): the boolean guard keeps mjst ahead of
-typia on both, by ~25% on `assert-loose` — close enough that the two can trade
-the lead run-to-run — and by ~85% on `assert-strict` (with
+(seven scalar roots plus a nested object): on JavaScriptCore the boolean guard
+keeps mjst ahead of typia on both, by ~12% on `assert-loose` — close enough that
+the two trade the lead run-to-run — and by ~3× on `assert-strict` (with
 `additionalProperties: false`), where mjst counts keys once and typia does not.
-(typia and TypeBox still win the *invalid* path, where they bail on the first
-error rather than collecting a full error list.)
+On V8 the same two rows go the other way against TypeBox, as the tables above
+show. (typia and TypeBox still win the *invalid* path on both engines, where
+they bail on the first error rather than collecting a full error list.)
 
 They are **not** that project's numbers and they do not belong next to its
 leaderboard: the shape is shared, the harness is not, and the harness is worth
@@ -279,9 +310,10 @@ an order of magnitude. See
 [Against the moltar harness](#against-the-moltar-harness) for the same functions
 measured under benny, the way the leaderboard measures them.
 
-Preparing a validator costs ~0.25–0.9 ms for mjst codegen and ~0.03–0.35 ms for a
-TypeBox `TypeCompiler` compile, versus ~13–18 ms for an Ajv compile. Every library
-agrees on every verdict; parity is asserted before timing.
+Preparing a validator costs ~0.2–0.7 ms for mjst codegen and ~0.03–0.23 ms for a
+TypeBox `TypeCompiler` compile, versus ~10–13 ms for an Ajv compile on Bun and
+~5–6.5 ms on Node — Ajv's compile is the one prepare cost that halves on V8.
+Every library agrees on every verdict; parity is asserted before timing.
 
 One caveat on the first two rows: their schemas declare `format` (`uuid`,
 `email`), and Ajv, typia, zod, and TypeBox all check it, while mjst's generated
@@ -296,7 +328,8 @@ numbers stay reproducible. Micro-benchmark figures vary by machine and runtime �
 reproduce with:
 
 ```bash
-bun run bench
+bun run bench        # Bun / JavaScriptCore
+bun run bench:node   # Node / V8 (builds the package first, then runs it under node)
 ```
 
 ### Against the moltar harness
@@ -408,22 +441,25 @@ picks one at generation time:
 
 Measured under the moltar harness (benny, the frozen fixture, each case alone in
 its own process — `bun run bench:moltar:leaderboard` prints one row per strategy
-on every runtime it finds), Linux x64, Bun 1.4.0 / Node 22.22:
+on every runtime it finds), Linux x64. The Node 22 column is the earlier
+measurement this option was introduced against; the Node 26 column is the same
+harness on the current runtime:
 
-| case | `unknownKeys` | Bun 1.4 | Node 22 |
-|:--|:--|--:|--:|
-| `assertStrict` (`isX`) | `count-keys` | ~300M ops/s (the harness floor — the call is eliminated) | ~19M ops/s |
-| `assertStrict` (`isX`) | `count-enumerable` | ~22M ops/s | ~22M ops/s |
-| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~220M ops/s (the harness floor again) | ~14M ops/s |
-| `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~13M ops/s | ~14M ops/s |
+| case | `unknownKeys` | Bun 1.4 | Node 22 | Node 26 |
+|:--|:--|--:|--:|--:|
+| `assertStrict` (`isX`) | `count-keys` | ~441M ops/s (the harness floor — the call is eliminated) | ~19M ops/s | ~31M ops/s |
+| `assertStrict` (`isX`) | `count-enumerable` | ~42M ops/s | ~22M ops/s | ~30M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~359M ops/s (the harness floor again) | ~14M ops/s | ~29M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~22M ops/s | ~14M ops/s | ~26M ops/s |
 
-The default is `count-keys` because this repo benches on Bun, where it is never
-the slower form and, with the nested shape check spelled out on the parse fast
-path, lets JavaScriptCore eliminate the strict parse as well. Code that will only ever
-run on Node gains from `count-enumerable`: ~10–20% on this box, and up to
-1.7–2× on faster hardware, where the keys array is what the strict validator
-spends its time on. The choice is made once, when the code is generated: nothing
-in the emitted file detects its runtime. (On Bun 1.3, where a frozen object puts
+The default is `count-keys` because it is never the slower form on Bun and,
+with the nested shape check spelled out on the parse fast path, lets
+JavaScriptCore eliminate the strict parse as well. The Node case has changed
+with the engine: on Node 22 `count-enumerable` was level or slightly ahead,
+which is where the advice to flip it for Node-only builds came from, but on
+Node 26 the default is ahead in both rows. Keep it unless you are pinned to an
+older V8 and have measured your own shapes. The choice is made once, when the
+code is generated: nothing in the emitted file detects its runtime. (On Bun 1.3, where a frozen object puts
 `Object.keys` on the same slow path as `for...in`, both strategies sit at ~2M
 ops/s under this fixture and the default is a wash.)
 

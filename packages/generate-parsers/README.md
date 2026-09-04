@@ -191,7 +191,7 @@ nobody registered still stops the build, with a message naming the ref.
 <td align="center"><code>"count-keys"</code></td>
 </tr>
 <tr>
-<td colspan="3">How a fast path proves a closed object (additionalProperties: false, or a stripUnknown build) carries no undeclared key. 'count-keys' is a prototype-guarded Object.keys(input).length comparison, the faster form on JavaScriptCore (Bun); 'count-enumerable' is a for…in count that allocates nothing, the faster form on V8 (Node). Pick by the runtime the generated code will run on; nothing detects it at runtime.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
+<td colspan="3">How a fast path proves a closed object (additionalProperties: false, or a stripUnknown build) carries no undeclared key. 'count-keys' is a prototype-guarded Object.keys(input).length comparison, the faster form on JavaScriptCore (Bun); 'count-enumerable' is a for…in count that allocates nothing; it was the faster form on Node 22, but on Node 26 'count-keys' ties or wins there too. Keep the default unless you are pinned to an older V8 and have measured your own shapes; nothing detects the runtime at runtime.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
 </tr>
 </tbody>
 </table>
@@ -307,23 +307,34 @@ keys) and `parseStrict` (assert + reject undeclared keys) halves of
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
 against the other *pure* parsers — the ones that return a new typed value rather
 than mutating in place — [zod](https://zod.dev) and
-[TypeBox](https://github.com/sinclairzx81/typebox). Measured on Bun 1.4.0 (Linux
-x64, a 4-vCPU cloud box — every table in this repo comes from the same machine
-and runtime), parsing valid input at steady state:
+[TypeBox](https://github.com/sinclairzx81/typebox).
 
-| case | mode | mjst (generated) | zod | typebox |
-|:--|:--|--:|--:|--:|
-| user (4 fields) | parseSafe | **~100M** ops/s | ~2.2M ops/s | ~1.2M ops/s |
-| order (nested + array) | parseSafe | **~5.5M** ops/s | ~0.44M ops/s | ~0.17M ops/s |
-| user (4 fields) | parseStrict | **~24M** ops/s | ~1.3M ops/s | ~1.5M ops/s |
-| order (nested + array) | parseStrict | **~7.7M** ops/s | ~0.26M ops/s | ~0.28M ops/s |
+Both runtimes were measured together on one machine (Linux x64, a 4-vCPU cloud
+box, Bun 1.4.0 and Node 26.8.1 — the same machine and runtimes as every table in
+this repo), each cell the median of three separate runs of the whole suite.
+Within one sitting a cell repeats to within a few percent; the same suite
+measured hours later moved ~60% across every case at once, so read the ratios
+and treat the absolutes as a property of that box.
 
-The upstream `assert` case (seven scalar roots plus a nested object) lands at
-~30M ops/s strict and ~34M safe. The `user` safe cell is the outlier: a strip
-parse of four declared keys builds one small object and nothing else, and the
-bench flags it as noisy (±10% across trials), so at that speed the ratio, not
-the absolute, is the honest signal: mjst lands ~12–45× ahead of zod across every
-case above.
+Parsing valid input at steady state:
+
+| case | mode | Bun: mjst | Bun: zod | Bun: typebox | Node: mjst | Node: zod | Node: typebox |
+|:--|:--|--:|--:|--:|--:|--:|--:|
+| user (4 fields) | parseSafe | **~163M** | ~3.3M | ~1.7M | **~88M** | ~4.0M | ~0.67M |
+| order (nested + array) | parseSafe | **~7.7M** | ~0.60M | ~0.26M | **~8.2M** | ~0.64M | ~0.15M |
+| assert (moltar shape) | parseSafe | **~120M** | ~3.5M | ~0.87M | **~66M** | ~5.3M | ~0.35M |
+| user (4 fields) | parseStrict | **~43M** | ~1.9M | ~2.2M | **~55M** | ~2.7M | ~1.5M |
+| order (nested + array) | parseStrict | **~13M** | ~0.36M | ~0.43M | **~8.7M** | ~0.55M | ~0.25M |
+| assert (moltar shape) | parseStrict | **~44M** | ~1.4M | ~1.2M | **~34M** | ~3.5M | ~0.80M |
+
+<sub>ops/s, higher is better.</sub>
+
+Unlike the validator suite — where TypeBox's compiled checker takes the loose
+moltar shape on V8 — the generated parser leads every case on both engines:
+~12–49× over zod on Bun and ~13–22× on Node. The two `user`/`assert` safe cells
+are the ones to read as ratios rather than absolutes: stripping to four declared
+keys builds one small object and nothing else, which is fast enough that the
+engine's inlining, not the parser, sets the number.
 
 What is replicated upstream is the *cases* — the two parse modes and their
 shapes — not the harness. These numbers come from this repo's own measurement
@@ -335,7 +346,7 @@ reproducible run of both harnesses:
 [Against the moltar harness](../generate-validators#against-the-moltar-harness).
 
 The trade is a one-shot **prepare** cost that only mjst pays — generating the
-parser source — which measures **~0.2–1.2 ms** per schema here (zod and TypeBox
+parser source — which measures **~0.16–0.74 ms** per schema here (zod and TypeBox
 author or interpret their parsers with no separate build step, so there is
 nothing to time). That is trivially amortized: you generate once at build time
 and run the emitted code forever.
@@ -347,7 +358,8 @@ the optimiser can't hoist the work away. Micro-benchmark figures vary by machine
 and runtime — reproduce with:
 
 ```bash
-bun run bench
+bun run bench        # Bun / JavaScriptCore
+bun run bench:node   # Node / V8 (builds the package first, then runs it under node)
 ```
 
 ### Counting keys on the fast path
@@ -375,11 +387,15 @@ its own shape validator makes, spelled out over the cached local rather than
 called — `typeof _nested === "object" && … && Object.keys(_nested).length === n`
 — one level deep and within a size budget, because a call was the one thing
 left on the strict fast path that JavaScriptCore would not see through. Under
-the moltar harness (Bun 1.4.0 / Node 22.22, each case alone in its own process)
-`parseStrict` then reaches the harness floor on Bun (~200M+ ops/s, the call
-eliminated) with `count-keys` and ~13M with `count-enumerable`, and on Node
-measures ~14M with either. The default is what wins on Bun, where this repo benches;
-Node-only consumers should flip it. See
+the moltar harness (each case alone in its own process) `parseStrict` reaches
+the harness floor on Bun 1.4.0 (~360M ops/s, the call eliminated) with
+`count-keys` against ~22M with `count-enumerable`.
+
+On Node the answer has moved with the engine. On Node 22 the two spellings were
+level (~14M either way, which is where the advice to flip it came from); on
+Node 26.8.1 `count-keys` measures ~29M against `count-enumerable`'s ~26M, so the
+default now ties or wins on both engines. Keep the default unless you are
+pinned to an older V8 and have measured your own shapes. See
 [Choosing how keys are counted](../generate-validators#choosing-how-keys-are-counted)
 in the sister package for the validator numbers and the full trade-off. Whichever
 you pick, every verdict on a value that could have come from JSON is the same.

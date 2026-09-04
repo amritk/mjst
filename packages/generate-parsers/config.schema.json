@@ -39,7 +39,7 @@
       "enum": ["count-enumerable", "count-keys"],
       "x-icon": "🔢",
       "default": "count-keys",
-      "description": "How a fast path proves a closed object (additionalProperties: false, or a stripUnknown build) carries no undeclared key. 'count-keys' is a prototype-guarded Object.keys(input).length comparison, the faster form on JavaScriptCore (Bun); 'count-enumerable' is a for…in count that allocates nothing, the faster form on V8 (Node). Pick by the runtime the generated code will run on; nothing detects it at runtime."
+      "description": "How a fast path proves a closed object (additionalProperties: false, or a stripUnknown build) carries no undeclared key. 'count-keys' is a prototype-guarded Object.keys(input).length comparison, the faster form on JavaScriptCore (Bun); 'count-enumerable' is a for…in count that allocates nothing; it was the faster form on Node 22, but on Node 26 'count-keys' ties or wins there too. Keep the default unless you are pinned to an older V8 and have measured your own shapes; nothing detects the runtime at runtime."
     }
   }
 }
