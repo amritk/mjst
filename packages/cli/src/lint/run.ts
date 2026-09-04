@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
-import { type LintResolver, lintDocument, validateRuleset } from '@amritk/lint'
+import { type LintResolver, lintDocument, type Ruleset, validateRuleset } from '@amritk/lint'
 import { DiagnosticSeverity, type IDiagnostic, type RulesetDefinition } from '@amritk/lint/types'
 import fg from 'fast-glob'
 import yargs from 'yargs'
@@ -16,6 +16,31 @@ const SEVERITY_BY_NAME: Record<string, DiagnosticSeverity> = {
 }
 
 const SEVERITY_LABEL = ['error', 'warning', 'info', 'hint'] as const
+
+/**
+ * The built-in preset names `--ruleset` resolves without a file on disk, each
+ * mapping to a *built* ruleset. Built rather than a definition, deliberately: a
+ * preset brings its own custom functions and format detectors, which a
+ * definition cannot carry — handed over as data, every one of its rules would
+ * be silently skipped (unknown functions, a `formats` gate matching nothing).
+ * The names mirror what the presets' own `extends` resolution accepts,
+ * including the legacy Spectral aliases.
+ */
+const buildAsyncApiPreset = async (): Promise<Ruleset> =>
+  (await import('@amritk/lint/rules/asyncapi')).createAsyncApiRuleset()
+const buildOpenApiPreset = async (): Promise<Ruleset> =>
+  (await import('@amritk/lint/rules/openapi')).createOpenApiRuleset()
+
+// A Map, not a record: the key comes straight from `--ruleset`, and a record
+// lookup on `constructor` would find `Object.prototype`'s.
+const PRESET_RULESETS = new Map<string, () => Promise<Ruleset>>([
+  ['asyncapi', buildAsyncApiPreset],
+  ['loupe:asyncapi', buildAsyncApiPreset],
+  ['spectral:asyncapi', buildAsyncApiPreset],
+  ['oas', buildOpenApiPreset],
+  ['loupe:oas', buildOpenApiPreset],
+  ['spectral:oas', buildOpenApiPreset],
+])
 
 type Args = {
   documents: string[]
@@ -112,7 +137,11 @@ const parseArgs = async (argv: string[]): Promise<{ args: Args } | { error: stri
       })
       .usage('$0 [documents..]', 'Lint JSON/YAML documents against a ruleset')
       .positional('documents', { describe: 'Documents or globs to lint', type: 'string', array: true })
-      .option('ruleset', { alias: 'r', type: 'string', describe: 'Path to a ruleset file' })
+      .option('ruleset', {
+        alias: 'r',
+        type: 'string',
+        describe: 'Path to a ruleset file, or a built-in preset: asyncapi, oas',
+      })
       .option('encoding', { type: 'string', default: 'utf8', describe: 'Input encoding' })
       .option('fail-severity', { alias: 'F', type: 'string', default: 'error', choices: Object.keys(SEVERITY_BY_NAME) })
       .option('display-only-failures', { alias: 'D', type: 'boolean', default: false })
@@ -222,12 +251,20 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
     return { definition, basePath: dirname(discovered) }
   }
 
-  let rulesetDefinition: RulesetDefinition | undefined
+  let rulesetDefinition: RulesetDefinition | Ruleset | undefined
   let rulesetBasePath: string | undefined
   if (parsed.ruleset) {
-    rulesetDefinition = await loadRuleset(parsed.ruleset)
-    rulesetBasePath = dirname(isAbsolute(parsed.ruleset) ? parsed.ruleset : resolve(process.cwd(), parsed.ruleset))
-    reportRulesetProblems(rulesetDefinition, parsed.ruleset)
+    const preset = PRESET_RULESETS.get(parsed.ruleset)
+    if (preset) {
+      // Built presets carry their functions and formats already; there is no
+      // definition to validate and no base path to resolve extends from.
+      rulesetDefinition = await preset()
+    } else {
+      const definition = await loadRuleset(parsed.ruleset)
+      rulesetDefinition = definition
+      rulesetBasePath = dirname(isAbsolute(parsed.ruleset) ? parsed.ruleset : resolve(process.cwd(), parsed.ruleset))
+      reportRulesetProblems(definition, parsed.ruleset)
+    }
   }
 
   const documents = parsed.documents ?? []

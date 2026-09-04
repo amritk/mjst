@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
+import { extractAsyncApi, listMessageSchemas } from '@amritk/asyncapi'
 import { buildSchema } from '@amritk/generate-parsers'
 import { buildValidatorSchema } from '@amritk/generate-validators'
 import { deriveRootTypeName } from '@amritk/helpers/derive-root-type-name'
@@ -17,6 +18,7 @@ import { detectHelpersMode } from './detect-helpers-mode'
 import { emitExamples } from './emit-examples'
 import { ensureOutputDir } from './ensure-output-dir'
 import { HELP_TEXT } from './help-text'
+import { loadAsyncApiDocument } from './load-asyncapi-document'
 import { loadConfig } from './load-config'
 import { loadSchema } from './load-schema'
 import { parseCliArgs } from './parse-cli-args'
@@ -491,6 +493,106 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
   }
 }
 
+/**
+ * Generates parsers for every message schema an AsyncAPI document declares,
+ * giving each message its own `channels/<channel>/<message>/` subtree under
+ * `outputDir` — structurally the {@link runRecursive} job, with the document
+ * supplying the schema list instead of a directory walk. Extraction problems
+ * (an Avro payload, a dangling `$ref`) are warnings: a mixed document still
+ * generates everything it can, and only a document yielding *nothing*
+ * generatable fails the run — an empty success would read as "no channels"
+ * rather than "wrong file".
+ */
+const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, outputDir: string): Promise<void> => {
+  const document = await loadAsyncApiDocument(config, documentPath)
+  const model = extractAsyncApi(document)
+  // Listing first: it appends output-name collision warnings onto the model's
+  // issues, and the user should see those alongside the extraction ones.
+  const schemas = listMessageSchemas(model)
+
+  for (const issue of model.issues) {
+    console.warn(`Warning: ${issue.path}: ${issue.message}`)
+  }
+
+  if (schemas.length === 0) {
+    console.error(
+      `Error: no generatable message schemas found in ${documentPath}. ` +
+        'Every message either declares no payload/headers or uses a non-JSON-Schema schemaFormat (see warnings above).',
+    )
+    process.exit(1)
+  }
+
+  console.log(`AsyncAPI ${model.version}: ${model.channels.length} channel(s), ${schemas.length} schema(s) to generate`)
+
+  await ensureOutputDir(outputDir)
+  const helpersMode = resolveHelpersMode(config, outputDir)
+
+  const sharedHelpers = new Map<string, string>()
+  const writer = await createOutputWriter(outputDir, config.force)
+  const exampleTasks: ExampleTask[] = []
+
+  const stageAll = async (): Promise<void> => {
+    for (const extracted of schemas) {
+      const { subDir, rootTypeName, schema } = extracted
+      // Depth of the message's output subdirectory, used to build the relative
+      // import path back to the shared `_helpers/` at the output root.
+      const depth = subDir.split('/').filter(Boolean).length
+      const helpersImportPrefix = '../'.repeat(depth)
+      console.log(`\n${subDir}/ (root type: ${rootTypeName})`)
+
+      const files = await buildSchema(
+        schema as JSONSchema,
+        rootTypeName,
+        undefined,
+        config.typesOnly,
+        config.logWarnings,
+        config.strict,
+        helpersMode,
+        helpersImportPrefix,
+        config.readonly,
+        config.stripUnknown,
+        config.typeSuffix,
+        resolveImportExt(config),
+        config.caseInsensitive,
+      )
+
+      for (const file of files) {
+        if (file.filename.startsWith('_helpers/')) {
+          sharedHelpers.set(file.filename, file.content)
+          continue
+        }
+
+        const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
+        await writer.stage(join(subDir, file.filename), content)
+      }
+
+      if (config.validators) {
+        await runValidators(config, schema, rootTypeName, writer, join('validators', subDir))
+      }
+
+      if (config.examples) exampleTasks.push({ schema, rootTypeName, subDir })
+    }
+
+    for (const [filename, content] of sharedHelpers) {
+      await writer.stage(filename, content)
+    }
+  }
+
+  const writtenTsFiles = await commitOrDiscard(writer, stageAll)
+
+  for (const filename of writtenTsFiles) console.log(`Generated: ${filename}`)
+
+  if (exampleTasks.length > 0) {
+    await runExamples(config, outputDir, exampleTasks)
+  }
+
+  if (config.build) {
+    await buildOutput(outputDir, writtenTsFiles, config.typesOnly)
+  } else {
+    console.log(`\nTotal files generated: ${writtenTsFiles.length}`)
+  }
+}
+
 const run = async (): Promise<void> => {
   // Skip the first two args (node executable and script path)
   const args = process.argv.slice(2)
@@ -581,6 +683,36 @@ const run = async (): Promise<void> => {
     process.exit(1)
   }
 
+  // An AsyncAPI document is one file yielding many schemas, so the flags that
+  // assume "one schema, one name" or "a directory of schema files" have no
+  // meaning against it.
+  if (config.input === 'asyncapi') {
+    if (config.schemaDir) {
+      console.error(
+        'Error: --input asyncapi reads a single document via --schema; it cannot be combined with --schema-dir.',
+      )
+      process.exit(1)
+    }
+    if (config.outFile) {
+      console.error(
+        'Error: --input asyncapi generates a directory of files per message; use --out-dir, not --out-file.',
+      )
+      process.exit(1)
+    }
+    if (config.rootType) {
+      console.error(
+        'Error: --root-type cannot be combined with --input asyncapi; each message derives its own root type.',
+      )
+      process.exit(1)
+    }
+    if (config.export) {
+      console.error(
+        'Error: --export applies to module inputs (typebox, zod, ...); an AsyncAPI document has no exports.',
+      )
+      process.exit(1)
+    }
+  }
+
   // Single-file output is the alternative to a directory of files.
   if (config.outFile) {
     if (!config.typesOnly) {
@@ -608,6 +740,15 @@ const run = async (): Promise<void> => {
   }
 
   const outputDir = resolve(config.outDir)
+
+  if (config.input === 'asyncapi') {
+    if (!config.schema) {
+      console.error('Error: --schema is required. Provide a path to an AsyncAPI document (JSON or YAML).')
+      process.exit(1)
+    }
+    await runAsyncApi(config, resolve(config.schema), outputDir)
+    return
+  }
 
   // schemaDir activates recursive mode and takes precedence over a single schema.
   if (config.schemaDir) {

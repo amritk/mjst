@@ -51,7 +51,7 @@ describe('validate-config', () => {
 
   it('reports a value outside a closed enum', () => {
     expect(() => validateConfig({ input: 'protobuf' }, 'mjst.config.json')).toThrow(
-      '/input: expected one of json, typebox, zod, valibot, effect, avro, received "protobuf".',
+      '/input: expected one of json, typebox, zod, valibot, effect, avro, asyncapi, received "protobuf".',
     )
   })
 

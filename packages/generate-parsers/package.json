@@ -41,7 +41,8 @@
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. generate-parsers",
     "generate-readme": "bun run ./scripts/generate-readme.ts",
-    "bench": "bun --conditions development ./bench/run.ts"
+    "bench": "bun --conditions development ./bench/run.ts",
+    "bench:moltar": "bun --conditions development ./bench/moltar.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts",
@@ -63,6 +64,7 @@
     "@amritk/generate-markdown": "workspace:*",
     "@sinclair/typebox": "^0.34.49",
     "ajv": "^8.17.1",
+    "benny": "^3.7.1",
     "zod": "^4.4.3"
   }
 }

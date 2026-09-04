@@ -6,7 +6,7 @@ import { isUnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { CliConfig } from './cli-config'
 import { validateConfig } from './validate-config'
 
-const SOURCE_FORMATS: readonly string[] = ['json', 'typebox', 'zod', 'valibot', 'effect', 'avro']
+const SOURCE_FORMATS: readonly string[] = ['json', 'typebox', 'zod', 'valibot', 'effect', 'avro', 'asyncapi']
 
 const isSourceFormat = (value: unknown): value is SourceFormat =>
   typeof value === 'string' && SOURCE_FORMATS.includes(value)

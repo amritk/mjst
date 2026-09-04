@@ -1877,9 +1877,13 @@ describe('generate-parser-function', () => {
       }
       const result = generateParserFunction(schema, 'User', { strict: true })
       expect(result).toContain(
-        'if (!isObject(input)) throw new Error(`[User] expected object, got ${input === null ? "null" : typeof input}`)',
+        'if (!isObject(input)) throw new Error("[User] expected object, got " + (input === null ? "null" : typeof input))',
       )
-      expect(result).not.toContain('if (!isObject(input)) return')
+      // A strict parser never falls back to a default: the object check is an
+      // assertion function so the fast path carries neither a throw nor a
+      // template literal.
+      expect(result).not.toContain('if (!isObject(input)) return {')
+      expect(result).toContain('_assertUserObject(input);')
     })
 
     it('throws on missing required property', () => {
@@ -2738,7 +2742,12 @@ describe('generate-parser-function', () => {
       }
 
       const source = generateParserFunction(schema, 'Doc', { strict: true, stripUnknown: true })
-      expect(source).toContain('? { foo: (_nested as Record<string, any>).foo')
+      // Each nested field is read once, into a local the condition and the
+      // literal share; the guard has already proven `_nested` is an object, so
+      // the inlined condition carries no shape terms of its own.
+      expect(source).toContain('const _nested_foo = (_nested as Record<string, any>).foo;')
+      expect(source).toContain('const _nested_num = (_nested as Record<string, any>).num;')
+      expect(source).toContain('? { foo: _nested_foo, num: _nested_num }')
       // The call survives for whatever the inlined condition rejects.
       expect(source).toContain(': parseDoc_Nested(_nested),')
 
