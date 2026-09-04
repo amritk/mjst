@@ -193,7 +193,7 @@ A ruleset is a plain object (authored as YAML, JSON, or a JS module):
 
 | Field | Description |
 | --- | --- |
-| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`. |
+| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`, `resolved` (default `true`; `false` runs the rule against the document as written, before `$ref` dereferencing), and `documentationUrl`. |
 | `then` | `{ function, field?, functionOptions? }` — `field` narrows the match to a child (`@key` targets the property name). |
 | `extends` | A ruleset (or list) to inherit rules from: a file path or npm package. `[target, 'recommended' \| 'all' \| 'off']` controls what it contributes. |
 | `functions` / `functionsDir` | Custom functions to load by name (default dir `functions/`). |
@@ -230,7 +230,7 @@ Anything outside that grammar is a ruleset error (`createRuleset` throws and nam
 | `resolveNamedRuleset(name, basePath?, options?)` | Resolve an `extends` reference (file path or npm package) to its definition. |
 | `builtinFunctions` | The registry of built-in rule functions. |
 
-The engine internals (`createDocument`, `lint`, `query`, `validateRuleset`, `parseWithPointers`, `createFixPlugin`, `DiagnosticSeverity`, and the rule/diagnostic types) are re-exported from the package root for advanced use.
+The engine internals (`createDocument`, `lint`, `lintWithResult`, `query`, `validateRuleset`, `parseWithPointers`, `createFixPlugin`, …) are re-exported from the package root for advanced use; `DiagnosticSeverity` and the rule/diagnostic types (`IDiagnostic`, `RulesetDefinition`, `IRuleDefinition`, …) live on the `@amritk/lint/types` subpath.
 
 ---
 
@@ -259,7 +259,7 @@ const findings = await lint(spec, { ruleset })
 | `oasFixers` | Auto-fixers for the mechanically-repairable OpenAPI rules (pass to `fixDocument` alongside a built OpenAPI ruleset). |
 | `loadOasSchema(version)` | Lazily load one OpenAPI version's official structural meta-schema (`'2.0'` / `'3.0'` / `'3.1'` / `'3.2'`), vendored as raw `.json` from `spec.openapis.org` (3.0/3.1/3.2 verbatim; 2.0 with its external draft-04 metaschema refs inlined). See [`schemas/README.md`](./src/rules/openapi/schemas/README.md). |
 
-The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.
+The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs, and its top-level `id`/`$schema` keys are dropped). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.
 
 `$ref` resolution stays the caller's job: the preset doesn't pull in a resolver, so for rules that need the dereferenced document (`resolved: true`) pass a `resolve` function to the core `lintWithResult` (for example wrapping [`@amritk/resolve-refs`](../resolve-refs)). The `mjst lint` CLI already wires one up.
 

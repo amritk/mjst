@@ -278,11 +278,11 @@ The one thing that *does* throw is the guard against a document built to exhaust
 | `BAD_TAG` | a verbatim tag missing its closing `>`, or a tag holding a flow indicator |
 | `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
 | `BAD_DIRECTIVE` | a malformed `%YAML` version, or content after it |
-| `DUPLICATE_DIRECTIVE` | a second `%YAML` directive on one document |
+| `DUPLICATE_DIRECTIVE` | a second `%YAML` directive on one document (a `%TAG` handle declared twice reuses the code as a warning) |
 | `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it |
 | `DEPTH_LIMIT` | nesting past the parser's depth cap |
 
-Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), a `%TAG` handle declared twice (`DUPLICATE_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
 
 ### Not supported
 
@@ -347,7 +347,9 @@ Which five, and why each is the answer it is:
 The suite settles conformance; it does not settle the handful of documents where
 the three parsers simply answer differently. These are the ones that exist, found
 by fuzzing all three against each other over ~90k generated documents plus the
-full suite corpus. Everything not listed here agrees.
+full suite corpus — a one-off run rather than a check in the test suite; what CI
+pins is the agreement with `yaml` in `src/differential.test.ts`. Everything not
+listed here agreed at the time of that run.
 
 | document | @amritk/yaml | `yaml` | `js-yaml` |
 | --- | --- | --- | --- |
