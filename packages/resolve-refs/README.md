@@ -191,15 +191,20 @@ recursive cycles intact, and records a diagnostic for every external ref. The
 registry, no scoping, no diagnostics — and re-resolves each ref on every
 encounter, so the gap is the production resolver's *total* per-call cost against
 the cheapest thing that produces the same inlined shape. Both are asserted to
-produce byte-identical output before either is timed. Representative numbers
-(Bun 1.4.0, Linux x64 — your hardware will differ, run `bun run bench` yourself):
+produce byte-identical output before either is timed. Medians of three runs on each runtime, one machine (Linux x64, a 4-vCPU cloud
+box, Bun 1.4.0 and Node 26.8.1 — your hardware will differ, run `bun run bench`
+or `bun run bench:node` yourself):
 
-| schema | cached | naive | speedup |
-|:---|---:|---:|---:|
-| chain (40 `$ref` → `$ref` links) | ~3.0k ops/s | ~0.68k ops/s | **~4.4×** |
-| reuse-heavy (50 refs → 1 def) | ~5.2k ops/s | ~7.4k ops/s | ~0.70× |
-| cyclic tree | ~33k ops/s | ~119k ops/s | ~0.27× |
-| wide-distinct (60 defs, each used once) | ~2.0k ops/s | ~6.0k ops/s | ~0.34× |
+| schema | Bun: cached | Bun: naive | Bun speedup | Node: cached | Node: naive | Node speedup |
+|:---|---:|---:|---:|---:|---:|---:|
+| chain (40 `$ref` → `$ref` links) | ~4.6k ops/s | ~1.1k ops/s | **~4.1×** | ~4.7k ops/s | ~1.1k ops/s | **~4.1×** |
+| reuse-heavy (50 refs → 1 def) | ~6.9k ops/s | ~11k ops/s | ~0.62× | ~6.6k ops/s | ~10k ops/s | ~0.66× |
+| cyclic tree | ~50k ops/s | ~183k ops/s | ~0.27× | ~58k ops/s | ~184k ops/s | ~0.31× |
+| wide-distinct (60 defs, each used once) | ~3.7k ops/s | ~9.5k ops/s | ~0.39× | ~3.4k ops/s | ~9.0k ops/s | ~0.38× |
+
+The two engines agree on every row to within a few percent, which is what you
+would expect from a resolver whose cost is one document walk rather than a hot
+inner loop.
 
 Memoization overtakes the naive walk only on the **chain** shape, where a long
 indirection path is expensive to re-resolve and the cache collapses it to one

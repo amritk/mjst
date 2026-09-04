@@ -168,26 +168,31 @@ apply your own rule.
 
 ## Performance
 
-Run it yourself with `bun run bench`. Numbers below are a median of three runs
-on one Linux x64 machine (a 4-vCPU cloud box, the same one every table in this
-repo comes from) under Bun 1.4.0 — treat the ratios as the durable part and the
-absolute throughput as a property of that box.
+Run it yourself with `bun run bench` (Bun) or `bun run bench:node` (Node, against
+the built package). Numbers below are a median of three runs of each on one
+Linux x64 machine (a 4-vCPU cloud box, the same one every table in this repo
+comes from), Bun 1.4.0 and Node 26.8.1 — treat the ratios as the durable part
+and the absolute throughput as a property of that box, which drifts between
+sittings.
 
 **Parse to a source-mapped tree** — the job this package exists for. `js-yaml` cannot produce positions, so it is not a candidate here.
 
-| fixture | @amritk/yaml | yaml (eemeli) | speedup |
-| --- | --- | --- | --- |
-| small (155 B) | 269k ops/s | 10.6k ops/s | **25.6×** |
-| medium (2 KB) | 28.6k ops/s | 742 ops/s | **38.8×** |
-| large (100 KB) | 527 ops/s | 17.7 ops/s | **28.3×** |
+| fixture | Bun: @amritk/yaml | Bun: yaml (eemeli) | Bun speedup | Node: @amritk/yaml | Node: yaml | Node speedup |
+| --- | --- | --- | --- | --- | --- | --- |
+| small (155 B) | 386k ops/s | 13.4k ops/s | **28.8×** | 418k ops/s | 12.1k ops/s | **34.6×** |
+| medium (2 KB) | 40.0k ops/s | 1.10k ops/s | **36.4×** | 35.9k ops/s | 1.10k ops/s | **32.6×** |
+| large (100 KB) | 759 ops/s | 23.0 ops/s | **33.0×** | 667 ops/s | 21.3 ops/s | **31.3×** |
 
 **Parse to plain data** — all three can do this.
 
-| fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
-| --- | --- | --- | --- | --- | --- |
-| small | 207k | 11.1k | 110k | 18.9× | 1.86× |
-| medium | 18.1k | 865 | 9.1k | 19.5× | 1.97× |
-| large | 281 | 16.7 | 178 | 17.0× | 1.57× |
+| fixture | runtime | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
+| --- | --- | --- | --- | --- | --- | --- |
+| small | Bun | 265k | 15.0k | 151k | 17.7× | 1.75× |
+| small | Node | 303k | 11.1k | 136k | 27.3× | 2.23× |
+| medium | Bun | 25.4k | 1.20k | 12.3k | 21.2× | 2.07× |
+| medium | Node | 26.5k | 1.00k | 11.5k | 26.5× | 2.30× |
+| large | Bun | 447 | 23.4 | 251 | 19.1× | 1.78× |
+| large | Node | 456 | 20.3 | 255 | 22.5× | 1.79× |
 
 **Bundle size** (minified + gzipped) — what each parser adds to an application
 that imports it. The bench bundles a small consumer of each library rather than
