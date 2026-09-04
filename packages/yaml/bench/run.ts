@@ -1,10 +1,10 @@
 import { unlink } from 'node:fs/promises'
 import { gzipSync } from 'node:zlib'
+import { parse as ours, parseDocument as oursDoc } from '@amritk/yaml'
 import jsyaml from 'js-yaml'
 import { parse as eemeli, parseDocument as eemeliDoc } from 'yaml'
 
-import { parse as ours, parseDocument as oursDoc } from '../src/index'
-import { FIXTURES } from './fixtures'
+import { FIXTURES } from './fixtures.ts'
 
 /**
  * Compares `@amritk/yaml` against the two most-used web YAML parsers — `yaml`
@@ -106,16 +106,24 @@ const bundleSize = async (specifier: string, named: readonly string[]): Promise<
  * smaller than it looks: it is not doing the same job.
  */
 const entries: Record<string, [specifier: string, named: readonly string[]]> = {
-  '@amritk/yaml': ['../src/index', ['parse', 'parseDocument', 'nodeAtPath', 'lineCounter']],
+  '@amritk/yaml': ['@amritk/yaml', ['parse', 'parseDocument', 'nodeAtPath', 'lineCounter']],
   yaml: ['yaml', ['parse', 'parseDocument']],
   'js-yaml': ['js-yaml', ['load']],
 }
+// Bundle size is a property of the code, not of the runtime executing it, so
+// it is measured once — under Bun, whose bundler does the work. A Node run of
+// this bench reports the throughput tables and says why this section is absent
+// rather than printing a size it did not measure.
 const sizes: Record<string, number> = {}
-for (const [name, [specifier, named]] of Object.entries(entries)) {
-  try {
-    sizes[name] = await bundleSize(specifier, named)
-  } catch (err) {
-    console.log(`  (could not bundle ${name}: ${(err as Error).message})`)
+if (typeof Bun === 'undefined') {
+  console.log('  (skipped under Node: the size probe bundles with Bun — run `bun run bench` for this table)\n')
+} else {
+  for (const [name, [specifier, named]] of Object.entries(entries)) {
+    try {
+      sizes[name] = await bundleSize(specifier, named)
+    } catch (err) {
+      console.log(`  (could not bundle ${name}: ${(err as Error).message})`)
+    }
   }
 }
 const mineSize = sizes['@amritk/yaml'] ?? 0

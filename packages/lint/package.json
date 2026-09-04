@@ -44,8 +44,10 @@
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. packages/lint/",
-    "prebench": "bun run --filter='@amritk/runtime-validators' --filter='@amritk/yaml' --filter='@amritk/resolve-refs' build",
-    "bench": "bun run ./bench/run.ts"
+    "prebench": "bun run build && bun run --filter='@amritk/runtime-validators' --filter='@amritk/yaml' --filter='@amritk/resolve-refs' build",
+    "bench": "bun run ./bench/run.ts",
+    "prebench:node": "bun run build && bun run --filter='@amritk/runtime-validators' --filter='@amritk/yaml' --filter='@amritk/resolve-refs' build",
+    "bench:node": "node ./bench/run.ts"
   },
   "exports": {
     "./package.json": "./package.json",

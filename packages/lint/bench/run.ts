@@ -1,13 +1,20 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { type LintResolver, lint } from '@amritk/lint'
+import { createOpenApiRuleset } from '@amritk/lint/rules/openapi'
 import { resolveRefs } from '@amritk/resolve-refs'
-import { Spectral, Document as SpectralDocument } from '@stoplight/spectral-core'
-import { Json as SpectralJson, Yaml as SpectralYaml } from '@stoplight/spectral-parsers'
-import { oas as spectralOas } from '@stoplight/spectral-rulesets'
+import spectralCore from '@stoplight/spectral-core'
+import spectralParsers from '@stoplight/spectral-parsers'
+import spectralRulesets from '@stoplight/spectral-rulesets'
 
-import type { LintResolver } from '../src/core'
-import { lint } from '../src/index'
-import { createOpenApiRuleset } from '../src/rules/openapi/index'
+// Spectral ships CommonJS. Bun serves its named exports through an ESM import;
+// Node's loader cannot always detect them in a CJS module, so the default
+// import — the whole `module.exports` — is destructured instead. That is the
+// one spelling both runtimes read, which is what lets this bench run under
+// either engine.
+const { Spectral, Document: SpectralDocument } = spectralCore
+const { Json: SpectralJson, Yaml: SpectralYaml } = spectralParsers
+const { oas: spectralOas } = spectralRulesets
 
 /**
  * Benchmarks `@amritk/lint` head-to-head against **Spectral** — the OpenAPI

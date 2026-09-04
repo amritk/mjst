@@ -41,7 +41,10 @@
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
+    "prebench": "bun run --filter='@amritk/helpers' build && bun run build",
     "bench": "bun --conditions development ./bench/run.ts",
+    "prebench:node": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:node": "node ./bench/run.ts",
     "bench:moltar": "bun --conditions development ./bench/moltar.ts"
   },
   "imports": {

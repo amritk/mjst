@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { buildSchema } from '@amritk/generate-parsers'
 
-import { buildSchema } from '../src/index.ts'
 import { opsCell } from './measure.ts'
 import { LIBRARY_IDS, LIBRARY_LABELS, type LibraryId } from './parsers.ts'
 import { PARSE_CASES } from './schemas.ts'
@@ -34,11 +34,19 @@ const BENCH_DIR = fileURLToPath(new URL('.', import.meta.url))
 const pad = (s: string, width: number): string => s.padEnd(width)
 const padStart = (s: string, width: number): string => s.padStart(width)
 
+/**
+ * Whether this process is Bun. The bench runs under either runtime: Bun resolves
+ * the `@amritk/*` workspace packages to their TypeScript sources through the
+ * `development` condition, while Node has no such loader and resolves them to
+ * the built `dist` through the same exports map — so the flag is passed only
+ * where it means something, and `bench:node` builds first.
+ */
+const IS_BUN = typeof Bun !== 'undefined'
+
 /** Spawns an isolated worker to time one library against one case. */
 const runWorker = (caseName: string, lib: LibraryId): WorkerResult => {
-  // `--conditions development` resolves the `@amritk/*` workspace packages to
-  // their TypeScript sources (no build step needed).
-  const stdout = execFileSync(process.execPath, ['--conditions', 'development', WORKER, caseName, lib], {
+  const flags = IS_BUN ? ['--conditions', 'development'] : []
+  const stdout = execFileSync(process.execPath, [...flags, WORKER, caseName, lib], {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
     cwd: BENCH_DIR,

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util'
+import { parse, parseDocument } from '@amritk/yaml'
 import { parse as reference } from 'yaml'
 
 // The measurement core is shared, not copied: the canonical implementation
@@ -5,7 +7,6 @@ import { parse as reference } from 'yaml'
 // reach for it the same way. Bench code is unpublished dev tooling, so the
 // cross-package relative import is deliberate.
 import { measure, type Stats } from '../../generate-parsers/bench/measure.ts'
-import { parse, parseDocument } from '../src/index'
 import { YAML_BENCH_CASES } from './cases.ts'
 import { FIXTURES } from './fixtures.ts'
 
@@ -38,7 +39,7 @@ const source = FIXTURES[benchCase.fixture]
 
 let parityOk = false
 try {
-  parityOk = Bun.deepEquals(parse(source), reference(source))
+  parityOk = isDeepStrictEqual(parse(source), reference(source))
 } catch {
   parityOk = false
 }

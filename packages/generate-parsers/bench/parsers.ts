@@ -3,9 +3,9 @@ import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { buildSchema } from '@amritk/generate-parsers'
 import { type TSchema, Value } from '@sinclair/typebox/value'
 
-import { buildSchema } from '../src/index.ts'
 import type { ParseCase } from './schemas.ts'
 
 /** A parser that turns unknown input into a clean typed object (or throws). */
@@ -46,6 +46,17 @@ const TYPEBOX_PARSE_OPS = {
  * throws like the others; `stripUnknown` is on only in safe mode (strict mode's
  * schema is closed, so undeclared keys are rejected rather than stripped).
  */
+/**
+ * Rewrites the generated files' relative `./x.js` import specifiers to `./x.ts`.
+ * The emitted source carries `.js` specifiers because that is what a compiled
+ * consumer needs, and Bun resolves them back to the `.ts` files on disk. Node
+ * does not: its type stripping resolves a specifier literally, so `./x.js` is a
+ * missing file. Pointing the specifier at the file actually written lets both
+ * runtimes import the same generated module with no transpile step, which is
+ * what makes the Node column measure the same code as the Bun one.
+ */
+const toTsSpecifiers = (source: string): string => source.replace(/(from '\.[^']*)\.js'/g, "$1.ts'")
+
 const loadMjstParser = async (parseCase: ParseCase): Promise<Parser> => {
   const files = await buildSchema(
     parseCase.schema,
@@ -63,7 +74,7 @@ const loadMjstParser = async (parseCase: ParseCase): Promise<Parser> => {
   for (const file of files) {
     const path = join(dir, file.filename)
     await mkdir(dirname(path), { recursive: true })
-    writeFileSync(path, file.content)
+    writeFileSync(path, toTsSpecifiers(file.content))
   }
 
   const mod = await import(pathToFileURL(join(dir, 'index.ts')).href)
