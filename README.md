@@ -112,10 +112,10 @@ The no-op row is a "validator" that checks nothing, so it is the fastest number 
 | `assert-strict`, valid input | Bun 1.4.0 mutable | Bun 1.4.0 frozen | Bun 1.3.11 mutable | Bun 1.3.11 frozen |
 |:--|--:|--:|--:|--:|
 | mjst (generated) | ~63M ops/s | ~67M ops/s | ~82M ops/s | ~1.5M ops/s |
-| typia (transformed) | ~34M ops/s | ~48M ops/s | TYPIA13M | TYPIA13F |
+| typia (transformed) | ~34M ops/s | ~48M ops/s | ~37M ops/s | ~1.5M ops/s |
 | typebox (compiled) | ~29M ops/s | ~26M ops/s | ~27M ops/s | ~1.4M ops/s |
-| ajv (compiled) | ~13M ops/s | ~13M ops/s | AJV13M | AJV13F |
-| zod | ~0.99M ops/s | ~1.0M ops/s | ZOD13M | ZOD13F |
+| ajv (compiled) | ~13M ops/s | ~13M ops/s | ~12M ops/s | ~1.2M ops/s |
+| zod | ~0.99M ops/s | ~1.0M ops/s | ~0.91M ops/s | ~0.47M ops/s |
 
 On Bun 1.3 everything converged because everything was paying the same engine slow path; V8 never had the cliff, and Bun 1.4 has closed it. [Frozen inputs](./packages/generate-validators#frozen-inputs) has the alternatives that were measured and why the generated code keeps the key count.
 

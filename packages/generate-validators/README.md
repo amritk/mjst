@@ -366,10 +366,10 @@ machine (Linux x64), valid input, on both Bun versions:
 | `assert-strict` | Bun 1.4.0 mutable | Bun 1.4.0 frozen | Bun 1.3.11 mutable | Bun 1.3.11 frozen |
 |:--|--:|--:|--:|--:|
 | mjst (generated) | ~63M ops/s | ~67M ops/s | ~82M ops/s | ~1.5M ops/s |
-| typia (transformed) | ~34M ops/s | ~48M ops/s | TYPIA13M | TYPIA13F |
+| typia (transformed) | ~34M ops/s | ~48M ops/s | ~37M ops/s | ~1.5M ops/s |
 | typebox (compiled) | ~29M ops/s | ~26M ops/s | ~27M ops/s | ~1.4M ops/s |
-| ajv (compiled) | ~13M ops/s | ~13M ops/s | AJV13M | AJV13F |
-| zod | ~0.99M ops/s | ~1.0M ops/s | ZOD13M | ZOD13F |
+| ajv (compiled) | ~13M ops/s | ~13M ops/s | ~12M ops/s | ~1.2M ops/s |
+| zod | ~0.99M ops/s | ~1.0M ops/s | ~0.91M ops/s | ~0.47M ops/s |
 
 It was an engine-level cliff, not an mjst one: on Bun 1.3 every compiled or
 generated strict validator lands within a hair of the same number, because they
