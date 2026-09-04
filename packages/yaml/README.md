@@ -169,24 +169,25 @@ apply your own rule.
 ## Performance
 
 Run it yourself with `bun run bench`. Numbers below are a median of three runs
-on one Linux x64 machine under Bun 1.4 — treat the ratios as the durable part
-and the absolute throughput as a property of that box.
+on one Linux x64 machine (a 4-vCPU cloud box, the same one every table in this
+repo comes from) under Bun 1.4.0 — treat the ratios as the durable part and the
+absolute throughput as a property of that box.
 
 **Parse to a source-mapped tree** — the job this package exists for. `js-yaml` cannot produce positions, so it is not a candidate here.
 
 | fixture | @amritk/yaml | yaml (eemeli) | speedup |
 | --- | --- | --- | --- |
-| small (155 B) | 455k ops/s | 15.4k ops/s | **29.9×** |
-| medium (2 KB) | 37.0k ops/s | 1.0k ops/s | **35.6×** |
-| large (100 KB) | 628 ops/s | 19.4 ops/s | **32.3×** |
+| small (155 B) | 269k ops/s | 10.6k ops/s | **25.6×** |
+| medium (2 KB) | 28.6k ops/s | 742 ops/s | **38.8×** |
+| large (100 KB) | 527 ops/s | 17.7 ops/s | **28.3×** |
 
 **Parse to plain data** — all three can do this.
 
 | fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
 | --- | --- | --- | --- | --- | --- |
-| small | 258k | 14.6k | 124k | 17.1× | 2.01× |
-| medium | 21.9k | 1.2k | 10.7k | 18.7× | 2.10× |
-| large | 403 | 23.3 | 227 | 17.0× | 1.70× |
+| small | 207k | 11.1k | 110k | 18.9× | 1.86× |
+| medium | 18.1k | 865 | 9.1k | 19.5× | 1.97× |
+| large | 281 | 16.7 | 178 | 17.0× | 1.57× |
 
 **Bundle size** (minified + gzipped) — what each parser adds to an application
 that imports it. The bench bundles a small consumer of each library rather than
