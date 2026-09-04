@@ -144,6 +144,41 @@ export type InterpreterContext = {
    * object rather than a bare number precisely so the reference is shared.
    */
   readonly budget: { steps: number }
+  /**
+   * The one boolean-mode child an error-collecting run probes its branches in,
+   * created on the first probe and kept — see {@link probeContext}. Always
+   * `null` on a context that is itself in boolean mode, which probes in place.
+   */
+  branch: InterpreterContext | null
+}
+
+/**
+ * The context a branch probe (`anyOf` / `oneOf` / `not` / `if`, `contains`,
+ * `propertyNames`) runs in: one that fails silently instead of unwinding or
+ * recording the caller's errors.
+ *
+ * A guard run is already such a context. Its only per-probe state is the
+ * `failed` flag, and a probe only ever starts from a run that has not failed
+ * (a failed guard run unwinds before reaching one), so the probe runs *in
+ * place* and the caller clears the flag afterwards — no allocation at all,
+ * where this used to mint a fresh context per branch, per `contains` element,
+ * and per `propertyNames` key. An error-collecting run cannot do that (its
+ * `fail` appends to the error list), so it keeps one boolean-mode child for
+ * its whole life and reuses it; a probe nested inside that child is back in
+ * the in-place case. Probes never overlap — validation is synchronous and the
+ * interpreter calls nothing user-supplied — so one child per run is enough.
+ *
+ * The caller must reset `failed` to `false` on the returned context once the
+ * probe is over; {@link InterpreterContext.branch} shares everything else.
+ */
+export const probeContext = (ctx: InterpreterContext): InterpreterContext => {
+  if (!ctx.emitErrors) return ctx
+  let sub = ctx.branch
+  if (sub === null) {
+    sub = newBranchContext(ctx)
+    ctx.branch = sub
+  }
+  return sub
 }
 
 /**
@@ -312,7 +347,25 @@ export const allUnique = (ctx: InterpreterContext, arr: readonly unknown[]): boo
       break
     }
   }
-  if (allPrimitive) return new Set(arr).size === len
+  if (allPrimitive) {
+    // A handful of primitives is compared pairwise: at most 28 comparisons for
+    // eight elements, against allocating and filling a `Set` — which on a
+    // typical short `tags` array was a double-digit share of validating the
+    // whole document. `NaN` is equal to itself here too — SameValueZero, as
+    // the `Set` path below and {@link deepEqual} — so the test is `===` plus
+    // the one pair `===` gets wrong.
+    if (len <= 8) {
+      for (let i = 0; i < len; i++) {
+        const a = arr[i]
+        for (let j = i + 1; j < len; j++) {
+          const b = arr[j]
+          if (a === b || (Number.isNaN(a) && Number.isNaN(b))) return false
+        }
+      }
+      return true
+    }
+    return new Set(arr).size === len
+  }
 
   // Structural path: bucket by hash, then run the exact `deepEqual` only within a
   // bucket. Distinct objects land in distinct buckets (~O(n)); the O(n²) pairwise
@@ -581,6 +634,7 @@ export const newBranchContext = (ctx: InterpreterContext): InterpreterContext =>
   refStack: ctx.refStack,
   maxDepth: ctx.maxDepth,
   budget: ctx.budget,
+  branch: null,
 })
 /**
  * The property-presence test, used by every keyword that asks the question:

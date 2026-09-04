@@ -167,6 +167,22 @@ export const allUnique = (arr: readonly unknown[]): boolean => {
 }
 
 /**
+ * True when \`test\` holds for every element of \`arr\`, holes included. Backs the
+ * item check inside a generated boolean guard.
+ *
+ * Not \`Array.prototype.every\`, because that *skips holes* in a sparse array
+ * (\`[, 'x']\`), whereas the validator's index-based loop reads a hole as
+ * \`undefined\` and rejects it — and the guard must never accept what the validator
+ * rejects. The guard used to get that by materialising \`Array.from(arr)\` first,
+ * which copied every array it looked at; an index loop reads a hole the same way
+ * and copies nothing.
+ */
+export const everyItem = (arr: readonly unknown[], test: (item: unknown) => boolean): boolean => {
+  for (let i = 0; i < arr.length; i++) if (!test(arr[i])) return false
+  return true
+}
+
+/**
  * Escapes one JSON Pointer segment (RFC 6901): \`~\` → \`~0\`, \`/\` → \`~1\`, in that
  * order. Generated error paths are built from *runtime* keys wherever the schema
  * did not name them — a \`patternProperties\` match, an \`additionalProperties\`

@@ -56,7 +56,7 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Document')
 
     // With local variable caching, optional $ref properties use the cached variable
-    expect(result).toContain('_contact !== undefined && { contact: parseContact(_contact) }')
+    expect(result).toContain('if (_contact !== undefined) out.contact = parseContact(_contact);')
   })
 
   it('calls imported parser for required $ref property', () => {

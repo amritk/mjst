@@ -133,19 +133,36 @@ const makeValidator = (
   const compiler = newCompiler(schema, registry, asserts, formats)
   const root = compileNode(compiler, schema)
 
+  // One run context for the life of the validator, reset per call rather than
+  // rebuilt. A validation is synchronous and the interpreter never calls back
+  // into user code, so two runs of one validator can never overlap, and the
+  // context, its budget holder, its ref stack and (in error mode) its branch
+  // probe context are safe to keep. That took three allocations off every
+  // call, which on a small schema was a measurable share of the whole run. The
+  // error list is the one thing handed to the caller, and it is dropped from
+  // the context at the start of the next run, so no two results share one.
+  const ctx: InterpreterContext = {
+    root: schema,
+    registry,
+    emitErrors,
+    caches,
+    errors: null,
+    failed: false,
+    refStack: [],
+    maxDepth: limits.maxDepth,
+    budget: { steps: limits.maxSteps },
+    branch: null,
+  }
+  const maxSteps = limits.maxSteps
+
   return (input: unknown): unknown => {
-    const ctx: InterpreterContext = {
-      root: schema,
-      registry,
-      emitErrors,
-      caches,
-      errors: null,
-      failed: false,
-      refStack: [],
-      maxDepth: limits.maxDepth,
-      // A fresh budget per call: the ceiling is per-validation, not per-validator.
-      budget: { steps: limits.maxSteps },
-    }
+    ctx.errors = null
+    ctx.failed = false
+    // A run that threw (a limit, an unresolvable ref) unwound past its
+    // balanced pops, so the stack is cleared here rather than trusted.
+    if (ctx.refStack.length !== 0) ctx.refStack.length = 0
+    // A fresh budget per call: the ceiling is per-validation, not per-validator.
+    ctx.budget.steps = maxSteps
     root.run(ctx, input, '', null, 0, rootScope)
     if (emitErrors) {
       return (ctx.errors === null ? true : { valid: false, errors: ctx.errors }) satisfies ValidationResult
