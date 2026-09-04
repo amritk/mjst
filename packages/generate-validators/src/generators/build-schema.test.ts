@@ -379,4 +379,34 @@ describe('build-schema', () => {
       }),
     ).rejects.toThrow(/Could not resolve \$ref/)
   })
+
+  // The strategy is the fifth positional argument and has to reach every file
+  // the walk emits, not only the root, or the CLI's `--unknown-keys` would flip
+  // one type and leave its `$ref`-reached definitions on the default. (The root
+  // here carries the `$ref`, which the flat guard declines, so the count shows
+  // up in the definition's file — the one the walk reaches second.)
+  it('threads unknownKeys to a $ref-reached definition', async () => {
+    const schema = {
+      type: 'object',
+      properties: { meta: { $ref: '#/$defs/meta' } },
+      required: ['meta'],
+      $defs: {
+        meta: {
+          type: 'object',
+          properties: { a: { type: 'number' } },
+          required: ['a'],
+          additionalProperties: false,
+        },
+      },
+    } as JSONSchema
+
+    const byDefault = await buildValidatorSchema(schema, 'Doc')
+    const enumerable = await buildValidatorSchema(schema, 'Doc', '', undefined, 'count-enumerable')
+    const own = byDefault.find((f) => f.filename === 'meta.ts')?.content ?? ''
+    const forIn = enumerable.find((f) => f.filename === 'meta.ts')?.content ?? ''
+    expect(own).toContain('Object.keys(obj).length !== 1')
+    expect(own).not.toContain('_c0')
+    expect(forIn).toContain('for (const _k0 in obj) _c0++')
+    expect(forIn).not.toContain('Object.keys(obj)')
+  })
 })

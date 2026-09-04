@@ -1,37 +1,53 @@
 ---
-"@amritk/generate-validators": patch
-"@amritk/generate-parsers": patch
+"@amritk/generate-validators": minor
+"@amritk/generate-parsers": minor
+"@amritk/mjst": minor
+"@amritk/helpers": minor
 ---
 
-The `additionalProperties: false` fast paths count keys with `for...in` instead
-of `Object.keys(obj).length === N`.
+Nested objects are hoisted into a local on every fast path, and how a closed
+object proves it has no undeclared key is now an option: `unknownKeys`.
 
-In both generators, a closed object whose declared properties are all required
-proves "no undeclared key" by counting: the typed checks ahead of the count have
-already proven every declared key present, so exactly N keys means no extra.
-That count was `Object.keys(obj).length === N`, which builds a keys array per
-call — twice per call for a nested closed object — and in the parsers carried an
-`Object.getPrototypeOf(obj) === Object.prototype` guard in front of it. It is now
-`let c = 0; for (const k in obj) c++; if (c !== N) …`, emitted as statements
-after the typed chain in `validateX`, `isX`, the parser fast path and the shape
-predicate. A `for...in` over a stable shape is answered from V8's enum cache and
-allocates nothing. When a declared property is optional the presence proof does
-not hold, and the per-key comparison walk is emitted as before.
+**Hoisting.** The validators' `isX` / `validateX` guards used to read every
+member of a nested object through a fresh cast — `typeof (obj.deeplyNested as
+Record<string, unknown>).foo`, once per member, plus twice more for the key
+count. They now load each nested object once, `const _n0 = obj.deeplyNested as
+Record<string, unknown>`, guard it with `typeof _n0 === 'object' && _n0 !==
+null` before the first member read, and read every member (and count every key)
+through the local, at any depth, for required and optional nested objects and
+for object array items alike. V8 had already commoned the loads; on
+JavaScriptCore the local is what lets the guard be optimised at all — under the
+moltar harness `isAssertStrict` on Bun goes from ~45M ops/s to the harness
+floor (~420M, the call eliminated). A guard that hoists or counts is now a run
+of early exits (`if (!(…)) return …`) rather than one nested `&&` chain. The
+parsers already read nested objects through cached locals and sub-parser
+parameters, so their fast paths keep their shape and gain the option below.
 
-Which keys the count sees: the ones `for...in` sees — the same keys the cold
-paths have always swept. An enumerable key inherited from a crafted or polluted
-`Object.prototype` is an extra on both paths (rejected: the safe direction); a
-declared key the input inherits rather than owns satisfies both paths, whose
-presence reads are `in`. The own-key count split the two: `validateX`'s guard
-accepted what `validateXErrors` reported, and the parser's fast path accepted
-what its cold path threw on. The parser's prototype guard existed to keep the
-own-key count sound against an inherited declared key masking an own extra; a
-`for...in` count sees that key too and needs no guard. Every verdict on a value
-that could have come from JSON is unchanged, and the differential suites against
-Ajv and `@amritk/runtime-validators` pass as before.
+**`unknownKeys: 'count-keys' | 'count-enumerable'`** — on `buildSchema` (15th
+positional), `buildValidatorSchema` (5th), and the CLI (`--unknown-keys`, or
+`unknownKeys` in the config file). `'count-keys'` is `Object.keys(obj).length
+=== N` (in the parsers behind an `Object.getPrototypeOf(input) ===
+Object.prototype` guard, which keeps an own-key count sound against an inherited
+declared key); `'count-enumerable'` is `let c = 0; for (const k in obj) c++`,
+which allocates nothing and needs no prototype guard. When a declared property is
+optional both fall back to the per-key `for…in` walk. The two trade places
+between engines, measured under the moltar harness (Node 22 / Bun 1.4, each case
+alone in its own process): `assertStrict` 20M / 420M ops/s with `count-keys`
+against 33M / 43M with `count-enumerable`; `parseStrict` 14M / 41M against
+29M / 22M. The default is **`'count-keys'`** — mjst benches on Bun, where it is
+never the slower form and is 2× faster on the strict parse. Node-only consumers
+gain ~1.7× on the strict validator and ~2× on the strict parser by passing
+`'count-enumerable'`. The choice is made at generation time; the emitted code
+never detects its runtime.
 
-`bun run bench:moltar` now ends with mjst measured under upstream's own process
-model — all four leaderboard cases in one process per runtime — and
-`bun run bench:moltar:leaderboard` runs just that. Node 22, one process:
-`assertStrict` 18.7M → 20.7M ops/s, `parseStrict` 12.5M → 13.9M; isolated per
-process, `assertStrict` 21.7M → 29.4M.
+Every verdict on a value that could have come from JSON is unchanged under
+either strategy, and the differential suites against Ajv and
+`@amritk/runtime-validators` pass as before. The two strategies do read
+different key sets on a value JSON cannot hold (an enumerable key on a crafted
+prototype): `for…in` agrees with the cold paths exactly, `Object.keys` accepts an
+inherited extra the cold path would report — which is what `main` always did.
+
+`@amritk/helpers` gains `unknown-keys-strategy` (the type, the list, the default
+and a guard), shared by both generators and the CLI. `bun run
+bench:moltar:leaderboard` prints one row per strategy for every runtime it
+finds, so both variants are measured side by side.

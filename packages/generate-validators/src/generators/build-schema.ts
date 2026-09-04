@@ -1,4 +1,5 @@
 import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
+import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -280,6 +281,11 @@ const RESERVED_WORDS = new Set([
  *   loading is yours to do (or `@amritk/resolve-refs`'), and a `$ref` to a URI
  *   nobody registered still stops generation. Only the documents actually
  *   referenced get files.
+ * @param unknownKeys - How the generated fast paths prove a closed object
+ *   (`additionalProperties: false`) carries no undeclared key: `'count-keys'`
+ *   (the default) compares `Object.keys(obj).length`, `'count-enumerable'`
+ *   counts with `for…in`. The first is the faster form on JavaScriptCore (Bun),
+ *   the second on V8 (Node) — see the README for the measurements.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -298,6 +304,7 @@ export const buildValidatorSchema = async (
   rootTypeName: string,
   typeSuffix = '',
   schemas?: Readonly<Record<string, unknown>>,
+  unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
 ): Promise<GeneratedFile[]> => {
   const files: GeneratedFile[] = []
 
@@ -359,6 +366,7 @@ export const buildValidatorSchema = async (
     const content = generateValidatorFile(node.schema, node.typeName, {
       rootSchema: node.rootSchema,
       typeSuffix,
+      unknownKeys,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })

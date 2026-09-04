@@ -27,9 +27,11 @@ const files = await buildValidatorSchema(schema, 'Document')
    `validateFoo` returns `true | { valid: false; errors: ValidationError[] }`.
    Check `if (result !== true)` for the failure path — `if (result.valid)` is
    wrong.
-2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?)`
-   — async, no `strict`/`typesOnly`/options. Returns `GeneratedFile[]` in memory
-   (you write them).
+2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?)`
+   — async, no `strict`/`typesOnly`/options object. Returns `GeneratedFile[]` in
+   memory (you write them). `unknownKeys` (`'count-keys'` by default,
+   `'count-enumerable'` for Node-only output) picks how a closed object's guard
+   counts keys; nothing in the generated code detects its runtime.
 3. **Output includes a shared `validation-result.ts`** (`ValidationError`,
    `ValidationResult`, helpers) plus the `index.ts` barrel.
 4. **`NaN` fails a *constrained* number** (`minimum`/`maximum`/`multipleOf` all

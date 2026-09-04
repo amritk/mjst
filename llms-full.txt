@@ -52,7 +52,8 @@ mjst compile-api ./routes.ts --out ./dist/handler.ts
 
 `--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
 `--validators`, `--examples`, `--types-only`, `--build`, `--strict`,
-`--strip-unknown`, `--readonly`, `--import-ext ts|js`, `--config <path>`,
+`--strip-unknown`, `--unknown-keys count-keys|count-enumerable`, `--readonly`,
+`--import-ext ts|js`, `--config <path>`,
 `--resolve-remote` / `--allowed-hosts` (SSRF-guarded remote `$ref`s).
 
 ## Lint gotchas
@@ -469,9 +470,11 @@ const files = await buildSchema(schema, 'Document')
 
 1. **`buildSchema` is `async` and takes POSITIONAL args, no options object.** The
    full signature is
-   `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?, strict?, helpersMode?, helpersImportPrefix?, readonly?, stripUnknown?, typeSuffix?, importExt?, caseInsensitive?)`.
+   `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?, strict?, helpersMode?, helpersImportPrefix?, readonly?, stripUnknown?, typeSuffix?, importExt?, caseInsensitive?, schemas?, unknownKeys?)`.
    To set a later flag you must pass every intervening positional. (The README's
-   short form omits the trailing seven.)
+   short form omits the trailing seven.) `unknownKeys` (`'count-keys'` by default,
+   `'count-enumerable'` for Node-only output) picks how a closed object's fast
+   path counts keys; nothing in the generated code detects its runtime.
 2. **It returns files in memory — it does NOT write to disk.** You write the
    `GeneratedFile[]` (`{ filename, content }`) yourself. `rootTypeName` becomes
    that filename (lowercased) as well as the `export type` name, so it must be a
@@ -527,9 +530,11 @@ const files = await buildValidatorSchema(schema, 'Document')
    `validateFoo` returns `true | { valid: false; errors: ValidationError[] }`.
    Check `if (result !== true)` for the failure path — `if (result.valid)` is
    wrong.
-2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?)`
-   — async, no `strict`/`typesOnly`/options. Returns `GeneratedFile[]` in memory
-   (you write them).
+2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?)`
+   — async, no `strict`/`typesOnly`/options object. Returns `GeneratedFile[]` in
+   memory (you write them). `unknownKeys` (`'count-keys'` by default,
+   `'count-enumerable'` for Node-only output) picks how a closed object's guard
+   counts keys; nothing in the generated code detects its runtime.
 3. **Output includes a shared `validation-result.ts`** (`ValidationError`,
    `ValidationResult`, helpers) plus the `index.ts` barrel.
 4. **`NaN` fails a *constrained* number** (`minimum`/`maximum`/`multipleOf` all

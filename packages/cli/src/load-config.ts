@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { SourceFormat } from '@amritk/adapters/source-format'
+import { isUnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 
 import type { CliConfig } from './cli-config'
 import { validateConfig } from './validate-config'
@@ -59,6 +60,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['stripUnknown'] === 'boolean' && { stripUnknown: obj['stripUnknown'] }),
     ...(typeof obj['caseInsensitive'] === 'boolean' && { caseInsensitive: obj['caseInsensitive'] }),
     ...(typeof obj['readonly'] === 'boolean' && { readonly: obj['readonly'] }),
+    ...(isUnknownKeysStrategy(obj['unknownKeys']) && { unknownKeys: obj['unknownKeys'] }),
     ...(isHelpersMode(obj['helpers']) && { helpers: obj['helpers'] }),
     ...(isImportExt(obj['importExt']) && { importExt: obj['importExt'] }),
     ...(typeof obj['rootType'] === 'string' && { rootType: obj['rootType'] }),

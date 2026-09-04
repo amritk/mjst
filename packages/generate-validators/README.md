@@ -84,7 +84,7 @@ if (!result.valid) {
 
 ## API
 
-### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?)`
+### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?)`
 
 | Parameter | Type | Default | Description |
 |:---|:---|:---|:---|
@@ -92,6 +92,7 @@ if (!result.valid) {
 | `rootTypeName` | `string` | — | Name used for the root type (e.g. `"Document"`). |
 | `typeSuffix` | `string` | `''` | Suffix appended to every `$ref`-derived type name (`'Object'` turns `Contact` into `ContactObject`). The root type name is unaffected. |
 | `schemas` | `Record<string, unknown>` | — | Documents you have **already loaded**, keyed by the absolute URI a `$ref` names them by. See below. |
+| `unknownKeys` | `'count-keys' \| 'count-enumerable'` | `'count-keys'` | How the fast paths prove a closed object (`additionalProperties: false`) has no undeclared key: `Object.keys(obj).length` (fastest on Bun) or a `for…in` count (fastest on Node). See [Choosing how keys are counted](#choosing-how-keys-are-counted). |
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
 
@@ -244,9 +245,10 @@ of it is published.
 Generated validators are straight-line, monomorphic TypeScript with no generic
 dispatch. The exported `validateX` is split into a hot and a cold half: on the
 happy path it runs a single allocation-free boolean guard — a pure `&&` chain of
-`typeof` checks (plus a `for...in` key count when an object is closed with
-`additionalProperties: false`) — and `return true`s straight away, only
-calling a separate error-collecting function when something is actually wrong.
+`typeof` checks, every nested object loaded once into a local, plus a key count
+when an object is closed with `additionalProperties: false` — and `return true`s
+straight away, only calling a separate error-collecting function when something
+is actually wrong.
 Keeping the hot function tiny lets the JIT optimise it aggressively, so a valid-input
 check beats every other library measured — including the build-time transformer
 typia — while still emitting full JSON-Pointer errors for invalid input, and
@@ -343,11 +345,11 @@ bun run bench:moltar   # benny, under the leaderboard's conditions
 
 Closing an object with `additionalProperties: false` means proving no
 undeclared key is present, and every library answers that by enumerating keys:
-mjst's guard counts them (a `for...in` count compared with `n`, exact because
-each declared property is required and already proven present — and, unlike
-`Object.keys(obj).length`, allocating nothing), Ajv and Zod sweep with
-`for...in`, TypeBox runs its own sweep. On V8 that costs the same whatever the
-input looks like.
+mjst's guard counts them (`Object.keys(obj).length === n` by default, exact
+because each declared property is required and already proven present — see
+[Choosing how keys are counted](#choosing-how-keys-are-counted) for the
+`for...in` alternative), Ajv and Zod sweep with `for...in`, TypeBox runs its own
+sweep. On V8 that costs the same whatever the input looks like.
 
 On JavaScriptCore (Bun) it does not. Making an object non-extensible —
 `Object.freeze`, `Object.seal` or a bare `Object.preventExtensions` — turns off
@@ -383,6 +385,45 @@ stays as it is.
 If it matters for your workload: validate before freezing (the verdict is the
 same either way — `src/generators/frozen-input.test.ts` pins that), or run on a
 V8 runtime, where the cliff does not exist.
+
+### Choosing how keys are counted
+
+The count itself can be spelled two ways, and the two trade places between the
+engines. `unknownKeys` — the last argument of `buildValidatorSchema`, the
+`--unknown-keys` flag of the CLI, the same option on `@amritk/generate-parsers` —
+picks one at generation time:
+
+- **`'count-keys'`** (default) — `Object.keys(obj).length === n`. Builds a keys
+  array per call, which V8 scalar-replaces when only the length is read.
+- **`'count-enumerable'`** — `let c = 0; for (const k in obj) c++`. Allocates
+  nothing, and on V8 is answered straight from the shape's enum cache. On
+  JavaScriptCore a `for...in` over a non-extensible object is the slow path
+  described above, and even on a mutable one it trails `Object.keys`.
+
+Measured under the moltar harness (benny, the frozen fixture, each case alone in
+its own process — `bun run bench:moltar:leaderboard` prints one row per strategy
+on every runtime it finds), Linux x64, Node 22 / Bun 1.4:
+
+| case | `unknownKeys` | Node 22 | Bun 1.4 |
+|:--|:--|--:|--:|
+| `assertStrict` (`isX`) | `count-keys` | ~20M ops/s | ~420M ops/s (the harness floor — the call is eliminated) |
+| `assertStrict` (`isX`) | `count-enumerable` | ~33M ops/s | ~43M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~14M ops/s | ~41M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~29M ops/s | ~22M ops/s |
+
+The default is `count-keys` because this repo benches on Bun, where it is never
+the slower form and is 2× faster on the strict parse. Code that will only ever
+run on Node gains ~1.7× on the strict validator and ~2× on the strict parser by
+flipping to `count-enumerable`. The choice is made once, when the code is
+generated: nothing in the emitted file detects its runtime.
+
+The two strategies also read different key sets — `Object.keys` sees own keys,
+`for...in` sees enumerable ones, inherited included — which no value parsed from
+JSON can tell apart. The `for...in` count agrees with the cold path exactly, so
+`isX` and `validateX` answer alike on a crafted prototype; the own-key count can
+accept an *inherited* extra that `validateXErrors` would report, and `isX` under
+it declines an inherited declared key that `validateX` accepts through its cold
+path. Neither strategy ever accepts a value the interpreter rejects on JSON data.
 
 ---
 

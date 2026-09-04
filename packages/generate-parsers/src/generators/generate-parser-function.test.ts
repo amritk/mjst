@@ -395,11 +395,25 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Strict', { strict: true })
 
     // The deep guard already proved the key set is exactly the declared
-    // properties — with every property required, via a `for…in` key count
-    // after the typed chain rather than a per-key walk — so the fast path
-    // builds an explicit literal (faster than a generic spread and a stable
-    // shape) rather than `{ ...input }`.
+    // properties — with every property required, via a key count rather than a
+    // per-key walk — so the fast path builds an explicit literal (faster than a
+    // generic spread and a stable shape) rather than `{ ...input }`. By default
+    // the count is the prototype-guarded `Object.keys` expression, one more
+    // term of the guard.
     expect(result).toContain(
+      'if (typeof _id === "number" && typeof _name === "string" && Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2) return {\n' +
+        '    id: _id,\n' +
+        '    name: _name,\n' +
+        '  } as unknown as Strict;',
+    )
+    expect(result).not.toContain('_keyCount')
+    expect(result).not.toContain('_hasOnlyKnownKeysStrict')
+    expect(result).not.toContain('return { ...input } as Strict;')
+
+    // `count-enumerable` counts with `for…in` instead, as statements behind the
+    // chain, with no keys array and no prototype guard.
+    const enumerable = generateParserFunction(schema, 'Strict', { strict: true, unknownKeys: 'count-enumerable' })
+    expect(enumerable).toContain(
       'if (typeof _id === "number" && typeof _name === "string") {\n' +
         '    let _keyCount = 0;\n' +
         '    for (const _k in input) _keyCount++;\n' +
@@ -409,17 +423,17 @@ describe('generate-parser-function', () => {
         '    } as unknown as Strict;\n' +
         '  }',
     )
-    expect(result).not.toContain('Object.keys(input)')
-    expect(result).not.toContain('Object.getPrototypeOf(input)')
-    expect(result).not.toContain('_hasOnlyKnownKeysStrict')
-    expect(result).not.toContain('return { ...input } as Strict;')
+    expect(enumerable).not.toContain('Object.keys(input)')
+    expect(enumerable).not.toContain('Object.getPrototypeOf(input)')
 
-    const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(result, 'parseStrict')
-    expect(parse({ id: 1, name: 'a' })).toEqual({ id: 1, name: 'a' })
-    expect(() => parse({ id: 1, name: 'a', extra: true })).toThrow('unknown property "extra"')
-    // The count matches (2 keys) but a required key is missing — the typed
-    // checks keep the count form sound and route this to the slow-path throw.
-    expect(() => parse({ id: 1, extra: true })).toThrow("missing required property 'name'")
+    for (const source of [result, enumerable]) {
+      const parse = evalGenerated<(input: unknown) => Record<string, unknown>>(source, 'parseStrict')
+      expect(parse({ id: 1, name: 'a' })).toEqual({ id: 1, name: 'a' })
+      expect(() => parse({ id: 1, name: 'a', extra: true })).toThrow('unknown property "extra"')
+      // The count matches (2 keys) but a required key is missing — the typed
+      // checks keep the count form sound and route this to the slow-path throw.
+      expect(() => parse({ id: 1, extra: true })).toThrow("missing required property 'name'")
+    }
   })
 
   it('handles complex object with multiple property types', () => {
@@ -2438,13 +2452,13 @@ describe('generate-parser-function', () => {
       expect(validate(smuggled)).toBe(false)
     })
 
-    // The no-extras term is a `for…in` key count, so it sees *inherited*
-    // enumerable keys — exactly the keys the cold path's `for…in` rejection has
-    // always walked, which is what lets the count drop the prototype guard an
-    // own-key count needed. Pinned here in both directions against an object
-    // whose prototype carries an enumerable property, since those are the
-    // inputs an own-key reading and a `for…in` reading disagree on.
-    it('counts inherited enumerable keys the way the cold path walks them', () => {
+    // Under `count-enumerable` the no-extras term is a `for…in` key count, so it
+    // sees *inherited* enumerable keys — exactly the keys the cold path's
+    // `for…in` rejection has always walked, which is what lets the count drop
+    // the prototype guard an own-key count needs. Pinned here in both directions
+    // against an object whose prototype carries an enumerable property, since
+    // those are the inputs an own-key reading and a `for…in` reading disagree on.
+    it('counts inherited enumerable keys the way the cold path walks them under count-enumerable', () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: { a: { type: 'number' }, b: { type: 'number' } },
@@ -2452,13 +2466,22 @@ describe('generate-parser-function', () => {
         additionalProperties: false,
       }
 
-      const source = generateParserFunction(schema, 'Pair', { strict: true })
+      const source = generateParserFunction(schema, 'Pair', { strict: true, unknownKeys: 'count-enumerable' })
       expect(source).toContain(
         'let _keyCount = 0;\n    for (const _k in input) _keyCount++;\n    if (_keyCount === 2) return {',
       )
       expect(source).not.toContain('Object.getPrototypeOf')
       const parse = evalGenerated<(input: unknown) => unknown>(source, 'parsePair')
-      const validatorSource = generateShapeValidator(schema, 'Pair', false)
+      const validatorSource = generateShapeValidator(
+        schema,
+        'Pair',
+        false,
+        '',
+        true,
+        false,
+        undefined,
+        'count-enumerable',
+      )
       expect(validatorSource).toContain(
         'let _keyCount = 0;\n  for (const _k in input) _keyCount++;\n  return _keyCount === 2;',
       )
@@ -2484,6 +2507,47 @@ describe('generate-parser-function', () => {
       expect(parsed).toEqual({ a: 1, b: 2 })
       expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype)
       expect(validate(withInheritedDeclared)).toBe(true)
+    })
+
+    // The default counts *own* keys with `Object.keys`, and that count is only
+    // sound behind a prototype guard: an inherited declared key would otherwise
+    // let an own extra keep the count at N. A non-plain object therefore takes
+    // the cold path under this strategy, and the cold path — `in` for presence,
+    // `for…in` for extras — gives the same verdict the `for…in` count gives.
+    it('guards the Object.keys count with the prototype under count-keys', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'number' }, b: { type: 'number' } },
+        required: ['a', 'b'],
+        additionalProperties: false,
+      }
+
+      const source = generateParserFunction(schema, 'Pair', { strict: true })
+      expect(source).toContain(
+        '&& Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2) return {',
+      )
+      expect(source).not.toContain('_keyCount')
+      const validatorSource = generateShapeValidator(schema, 'Pair', false)
+      expect(validatorSource).toContain(
+        '    && Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2;\n};',
+      )
+      const parse = evalGenerated<(input: unknown) => unknown>(source, 'parsePair')
+      const validate = evalGenerated<(input: unknown) => boolean>(validatorSource, 'validatePairShape')
+
+      expect(parse({ a: 1, b: 2 })).toEqual({ a: 1, b: 2 })
+      expect(validate({ a: 1, b: 2 })).toBe(true)
+
+      // Own keys are exactly {a, b}, but the prototype is not Object.prototype:
+      // the fast path declines, and the cold `for…in` rejection names the extra.
+      const withInheritedExtra = Object.assign(Object.create({ extra: 3 }), { a: 1, b: 2 })
+      expect(() => parse(withInheritedExtra)).toThrow('unknown property "extra"')
+      expect(validate(withInheritedExtra)).toBe(false)
+
+      // The shape predicate says "not already in shape" for any non-plain
+      // object; the parser still accepts it through the cold path, as before.
+      const withInheritedDeclared = Object.assign(Object.create({ a: 1 }), { b: 2 })
+      expect(parse(withInheritedDeclared)).toEqual({ a: 1, b: 2 })
+      expect(validate(withInheritedDeclared)).toBe(false)
     })
 
     it('walks the keys instead of counting when a closed object has an optional property', () => {
@@ -2532,9 +2596,14 @@ describe('generate-parser-function', () => {
       const source = generateParserFunction(schema, 'Outer', { strict: true })
       // One count, in the nested shape predicate; the open root has no term at
       // all and keeps its `{ ...input }` fast path.
-      expect(source.split('let _keyCount = 0;').length - 1).toBe(1)
+      expect(source.split('Object.keys(input).length === 2').length - 1).toBe(1)
       expect(source).toContain('const validateOuter_MetaShape = (input: unknown): boolean => {')
-      expect(source).toContain('return _keyCount === 2;')
+      expect(source).toContain(
+        '    && Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2;\n};',
+      )
+      const enumerable = generateParserFunction(schema, 'Outer', { strict: true, unknownKeys: 'count-enumerable' })
+      expect(enumerable.split('let _keyCount = 0;').length - 1).toBe(1)
+      expect(enumerable).toContain('return _keyCount === 2;')
 
       const parse = evalGenerated<(input: unknown) => unknown>(source, 'parseOuter')
       expect(parse({ meta: { a: 1, b: 2 }, extra: true })).toEqual({ meta: { a: 1, b: 2 }, extra: true })

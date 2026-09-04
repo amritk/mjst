@@ -28,6 +28,7 @@ describe('help-text', () => {
       '--strip-unknown',
       '--case-insensitive',
       '--log-warnings',
+      '--unknown-keys',
       '--resolve-remote',
       '--allowed-hosts',
       '--allow-private-hosts',

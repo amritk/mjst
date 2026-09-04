@@ -9,11 +9,14 @@
  * (shared helpers see more call sites, inline caches see more shapes), and the
  * public numbers come from the former. This worker reproduces it for mjst.
  *
- *   usage: <bun|node> bench/moltar-leaderboard-worker.mjs <modulesDir>
+ *   usage: <bun|node> bench/moltar-leaderboard-worker.mjs <modulesDir> [case]
  *
  * `modulesDir` holds one transpiled module per case, `<case>/index.js`, built by
  * `moltar-leaderboard.ts`. Output is one JSON line: an array of
- * `{ case, ops, margin, samples }` in the order the cases ran.
+ * `{ case, ops, margin, samples }` in the order the cases ran. With a `case`
+ * named, only that module is loaded and timed — one case alone in a fresh
+ * process, the other model worth a column: it is how a generator change is
+ * measured before it meets the other three cases' call sites.
  */
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -49,8 +52,8 @@ class AssertStrict extends Benchmark {
   }
 }
 
-const [modulesDir] = process.argv.slice(2)
-if (!modulesDir) throw new Error('usage: moltar-leaderboard-worker.mjs <modulesDir>')
+const [modulesDir, onlyCase] = process.argv.slice(2)
+if (!modulesDir) throw new Error('usage: moltar-leaderboard-worker.mjs <modulesDir> [case]')
 
 const load = (caseName) => import(pathToFileURL(join(modulesDir, caseName, 'index.js')).href)
 
@@ -140,7 +143,9 @@ const CASES = [
 // Every module is loaded before any case is timed, as upstream's registration
 // does, so the later cases run against a heap the earlier ones already shaped.
 const benchmarks = []
-for (const c of CASES) {
+const selected = onlyCase === undefined ? CASES : CASES.filter((c) => c.name === onlyCase)
+if (selected.length === 0) throw new Error(`unknown leaderboard case "${onlyCase}"`)
+for (const c of selected) {
   const fn = await c.build()
   if (!c.check(fn)) throw new Error(`mjst failed the leaderboard's ${c.name} tests`)
   benchmarks.push({ name: c.name, benchmark: new c.Case('mjst', fn) })

@@ -121,6 +121,23 @@ describe('load-config', () => {
     await expect(loadConfig(configPath)).rejects.toThrow('/stripUnknown: expected boolean, received string.')
   })
 
+  it('loads unknownKeys from a config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', unknownKeys: 'count-enumerable' }))
+
+    const result = await loadConfig(configPath)
+    expect(result).toEqual({ schema: 's.json', outDir: 'o', unknownKeys: 'count-enumerable' })
+  })
+
+  it('rejects an unknownKeys value outside the two strategies', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', unknownKeys: 'for-in' }))
+
+    await expect(loadConfig(configPath)).rejects.toThrow(
+      '/unknownKeys: expected one of count-enumerable, count-keys, received "for-in".',
+    )
+  })
+
   it('loads the reference-resolution keys from a config file', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}.json`)
     await writeFile(

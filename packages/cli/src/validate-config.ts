@@ -1,4 +1,5 @@
 import { readKey } from '@amritk/helpers/read-key'
+import { UNKNOWN_KEYS_STRATEGIES } from '@amritk/helpers/unknown-keys-strategy'
 
 /**
  * The JSON type each config key accepts, mirroring `config.schema.json`.
@@ -40,6 +41,7 @@ export const CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   stripUnknown: { type: 'boolean' },
   caseInsensitive: { type: 'boolean' },
   readonly: { type: 'boolean' },
+  unknownKeys: { type: 'string', enum: [...UNKNOWN_KEYS_STRATEGIES] },
   helpers: { type: 'string', enum: ['package', 'embedded'] },
   typeSuffix: { type: 'string' },
   banner: { type: 'boolean|string' },

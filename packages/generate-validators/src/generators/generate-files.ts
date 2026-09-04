@@ -1,4 +1,5 @@
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
+import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { collectValidatorImports } from './collect-validator-imports'
@@ -22,6 +23,12 @@ type GenerateValidatorFileOptions = {
    * Defaults to `''` (no suffix).
    */
   readonly typeSuffix?: string
+  /**
+   * How the fast paths prove a closed object carries no undeclared key —
+   * `Object.keys(obj).length` (the default) or a `for…in` count. See
+   * {@link UnknownKeysStrategy} for the trade-off between the two.
+   */
+  readonly unknownKeys?: UnknownKeysStrategy
 }
 
 /**
@@ -72,8 +79,9 @@ export const generateValidatorFile = (
     typeSuffix,
     ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
   })
-  const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix, options?.rootSchema)
-  const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix)
+  const unknownKeys = options?.unknownKeys ?? DEFAULT_UNKNOWN_KEYS
+  const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix, options?.rootSchema, unknownKeys)
+  const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix, unknownKeys)
 
   const body = validatorFunction + booleanGuard
 

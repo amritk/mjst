@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildSchema } from '@amritk/generate-parsers'
+import { UNKNOWN_KEYS_STRATEGIES, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 
 import { buildValidatorSchema } from '../src/index.ts'
 import { fmtOps } from './measure.ts'
@@ -17,6 +18,12 @@ import { assertSchema } from './moltar-data.mjs'
  * its own script for a quick before/after on the generators:
  *
  *   bun run bench:moltar:leaderboard
+ *
+ * Every case is generated once per `unknownKeys` strategy and each strategy gets
+ * a row, because the two strategies trade places between the runtimes: the
+ * `for…in` count is the faster form on V8 and the slower one on JavaScriptCore,
+ * where the leaderboard's frozen fixture puts every `for…in` on the engine's
+ * slow path. The public leaderboard runs on Node; this repo benches on Bun.
  */
 
 const BENCH_DIR = fileURLToPath(new URL('.', import.meta.url))
@@ -32,14 +39,14 @@ type Runtime = { id: 'bun' | 'node'; command: string; version: string }
 
 /**
  * Generates the four modules the leaderboard case would wire up — parsers for
- * the parse cases, validators for the assert cases — and transpiles them to
- * JavaScript so the same files run under Node and Bun. `parseSafe` is the strict
- * parser with `stripUnknown` over the open schema; `parseStrict` is the strict
- * parser over the closed one. Helpers are embedded so each module dir stands
- * alone.
+ * the parse cases, validators for the assert cases — under one `unknownKeys`
+ * strategy, and transpiles them to JavaScript so the same files run under Node
+ * and Bun. `parseSafe` is the strict parser with `stripUnknown` over the open
+ * schema; `parseStrict` is the strict parser over the closed one. Helpers are
+ * embedded so each module dir stands alone.
  */
-export const buildLeaderboardModules = async (): Promise<string> => {
-  const root = mkdtempSync(join(tmpdir(), 'mjst-moltar-leaderboard-'))
+export const buildLeaderboardModules = async (unknownKeys: UnknownKeysStrategy): Promise<string> => {
+  const root = mkdtempSync(join(tmpdir(), `mjst-moltar-leaderboard-${unknownKeys}-`))
   const transpiler = new Bun.Transpiler({ loader: 'ts' })
   const write = (caseName: LeaderboardCase, files: readonly { filename: string; content: string }[]): void => {
     const dir = join(root, caseName)
@@ -63,18 +70,33 @@ export const buildLeaderboardModules = async (): Promise<string> => {
       './',
       false,
       stripUnknown,
+      '',
+      'js',
+      false,
+      undefined,
+      unknownKeys,
     )
+  const validator = (typeName: string, strictSchema: boolean) =>
+    buildValidatorSchema(assertSchema(strictSchema), typeName, '', undefined, unknownKeys)
   write('parseSafe', await parser('ParseSafe', false, true))
   write('parseStrict', await parser('ParseStrict', true, false))
-  write('assertLoose', await buildValidatorSchema(assertSchema(false), 'AssertLoose'))
-  write('assertStrict', await buildValidatorSchema(assertSchema(true), 'AssertStrict'))
+  write('assertLoose', await validator('AssertLoose', false))
+  write('assertStrict', await validator('AssertStrict', true))
   return root
 }
 
-/** Runs the four cases in one process under `runtime`. */
-export const runLeaderboardWorker = (runtime: Runtime, modulesDir: string): LeaderboardResult[] | null => {
+/**
+ * Runs the four cases in one process under `runtime` — or, with `onlyCase`, that
+ * one case alone in a fresh process.
+ */
+export const runLeaderboardWorker = (
+  runtime: Runtime,
+  modulesDir: string,
+  onlyCase?: LeaderboardCase,
+): LeaderboardResult[] | null => {
   try {
-    const stdout = execFileSync(runtime.command, [WORKER, modulesDir], { encoding: 'utf8', maxBuffer: 1024 * 1024 })
+    const args = onlyCase === undefined ? [WORKER, modulesDir] : [WORKER, modulesDir, onlyCase]
+    const stdout = execFileSync(runtime.command, args, { encoding: 'utf8', maxBuffer: 1024 * 1024 })
     return JSON.parse(stdout) as LeaderboardResult[]
   } catch (error) {
     const detail = error instanceof Error ? ((error as { stderr?: string }).stderr ?? error.message) : String(error)
@@ -98,22 +120,64 @@ export const detectRuntimes = (): Runtime[] => {
 const pad = (s: string, width: number): string => s.padEnd(width)
 const padStart = (s: string, width: number): string => s.padStart(width)
 
-/** Prints the four-case table, one column per runtime. */
-export const runLeaderboard = async (runtimes: Runtime[] = detectRuntimes()): Promise<void> => {
-  console.log('## leaderboard process model — mjst, four cases in one process\n')
-  console.log('Upstream runs every case a library registers back to back in one process, in this')
-  console.log('order, each under benny at its defaults with the result discarded. ± is benny’s margin.\n')
-  const modulesDir = await buildLeaderboardModules()
-  const columns = runtimes.map((runtime) => ({ runtime, results: runLeaderboardWorker(runtime, modulesDir) }))
-  console.log(`  ${pad('case', 14)}${columns.map((c) => padStart(c.runtime.version, 18)).join('')}`)
+/** One measurement per (runtime, strategy), keyed `${runtime.id}:${unknownKeys}`. */
+type Cells = Map<string, LeaderboardResult[] | null>
+
+const label = (caseName: LeaderboardCase, unknownKeys: UnknownKeysStrategy): string =>
+  `${caseName} · ${unknownKeys}${unknownKeys === 'count-keys' ? ' (default)' : ''}`
+
+/** Prints one table: a row per (case, strategy), a column per runtime. */
+const printTable = (runtimes: readonly Runtime[], cells: Cells): void => {
+  const rowWidth = Math.max(...LEADERBOARD_CASES.flatMap((c) => UNKNOWN_KEYS_STRATEGIES.map((u) => label(c, u).length)))
+  console.log(`  ${pad('case · unknownKeys', rowWidth)}${runtimes.map((r) => padStart(r.version, 18)).join('')}`)
   for (const caseName of LEADERBOARD_CASES) {
-    const cells = columns.map((c) => {
-      const result = c.results?.find((r) => r.case === caseName)
-      return padStart(result ? `${fmtOps(result.ops)} ±${result.margin.toFixed(0)}%` : 'n/a', 18)
-    })
-    console.log(`  ${pad(caseName, 14)}${cells.join('')}`)
+    for (const unknownKeys of UNKNOWN_KEYS_STRATEGIES) {
+      const row = runtimes.map((runtime) => {
+        const result = cells.get(`${runtime.id}:${unknownKeys}`)?.find((r) => r.case === caseName)
+        return padStart(result ? `${fmtOps(result.ops)} ±${result.margin.toFixed(0)}%` : 'n/a', 18)
+      })
+      console.log(`  ${pad(label(caseName, unknownKeys), rowWidth)}${row.join('')}`)
+    }
   }
   console.log()
+}
+
+/**
+ * Prints the two leaderboard tables — the four cases in one process, then each
+ * case alone in its own process — one row per (case, strategy), one column per
+ * runtime. The default strategy is marked so the row the CLI emits without
+ * `--unknown-keys` is easy to find.
+ */
+export const runLeaderboard = async (runtimes: Runtime[] = detectRuntimes()): Promise<void> => {
+  const modules = new Map<UnknownKeysStrategy, string>()
+  for (const unknownKeys of UNKNOWN_KEYS_STRATEGIES)
+    modules.set(unknownKeys, await buildLeaderboardModules(unknownKeys))
+
+  console.log('## leaderboard process model — mjst, four cases in one process\n')
+  console.log('Upstream runs every case a library registers back to back in one process, in this')
+  console.log('order, each under benny at its defaults with the result discarded. ± is benny’s margin.')
+  console.log('Each case appears once per `unknownKeys` strategy; `count-keys` is the default.\n')
+  const together: Cells = new Map()
+  for (const [unknownKeys, modulesDir] of modules) {
+    for (const runtime of runtimes)
+      together.set(`${runtime.id}:${unknownKeys}`, runLeaderboardWorker(runtime, modulesDir))
+  }
+  printTable(runtimes, together)
+
+  console.log('## each case alone in its own process\n')
+  console.log('The same modules, one case per fresh process — the model a generator change is')
+  console.log('measured under before it shares a heap with the other three cases.\n')
+  const alone: Cells = new Map()
+  for (const [unknownKeys, modulesDir] of modules) {
+    for (const runtime of runtimes) {
+      const results = LEADERBOARD_CASES.map((caseName) => runLeaderboardWorker(runtime, modulesDir, caseName))
+      alone.set(
+        `${runtime.id}:${unknownKeys}`,
+        results.every((r) => r !== null) ? results.flatMap((r) => r as LeaderboardResult[]) : null,
+      )
+    }
+  }
+  printTable(runtimes, alone)
 }
 
 if (import.meta.main) await runLeaderboard()

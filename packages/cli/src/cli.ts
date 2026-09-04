@@ -247,7 +247,13 @@ const runValidators = async (
   writer: OutputWriter,
   validatorsSubDir: string,
 ): Promise<string[]> => {
-  const files = await buildValidatorSchema(schema as JSONSchema, rootTypeName, config.typeSuffix)
+  const files = await buildValidatorSchema(
+    schema as JSONSchema,
+    rootTypeName,
+    config.typeSuffix,
+    undefined,
+    config.unknownKeys,
+  )
   const staged: string[] = []
 
   for (const file of files) {
@@ -285,6 +291,8 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     config.typeSuffix,
     resolveImportExt(config),
     config.caseInsensitive,
+    undefined,
+    config.unknownKeys,
   )
 
   const writer = await createOutputWriter(outputDir, config.force)
@@ -353,6 +361,8 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
     config.typeSuffix,
     resolveImportExt(config),
     config.caseInsensitive,
+    undefined,
+    config.unknownKeys,
   )
 
   const combined = combineGeneratedFiles(files)
@@ -437,6 +447,8 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
         config.typeSuffix,
         resolveImportExt(config),
         config.caseInsensitive,
+        undefined,
+        config.unknownKeys,
       )
 
       for (const file of files) {

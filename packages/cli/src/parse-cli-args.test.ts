@@ -297,6 +297,19 @@ describe('parse-cli-args', () => {
     })
   })
 
+  it('parses --unknown-keys in both syntaxes', () => {
+    expect(parseCliArgs(['--unknown-keys', 'count-enumerable'])).toEqual({ unknownKeys: 'count-enumerable' })
+    expect(parseCliArgs(['--unknown-keys=count-keys'])).toEqual({ unknownKeys: 'count-keys' })
+    expect(parseCliArgs(['--unknownKeys', 'count-keys'])).toEqual({ unknownKeys: 'count-keys' })
+  })
+
+  it('throws on an invalid --unknown-keys value, listing the strategies', () => {
+    expect(() => parseCliArgs(['--unknown-keys', 'for-in'])).toThrow(
+      'Invalid --unknown-keys value "for-in". Expected one of: count-enumerable, count-keys.',
+    )
+    expect(() => parseCliArgs(['--unknown-keys'])).toThrow('Flag "--unknown-keys" expects a value.')
+  })
+
   it('parses --helpers package with space-separated value', () => {
     const result = parseCliArgs(['--helpers', 'package'])
     expect(result).toEqual({ helpers: 'package' })
