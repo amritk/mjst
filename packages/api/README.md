@@ -2000,9 +2000,9 @@ isolates differ from one another by more than trials within one isolate do:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~94k ops/s ¹ | **~99k** | ~63k | ~87k |
-| dynamic GET, params validated | **~103k** ¹ | ~55k | ~58k | ~76k |
-| POST, body validated | **~27k** ¹ | ~22k | ~21k | ~22k |
+| static GET | **~163k ops/s** ¹ | ~160k | ~96k | ~152k |
+| dynamic GET, params validated | **~153k** ¹ | ~88k | ~63k | ~137k |
+| POST, body validated | **~41k** ¹ | ~35k | ~33k | ~39k |
 
 Under **Node 26/V8** — the same engine workerd runs, without workerd around it:
 
@@ -2029,14 +2029,14 @@ every case before it is timed.</sub>
 
 Read the ratios, not the absolutes. Against the like-for-like column —
 `hono + zod`, the other stack that actually validates — the compiled engine
-leads on Bun (1.2–2.9×) and is mixed on Node (0.87–1.4×) and under workerd
-(0.88–1.4×): widest wherever params and query have to be coerced and checked,
-narrowest (and on Node and workerd, slightly behind) on the static GET, where
-there is no validation work to win back.
+leads on Bun (1.2–2.9×) and under workerd (0.95–1.6×), and is mixed on Node
+(0.87–1.4×): widest wherever params and query have to be coerced and checked,
+narrowest (and on Node's static GET, slightly behind) where there is no
+validation work to win back.
 
 Against *unvalidated* Hono it leads only Bun's static GET (1.06×) and ties or
 trails everywhere else — 0.88–0.99× on Bun's other two cases, 0.77–1.00× across
-Node, 0.74–0.93× across workerd. That is a change from the previous revision, which
+Node, 0.89–0.95× across workerd. That is a change from the previous revision, which
 had it level with or ahead of bare Hono on the GET cases, and the cause is the
 runtimes rather than this package: bare Hono skips the validation every other
 column performs, and it now skips it fast enough that compiling the validation
@@ -2045,9 +2045,9 @@ older reason — it is dominated by reading and parsing the body, which every
 column pays and none of the compiler's work removes.
 
 The runtime (development) engine — no build step, response validation on — lands
-at 0.93–1.97× of `hono + zod` on Bun, 0.75–1.14× on Node, and 0.64–1.05× under
-workerd. Its workerd static-GET cell is also the least trustworthy number in
-these tables: the five isolates spread from 32k to 82k around a 63k median,
+at 0.93–1.97× of `hono + zod` on Bun, 0.75–1.14× on Node, and 0.60–0.94× under
+workerd. Its workerd dynamic-GET cell is also the least trustworthy number in
+these tables: the five isolates spread from 46k to 82k around a 63k median,
 which is the pause behaviour described next rather than a throughput figure.
 
 **On the pauses this table used to warn about.** An earlier revision reported
@@ -2070,8 +2070,8 @@ the object out of V8's in-object slots, taking the compiled engine from 852 to
 1276 bytes per request. Inheriting the getter from a shared prototype keeps
 the deferral and gives the layout back. The compiled engine now allocates
 **816 bytes per request against both Hono columns' 1196**, and its slow batches
-have stopped standing out: p95 sits at **1.11× its median**, tighter than bare
-Hono's 1.16× and `hono + zod`'s 1.31×, where before it stalled on 5 batches in
+have stopped standing out: p95 sits at **1.15× its median**, tighter than bare
+Hono's 1.17× and `hono + zod`'s 1.58×, where before it stalled on 5 batches in
 60 and lost 29% of its wall clock to them.
 
 The runtime engine had a second, unrelated cost: it ran the whole request
@@ -2081,13 +2081,13 @@ handler never needs to yield, and the frame and promise were pure overhead.
 `Api.handle` now returns `ApiResponse | Promise<ApiResponse>` and the pipeline
 stays synchronous until something genuinely asynchronous appears. On the static
 GET that took it from 2115 to 1510 bytes per request, and from ~69k to ~93k
-ops/s on the machine that change was measured on. It still allocates 1510 bytes
-per request here.
+ops/s on the machine that change was measured on. It allocates 1378 bytes per
+request here.
 
 What that did *not* fix is the pause. The runtime engine's batch times under
-workerd are still bimodal: a p95 around **2.6× its median** (86 ms against
-33 ms), a discrete event rather than a broad spread, and the same instability
-shows up as the 31k–88k spread across isolates in its static-GET cell above.
+workerd are still bimodal: a p95 around **3.2× its median** (58 ms against
+18 ms), a discrete event rather than a broad spread, and the same instability
+shows up as the 46k–82k spread across isolates in its dynamic-GET cell above.
 Removing the async machinery did not move it and neither did turning response
 validation off, so it is a major collection driven by something still
 unaccounted for. The compiled engine — the production path — does not show it.
