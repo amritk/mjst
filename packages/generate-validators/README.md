@@ -310,10 +310,16 @@ an order of magnitude. See
 [Against the moltar harness](#against-the-moltar-harness) for the same functions
 measured under benny, the way the leaderboard measures them.
 
-Preparing a validator costs ~0.2–0.7 ms for mjst codegen and ~0.03–0.23 ms for a
-TypeBox `TypeCompiler` compile, versus ~10–13 ms for an Ajv compile on Bun and
-~5–6.5 ms on Node — Ajv's compile is the one prepare cost that halves on V8.
-Every library agrees on every verdict; parity is asserted before timing.
+Preparing a validator, by runtime (medians over the four cases above):
+
+| | mjst codegen | TypeBox compile | Ajv compile |
+|:--|--:|--:|--:|
+| Bun 1.4.0 | ~0.30–0.66 ms | ~0.04–0.23 ms | ~9.7–13 ms |
+| Node 26.8.1 | ~0.27–0.58 ms | ~0.04–0.11 ms | ~5.3–6.4 ms |
+
+Ajv's compile is the one prepare cost that roughly halves on V8; the other two
+are within a whisker of each other on both engines. Every library agrees on
+every verdict; parity is asserted before timing.
 
 One caveat on the first two rows: their schemas declare `format` (`uuid`,
 `email`), and Ajv, typia, zod, and TypeBox all check it, while mjst's generated
@@ -401,20 +407,26 @@ therefore on strict schemas only. Bun 1.4.0 no longer shows the cliff — frozen
 and mutable input run at the same speed for every library. Frozen inputs are
 ordinary — a config object frozen at startup, a shared fixture, a module-level
 constant — so `bun run bench` keeps carrying `small (4 fields, frozen)` and
-`assert-strict (frozen)` cases to keep it measured. One run of each on this
-machine (Linux x64), valid input, on both Bun versions:
+`assert-strict (frozen)` cases to keep it measured. Medians of three runs on
+this machine (Linux x64), valid input, on both current runtimes and on the Bun
+version that had the cliff:
 
-| `assert-strict` | Bun 1.4.0 mutable | Bun 1.4.0 frozen | Bun 1.3.11 mutable | Bun 1.3.11 frozen |
-|:--|--:|--:|--:|--:|
-| mjst (generated) | ~63M ops/s | ~67M ops/s | ~82M ops/s | ~1.5M ops/s |
-| typia (transformed) | ~34M ops/s | ~48M ops/s | ~37M ops/s | ~1.5M ops/s |
-| typebox (compiled) | ~29M ops/s | ~26M ops/s | ~27M ops/s | ~1.4M ops/s |
-| ajv (compiled) | ~13M ops/s | ~13M ops/s | ~12M ops/s | ~1.2M ops/s |
-| zod | ~0.99M ops/s | ~1.0M ops/s | ~0.91M ops/s | ~0.47M ops/s |
+| `assert-strict` | Bun 1.4.0 mutable | Bun 1.4.0 frozen | Node 26 mutable | Node 26 frozen | Bun 1.3.11 mutable | Bun 1.3.11 frozen |
+|:--|--:|--:|--:|--:|--:|--:|
+| mjst (generated) | ~171M ops/s | ~166M ops/s | ~37M ops/s | ~35M ops/s | ~82M ops/s | ~1.5M ops/s |
+| typia (transformed) | ~58M ops/s | ~89M ops/s | n/a | n/a | ~37M ops/s | ~1.5M ops/s |
+| typebox (compiled) | ~45M ops/s | ~46M ops/s | ~37M ops/s | ~35M ops/s | ~27M ops/s | ~1.4M ops/s |
+| ajv (compiled) | ~23M ops/s | ~22M ops/s | ~25M ops/s | ~25M ops/s | ~12M ops/s | ~1.2M ops/s |
+| zod | ~1.4M ops/s | ~1.4M ops/s | ~3.6M ops/s | ~3.6M ops/s | ~0.91M ops/s | ~0.47M ops/s |
+
+<sub>typia is Bun-only: its checks come from a compile-time transform delivered
+as a Bun preload, so the Node run cannot build one.</sub>
 
 It was an engine-level cliff, not an mjst one: on Bun 1.3 every compiled or
 generated strict validator lands within a hair of the same number, because they
-are all paying the same engine slow path. The generated code keeps the key count
+are all paying the same engine slow path. The Node 26 columns are flat, frozen
+or not, which is what "V8 never had it" looks like measured rather than
+asserted. The generated code keeps the key count
 anyway. Every alternative was measured (on Bun 1.3.11) and every one is worse
 overall. `Object.values(obj)` and `Object.keys({ ...obj })` sidestep the cliff,
 but on the ordinary mutable path they cost 28–37× under JSC and 2–7× under V8.

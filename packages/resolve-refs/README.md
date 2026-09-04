@@ -218,5 +218,6 @@ rows are kept in the table precisely to show that trade honestly rather than
 cherry-picking the one shape the cache wins.
 
 Opting into `trackOrigins` (which records where each inlined value came from)
-costs nothing measurable on these small schemas: the four rows land between −10%
-and +13%, straddling zero, which is run-to-run noise rather than a price.
+costs nothing measurable on these small schemas, on either runtime: the four
+rows land between −9% and +7% on Bun and between −3% and +1% on Node, straddling
+zero in both cases, which is run-to-run noise rather than a price.

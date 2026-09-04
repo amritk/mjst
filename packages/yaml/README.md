@@ -195,7 +195,8 @@ sittings.
 | large | Node | 456 | 20.3 | 255 | 22.5× | 1.79× |
 
 **Bundle size** (minified + gzipped) — what each parser adds to an application
-that imports it. The bench bundles a small consumer of each library rather than
+that imports it. This one table has no runtime split: it measures what the
+bundler emits, which is the same bytes whoever runs them. The bench bundles a small consumer of each library rather than
 the library's own entry point, so the numbers reflect code that is actually
 reachable. Ours covers the full surface (`parse`, `parseDocument`, `nodeAtPath`,
 `lineCounter`); `js-yaml` gets only `load`, because it has no positioned-tree

@@ -109,6 +109,7 @@ The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/types
 | benny, moltar's `Benchmark` class | Bun | ~90M ops/s | ~76M ops/s |
 | benny, moltar's `Benchmark` class | Node | ~80M ops/s | ~34M ops/s |
 | *no-op control, same harness* | *Node* | *~91M ops/s* | *~96M ops/s* |
+| *no-op control, same harness* | *Bun* | *~508M ops/s (±46%)* | *~449M ops/s (±48%)* |
 
 The no-op row is a "validator" that checks nothing, so it is the fastest number that harness can produce: on Node the `assert-loose` figure lands within 12% of it, which is a measurement of benny, not of validation — the leaderboard's ceiling, not any library's, and on CI hardware that ceiling sits lower still. The harness also reorders the field: under benny on Node the generated validator leads TypeBox (~80M against ~54M), the reverse of what our own harness reports on the same functions and the same engine. And moltar's fixture is `Object.freeze({ … })`, which under Bun 1.3 cost *every* library about 100× on `assert-strict` (the Bun cell read ~2.4M); Bun 1.4.0 has closed that cliff (details and the frozen-input benchmark: [Frozen inputs](./packages/generate-validators#frozen-inputs)).
 

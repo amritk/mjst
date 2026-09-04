@@ -346,9 +346,9 @@ reproducible run of both harnesses:
 [Against the moltar harness](../generate-validators#against-the-moltar-harness).
 
 The trade is a one-shot **prepare** cost that only mjst pays — generating the
-parser source — which measures **~0.16–0.74 ms** per schema here (zod and TypeBox
-author or interpret their parsers with no separate build step, so there is
-nothing to time). That is trivially amortized: you generate once at build time
+parser source — which measures **~0.20–0.74 ms** per schema on Bun and
+**~0.16–0.72 ms** on Node (zod and TypeBox author or interpret their parsers
+with no separate build step, so there is nothing to time). That is trivially amortized: you generate once at build time
 and run the emitted code forever.
 
 Every library is checked for agreement — same stripped/rejected output, same
