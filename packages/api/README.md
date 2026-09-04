@@ -65,7 +65,7 @@ Express, Fastify, Koa, NestJS (Node) — with a
 
 **Integration recipes**
 - [App context: Drizzle, sessions](#app-context-drizzle-sessions-anything-per-request) · [Guards](#guards-authorize-once-declare-the-outcome) · [Deny-by-default: `secureRoutes`](#deny-by-default-secureroutes) · [Auth: Better Auth](#auth-better-auth) · [Sessions: a production setup](#sessions-a-production-setup)
-- [Observability](#observability-metrics-and-request-logs) · [OpenAPI: servers, auth schemes, components](#openapi-servers-auth-schemes-shared-components) · [Error reporting: Sentry](#error-reporting-sentry) · [Typed client for external consumers: Hey API](#typed-client-for-external-consumers-hey-api) · [Schemas from Zod, TypeBox, Valibot, Effect](#schemas-from-zod-typebox-valibot-effect)
+- [Observability](#observability-metrics-and-request-logs) · [OpenAPI: servers, auth schemes, components](#openapi-servers-auth-schemes-shared-components) · [Error reporting: Sentry](#error-reporting-sentry) · [Typed client for external consumers](#typed-client-for-external-consumers) · [Schemas from Zod, TypeBox, Valibot, Effect](#schemas-from-zod-typebox-valibot-effect)
 
 **About**
 - [Integration philosophy](#integration-philosophy) · [Requirements and stability](#requirements-and-stability) · [Scope notes](#scope-notes)
@@ -114,12 +114,15 @@ A framework is still a framework. This package has no:
   (`onResponse`), and per-route [`guards`](#guards-authorize-once-declare-the-outcome)
   cover the same ground with a flatter model — and on the Node adapter there are
   no hooks at all, [by design](#serving-it): you use the host framework's chain.
-- **WebSockets.** Server-sent events are first class (`sseStream`, `formatSse`,
-  and [streaming responses](#streaming-and-raw-responses)); socket upgrades are
-  the host's job.
-- **Static file serving, JSX/SSR, or template rendering.** Nothing here renders
-  HTML except the Scalar docs page [`createDocs`](#framework-parity-helpers)
-  serves.
+- **Serving WebTransport.** Server-sent events are first class (`sseStream`,
+  `formatSse`, and [streaming responses](#streaming-and-raw-responses)), and
+  WebSocket upgrades (`upgradeWebSocket`, `acceptWebSocket`) plus typed message
+  contracts are covered under [Realtime](#realtime-webtransport-with-a-websocket-fallback);
+  a WebTransport *server* is not (see there for why).
+- **JSX/SSR or template rendering.** Nothing here renders HTML except the
+  Scalar docs page [`createDocs`](#framework-parity-helpers) serves; static
+  files go through the injected-reader [`createStatic`](#static-files) hook, not
+  a built-in filesystem layer.
 - **A plugin ecosystem.** CORS, CSRF, rate limiting, security headers, ETag,
   compression, request IDs, and health checks ship as
   [hook factories](#built-in-security-hooks); beyond those you write it or take
@@ -324,7 +327,8 @@ if (reply.status === 404) /* declared, typed, no body */;
   `RequestParamsOf` / `RequestQueryOf` / `RequestBodyOf` /
   `RequestHeadersOf` / `RequestCookiesOf` (the request slots, `undefined`
   when undeclared), and `ClientReplyOf` / `RouteReplyOf` (the client and
-  handler reply unions). Error payloads become named exports instead of
+  handler reply unions; `RouteReplyOf` is handler-side, so it comes from the
+  root `@amritk/api` rather than `@amritk/api/client`). Error payloads become named exports instead of
   inline `as { ... }` casts at every use site:
 
   ```ts
@@ -824,7 +828,7 @@ running a fetch handler (including a compiled module's `fetch` export) on
 - Validation failures answer `400` with `{ error: 'validation_failed', source,
   errors }` where `errors` carries the same `{ message, path }` shape as
   `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
-  or `body`. The `errors` option reshapes this (and the other built-in
+  `cookies`, or `body`. The `errors` option reshapes this (and the other built-in
   bodies) when deployed clients already parse a different envelope.
 
 ### String formats
@@ -1037,9 +1041,8 @@ implementRoute(importCsv, ({ body }) => ({ status: 200, body: { rows: body.split
 await client.importCsv({ body: csvText, headers: { 'content-type': 'text/csv' } })
 ```
 
-Sending these formats from the derived client is opt-in: register
-`formBodySerializer` / `multipartBodySerializer` in `createClient` (see the
-typed-client section above) so JSON-only apps never bundle them.
+Unlike `form` / `multipart`, these two need no serializer registered in
+`createClient`: the client sends `text` and `bytes` bodies as they are.
 
 ### Streaming and raw responses
 
@@ -1084,7 +1087,7 @@ const proxy = defineRoute({
   path: '/legacy',
   responses: { 200: { body: legacySchema } },
   // Reuse an existing Response-building helper (or an upstream fetch) unchanged.
-  handler: async ({ request }) => raw(await fetch(new URL(request.raw as Request), { redirect: 'manual' })),
+  handler: async ({ request }) => raw(await fetch((request.raw as Request).url, { redirect: 'manual' })),
 })
 ```
 
@@ -1274,13 +1277,15 @@ const handler = toFetchHandler(api, {
 
 **`createSecurityHeaders(options?)`** — an `onResponse` decorator that stamps
 the browser-hardening headers (`x-content-type-options: nosniff`,
-`x-frame-options: SAMEORIGIN`, `referrer-policy: no-referrer`, the
-cross-origin isolation trio, …) only when the handler didn't already set them.
+`x-frame-options: SAMEORIGIN`, `referrer-policy: no-referrer`,
+`cross-origin-opener-policy` / `cross-origin-resource-policy`,
+`origin-agent-cluster`, …) only when the handler didn't already set them.
 **HSTS and CSP default off** on purpose: `strict-transport-security` on a bare
 IP or a plain-HTTP dev origin locks browsers out, and no single CSP fits every
 app — opt into both explicitly (`strictTransportSecurity: true`,
-`contentSecurityPolicy: "…"`) for a production HTTPS deployment. Any field
-takes `false` to omit or a string to override.
+`contentSecurityPolicy: "…"`) for a production HTTPS deployment. Every field
+except `contentSecurityPolicy` (a string only) takes `false` to omit or a
+string to override.
 
 **`createCors(options)`** — preflight answerer (`onRequest`) plus allow/expose
 stamper (`onResponse`), applied to *every* response including 404s and gate
@@ -1711,7 +1716,7 @@ back off a route gives `… | undefined` — pass the standalone constant to
 **What this does not do:** there is no OpenAPI representation. OpenAPI has no
 vocabulary for a bidirectional message union, so `messages` never appears in
 the document — the contract stays the single source of truth, and an AsyncAPI
-projection remains a separate question. See the plan doc for why a parallel
+projection remains a separate question. See [the plan doc](../../docs/api-framework-plan.md) for why a parallel
 channel DSL was set aside.
 
 ### Client-side auth refresh
@@ -1944,7 +1949,8 @@ differential corpus pins each one.
 Staleness is detected, not silent: the emitted module bakes a
 `contractsHash` and recomputes it over the imported routes at init — a
 schema or path edited after compilation logs a one-line
-"stale compiled module" warning (never a throw) until you regenerate. The
+`[@amritk/api] Stale compiled module` message via `console.error` (never a
+throw) until you regenerate. The
 `mjst compile-api` CLI subcommand wraps the build step
 (`mjst compile-api ./src/routes.ts --out src/api.compiled.ts`), and
 `fetchToNodeHandler` bridges the compiled `fetch` export onto

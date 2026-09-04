@@ -36,7 +36,8 @@ An `index.ts` barrel re-exports everything.
 > The generated arbitraries import `fast-check`, so consumers need it installed
 > (`npm i -D fast-check`). An arbitrary whose schema uses a keyword no `fc.*`
 > combinator captures on its own (`if`/`then`/`else`, `not`, exclusive `oneOf`,
-> and the presence-gated object keywords) also imports `@amritk/runtime-validators`
+> `contains`, and the presence-gated object keywords — `patternProperties`,
+> `propertyNames`, `dependent*`, `min`/`maxProperties`) also imports `@amritk/runtime-validators`
 > for a post-generation validating filter; files that need no such filter don't.
 > The static `fooExample` values have no runtime dependencies.
 >
@@ -125,7 +126,7 @@ const res = await fetch('/users', { method: 'POST', body: JSON.stringify(userExa
 | Export | Description |
 |:---|:---|
 | `buildExampleSchema(schema, rootName, suffix?)` | Walks the `$ref` graph and returns a `GeneratedFile[]` (one file per schema + an `index.ts`). |
-| `generateArbitrary(schema, typeName, suffix?)` | Returns the `export const …Arbitrary` source for a single schema node. |
+| `generateArbitrary(schema, typeName, suffix?, lazyRefFilenames?, rootSchema?)` | Returns the `export const …Arbitrary` source for a single schema node. |
 | `generateExampleConst(schema, typeName, rootSchema?)` | Returns the `export const …Example` source for a single schema node. |
 | `deriveExample(schema, rootSchema?)` | Returns a concrete, schema-valid JavaScript value (no code-generation). |
 | `serializeValue(value)` | Serializes a derived value to a TypeScript source expression (handles `Date`/`bigint`). |

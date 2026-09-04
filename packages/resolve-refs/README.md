@@ -56,7 +56,7 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 |:---|:---|:---|
 | `remote` | `true` | Whether http(s) refs may be fetched at all. |
 | `localRefs` | `true` | Whether `$ref`s to other files on disk may be read. `false` still reads the root document you named — it refuses everything a ref reaches out to. |
-| `allowedRoots` | `[dirname(root)]` | Directories a local `$ref` must resolve inside. The default confines a ref to the folder holding the root document. |
+| `allowedRoots` | `[dirname(root)]` | Directories a local `$ref` must resolve inside. The default confines a ref to the folder holding the root document; for a root loaded from a URL the default is `[]`, so no local file is read at all. |
 | `allowedHosts` | `[]` | If non-empty, only these hosts may be fetched. Matched case-insensitively; an entry without a port matches any port, one with a port must match it (a URL that omits the port counts as its protocol default). An explicit entry bypasses the private-host and DNS guards. |
 | `allowPrivateHosts` | `false` | Allow loopback/private/link-local targets. Left off, these are refused as an SSRF guard. |
 | `verifyDns` | `true` | Resolve each remote host and refuse it when any address it resolves to is non-public. Pass `false` where names resolve at an egress proxy rather than locally. |
@@ -74,7 +74,8 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 
 Errors (a missing file, a refused host, a refused path, a bad URL, a document too
 deeply nested) are collected on `result.errors` rather than thrown; the
-corresponding ref resolves to `{}` so the rest of the document still resolves.
+referencing node is left in place as its `$ref` (nothing is inlined) so the rest
+of the document still resolves.
 Each error carries the `path` to the reference that caused it — a path in the
 document you named, ending in the keyword (`['properties', 'pet', '$ref']`) — so
 a caller can anchor a diagnostic on the `$ref` a reader has to fix. It is empty

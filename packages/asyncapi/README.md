@@ -71,10 +71,10 @@ Cross-file and remote `$ref`s are the loader's job: resolve them first (for exam
 ## API
 
 - **`extractAsyncApi(document)`** → `AsyncApiModel` — the normalized document: `version`, `major`, `title?`, `channels` (each with `key`, `address?`, `messages`), and collected `issues`. Throws only when the input is not an AsyncAPI document at all.
-- **`listMessageSchemas(model)`** → `ExtractedSchema[]` — one `{ subDir, rootTypeName, schema }` per generatable payload/headers, with deterministic collision-suffixed directory tokens.
+- **`listMessageSchemas(model, issues?)`** → `ExtractedSchema[]` — one `{ subDir, rootTypeName, schema }` per generatable payload/headers, with deterministic collision-suffixed directory tokens; collision issues are appended to `model.issues` (or to the `issues` array you pass).
 - **`detectAsyncApiVersion(document)`** — the `asyncapi` version and its major, or `undefined`.
 - **`classifySchemaFormat(schemaFormat)`** — which JSON Schema dialect a `schemaFormat` names (`'asyncapi' | 'draft-07' | '2020-12' | 'openapi'`), or `'unsupported'`.
-- **`mergeTraits(target, traits)`** — the spec's shallow trait merge, applied before `schemaFormat` is read.
+- **`mergeTraits(target, traits, precedence)`** — trait application as an RFC 7386 JSON Merge Patch (recursive, so nested contributions from both sides survive); `precedence` is `'trait'` for 2.x (traits override the target) or `'target'` for 3.0 (the target wins). Applied before `schemaFormat` is read.
 
 ---
 

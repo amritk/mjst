@@ -237,9 +237,10 @@ Three deliberate departures:
   Ajv accepts `"a string"` against `{ properties: { a: {} } }`; a parser has to
   return the type it declares, and the declared type is an object.
 
-If a strict parser cannot enforce something — a `$ref` cycle it would have to
-inline because the build emits a single file, a subschema using a keyword it
-cannot prove — generation **fails with an error naming the keyword** rather than
+If a strict parser cannot enforce something — a `$ref` cycle inside a subschema it
+has to match inline (`contains`, `not`, `propertyNames`, `dependentSchemas`, or an
+`unevaluated*` backstop), which the inline matcher will not unroll; a subschema
+using a keyword it cannot prove — generation **fails with an error naming the keyword** rather than
 emitting a parser that quietly accepts what the schema forbids. Coercing
 (non-strict) parsers are documented to repair rather than reject, so they ignore
 the rejecting keywords by design.
@@ -266,8 +267,9 @@ no I/O to answer the retrieval step. Everything else — applying the base URIs,
 walking anchors across documents, emitting a parser per definition and an import
 graph that links — the generator still has to do.
 
-Of the 41 that do not, **18** are the `ignores a non-object` cases that follow
-from the third departure above, and **12** are a keyword strict mode will not
+Of the 41 that do not, **18** follow from the third departure above — the
+`ignores a non-object` cases plus three `ref.json` cases where a recursive `$ref`
+lands on a root that declares `properties` — and **12** are a keyword strict mode will not
 approximate (a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) —
 those cost a build error naming the cause, never a wrong verdict. The rest: **8**
 `$dynamicRef`s whose binding depends on the evaluation path (a generator emits one
