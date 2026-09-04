@@ -10,7 +10,7 @@ cd mjst
 bun install
 ```
 
-You'll need [Bun](https://bun.sh) ≥ 1.1.
+You'll need [Bun](https://bun.sh) — the repo pins 1.4 via `packageManager` in `package.json`.
 
 ## Common commands
 

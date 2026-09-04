@@ -37,7 +37,7 @@ yarn add -D @amritk/mjst
 bun add -d @amritk/mjst
 ```
 
-The package ships a `mjst` bin that runs under Node ≥ 20 (or Bun), so you can invoke it via `npx mjst`, `pnpm dlx mjst`, `yarn dlx mjst`, `bunx mjst`, or as a script in `package.json`.
+The package ships a `mjst` bin that runs under Node ≥ 20 (or Bun), so you can invoke it via `npx mjst`, `pnpm exec mjst`, `yarn mjst`, `bunx mjst`, or as a script in `package.json`.
 
 ---
 
@@ -64,7 +64,7 @@ npx mjst --schema ./schema.json --out-file ./generated/schema.ts --types-only
 ### Recursive — a whole folder of schemas
 
 Point `--schema-dir` at a directory of JSON Schemas and mjst generates parsers for every
-`*.json` file it finds, mirroring the directory layout under `--out-dir`:
+`*.json` file it finds (skipping `node_modules/` and dot-directories), mirroring the directory layout under `--out-dir`:
 
 ```bash
 npx mjst --schema-dir ./schemas --out-dir ./generated
@@ -188,7 +188,7 @@ npx mjst --config ./mjst.config.json
 ```
 
 > [!NOTE]
-> Validate your config against the bundled JSON Schema: [`config.schema.json`](./config.schema.json)
+> Validate your config against the repository's JSON Schema: [`config.schema.json`](./config.schema.json) (not included in the npm package)
 
 ---
 
@@ -220,7 +220,7 @@ With no `-r`, mjst discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking
 | Flag | Description |
 | --- | --- |
 | `<documents..>` | Files or globs to lint (positional). |
-| `-r`, `--ruleset` | Path to a ruleset file. Defaults to `.lint.*` discovery. |
+| `-r`, `--ruleset` | Path to a ruleset file, or a built-in preset (`oas`, `asyncapi`). Defaults to `.lint.*` discovery. |
 | `-F`, `--fail-severity` | Minimum severity that fails the run: `error` (default), `warn`, `info`, `hint`. |
 | `-D`, `--display-only-failures` | Only show findings at or above `--fail-severity`. |
 | `--stdin-filepath` | Path to associate with piped input (labels findings and enables ruleset discovery). |
@@ -230,6 +230,7 @@ With no `-r`, mjst discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking
 | `--allowed-hosts` | Restrict remote `$ref` fetches to these hosts (implies `--resolve-remote`). |
 | `--allow-private-hosts` | Permit remote `$ref`s to private/loopback hosts (SSRF guard, off by default). |
 | `--allowed-roots` | Extra directories a local `$ref` may resolve into, on top of the document's own (repeat the flag). |
+| `--encoding` | Input encoding for the linted files (default `utf8`). |
 | `-q`, `--quiet` | Suppress the findings report (the exit code still reflects findings). |
 
 By default `mjst lint` dereferences `$ref`, `$dynamicRef`/`$dynamicAnchor`, and `$recursiveRef`/`$recursiveAnchor` before running rules, so rules with `resolved: true` (the ruleset default) see through references. Internal and local cross-file refs resolve from disk — a finding on a cross-file node reports that file's own `line:column` — as long as they stay inside the linted document's own directory; use `--allowed-roots` to let a document reach a shared sibling folder. Remote refs are only fetched when you opt in with `--resolve-remote` or `--allowed-hosts`.
@@ -250,7 +251,7 @@ npx mjst compile-api src/routes.ts --out dist/handler.js
 npx mjst compile-api src/routes.ts --out dist/handler.js --options compile-options.json
 ```
 
-Every export of the routes module that looks like a route contract (`method`, `path`, `responses`) is compiled; the generated module imports those contracts back through `--routes-import` (default: the relative path from the out file to the routes module). The routes module is imported at build time, so it must be loadable by the runtime running mjst — run via `bunx` for TypeScript sources, or under Node install a loader such as `tsx` (`node --import tsx`).
+Every *named* export of the routes module that looks like a route contract (`method`, `path`, `responses`) is compiled (a `default` export is ignored, because the generated module imports each contract by name); the generated module imports those contracts back through `--routes-import` (default: the relative path from the out file to the routes module). The routes module is imported at build time, so it must be loadable by the runtime running mjst — run via `bunx` for TypeScript sources, or under Node install a loader such as `tsx` (`node --import tsx`).
 
 | Flag | Description |
 | --- | --- |
@@ -556,6 +557,16 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
   "schema": "./schema.json",
   "outDir": "./generated",
   "logWarnings": true
+}
+```
+
+**Strict — throw on invalid input**
+
+```json
+{
+  "schema": "./schema.json",
+  "outDir": "./generated",
+  "strict": true
 }
 ```
 

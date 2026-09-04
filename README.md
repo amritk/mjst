@@ -26,15 +26,15 @@ mjst is a monorepo of JSON Schema (Draft 2020-12) tooling for TypeScript. At its
 |:---|:---|
 | **Parsers** | Runtime functions that validate and coerce unknown input into typed values |
 | **Validators** | Error-collecting `validateX` functions plus flat `isX` boolean type guards |
-| **Type definitions** | `.d.ts` types matching the schema, with documentation comments |
+| **Type definitions** | TypeScript types matching the schema, with documentation comments (compiled to `.d.ts` under `--build`) |
 | **Test data** | fast-check arbitraries for property testing, plus concrete example values |
 | **Markdown** | A configuration-reference table rendered from a schema's properties |
 
 Around the generators sits a wider toolbox:
 
-- **API layer** — `@amritk/api` turns route contracts into typed handlers, request/response validation, an OpenAPI 3.1 document, and a typed client
+- **API layer** — `@amritk/api` turns route contracts into typed handlers, request/response validation, an OpenAPI 3.2 document, and a typed client
 - **Linting** — `mjst lint` checks JSON/YAML documents against JSON Schema and custom style rules, with exact `line:column` findings
-- **Adapters** — consume schemas authored in TypeBox, Zod, Valibot, or Effect as input
+- **Adapters** — consume schemas authored in TypeBox, Zod, Valibot, Effect, or Apache Avro (`.avsc`) as input
 - **`$ref` resolution** — resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard
 - **Runtime validation** — fast validation for schemas you don't know ahead of time
 - **YAML parsing** — a tiny, dependency-free YAML parser that keeps exact source positions
@@ -48,14 +48,14 @@ The CLI (`mjst`) is the primary entry point; everything above is also published 
 | Package | Description |
 |:---|:---|
 | [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, types, and test data from a schema; lints JSON/YAML (`mjst lint`); compiles API contracts (`mjst compile-api`) |
-| [`@amritk/api`](./packages/api) | Contract-first, framework-agnostic API layer — typed routes, request/response validation, OpenAPI 3.1, typed client |
+| [`@amritk/api`](./packages/api) | Contract-first, framework-agnostic API layer — typed routes, request/response validation, OpenAPI 3.2, typed client |
 | [`@amritk/lint`](./packages/lint) | Format-agnostic JSON/YAML style-guide linter — JSON Schema + custom rules, with exact `line:column` findings |
 | [`@amritk/generate-parsers`](./packages/generate-parsers) | Programmatic API for parser + type generation |
 | [`@amritk/generate-validators`](./packages/generate-validators) | Programmatic API for validator generation |
 | [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Renders a config schema as documentation — a README table, or a multi-page prose reference |
-| [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, Valibot, Effect) into JSON Schema |
+| [`@amritk/adapters`](./packages/adapters) | Convert schemas from external libraries (TypeBox, Zod, Valibot, Effect, Apache Avro) into JSON Schema |
 | [`@amritk/asyncapi`](./packages/asyncapi) | Extract message schemas from AsyncAPI 2.x/3.0 documents for the generators (`--input asyncapi`) |
 | [`@amritk/resolve-refs`](./packages/resolve-refs) | Resolve and inline JSON Schema / OpenAPI `$ref`s, with a default-deny SSRF guard |
 | [`@amritk/yaml`](./packages/yaml) | Tiny, dependency-free YAML parser with exact source positions for diagnostics |
@@ -159,7 +159,7 @@ No install required — run it directly with your favourite package runner:
 npx @amritk/mjst --schema ./schema.json --out-dir ./generated
 
 # pnpm
-pnpx @amritk/mjst --schema ./schema.json --out-dir ./generated
+pnpm dlx @amritk/mjst --schema ./schema.json --out-dir ./generated
 
 # yarn
 yarn dlx @amritk/mjst --schema ./schema.json --out-dir ./generated
@@ -208,10 +208,10 @@ so they stay in sync with the source.
 
 ## Requirements
 
-- **Node.js ≥ 20** (or **Bun ≥ 1.1**) to run the CLI
+- **Node.js ≥ 20** (or **Bun**) to run the CLI
 - **TypeScript ≥ 5** in your consuming project
 
-Contributing? You'll need [Bun](https://bun.sh) ≥ 1.1 — it's the package manager and bundler for this repo. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+Contributing? You'll need [Bun](https://bun.sh) — the repo pins 1.4 via `packageManager` — it's the package manager and bundler for this repo. See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ---
 
