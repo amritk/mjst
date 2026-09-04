@@ -42,6 +42,8 @@ Validation:
   --strip-unknown       Silently drop undeclared input keys at every nesting level
   --case-insensitive    Normalize mis-cased enum/const strings to their exact casing
   --log-warnings        console.warn on input keys not declared in the schema
+  --unknown-keys <s>    How closed objects are proven free of undeclared keys:
+                        count-keys (default, fastest on Bun) or count-enumerable (fastest on Node)
 
 Reference resolution:
   --resolve-remote      Fetch http(s) $refs while resolving cross-file/remote refs (off by default)

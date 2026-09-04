@@ -146,6 +146,7 @@
         "json-schema-typed": "catalog:",
       },
       "devDependencies": {
+        "@amritk/generate-parsers": "workspace:*",
         "@amritk/runtime-validators": "workspace:*",
         "@ryoppippi/unplugin-typia": "^2.6.5",
         "@scalar/openapi-parser": "^0.26.1",

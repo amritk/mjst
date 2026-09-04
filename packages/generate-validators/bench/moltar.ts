@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { buildValidatorSchema } from '../src/index.ts'
 import { fmtOps } from './measure.ts'
 import { assertSchema, isStrictCase, MOLTAR_CASES } from './moltar-data.mjs'
+import { runLeaderboard } from './moltar-leaderboard.ts'
 
 /**
  * The same validators as `run.ts`, measured under
@@ -34,6 +35,12 @@ import { assertSchema, isStrictCase, MOLTAR_CASES } from './moltar-data.mjs'
  * Both runtimes are measured when both are installed: the public leaderboard
  * publishes Node numbers, this repo benches on Bun, and that difference is worth
  * a column rather than a hand-wave.
+ *
+ * The tables isolate one (case, library, mode) per process. Upstream isolates
+ * one *library* per process and runs its four cases inside it, so the run ends
+ * with mjst measured that way too — all four cases, one process, see
+ * `moltar-leaderboard.ts` — which is the figure to compare with the published
+ * one.
  *
  *   bun run bench:moltar
  */
@@ -202,6 +209,8 @@ const run = async (): Promise<void> => {
   console.log('Note: moltar’s fixture is `Object.freeze({ ... })`, so its assert cases run against a')
   console.log('non-extensible object. The own-harness reference above uses a mutable pool; the')
   console.log('like-for-like frozen figure is the `assert-strict (frozen)` case in `bun run bench`.\n')
+
+  await runLeaderboard(runtimes)
 }
 
 await run()

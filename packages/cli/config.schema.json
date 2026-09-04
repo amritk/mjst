@@ -122,6 +122,14 @@
       "default": false,
       "description": "Emit every property, array, and record in the generated type definitions as readonly, producing deeply immutable types. Affects type definitions only; the generated parsers still build and return plain objects."
     },
+    "unknownKeys": {
+      "type": "string",
+      "enum": ["count-enumerable", "count-keys"],
+      "x-cli-flag": "--unknown-keys <strategy>",
+      "x-icon": "🔢",
+      "default": "count-keys",
+      "description": "How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in, allocates nothing, and is the faster form on V8 (Node). Pick by the runtime the generated code will run on; the generated code never detects it."
+    },
     "helpers": {
       "type": "string",
       "enum": ["package", "embedded"],
@@ -192,7 +200,7 @@
       "type": "string",
       "x-cli-flag": "--config <path>",
       "x-icon": "⚙️",
-      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts, allowedRoots) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.",
+      "description": "Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, unknownKeys, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts, allowedRoots) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.",
       "examples": ["./mjst.config.json"]
     }
   },

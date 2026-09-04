@@ -46,7 +46,8 @@ mjst compile-api ./routes.ts --out ./dist/handler.ts
 
 `--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
 `--validators`, `--examples`, `--types-only`, `--build`, `--strict`,
-`--strip-unknown`, `--readonly`, `--import-ext ts|js`, `--config <path>`,
+`--strip-unknown`, `--unknown-keys count-keys|count-enumerable`, `--readonly`,
+`--import-ext ts|js`, `--config <path>`,
 `--resolve-remote` / `--allowed-hosts` (SSRF-guarded remote `$ref`s).
 
 ## Lint gotchas

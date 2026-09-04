@@ -1053,4 +1053,66 @@ describe('build-schema', () => {
       }
     })
   })
+
+  // The strategy is the fifteenth positional argument and has to reach every
+  // parser the walk emits — the root, its nested sub-parsers and a `$ref`-reached
+  // definition alike — or the CLI's `--unknown-keys` would only ever flip one.
+  it('threads unknownKeys to every emitted parser and shape validator', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        inline: {
+          type: 'object',
+          properties: { b: { type: 'number' } },
+          required: ['b'],
+          additionalProperties: false,
+        },
+        meta: { $ref: '#/$defs/meta' },
+      },
+      required: ['inline', 'meta'],
+      additionalProperties: false,
+      $defs: {
+        meta: {
+          type: 'object',
+          properties: { a: { type: 'number' } },
+          required: ['a'],
+          additionalProperties: false,
+        },
+      },
+    }
+    const build = (unknownKeys?: 'count-keys' | 'count-enumerable') =>
+      buildSchema(
+        schema,
+        'Doc',
+        undefined,
+        false,
+        false,
+        true,
+        'package',
+        './',
+        false,
+        false,
+        '',
+        'js',
+        false,
+        undefined,
+        unknownKeys,
+      )
+
+    const byDefault = await build()
+    const enumerable = await build('count-enumerable')
+    for (const name of ['doc.ts', 'meta.ts']) {
+      const own = byDefault.find((f) => f.filename === name)?.content ?? ''
+      const forIn = enumerable.find((f) => f.filename === name)?.content ?? ''
+      expect(own, name).toContain('Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length ===')
+      expect(own, name).not.toContain('_keyCount')
+      expect(forIn, name).toContain('for (const _k in input) _keyCount++;')
+      expect(forIn, name).not.toContain('Object.getPrototypeOf(input)')
+    }
+    // The nested sub-parser in doc.ts follows the same strategy as its parent.
+    const nested = (files: { filename: string; content: string }[]) =>
+      files.find((f) => f.filename === 'doc.ts')?.content.split('const validateDoc_InlineShape')[1] ?? ''
+    expect(nested(byDefault)).toContain('Object.keys(input).length === 1')
+    expect(nested(enumerable)).toContain('return _keyCount === 1;')
+  })
 })

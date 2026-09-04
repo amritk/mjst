@@ -33,6 +33,13 @@
       "x-icon": "🔡",
       "default": false,
       "description": "Normalize a mis-cased string to the exact casing of a declared enum/const member it matches case-insensitively (e.g. hElLo → hello) instead of coercing to the default. Coerce mode only — strict parsers still reject a casing mismatch. Correctly-cased input keeps the exact-match fast path, so the hot path is unaffected."
+    },
+    "unknownKeys": {
+      "type": "string",
+      "enum": ["count-enumerable", "count-keys"],
+      "x-icon": "🔢",
+      "default": "count-keys",
+      "description": "How a fast path proves a closed object (additionalProperties: false, or a stripUnknown build) carries no undeclared key. 'count-keys' is a prototype-guarded Object.keys(input).length comparison, the faster form on JavaScriptCore (Bun); 'count-enumerable' is a for…in count that allocates nothing, the faster form on V8 (Node). Pick by the runtime the generated code will run on; nothing detects it at runtime."
     }
   }
 }

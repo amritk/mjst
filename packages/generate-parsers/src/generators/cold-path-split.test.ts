@@ -121,6 +121,30 @@ describe('cold-path-split', () => {
     ])
   })
 
+  // The object check has to stay a call the fast path makes only when it is
+  // about to throw. Made unconditionally — `_assertAssertObject(input)` as the
+  // first statement — it is a call to a function that can throw on every path,
+  // and JavaScriptCore keeps it and the parser with it: under the moltar harness
+  // on Bun 1.4 both parse cases sat at ~50M ops/s where ~220M is the floor.
+  it('calls the object check only behind the object test, at every level', () => {
+    for (const [options, closed] of [
+      [{ strict: true, stripUnknown: true }, false],
+      [{ strict: true }, true],
+    ] as const) {
+      const source = generateParserFunction(assertSchema(closed), 'Assert', options)
+      for (const [name, body] of fastPathFunctions(source)) {
+        const assertName = `_assert${name.slice('parse'.length)}Object`
+        expect(body, name).toContain(`  if (!isObject(input)) ${assertName}(input);`)
+        expect(body, name).not.toContain(`\n  ${assertName}(input);`)
+      }
+      const parse = evalGenerated<(input: unknown) => unknown>(source, 'parseAssert')
+      expect(parse(assertInput)).toEqual(assertInput)
+      expect(() => parse(null)).toThrow('[Assert] expected object, got null')
+      expect(() => parse(['x'])).toThrow('[Assert] expected object, got object')
+      expect(() => parse({ ...assertInput, deeplyNested: 7 })).toThrow("field 'deeplyNested' expected object")
+    }
+  })
+
   it('reads every field exactly once on the fast path, nested fields included', () => {
     const source = generateParserFunction(assertSchema(false), 'Assert', { strict: true, stripUnknown: true })
     const hot = functions(source).get('parseAssert') as string

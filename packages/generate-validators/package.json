@@ -42,7 +42,8 @@
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
     "bench": "bun --conditions development ./bench/run.ts",
-    "bench:moltar": "bun --conditions development ./bench/moltar.ts"
+    "bench:moltar": "bun --conditions development ./bench/moltar.ts",
+    "bench:moltar:leaderboard": "bun --conditions development ./bench/moltar-leaderboard.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts"
@@ -59,6 +60,7 @@
     "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
+    "@amritk/generate-parsers": "workspace:*",
     "@amritk/runtime-validators": "workspace:*",
     "@ryoppippi/unplugin-typia": "^2.6.5",
     "@scalar/openapi-parser": "^0.26.1",

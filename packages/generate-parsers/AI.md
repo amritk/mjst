@@ -22,9 +22,11 @@ const files = await buildSchema(schema, 'Document')
 
 1. **`buildSchema` is `async` and takes POSITIONAL args, no options object.** The
    full signature is
-   `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?, strict?, helpersMode?, helpersImportPrefix?, readonly?, stripUnknown?, typeSuffix?, importExt?, caseInsensitive?)`.
+   `buildSchema(rootSchema, rootTypeName, extensions?, typesOnly?, logWarnings?, strict?, helpersMode?, helpersImportPrefix?, readonly?, stripUnknown?, typeSuffix?, importExt?, caseInsensitive?, schemas?, unknownKeys?)`.
    To set a later flag you must pass every intervening positional. (The README's
-   short form omits the trailing seven.)
+   short form omits the trailing seven.) `unknownKeys` (`'count-keys'` by default,
+   `'count-enumerable'` for Node-only output) picks how a closed object's fast
+   path counts keys; nothing in the generated code detects its runtime.
 2. **It returns files in memory — it does NOT write to disk.** You write the
    `GeneratedFile[]` (`{ filename, content }`) yourself. `rootTypeName` becomes
    that filename (lowercased) as well as the `export type` name, so it must be a

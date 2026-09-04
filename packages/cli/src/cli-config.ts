@@ -1,4 +1,5 @@
 import type { SourceFormat } from '@amritk/adapters/source-format'
+import type { UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 
 /**
  * Configuration for the CLI tool.
@@ -106,6 +107,14 @@ export type CliConfig = {
    * path is unaffected.
    */
   readonly caseInsensitive?: boolean
+  /**
+   * How generated fast paths prove a closed object (`additionalProperties:
+   * false`) carries no undeclared key. `'count-keys'` (the default) compares
+   * `Object.keys(obj).length` and is the faster form on JavaScriptCore (Bun);
+   * `'count-enumerable'` counts with `for…in` and is the faster form on V8
+   * (Node). Applies to parsers and validators alike.
+   */
+  readonly unknownKeys?: UnknownKeysStrategy
   /**
    * Controls how generated parsers reference their runtime helpers.
    * - `'package'`: emit `import ... from '@amritk/helpers/...'`.
