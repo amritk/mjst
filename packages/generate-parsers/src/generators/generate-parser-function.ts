@@ -1258,7 +1258,7 @@ const KEY_COUNT_VAR = '_keyCount'
  * The fast path's no-extras test whenever {@link exactKeyCountOf} allows it, in
  * the two pieces the emitters place: `statements` to run once the typed chain
  * has passed (at `indent`), and `verdict`, the expression that is true when the
- * key count is exactly `count`.
+ * key count of `obj` is exactly `count`.
  */
 type KeyCountCheck = { readonly statements: readonly string[]; readonly verdict: string }
 
@@ -1286,14 +1286,19 @@ type KeyCountCheck = { readonly statements: readonly string[]; readonly verdict:
  * strategy, and the parse rejects — the safe direction. The runtime interpreter
  * counts own keys; all three agree on every value that could have come from JSON.
  */
-const keyCountCheck = (unknownKeys: UnknownKeysStrategy, count: number, indent: string): KeyCountCheck =>
+const keyCountCheck = (
+  unknownKeys: UnknownKeysStrategy,
+  count: number,
+  indent: string,
+  obj = 'input',
+): KeyCountCheck =>
   unknownKeys === 'count-keys'
     ? {
         statements: [],
-        verdict: `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${count}`,
+        verdict: `Object.getPrototypeOf(${obj}) === Object.prototype && Object.keys(${obj}).length === ${count}`,
       }
     : {
-        statements: [`${indent}let ${KEY_COUNT_VAR} = 0;`, `${indent}for (const _k in input) ${KEY_COUNT_VAR}++;`],
+        statements: [`${indent}let ${KEY_COUNT_VAR} = 0;`, `${indent}for (const _k in ${obj}) ${KEY_COUNT_VAR}++;`],
         verdict: `${KEY_COUNT_VAR} === ${count}`,
       }
 
@@ -1762,6 +1767,10 @@ const generateObjectParser = (
   // declarations (TS2451). Dedupe by suffixing `_` until unique — the same
   // approach `collectInlineObjectProperties` uses — so each key gets its own var.
   const usedVarNames = new Set<string>([KEY_COUNT_VAR])
+  // The budget for nested shape predicates spelled out in the guard — the same
+  // caps the strip-build inlining works under, counted separately from it.
+  let inlinedGuardSites = 0
+  let inlinedGuardProperties = 0
   for (const key of propertyKeys) {
     const propSchema = schemaProps[key] as JSONSchema
     const isRequired = isPropertyRequired(key, schema)
@@ -1781,11 +1790,34 @@ const generateObjectParser = (
 
     const subName = subTypeNames.get(key)
     // Inline nested objects fast-path through their private shape predicate, the
-    // same way $ref properties use the imported one. Arrays of inline objects
-    // additionally prove every element via the private item predicate.
-    let check = subName
-      ? `${shapeValidatorName(subName)}(${varName})`
-      : generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
+    // same way $ref properties use the imported one — spelled out over the cached
+    // local while the budget lasts (see {@link inlineNestedShapeCheck}), a call
+    // past it. Arrays of inline objects additionally prove every element via the
+    // private item predicate.
+    const inlined =
+      subName !== undefined && inlinedGuardSites < INLINE_NESTED_MAX_SITES
+        ? inlineNestedShapeCheck(
+            propSchema,
+            subName,
+            varName,
+            useRefImports,
+            suffix,
+            stripUnknown,
+            reservedNames,
+            unknownKeys,
+          )
+        : null
+    const withinBudget =
+      inlined !== null && inlinedGuardProperties + inlined.propertyCount <= INLINE_NESTED_MAX_TOTAL_PROPERTIES
+    if (withinBudget) {
+      inlinedGuardSites++
+      inlinedGuardProperties += inlined.propertyCount
+    }
+    let check = withinBudget
+      ? inlined.check
+      : subName
+        ? `${shapeValidatorName(subName)}(${varName})`
+        : generatePropertyTypeCheck(varName, propSchema, useRefImports, suffix)
     const itemSubName = subItemNames.get(key)
     if (check !== null && itemSubName) {
       check = `${check} && _every${itemSubName}(${varName})`
@@ -3307,7 +3339,48 @@ export const generateShapeValidator = (
     return stub
   }
 
-  if (!hasProperties(schema)) return stub
+  const shape = shapeChecksOf(schema, typeName, 'input', useRefImports, suffix, stripUnknown, reservedNames)
+  if (shape === null) return stub
+  const strictKeysGuard = shape.walksKeys ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
+  return renderShapeValidator(exportPrefix, fnName, shape.checks, shape.keyCount, strictKeysGuard, unknownKeys)
+}
+
+/**
+ * The typed checks of an object's shape predicate, every member read through
+ * `root` — `input` inside the shape validator itself, the parent's cached local
+ * when the predicate is inlined into a fast path (see
+ * {@link inlineNestedShapeCheck}). One builder for both, so the inlined chain
+ * and the predicate it stands in for cannot drift apart.
+ *
+ * `keyCount` is the declared-key count to test after the checks when the
+ * parser strips extras and every declared property is required (see
+ * {@link exactKeyCountOf}); `walksKeys` says the strip build needs the per-key
+ * `_hasOnlyKnownKeys` walk instead. Null when the schema cannot be predicated
+ * flat at all.
+ */
+type ShapeChecks = {
+  readonly checks: readonly string[]
+  readonly keyCount: number | null
+  readonly walksKeys: boolean
+  /** How many properties the checks cover, for the inlining budget. */
+  readonly propertyCount: number
+}
+
+const shapeChecksOf = (
+  schema: JSONSchema,
+  typeName: string,
+  root: string,
+  useRefImports: boolean,
+  suffix: string,
+  stripUnknown: boolean,
+  reservedNames: ReadonlySet<string>,
+): ShapeChecks | null => {
+  if (!isSchemaObject(schema)) return null
+  // Keywords the parser's fast path cannot mirror (contains, dependentRequired,
+  // dependentSchemas, propertyNames) make a bare shape match insufficient: a
+  // parent that fast-pathed through this predicate would skip their enforcement.
+  if (hasFastPathBlockingKeyword(schema)) return null
+  if (!hasProperties(schema)) return null
 
   // Composition / conditional schemas can match in many shapes — bail.
   if (
@@ -3320,7 +3393,7 @@ export const generateShapeValidator = (
     'then' in schema ||
     'else' in schema
   ) {
-    return stub
+    return null
   }
 
   const schemaProps = (schema as { properties: Record<string, JSONSchema> }).properties
@@ -3336,21 +3409,15 @@ export const generateShapeValidator = (
   // prove all N keys present); otherwise it is the `_hasOnlyKnownKeys` walk the
   // parser emits under the same `stripKeys` condition.
   const validatorStripKeys = hasStrictKeys(schema) || stripUnknown
-  const validatorKeyCount = validatorStripKeys ? exactKeyCountOf(schema) : null
-  const strictKeysGuard =
-    validatorStripKeys && validatorKeyCount === null
-      ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;`
-      : ''
+  const keyCount = validatorStripKeys ? exactKeyCountOf(schema) : null
   const checks: string[] = []
 
   for (const key of propertyKeys) {
     const propSchema = schemaProps[key] as JSONSchema
     // Records of refs require iterating every value — too expensive for the fast path.
-    if (shouldUseRecordRefImport(propSchema, useRefImports)) {
-      return stub
-    }
+    if (shouldUseRecordRefImport(propSchema, useRefImports)) return null
 
-    const accessor = safeAccessor('input', key)
+    const accessor = safeAccessor(root, key)
     const isRequired = isPropertyRequired(key, schema)
     const subName = subTypeNames.get(key)
     let check = subName
@@ -3363,9 +3430,7 @@ export const generateShapeValidator = (
     if (check !== null && itemSubName) {
       check = `${check} && _every${itemSubName}(${accessor})`
     }
-    if (check === null) {
-      return stub
-    }
+    if (check === null) return null
 
     if (isRequired) {
       checks.push(check)
@@ -3377,10 +3442,56 @@ export const generateShapeValidator = (
   // Size bounds: without them a predicate built purely from per-property checks
   // said "already the right shape" for a value violating `minProperties`, and
   // the parser's fast path returned it before any assertion ran.
-  if (hasMinProperties(schema)) checks.push(`Object.keys(input).length >= ${schema.minProperties}`)
-  if (hasMaxProperties(schema)) checks.push(`Object.keys(input).length <= ${schema.maxProperties}`)
+  if (hasMinProperties(schema)) checks.push(`Object.keys(${root}).length >= ${schema.minProperties}`)
+  if (hasMaxProperties(schema)) checks.push(`Object.keys(${root}).length <= ${schema.maxProperties}`)
 
-  return renderShapeValidator(exportPrefix, fnName, checks, validatorKeyCount, strictKeysGuard, unknownKeys)
+  return { checks, keyCount, walksKeys: validatorStripKeys && keyCount === null, propertyCount: propertyKeys.length }
+}
+
+/**
+ * A nested object's shape predicate, spelled out as one expression over the
+ * parent's cached local instead of a call to `validate{Sub}Shape(local)`.
+ *
+ * The call was the one thing left on the strict fast path that JavaScriptCore
+ * would not see through: with it, `parseStrict` under the moltar harness sat at
+ * ~45M ops/s on Bun 1.4; with the same checks inlined it reaches the harness
+ * floor (~200M+, the call eliminated), and Node gains ~15% from the saved call.
+ * The chain is the shape validator's own checks (see {@link shapeChecksOf}) —
+ * `isObject` spelled out, as {@link inlineNestedFastPath} does, then the typed
+ * checks, then the key count — so the verdict is the predicate's exactly.
+ *
+ * Returns null, leaving the call in place, when the predicate is not one
+ * expression: a per-key walk (`_hasOnlyKnownKeys`), a `for…in` count under
+ * `count-enumerable`, a schema the predicate stubs, or a nested object wider
+ * than the inlining budget allows. A nested object's *own* nested objects stay
+ * calls inside the chain — one level, like the strip-build inlining.
+ */
+const inlineNestedShapeCheck = (
+  childSchema: JSONSchema,
+  childTypeName: string,
+  local: string,
+  useRefImports: boolean,
+  suffix: string,
+  stripUnknown: boolean,
+  reservedNames: ReadonlySet<string>,
+  unknownKeys: UnknownKeysStrategy,
+): { readonly check: string; readonly propertyCount: number } | null => {
+  // The local holds `unknown`; the reads below narrow nothing by themselves, so
+  // they go through the same `any` record the strip-build inlining uses.
+  const readRoot = `(${local} as Record<string, any>)`
+  const shape = shapeChecksOf(childSchema, childTypeName, readRoot, useRefImports, suffix, stripUnknown, reservedNames)
+  if (shape === null || shape.walksKeys) return null
+  if (shape.propertyCount === 0 || shape.propertyCount > INLINE_NESTED_MAX_PROPERTIES) return null
+  const count = shape.keyCount === null ? null : keyCountCheck(unknownKeys, shape.keyCount, '', local)
+  if (count !== null && count.statements.length > 0) return null
+  const parts = [
+    `typeof ${local} === "object"`,
+    `${local} !== null`,
+    `!Array.isArray(${local})`,
+    ...shape.checks,
+    ...(count === null ? [] : [count.verdict]),
+  ]
+  return { check: `(${parts.join(' && ')})`, propertyCount: shape.propertyCount }
 }
 
 /**

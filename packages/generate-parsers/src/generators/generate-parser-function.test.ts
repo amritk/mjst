@@ -2579,6 +2579,103 @@ describe('generate-parser-function', () => {
       expect(() => parse({ id: 1, tag: 'a', extra: 'x' })).toThrow('unknown property "extra"')
     })
 
+    // A call to the nested shape predicate was the one thing left on the strict
+    // fast path that JavaScriptCore would not see through — with it the strict
+    // parse under the moltar harness sat at ~45M ops/s on Bun 1.4, with the same
+    // checks spelled out it reaches the harness floor. The chain is the
+    // predicate's own checks over the cached local, so the two cannot disagree.
+    it('spells a nested object’s shape predicate out over the cached local on the fast path', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          nested: {
+            type: 'object',
+            properties: { foo: { type: 'string' }, num: { type: 'number', minimum: 3 } },
+            required: ['foo', 'num'],
+            additionalProperties: false,
+          },
+        },
+        required: ['id', 'nested'],
+        additionalProperties: false,
+      }
+
+      const source = generateParserFunction(schema, 'Doc', { strict: true })
+      expect(source).toContain(
+        'if (typeof _id === "number" && (typeof _nested === "object" && _nested !== null && !Array.isArray(_nested) && ' +
+          'typeof (_nested as Record<string, any>).foo === "string" && typeof (_nested as Record<string, any>).num === "number" && (_nested as Record<string, any>).num >= 3 && ' +
+          'Object.getPrototypeOf(_nested) === Object.prototype && Object.keys(_nested).length === 2) && ' +
+          'Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2) return {',
+      )
+      expect(source).not.toContain('validateDoc_NestedShape(_nested)')
+      // The predicate itself survives: the nested parser's own fast path and the
+      // exported shape validator still call it.
+      expect(source).toContain('if (validateDoc_NestedShape(input)) return input as Doc_Nested;')
+
+      const parse = evalGenerated<(input: unknown) => unknown>(source, 'parseDoc')
+      expect(parse({ id: 1, nested: { foo: 'a', num: 3 } })).toEqual({ id: 1, nested: { foo: 'a', num: 3 } })
+      for (const [input, message] of [
+        [{ id: 1, nested: { foo: 'a', num: 2 } }, "field 'num' must be >= 3"],
+        [{ id: 1, nested: { foo: 'a', num: 3, extra: 1 } }, 'unknown property "extra"'],
+        [{ id: 1, nested: { foo: 'a' } }, "missing required property 'num'"],
+        [{ id: 1, nested: null }, "field 'nested' expected object"],
+        [{ id: 1, nested: [] }, "field 'nested' expected object"],
+        [{ id: 1, nested: { foo: 'a', num: 3 }, extra: 1 }, 'unknown property "extra"'],
+      ] as const) {
+        expect(() => parse(input), JSON.stringify(input)).toThrow(message)
+      }
+    })
+
+    it('keeps the nested shape call where its predicate is not one expression', () => {
+      const closed = (properties: Record<string, JSONSchema>, required: string[]): JSONSchema => ({
+        type: 'object',
+        properties: { nested: { type: 'object', properties, required, additionalProperties: false } },
+        required: ['nested'],
+        additionalProperties: false,
+      })
+      const call = 'validateDoc_NestedShape(_nested)'
+
+      // A `for…in` count is statements, not a term of a chain.
+      const enumerable = generateParserFunction(closed({ a: { type: 'number' } }, ['a']), 'Doc', {
+        strict: true,
+        unknownKeys: 'count-enumerable',
+      })
+      expect(enumerable).toContain(call)
+
+      // An optional property means the per-key walk, which is a call either way.
+      const walked = generateParserFunction(closed({ a: { type: 'number' }, b: { type: 'number' } }, ['a']), 'Doc', {
+        strict: true,
+      })
+      expect(walked).toContain(call)
+
+      // Wider than the inlining budget.
+      const wide = Object.fromEntries(Array.from({ length: 13 }, (_, i) => [`p${i}`, { type: 'number' as const }]))
+      const tooWide = generateParserFunction(closed(wide, Object.keys(wide)), 'Doc', { strict: true })
+      expect(tooWide).toContain(call)
+
+      // The nested object's own nested object stays a call inside the chain.
+      const deep = generateParserFunction(
+        closed(
+          {
+            inner: {
+              type: 'object',
+              properties: { x: { type: 'number' } },
+              required: ['x'],
+              additionalProperties: false,
+            },
+          },
+          ['inner'],
+        ),
+        'Doc',
+        { strict: true },
+      )
+      expect(deep).not.toContain(call)
+      expect(deep).toContain('validateDoc_Nested_InnerShape((_nested as Record<string, any>).inner)')
+      const parse = evalGenerated<(input: unknown) => unknown>(deep, 'parseDoc')
+      expect(parse({ nested: { inner: { x: 1 } } })).toEqual({ nested: { inner: { x: 1 } } })
+      expect(() => parse({ nested: { inner: { x: 1, y: 2 } } })).toThrow('unknown property "y"')
+    })
+
     it('counts only the closed object when it is nested inside an open one', () => {
       const schema: JSONSchema = {
         type: 'object',

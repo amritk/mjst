@@ -18,10 +18,21 @@ through the local, at any depth, for required and optional nested objects and
 for object array items alike. V8 had already commoned the loads; on
 JavaScriptCore the local is what lets the guard be optimised at all — under the
 moltar harness `isAssertStrict` on Bun 1.4 goes from ~45M ops/s to the harness
-floor (~300M on the measuring box, the call eliminated). A guard that hoists or counts is now a run
-of early exits (`if (!(…)) return …`) rather than one nested `&&` chain. The
-parsers already read nested objects through cached locals and sub-parser
-parameters, so their fast paths keep their shape and gain the option below.
+floor (~300M on the measuring box, the call eliminated). A guard that hoists
+or counts is now a run of early exits (`if (!(…)) return …`) rather than one
+nested `&&` chain.
+
+The parsers already read nested objects through cached locals, but their fast
+path proved a nested object with a *call* — `validateDoc_NestedShape(_nested)` —
+and that call was the one thing left on the strict fast path JavaScriptCore
+would not see through. The parent's guard now spells the nested predicate out
+over the local (`typeof _nested === "object" && … && Object.keys(_nested).length
+=== 2`), built from the shape validator's own checks so the two cannot disagree,
+one level deep and within the same size budget as the strip-build inlining.
+`parseStrict` under the moltar harness on Bun 1.4 goes from ~45M ops/s to the
+harness floor, and Node gains the saved call (~15%). The call stays where the
+predicate is not one expression: a per-key walk, a `for…in` count under
+`count-enumerable`, or a nested object past the budget.
 
 **`unknownKeys: 'count-keys' | 'count-enumerable'`** — on `buildSchema` (15th
 positional), `buildValidatorSchema` (5th), and the CLI (`--unknown-keys`, or

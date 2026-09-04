@@ -365,10 +365,16 @@ because the two spellings trade places between the engines:
   cache. On JavaScriptCore a `for…in` over a non-extensible object is the engine's
   slow path, and the strict parse runs at half speed.
 
-Under the moltar harness (Bun 1.4.0 / Node 22.22, each case alone in its own
-process) `parseStrict` measures ~45M / ~13M ops/s with `count-keys` and ~13M /
-~14M with `count-enumerable`. The default is what wins on Bun, where this repo
-benches; Node-only consumers should flip it. See
+A nested object's shape is proven on the parent's fast path by the same checks
+its own shape validator makes, spelled out over the cached local rather than
+called — `typeof _nested === "object" && … && Object.keys(_nested).length === n`
+— one level deep and within a size budget, because a call was the one thing
+left on the strict fast path that JavaScriptCore would not see through. Under
+the moltar harness (Bun 1.4.0 / Node 22.22, each case alone in its own process)
+`parseStrict` then reaches the harness floor on Bun (~200M+ ops/s, the call
+eliminated) with `count-keys` and ~13M with `count-enumerable`, and on Node
+measures ~15M / ~14M. The default is what wins on Bun, where this repo benches;
+Node-only consumers should flip it. See
 [Choosing how keys are counted](../generate-validators#choosing-how-keys-are-counted)
 in the sister package for the validator numbers and the full trade-off. Whichever
 you pick, every verdict on a value that could have come from JSON is the same.
