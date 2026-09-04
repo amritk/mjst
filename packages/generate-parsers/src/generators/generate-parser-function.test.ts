@@ -17,18 +17,25 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'User')
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {
         name: "",
       };
   const _name = input.name;
   const _age = input.age;
-  if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return { ...input } as User;
   return {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _name = input.name;
+  const _age = input.age;
+  if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -43,14 +50,20 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'Product')
     expect(result).toBe(
-      `export const parseProduct = (input: unknown): Product => {
+      `const _parseProductSlow = (input: unknown): Product => {
   if (!isObject(input)) return {} as Product;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return { ...input } as Product;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as Product;
+}
+
+export const parseProduct = (input: unknown): Product => {
+  if (!isObject(input)) return _parseProductSlow(input);
+  const _id = input.id;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as Product;
+  return _parseProductSlow(input);
 }`,
     )
   })
@@ -91,7 +104,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User')
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {
         id: 0,
         name: "",
@@ -99,13 +112,21 @@ describe('generate-parser-function', () => {
   const _id = input.id;
   const _name = input.name;
   const _email = input.email;
-  if (typeof _id === "number" && typeof _name === "string" && (_email === undefined || typeof _email === "string")) return { ...input } as User;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     ...(_email !== undefined && { email: typeof _email === "string" ? _email : String(_email) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _id = input.id;
+  const _name = input.name;
+  const _email = input.email;
+  if (typeof _id === "number" && typeof _name === "string" && (_email === undefined || typeof _email === "string")) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -123,18 +144,25 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Item')
 
     expect(result).toBe(
-      `export const parseItem = (input: unknown): Item => {
+      `const _parseItemSlow = (input: unknown): Item => {
   if (!isObject(input)) return {
         id: 0,
       };
   const _id = input.id;
   const _description = input.description;
-  if (typeof _id === "number" && (_description === undefined || typeof _description === "string")) return { ...input } as Item;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     ...(_description !== undefined && { description: typeof _description === "string" ? _description : String(_description) }),
   } as unknown as Item;
+}
+
+export const parseItem = (input: unknown): Item => {
+  if (!isObject(input)) return _parseItemSlow(input);
+  const _id = input.id;
+  const _description = input.description;
+  if (typeof _id === "number" && (_description === undefined || typeof _description === "string")) return { ...input } as Item;
+  return _parseItemSlow(input);
 }`,
     )
   })
@@ -196,16 +224,22 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {
         contact: parseContact(undefined),
       };
   const _contact = input.contact;
-  if (validateContactShape(_contact)) return { ...input } as User;
   return {
     ...input,
     contact: parseContact(_contact),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contact = input.contact;
+  if (validateContactShape(_contact)) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -221,14 +255,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _contact = input.contact;
-  if ((_contact === undefined || validateContactShape(_contact))) return { ...input } as User;
   return {
     ...input,
     ...(_contact !== undefined && { contact: parseContact(_contact) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contact = input.contact;
+  if ((_contact === undefined || validateContactShape(_contact))) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -248,16 +288,22 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {
         contacts: [],
       };
   const _contacts = input.contacts;
-  if (Array.isArray(_contacts) && _contacts.every(validateContactShape)) return { ...input } as User;
   return {
     ...input,
     contacts: validateArray(_contacts, parseContact),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contacts = input.contacts;
+  if (Array.isArray(_contacts) && _contacts.every(validateContactShape)) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -276,14 +322,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _contacts = input.contacts;
-  if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape))) return { ...input } as User;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContact) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contacts = input.contacts;
+  if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape))) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -302,14 +354,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: false })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _contacts = input.contacts;
-  if ((_contacts === undefined || Array.isArray(_contacts))) return { ...input } as User;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: Array.isArray(_contacts) ? _contacts : [] }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contacts = input.contacts;
+  if ((_contacts === undefined || Array.isArray(_contacts))) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -422,7 +480,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Complex')
 
     expect(result).toBe(
-      `export const parseComplex = (input: unknown): Complex => {
+      `const _parseComplexSlow = (input: unknown): Complex => {
   if (!isObject(input)) return {
         id: 0,
         name: "",
@@ -432,7 +490,6 @@ describe('generate-parser-function', () => {
   const _tags = input.tags;
   const _metadata = input.metadata;
   const _isActive = input.isActive;
-  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string")) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
@@ -441,6 +498,17 @@ describe('generate-parser-function', () => {
     ...(_metadata !== undefined && { metadata: isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {} }),
     ...(_isActive !== undefined && { isActive: typeof _isActive === "boolean" ? _isActive : Boolean(_isActive) }),
   } as unknown as Complex;
+}
+
+export const parseComplex = (input: unknown): Complex => {
+  if (!isObject(input)) return _parseComplexSlow(input);
+  const _id = input.id;
+  const _name = input.name;
+  const _tags = input.tags;
+  const _metadata = input.metadata;
+  const _isActive = input.isActive;
+  if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string")) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
+  return _parseComplexSlow(input);
 }`,
     )
   })
@@ -456,14 +524,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'ApiSpec', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseApiSpec = (input: unknown): ApiSpec => {
+      `const _parseApiSpecSlow = (input: unknown): ApiSpec => {
   if (!isObject(input)) return {} as ApiSpec;
   const _externalDoc = input.externalDoc;
-  if ((_externalDoc === undefined || validateExternalDocumentationShape(_externalDoc))) return { ...input } as ApiSpec;
   return {
     ...input,
     ...(_externalDoc !== undefined && { externalDoc: parseExternalDocumentation(_externalDoc) }),
   } as unknown as ApiSpec;
+}
+
+export const parseApiSpec = (input: unknown): ApiSpec => {
+  if (!isObject(input)) return _parseApiSpecSlow(input);
+  const _externalDoc = input.externalDoc;
+  if ((_externalDoc === undefined || validateExternalDocumentationShape(_externalDoc))) return { ...input } as ApiSpec;
+  return _parseApiSpecSlow(input);
 }`,
     )
   })
@@ -482,20 +556,28 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {
         contact: parseContact(undefined),
       };
   const _contact = input.contact;
   const _address = input.address;
   const _company = input.company;
-  if (validateContactShape(_contact) && (_address === undefined || validateAddressShape(_address)) && (_company === undefined || validateCompanyShape(_company))) return { ...input } as User;
   return {
     ...input,
     contact: parseContact(_contact),
     ...(_address !== undefined && { address: parseAddress(_address) }),
     ...(_company !== undefined && { company: parseCompany(_company) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contact = input.contact;
+  const _address = input.address;
+  const _company = input.company;
+  if (validateContactShape(_contact) && (_address === undefined || validateAddressShape(_address)) && (_company === undefined || validateCompanyShape(_company))) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -514,7 +596,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {
         id: 0,
         name: "",
@@ -522,13 +604,21 @@ describe('generate-parser-function', () => {
   const _id = input.id;
   const _contact = input.contact;
   const _name = input.name;
-  if (typeof _id === "number" && (_contact === undefined || validateContactShape(_contact)) && typeof _name === "string") return { ...input } as User;
   return {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     ...(_contact !== undefined && { contact: parseContact(_contact) }),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _id = input.id;
+  const _contact = input.contact;
+  const _name = input.name;
+  if (typeof _id === "number" && (_contact === undefined || validateContactShape(_contact)) && typeof _name === "string") return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -547,14 +637,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Tagged', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseTagged = (input: unknown): Tagged => {
+      `const _parseTaggedSlow = (input: unknown): Tagged => {
   if (!isObject(input)) return {} as Tagged;
   const _tags = input.tags;
-  if ((_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Tagged;
   return {
     ...input,
     ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
   } as unknown as Tagged;
+}
+
+export const parseTagged = (input: unknown): Tagged => {
+  if (!isObject(input)) return _parseTaggedSlow(input);
+  const _tags = input.tags;
+  if ((_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Tagged;
+  return _parseTaggedSlow(input);
 }`,
     )
   })
@@ -572,14 +668,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'ItemsContainer', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseItemsContainer = (input: unknown): ItemsContainer => {
+      `const _parseItemsContainerSlow = (input: unknown): ItemsContainer => {
   if (!isObject(input)) return {} as ItemsContainer;
   const _items = input.items;
-  if ((_items === undefined || Array.isArray(_items))) return { ...input } as ItemsContainer;
   return {
     ...input,
     ...(_items !== undefined && { items: Array.isArray(_items) ? _items : [] }),
   } as unknown as ItemsContainer;
+}
+
+export const parseItemsContainer = (input: unknown): ItemsContainer => {
+  if (!isObject(input)) return _parseItemsContainerSlow(input);
+  const _items = input.items;
+  if ((_items === undefined || Array.isArray(_items))) return { ...input } as ItemsContainer;
+  return _parseItemsContainerSlow(input);
 }`,
     )
   })
@@ -596,16 +698,23 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _contact = input.contact;
   const _age = input.age;
-  if ((_contact === undefined || validateContactShape(_contact)) && (_age === undefined || typeof _age === "number")) return { ...input } as User;
   return {
     ...input,
     ...(_contact !== undefined && { contact: parseContact(_contact) }),
     ...(_age !== undefined && { age: typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contact = input.contact;
+  const _age = input.age;
+  if ((_contact === undefined || validateContactShape(_contact)) && (_age === undefined || typeof _age === "number")) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -661,14 +770,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'MyCustomType')
 
     expect(result).toBe(
-      `export const parseMyCustomType = (input: unknown): MyCustomType => {
+      `const _parseMyCustomTypeSlow = (input: unknown): MyCustomType => {
   if (!isObject(input)) return {} as MyCustomType;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return { ...input } as MyCustomType;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as MyCustomType;
+}
+
+export const parseMyCustomType = (input: unknown): MyCustomType => {
+  if (!isObject(input)) return _parseMyCustomTypeSlow(input);
+  const _id = input.id;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as MyCustomType;
+  return _parseMyCustomTypeSlow(input);
 }`,
     )
   })
@@ -684,14 +799,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'myCustomType')
 
     expect(result).toBe(
-      `export const parsemyCustomType = (input: unknown): myCustomType => {
+      `const _parsemyCustomTypeSlow = (input: unknown): myCustomType => {
   if (!isObject(input)) return {} as myCustomType;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return { ...input } as myCustomType;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as myCustomType;
+}
+
+export const parsemyCustomType = (input: unknown): myCustomType => {
+  if (!isObject(input)) return _parsemyCustomTypeSlow(input);
+  const _id = input.id;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as myCustomType;
+  return _parsemyCustomTypeSlow(input);
 }`,
     )
   })
@@ -706,14 +827,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Implicit')
 
     expect(result).toBe(
-      `export const parseImplicit = (input: unknown): Implicit => {
+      `const _parseImplicitSlow = (input: unknown): Implicit => {
   if (!isObject(input)) return {} as Implicit;
   const _name = input.name;
-  if ((_name === undefined || typeof _name === "string")) return { ...input } as Implicit;
   return {
     ...input,
     ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
   } as unknown as Implicit;
+}
+
+export const parseImplicit = (input: unknown): Implicit => {
+  if (!isObject(input)) return _parseImplicitSlow(input);
+  const _name = input.name;
+  if ((_name === undefined || typeof _name === "string")) return { ...input } as Implicit;
+  return _parseImplicitSlow(input);
 }`,
     )
   })
@@ -778,14 +905,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Container', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseContainer = (input: unknown): Container => {
+      `const _parseContainerSlow = (input: unknown): Container => {
   if (!isObject(input)) return {} as Container;
   const _data = input.data;
-  if ((_data === undefined || Array.isArray(_data))) return { ...input } as Container;
   return {
     ...input,
     ...(_data !== undefined && { data: Array.isArray(_data) ? _data : [] }),
   } as unknown as Container;
+}
+
+export const parseContainer = (input: unknown): Container => {
+  if (!isObject(input)) return _parseContainerSlow(input);
+  const _data = input.data;
+  if ((_data === undefined || Array.isArray(_data))) return { ...input } as Container;
+  return _parseContainerSlow(input);
 }`,
     )
   })
@@ -801,14 +934,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _nested = input.nested;
-  if ((_nested === undefined || validateTypeShape(_nested))) return { ...input } as User;
   return {
     ...input,
     ...(_nested !== undefined && { nested: parseType(_nested) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _nested = input.nested;
+  if ((_nested === undefined || validateTypeShape(_nested))) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -831,16 +970,23 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _contacts = input.contacts;
   const _addresses = input.addresses;
-  if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape)) && (_addresses === undefined || Array.isArray(_addresses) && _addresses.every(validateAddressShape))) return { ...input } as User;
   return {
     ...input,
     ...(_contacts !== undefined && { contacts: validateArray(_contacts, parseContact) }),
     ...(_addresses !== undefined && { addresses: validateArray(_addresses, parseAddress) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _contacts = input.contacts;
+  const _addresses = input.addresses;
+  if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape)) && (_addresses === undefined || Array.isArray(_addresses) && _addresses.every(validateAddressShape))) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -858,16 +1004,23 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User')
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _id = input.id;
   const _name = input.name;
-  if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return { ...input } as User;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
     ...(_name !== undefined && { name: typeof _name === "string" ? _name : String(_name) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _id = input.id;
+  const _name = input.name;
+  if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -883,14 +1036,20 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User')
 
     expect(result).toBe(
-      `export const parseUser = (input: unknown): User => {
+      `const _parseUserSlow = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _id = input.id;
-  if ((_id === undefined || typeof _id === "number")) return { ...input } as User;
   return {
     ...input,
     ...(_id !== undefined && { id: typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0) }),
   } as unknown as User;
+}
+
+export const parseUser = (input: unknown): User => {
+  if (!isObject(input)) return _parseUserSlow(input);
+  const _id = input.id;
+  if ((_id === undefined || typeof _id === "number")) return { ...input } as User;
+  return _parseUserSlow(input);
 }`,
     )
   })
@@ -1648,7 +1807,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Product')
 
     expect(result).toBe(
-      `export const parseProduct = (input: unknown): Product => {
+      `const _parseProductSlow = (input: unknown): Product => {
   if (!isObject(input)) return {
         id: "",
         name: "",
@@ -1659,7 +1818,6 @@ describe('generate-parser-function', () => {
   const _price = input.price;
   const _inStock = input.inStock;
   const _tags = input.tags;
-  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Product;
   return {
     ...input,
     id: typeof _id === "string" ? _id : (_id !== undefined ? String(_id) : ""),
@@ -1668,6 +1826,17 @@ describe('generate-parser-function', () => {
     ...(_inStock !== undefined && { inStock: typeof _inStock === "boolean" ? _inStock : Boolean(_inStock) }),
     ...(_tags !== undefined && { tags: (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []) }),
   } as unknown as Product;
+}
+
+export const parseProduct = (input: unknown): Product => {
+  if (!isObject(input)) return _parseProductSlow(input);
+  const _id = input.id;
+  const _name = input.name;
+  const _price = input.price;
+  const _inStock = input.inStock;
+  const _tags = input.tags;
+  if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Product;
+  return _parseProductSlow(input);
 }`,
     )
   })
@@ -1686,18 +1855,26 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'PageParams')
 
     expect(result).toBe(
-      `export const parsePageParams = (input: unknown): PageParams => {
+      `const _parsePageParamsSlow = (input: unknown): PageParams => {
   if (!isObject(input)) return {} as PageParams;
   const _page = input.page;
   const _perPage = input.perPage;
   const _search = input.search;
-  if ((_page === undefined || typeof _page === "number" && Number.isInteger(_page) && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
   return {
     ...input,
     ...(_page !== undefined && { page: typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : ((_n) => Number.isInteger(_n) && _n >= 1 ? _n : 1)(Number(_page)) }),
     ...(_perPage !== undefined && { perPage: typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : ((_n) => Number.isInteger(_n) && _n >= 1 && _n <= 100 ? _n : 1)(Number(_perPage)) }),
     ...(_search !== undefined && { search: typeof _search === "string" ? _search : String(_search) }),
   } as unknown as PageParams;
+}
+
+export const parsePageParams = (input: unknown): PageParams => {
+  if (!isObject(input)) return _parsePageParamsSlow(input);
+  const _page = input.page;
+  const _perPage = input.perPage;
+  const _search = input.search;
+  if ((_page === undefined || typeof _page === "number" && Number.isInteger(_page) && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
+  return _parsePageParamsSlow(input);
 }`,
     )
   })
@@ -1735,7 +1912,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'GeoCoordinate')
 
     expect(result).toBe(
-      `export const parseGeoCoordinate = (input: unknown): GeoCoordinate => {
+      `const _parseGeoCoordinateSlow = (input: unknown): GeoCoordinate => {
   if (!isObject(input)) return {
         latitude: 0,
         longitude: 0,
@@ -1744,7 +1921,6 @@ describe('generate-parser-function', () => {
   const _longitude = input.longitude;
   const _altitude = input.altitude;
   const _label = input.label;
-  if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return { ...input } as GeoCoordinate;
   return {
     ...input,
     latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? ((_n) => Number.isFinite(_n) && _n >= -90 && _n <= 90 ? _n : 0)(Number(_latitude)) : 0),
@@ -1752,6 +1928,16 @@ describe('generate-parser-function', () => {
     ...(_altitude !== undefined && { altitude: typeof _altitude === "number" ? _altitude : (Number.isFinite(Number(_altitude)) ? Number(_altitude) : 0) }),
     ...(_label !== undefined && { label: typeof _label === "string" ? _label : String(_label) }),
   } as unknown as GeoCoordinate;
+}
+
+export const parseGeoCoordinate = (input: unknown): GeoCoordinate => {
+  if (!isObject(input)) return _parseGeoCoordinateSlow(input);
+  const _latitude = input.latitude;
+  const _longitude = input.longitude;
+  const _altitude = input.altitude;
+  const _label = input.label;
+  if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return { ...input } as GeoCoordinate;
+  return _parseGeoCoordinateSlow(input);
 }`,
     )
   })
@@ -1827,7 +2013,10 @@ describe('generate-parser-function', () => {
       expect(result).toContain(
         'if (!isObject(input)) throw new Error(`[User] expected object, got ${input === null ? "null" : typeof input}`)',
       )
-      expect(result).not.toContain('if (!isObject(input)) return')
+      // A strict parser never falls back to a default: the only `return` on a
+      // non-object is the hand-off to its own cold function, which throws.
+      expect(result).not.toContain('if (!isObject(input)) return {')
+      expect(result).toContain('if (!isObject(input)) return _parseUserSlow(input);')
     })
 
     it('throws on missing required property', () => {
@@ -2457,7 +2646,12 @@ describe('generate-parser-function', () => {
       }
 
       const source = generateParserFunction(schema, 'Doc', { strict: true, stripUnknown: true })
-      expect(source).toContain('? { foo: (_nested as Record<string, any>).foo')
+      // Each nested field is read once, into a local the condition and the
+      // literal share; the guard has already proven `_nested` is an object, so
+      // the inlined condition carries no shape terms of its own.
+      expect(source).toContain('const _nested_foo = (_nested as Record<string, any>).foo;')
+      expect(source).toContain('const _nested_num = (_nested as Record<string, any>).num;')
+      expect(source).toContain('? { foo: _nested_foo, num: _nested_num }')
       // The call survives for whatever the inlined condition rejects.
       expect(source).toContain(': parseDoc_Nested(_nested),')
 
@@ -2559,8 +2753,12 @@ describe('generate-parser-function', () => {
         strict: true,
         stripUnknown: true,
       })
+      // Only the hot function inlines, and only four sites of it.
       expect(source.split('? {').length - 1).toBe(4)
-      expect(source.split(/: parseWide_N\d+\(/).length - 1).toBe(10)
+      // Every one of the ten keeps its call: in the hot function as the inlined
+      // condition's fallback (or outright, past the budget), and again in the
+      // cold function, which never inlines.
+      expect(source.split(/: parseWide_N\d+\(/).length - 1).toBe(20)
     })
 
     // Issue: the strip build's fast path used to prove "no undeclared key" only
