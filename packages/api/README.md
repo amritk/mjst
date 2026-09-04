@@ -1983,13 +1983,15 @@ targets. Reproduce with `bun run bench:workerd`, `bun run bench:vs` (Node), or
 `bun run bench:vs:bun`.
 
 Every table below was re-measured together on one machine (Bun 1.4.0 /
-Node 22.22, Linux x64, a 4-vCPU cloud box, workerd via Miniflare 4.20260730 —
-the same machine and runtimes as every other benchmark table in this repo). The
-box differs from the ones earlier revisions were taken on, and Bun 1.4 in
-particular made web-standard `Request`/`Response` construction far cheaper than
-Bun 1.3 — so the absolute figures, and the Bun column especially, move for
-reasons that have nothing to do with this package. Compare columns within a
-table, not against a figure you remember.
+Node 26.8.1, Linux x64, a 4-vCPU cloud box, workerd via Miniflare 4.20260730 —
+the same machine and runtimes as every other benchmark table in this repo). Two
+warnings about the absolute figures. Bun 1.4 made web-standard
+`Request`/`Response` construction far cheaper than Bun 1.3, so the Bun column
+moved for reasons that have nothing to do with this package. And this box's
+throughput drifts between sittings: the same suite, same runtime, same commit
+read 60% faster an hour later, uniformly across cases. Ratios within a table
+survive that; a remembered absolute does not. Compare columns within a table,
+not against a figure you remember.
 
 Under **workerd**, the runtime `compileToModule` exists for, measured inside a
 real isolate (Miniflare, one fresh isolate per cell) rather than in a stand-in
@@ -2002,13 +2004,13 @@ isolates differ from one another by more than trials within one isolate do:
 | dynamic GET, params validated | **~103k** ¹ | ~55k | ~58k | ~76k |
 | POST, body validated | **~27k** ¹ | ~22k | ~21k | ~22k |
 
-Under **Node/V8** — the same engine workerd runs, without workerd around it:
+Under **Node 26/V8** — the same engine workerd runs, without workerd around it:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | **~146k ops/s** ¹ | ~141k | ~93k | ~134k |
-| dynamic GET, params validated | **~120k** ¹ | ~52k | ~67k | ~95k |
-| POST, body validated | **~45k** ¹ | ~38k | ~32k | ~41k |
+| static GET | **~150k ops/s** ¹ | ~143k | ~107k | ~124k |
+| dynamic GET, params validated | **~131k** ¹ | ~70k | ~80k | ~101k |
+| POST, body validated | ~59k ¹ | ~53k | ~49k | **~59k** |
 
 Under **Bun/JavaScriptCore**, where web-standard `Request`/`Response` objects
 are far cheaper to build than undici's and more of the difference is the
@@ -2016,9 +2018,9 @@ framework rather than the runtime:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~460k ops/s ¹ | ~426k | ~389k | **~484k** |
-| dynamic GET, params validated | **~347k** ¹ | ~127k | ~207k | ~287k |
-| POST, body validated | **~170k** ¹ | ~106k | ~129k | ~135k |
+| static GET | ~574k ops/s ¹ | ~514k | ~478k | **~610k** |
+| dynamic GET, params validated | **~423k** ¹ | ~145k | ~286k | ~418k |
+| POST, body validated | **~265k** ¹ | ~172k | ~189k | ~232k |
 
 <sub>¹ hono-bare does no validation; every @amritk/api column validates, and
 the runtime column validates responses too (`validateResponses: true`, the
@@ -2027,14 +2029,14 @@ every case before it is timed.</sub>
 
 Read the ratios, not the absolutes. Against the like-for-like column —
 `hono + zod`, the other stack that actually validates — the compiled engine
-leads on Bun (1.1–2.3×), and is mixed on Node (0.95–1.8×) and under workerd
+leads on Bun (1.2–2.9×) and is mixed on Node (0.87–1.4×) and under workerd
 (0.88–1.4×): widest wherever params and query have to be coerced and checked,
 narrowest (and on Node and workerd, slightly behind) on the static GET, where
 there is no validation work to win back.
 
-Against *unvalidated* Hono it now leads only Bun's static GET (1.05×) and trails
-everywhere else — 0.79–0.83× on Bun's other two cases, 0.79–0.92× across Node,
-0.74–0.93× across workerd. That is a change from the previous revision, which
+Against *unvalidated* Hono it leads only Bun's static GET (1.06×) and ties or
+trails everywhere else — 0.88–0.99× on Bun's other two cases, 0.77–1.00× across
+Node, 0.74–0.93× across workerd. That is a change from the previous revision, which
 had it level with or ahead of bare Hono on the GET cases, and the cause is the
 runtimes rather than this package: bare Hono skips the validation every other
 column performs, and it now skips it fast enough that compiling the validation
@@ -2043,7 +2045,7 @@ older reason — it is dominated by reading and parsing the body, which every
 column pays and none of the compiler's work removes.
 
 The runtime (development) engine — no build step, response validation on — lands
-at 0.91–1.6× of `hono + zod` on Bun, 0.66–1.3× on Node, and 0.64–1.05× under
+at 0.93–1.97× of `hono + zod` on Bun, 0.75–1.14× on Node, and 0.64–1.05× under
 workerd. Its workerd static-GET cell is also the least trustworthy number in
 these tables: the five isolates spread from 32k to 82k around a 63k median,
 which is the pause behaviour described next rather than a throughput figure.
