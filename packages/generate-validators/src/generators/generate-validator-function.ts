@@ -1828,7 +1828,57 @@ const carriesUnevaluated = (schema: JSONSchema): boolean => {
   )
 }
 
-const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string): string[] | null => {
+/**
+ * One `additionalProperties: false` test a flat guard runs *after* its typed
+ * `&&` chain, as statements: a `for…in` walk over `obj` that either counts the
+ * keys or compares each one against the declared set.
+ *
+ * `count` is the declared-key count when every declared property is required.
+ * The typed chain ahead of the walk has then proven all N declared keys present,
+ * so "exactly N enumerable keys" is "no undeclared key" — a count needs no
+ * comparison per key and, unlike `Object.keys(obj).length`, allocates nothing:
+ * V8 answers a `for…in` from the shape's enum cache. When a declared property is
+ * optional the chain proves nothing about presence, so `count` is `null` and
+ * every key is compared against `known` instead.
+ *
+ * Which keys the walk sees is the cold path's semantics, deliberately.
+ * `validateXErrors` sweeps undeclared keys with the same `for…in`, so an
+ * enumerable key *inherited* from a polluted `Object.prototype` is an extra on
+ * both paths (rejected — the safe direction), and a declared key the input
+ * inherits rather than owns satisfies both paths, whose presence reads are `in`.
+ * An own-key count (`Object.keys`) split the two paths on exactly those inputs:
+ * the guard accepted what the cold path reported. The interpreter counts own keys
+ * only; the two agree on every value that could have come from JSON.
+ */
+type KeySetCheck = { readonly obj: string; readonly count: number | null; readonly known: readonly string[] }
+
+/** The two statements that count the keys `for…in` sees on `obj` into `_c<index>`. */
+const keyCountLines = (obj: string, index: number): string[] => [
+  `let _c${index} = 0`,
+  `for (const _k${index} in ${obj}) _c${index}++`,
+]
+
+/**
+ * Renders a {@link KeySetCheck} for a boolean guard: statements that `return
+ * false` on an undeclared key and fall through otherwise. `index` keeps the loop
+ * locals distinct when one guard checks several objects.
+ */
+const keySetCheckLines = (check: KeySetCheck, index: number): string[] => {
+  if (check.count === null) {
+    // Inline comparisons at any width: a guard has nowhere to hoist a `Set`,
+    // and the `.every` chain this replaces inlined them too.
+    const unknown = unknownKeyCheck(check.known, '', Number.POSITIVE_INFINITY).isUnknown(`_k${index}`)
+    return [`for (const _k${index} in ${check.obj}) if (${unknown}) return false`]
+  }
+  return [...keyCountLines(check.obj, index), `if (_c${index} !== ${check.count}) return false`]
+}
+
+const guardPropConditions = (
+  key: string,
+  propSchema: JSONSchema,
+  objAcc: string,
+  keyChecks: KeySetCheck[],
+): string[] | null => {
   if (!isSchemaObject(propSchema)) return null
 
   // Dotted access (`obj.number`) for identifier keys, bracket access otherwise.
@@ -1877,7 +1927,7 @@ const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string
     case 'object':
       // Member access into the nested record is only reached after the shape
       // check ahead of it in the `&&` chain, so the cast is always safe.
-      return guardObjectConditions(propSchema, raw, `(${raw} as Record<string, unknown>)`)
+      return guardObjectConditions(propSchema, raw, `(${raw} as Record<string, unknown>)`, keyChecks)
     // Arrays need a per-item loop the guard can't express, and any other type
     // (null, multi-type, untyped) is left to the slow path.
     default:
@@ -1934,7 +1984,12 @@ const arrayRejectedByRequiredProp = (
  * `additionalProperties` *schema*), or unguardable property makes it bail, and
  * the validator falls back to its full error-collecting body.
  */
-const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
+const guardObjectConditions = (
+  schema: JSONSchema,
+  raw: string,
+  objAcc: string,
+  keyChecks: KeySetCheck[],
+): string[] | null => {
   if (!isObjectSchema(schema)) return null
   if (hasDependentRequired(schema) || hasPropertyNames(schema) || declaresKey(schema, 'dependentSchemas')) return null
   if (hasMinProperties(schema) || hasMaxProperties(schema) || declaresKey(schema, 'dependencies')) return null
@@ -1972,7 +2027,7 @@ const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string):
     // An optional property would need an `=== undefined ||` branch and breaks
     // the key-count trick, so the guard only covers all-required objects.
     if (!required.has(key)) return null
-    const propConditions = guardPropConditions(key, properties[key] as JSONSchema, objAcc)
+    const propConditions = guardPropConditions(key, properties[key] as JSONSchema, objAcc, keyChecks)
     if (propConditions === null) return null
     conditions.push(...propConditions)
   }
@@ -1980,9 +2035,10 @@ const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string):
   if (strict) {
     // `additionalProperties: false` with every declared property required: once
     // the typeof checks confirm each key is present, an exact key count proves
-    // there are no extras — TypeBox's trick, with no loop and no Set.
+    // there are no extras — TypeBox's trick, with no comparison per key. It runs
+    // as statements after the chain (see {@link KeySetCheck}).
     if (!keys.every((key) => required.has(key))) return null
-    conditions.push(`Object.keys(${objAcc}).length === ${keys.length}`)
+    keyChecks.push({ obj: objAcc, count: keys.length, known: keys })
   }
 
   return conditions
@@ -2076,7 +2132,8 @@ const generateObjectValidator = (
   // through to the error-collecting path, which produces the same verdict and
   // full JSON-Pointer errors. Schemas with constraints the guard can't express
   // produce no guard at all (`null`), leaving behaviour unchanged.
-  const guard = guardObjectConditions(schema, 'input', 'obj')
+  const guardKeyChecks: KeySetCheck[] = []
+  const guard = guardObjectConditions(schema, 'input', 'obj', guardKeyChecks)
 
   // The cold, error-collecting body. When there's a guard this is a separate
   // (unexported) function reached only on failure; the hot path never enters it
@@ -2119,7 +2176,17 @@ const generateObjectValidator = (
   // property to check (`{ "type": "object", "properties": {} }`, which the OpenAPI
   // corpus really does carry) guards on the shape alone, and then the binding is
   // an unused local in the *exported* function.
-  const guardText = guard.join('\n')
+  // The no-extras tests come last, as statements inside the chain's block: the
+  // chain has proven every counted object present and well-typed by then, which
+  // is what makes a bare count sound (see {@link KeySetCheck}). All the counts
+  // are taken before any is compared — a valid input needs every one of them,
+  // and an invalid one is on its way to the cold path either way.
+  const guardCountLines = guardKeyChecks.flatMap((check, index) => keyCountLines(check.obj, index))
+  const guardVerdict =
+    guardKeyChecks.length === 0
+      ? 'return true'
+      : `if (${guardKeyChecks.map((check, index) => `_c${index} === ${check.count}`).join(' && ')}) return true`
+  const guardText = [...guard, ...guardCountLines].join('\n')
   const collectName = `${vName}Errors`
   return withHoisted(
     ctx.hoisted,
@@ -2131,7 +2198,8 @@ const generateObjectValidator = (
       `  if (`,
       guard.map((condition) => `    ${condition}`).join(' &&\n'),
       `  ) {`,
-      `    return true`,
+      ...guardCountLines.map((line) => `    ${line}`),
+      `    ${guardVerdict}`,
       `  }`,
       `  return ${collectName}(input, _path)`,
       `}`,
@@ -2181,7 +2249,12 @@ const valueCanHaveType = (value: unknown, type: string): boolean => {
  * validator. Used for a property value or an array item; `acc` is the expression
  * yielding the value.
  */
-const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): string | null => {
+const booleanLeafExpr = (
+  schema: JSONSchema,
+  acc: string,
+  narrowable: boolean,
+  keyChecks: KeySetCheck[],
+): string | null => {
   if (!isSchemaObject(schema)) return null
 
   /**
@@ -2292,7 +2365,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
     case 'object': {
       // Members below this point read through the cast, so nothing under it can
       // be narrowed by the chain.
-      const parts = booleanObjectParts(schema, acc, `(${acc} as Record<string, unknown>)`, false)
+      const parts = booleanObjectParts(schema, acc, `(${acc} as Record<string, unknown>)`, false, keyChecks)
       return parts === null ? null : withMembership(parts.join(' && '))
     }
     case 'array':
@@ -2352,9 +2425,15 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
   // guard reaches the identical verdict. `booleanLeafExpr` returns `null` for item
   // schemas it can't express flat — bail so the validator decides, keeping the
   // guard from ever accepting what the slow path would reject.
-  const itemExpr = booleanLeafExpr(items, '_it')
+  const itemChecks: KeySetCheck[] = []
+  const itemExpr = booleanLeafExpr(items, '_it', true, itemChecks)
   if (itemExpr === null) return null
-  return `${base} && Array.from(${acc} as unknown[]).every((_it) => (${itemExpr}))`
+  if (itemChecks.length === 0) return `${base} && Array.from(${acc} as unknown[]).every((_it) => (${itemExpr}))`
+  // An item that closes its keys needs the statements of {@link keySetCheckLines}
+  // after its chain, which a block-bodied callback fits on the one line the
+  // surrounding `&&` chain is laid out in.
+  const itemStatements = itemChecks.flatMap((check, index) => keySetCheckLines(check, index)).join('; ')
+  return `${base} && Array.from(${acc} as unknown[]).every((_it) => { if (!(${itemExpr})) return false; ${itemStatements}; return true })`
 }
 
 /**
@@ -2363,7 +2442,13 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
  * keyword can't be mirrored flat. `raw` yields the value (for the shape check);
  * `objAcc` is the same value narrowed to a record (for member access).
  */
-const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, narrowable = true): string[] | null => {
+const booleanObjectParts = (
+  schema: JSONSchema,
+  raw: string,
+  objAcc: string,
+  narrowable: boolean,
+  keyChecks: KeySetCheck[],
+): string[] | null => {
   if (!isObjectSchema(schema)) return null
   // A `type: "object"` node can still carry a `$ref`, a `const`/`enum`, or an
   // `x-mjst` hint alongside its object keywords. None of them is in the parts
@@ -2409,7 +2494,7 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, nar
     // pathological anyway, so losing the flat guard for it costs nothing real.
     if (PROTOTYPE_MEMBERS.has(key)) return null
     const member = safeAccessor(objAcc, key)
-    const expr = booleanLeafExpr(propSchema, member, narrowable)
+    const expr = booleanLeafExpr(propSchema, member, narrowable, keyChecks)
     if (expr === null) return null
     parts.push(required.has(key) ? expr : `(${member} === undefined || (${expr}))`)
   }
@@ -2427,17 +2512,13 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, nar
   }
 
   if (strict) {
-    // `additionalProperties: false`: with every property required, an exact key
-    // count proves no extras (the typeof checks above already proved presence);
-    // otherwise sweep the keys against the declared set.
-    if (keys.length === 0) {
-      parts.push(`Object.keys(${objAcc}).length === 0`)
-    } else if (keys.every((key) => required.has(key))) {
-      parts.push(`Object.keys(${objAcc}).length === ${keys.length}`)
-    } else {
-      const known = keys.map((key) => `_k === ${JSON.stringify(key)}`).join(' || ')
-      parts.push(`Object.keys(${objAcc}).every((_k) => ${known})`)
-    }
+    // `additionalProperties: false` joins as a `for…in` walk after the chain
+    // (see {@link KeySetCheck}): a bare count when every property is required
+    // (vacuously so for an object declaring none), since the typeof checks above
+    // already proved presence; a comparison of every key against the declared
+    // set otherwise.
+    const allRequired = keys.every((key) => required.has(key))
+    keyChecks.push({ obj: objAcc, count: allRequired ? keys.length : null, known: keys })
   }
 
   return parts
@@ -2525,24 +2606,49 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
   // the validator, and a guard that disagrees is worse than no guard, so those
   // fall back to calling `validateX`.
   if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
-    const parts = booleanObjectParts(rewritten, 'input', 'obj')
+    const keyChecks: KeySetCheck[] = []
+    const parts = booleanObjectParts(rewritten, 'input', 'obj', true, keyChecks)
     if (parts === null) return fallback
+    const checkLines = keyChecks.flatMap((check, index) => keySetCheckLines(check, index))
+    // With no key set to walk the guard is the chain itself. With one, the chain
+    // becomes the early exit and the walks follow it as statements — they read
+    // objects the chain has just proven present.
+    const body =
+      checkLines.length === 0
+        ? [`  return (`, parts.map((part) => `    ${part}`).join(' &&\n'), `  )`]
+        : [
+            `  if (!(`,
+            parts.map((part) => `    ${part}`).join(' &&\n'),
+            `  )) return false`,
+            ...checkLines.map((line) => `  ${line}`),
+            `  return true`,
+          ]
     return [
       `export const ${name} = (input: unknown): ${returns} => {`,
       // Same unused-local as the validator's hot guard: a node with no property
       // to read guards on the shape alone and never touches the narrowing.
-      ...(readsObjBinding(parts.join('\n')) ? [`  const obj = input as Record<string, unknown>`] : []),
-      `  return (`,
-      parts.map((part) => `    ${part}`).join(' &&\n'),
-      `  )`,
+      ...(readsObjBinding([...parts, ...checkLines].join('\n'))
+        ? [`  const obj = input as Record<string, unknown>`]
+        : []),
+      ...body,
       `}`,
     ].join('\n')
   }
 
   // Non-object roots (scalar, enum, array) can often be expressed inline too.
-  const expr = booleanLeafExpr(rewritten, 'input')
+  const leafChecks: KeySetCheck[] = []
+  const expr = booleanLeafExpr(rewritten, 'input', true, leafChecks)
   if (expr === null) return fallback
-  return `export const ${name} = (input: unknown): ${returns} => ${expr}`
+  if (leafChecks.length === 0) return `export const ${name} = (input: unknown): ${returns} => ${expr}`
+  // An object root the flat object guard above declined still reaches the
+  // object leaf, and its key-set walks need a body.
+  return [
+    `export const ${name} = (input: unknown): ${returns} => {`,
+    `  if (!(${expr})) return false`,
+    ...leafChecks.flatMap((check, index) => keySetCheckLines(check, index)).map((line) => `  ${line}`),
+    `  return true`,
+    `}`,
+  ].join('\n')
 }
 
 /**

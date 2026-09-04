@@ -244,8 +244,8 @@ of it is published.
 Generated validators are straight-line, monomorphic TypeScript with no generic
 dispatch. The exported `validateX` is split into a hot and a cold half: on the
 happy path it runs a single allocation-free boolean guard — a pure `&&` chain of
-`typeof` checks (plus an `Object.keys().length` count when an object is closed
-with `additionalProperties: false`) — and `return true`s straight away, only
+`typeof` checks (plus a `for...in` key count when an object is closed with
+`additionalProperties: false`) — and `return true`s straight away, only
 calling a separate error-collecting function when something is actually wrong.
 Keeping the hot function tiny lets the JIT optimise it aggressively, so a valid-input
 check beats every other library measured — including the build-time transformer
@@ -343,10 +343,11 @@ bun run bench:moltar   # benny, under the leaderboard's conditions
 
 Closing an object with `additionalProperties: false` means proving no
 undeclared key is present, and every library answers that by enumerating keys:
-mjst's guard counts them (`Object.keys(obj).length === n`, exact because each
-declared property is required and already proven present), Ajv and Zod sweep
-with `for...in`, TypeBox runs its own sweep. On V8 that costs the same whatever
-the input looks like.
+mjst's guard counts them (a `for...in` count compared with `n`, exact because
+each declared property is required and already proven present — and, unlike
+`Object.keys(obj).length`, allocating nothing), Ajv and Zod sweep with
+`for...in`, TypeBox runs its own sweep. On V8 that costs the same whatever the
+input looks like.
 
 On JavaScriptCore (Bun) it does not. Making an object non-extensible —
 `Object.freeze`, `Object.seal` or a bare `Object.preventExtensions` — turns off

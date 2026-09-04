@@ -1199,13 +1199,13 @@ const hasStrictKeys = (schema: JSONSchema): boolean => {
 
 /**
  * When every declared property is required (and every required key is
- * declared, with a real schema), the fast-path known-keys test can be an
- * own-key *count* comparison instead of a per-key `for..in` walk: the typed
- * property checks already prove all N declared keys are present, so
- * `Object.keys(input).length === N` proves there are no undeclared extras —
- * measurably cheaper on the hot path. Returns the declared-key count, or null
- * when the cheaper form would be unsound (an optional or non-schema property
- * breaks the presence proof).
+ * declared, with a real schema), the fast-path known-keys test can be a key
+ * *count* comparison instead of a per-key comparison walk: the typed property
+ * checks already prove all N declared keys are present, so "exactly N keys"
+ * proves there are no undeclared extras — measurably cheaper on the hot path.
+ * Returns the declared-key count, or null when the cheaper form would be
+ * unsound (an optional or non-schema property breaks the presence proof).
+ * {@link keyCountStatements} is the count itself.
  */
 const exactKeyCountOf = (schema: JSONSchema): number | null => {
   if (!isSchemaObject(schema) || !hasProperties(schema) || !hasRequired(schema)) return null
@@ -1232,6 +1232,39 @@ const exactKeyCountOf = (schema: JSONSchema): number | null => {
   if (declaredCount === 0 || required.length !== declaredCount) return null
   return declaredCount
 }
+
+/**
+ * The local the fast path counts keys into. Reserved before the property
+ * locals are named (see `usedVarNames`), so a property called `keyCount` cannot
+ * shadow it inside the block that builds the result literal.
+ */
+const KEY_COUNT_VAR = '_keyCount'
+
+/**
+ * The statements that count the keys `for…in` sees on `input` into
+ * {@link KEY_COUNT_VAR} — the fast path's no-extras test whenever
+ * {@link exactKeyCountOf} allows it. A `for…in` count over a stable shape is
+ * answered from V8's enum cache and allocates nothing, where the
+ * `Object.keys(input).length` it replaces built a keys array per call, twice
+ * per parse for a nested schema — and, unlike a count of *own* keys, it needs no
+ * `Object.getPrototypeOf(input) === Object.prototype` guard in front of it.
+ *
+ * That guard existed to keep the own-key count sound: a crafted prototype could
+ * satisfy the typed checks through an inherited declared key while an own extra
+ * kept the own-key count at N. A `for…in` count sees the inherited key too, so
+ * the same input counts N + 1 and lands on the cold path, whose `for…in`
+ * rejection has always walked inherited keys — the two paths now read the key
+ * set the same way. What changes for a non-plain input with exactly the declared
+ * keys, own or inherited, is only that the fast path accepts it where the guard
+ * used to divert it to the cold path, which accepted it too. The enumerable
+ * keys a polluted `Object.prototype` adds are extras on both paths, and the
+ * parse rejects — the safe direction. The runtime interpreter counts own keys
+ * only; the two agree on every value that could have come from JSON.
+ */
+const keyCountStatements = (indent: string): string[] => [
+  `${indent}let ${KEY_COUNT_VAR} = 0;`,
+  `${indent}for (const _k in input) ${KEY_COUNT_VAR}++;`,
+]
 
 /**
  * Determines if a property needs a local variable or can be inlined.
@@ -1533,7 +1566,7 @@ const generateObjectParser = (
   const fastPathNeedsKnownKeys = guardKeys && (rejectsUnknownKeys || !fastPathBuildsDeclaredLiteral)
   const droppedKnownKeysTerm = guardKeys && !fastPathNeedsKnownKeys
   // When every declared property is required, the fast-path no-extras test is
-  // the cheaper own-key count (see exactKeyCountOf) and the `_hasOnlyKnownKeys`
+  // the cheaper key count (see exactKeyCountOf) and the `_hasOnlyKnownKeys`
   // predicate is not emitted at all — the shape validator derives the same
   // decision from the schema, so the cross-function contract stays in sync.
   const exactKeyCount = guardKeys ? exactKeyCountOf(schema) : null
@@ -1601,7 +1634,7 @@ const generateObjectParser = (
   // (e.g. `a-b` and `a.b` both → `_a_b`), which would emit two `const _a_b`
   // declarations (TS2451). Dedupe by suffixing `_` until unique — the same
   // approach `collectInlineObjectProperties` uses — so each key gets its own var.
-  const usedVarNames = new Set<string>()
+  const usedVarNames = new Set<string>([KEY_COUNT_VAR])
   for (const key of propertyKeys) {
     const propSchema = schemaProps[key] as JSONSchema
     const isRequired = isPropertyRequired(key, schema)
@@ -1672,28 +1705,20 @@ const generateObjectParser = (
   // false the cold path rejects extras instead; folding the known-keys term into
   // the guard lets the guard run *before* that rejection, so a valid clean input
   // never pays for the per-property assertions. With every declared property
-  // required, the own-key count is equivalent and cheaper than the per-key walk —
-  // but only for plain objects: a crafted prototype could satisfy the typed
-  // checks through inherited properties while the own-key count still matches,
-  // so non-plain inputs route to the slow path, where the for..in walk keeps
-  // the historical inherited-key rejection.
-  //
-  // The keys array this allocates looks like the thing to remove — but a
-  // prototype-guarded `for..in` count measured slower than it, both under the
-  // benchmark harness and one-variant-per-process: V8 scalar-replaces the array
-  // when only `.length` is read, and `Object.getPrototypeOf` is the dearer half
-  // of the pair either way. Leave it alone.
-  if (fastPathNeedsKnownKeys) {
-    fastPathChecks.push(
-      exactKeyCount !== null
-        ? `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`
-        : `_hasOnlyKnownKeys${typeName}(input)`,
-    )
+  // required the term is a key count, which is not an expression the `&&` chain
+  // can carry: it is emitted as statements after the chain (see
+  // {@link keyCountStatements}), so it is kept beside the chain rather than in
+  // it. Otherwise the per-key walk joins the chain as a call.
+  const fastPathKeyCount = fastPathNeedsKnownKeys ? exactKeyCount : null
+  if (fastPathNeedsKnownKeys && exactKeyCount === null) {
+    fastPathChecks.push(`_hasOnlyKnownKeys${typeName}(input)`)
   }
 
   // The deep guard proves the whole shape (so `{ ...input }` can be returned),
-  // using the nested shape predicates and the known-keys term above.
-  const deepGuard = canFastPath && fastPathChecks.length > 0 ? fastPathChecks.join(' && ') : null
+  // using the nested shape predicates and the known-keys term above. It is the
+  // empty string when the key count is the whole guard.
+  const deepGuard =
+    canFastPath && (fastPathChecks.length > 0 || fastPathKeyCount !== null) ? fastPathChecks.join(' && ') : null
 
   // An exported stripKeys parser returns a literal built from the cached
   // property reads on its fast path. Delegating that guard to the shape
@@ -1721,23 +1746,21 @@ const generateObjectParser = (
     const shapeFnName = shapeValidatorName(typeName)
     const shapeStrictKeysGuard =
       stripKeys && exactKeyCount === null ? `\n  if (!_hasOnlyKnownKeys${typeName}(input)) return false;` : ''
-    const shapeChecks = [...fastPathAccessorChecks]
-    if (stripKeys && exactKeyCount !== null) {
-      shapeChecks.push(
-        `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${exactKeyCount}`,
-      )
-    }
-    const expectedShapeValidator =
-      shapeChecks.length === 0
-        ? shapeStrictKeysGuard
-          ? `${exportPrefix}const ${shapeFnName} = (input: unknown): boolean => {\n  if (!isObject(input)) return false;${shapeStrictKeysGuard}\n  return true;\n};`
-          : `${exportPrefix}const ${shapeFnName} = (input: unknown): boolean => isObject(input);`
-        : `${exportPrefix}const ${shapeFnName} = (input: unknown): boolean => {\n  if (!isObject(input)) return false;${shapeStrictKeysGuard}\n  return ${shapeChecks.join('\n    && ')};\n};`
+    const expectedShapeValidator = renderShapeValidator(
+      exportPrefix,
+      shapeFnName,
+      fastPathAccessorChecks,
+      stripKeys ? exactKeyCount : null,
+      shapeStrictKeysGuard,
+    )
     if (shapeValidatorSource === expectedShapeValidator) {
       deepGuardExpr = `${shapeFnName}(input)`
     }
   }
   const deepGuardCallsShape = deepGuardExpr !== deepGuard
+  // The key count the guard still has to take inline — none once the guard is
+  // a call to the shape validator, which counts for itself.
+  const inlineKeyCount = deepGuardCallsShape ? null : fastPathKeyCount
 
   // The shallow guard powers the strict strip-build fast path (stripUnknown
   // without additionalProperties: false): it proves every scalar is well-typed
@@ -2003,9 +2026,29 @@ const generateObjectParser = (
   // The literal shares each value by reference, exactly like the spread did, so
   // it never re-parses an already-validated nested object. allOf merges in
   // properties this `propInfo` list doesn't carry, so it keeps the spread.
+  // `head` is the return statement's first line (without its indent), `tail`
+  // the rest of it as fully indented lines — a literal's fields and closing
+  // brace. With a key count to take, the chain opens a block that counts before
+  // it returns, and the whole statement moves in with it.
+  const emitGuardedReturn = (lines: string[], head: string, tail: readonly string[] = []): void => {
+    if (inlineKeyCount === null) {
+      lines.push(`  if (${deepGuardExpr}) ${head}`, ...tail)
+      return
+    }
+    const bare = deepGuardExpr === ''
+    const indent = bare ? '  ' : '    '
+    if (!bare) lines.push(`  if (${deepGuardExpr}) {`)
+    lines.push(...keyCountStatements(indent))
+    lines.push(
+      `${indent}if (${KEY_COUNT_VAR} === ${inlineKeyCount}) ${head}`,
+      ...tail.map((line) => (bare ? line : `  ${line}`)),
+    )
+    if (!bare) lines.push(`  }`)
+  }
+
   const emitDeepGuardReturn = (lines: string[]): void => {
     if (!fastPathBuildsDeclaredLiteral) {
-      lines.push(`  if (${deepGuardExpr}) return { ...input } as ${typeName};`)
+      emitGuardedReturn(lines, `return { ...input } as ${typeName};`)
       return
     }
     // A *private* (nested-object / array-item) parser whose deep guard proved
@@ -2020,7 +2063,7 @@ const generateObjectParser = (
     // guard says nothing about undeclared keys and only the declared-property
     // literal below actually strips them.
     if (!exported && fastPathNeedsKnownKeys) {
-      lines.push(`  if (${deepGuardExpr}) return input as ${typeName};`)
+      emitGuardedReturn(lines, `return input as ${typeName};`)
       return
     }
     const fields: string[] = []
@@ -2047,8 +2090,6 @@ const generateObjectParser = (
           : `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${accessor} }),`,
       )
     }
-    lines.push(`  if (${deepGuardExpr}) return {`)
-    lines.push(fields.join('\n'))
     // `as unknown as`, because every field here is an `unknown` read that only
     // the guard above proves anything about. A plain assertion looked checkable
     // and was not: `_x !== undefined` narrows `unknown` to `{} | null`, which
@@ -2056,7 +2097,7 @@ const generateObjectParser = (
     // missing in type '{}'"), and `Array.isArray(_x)` narrows to `any[]`, which
     // it refuses to convert to a tuple. Both are generated files that do not
     // build, for a check that could never have caught a real mismatch.
-    lines.push(`  } as unknown as ${typeName};`)
+    emitGuardedReturn(lines, `return {`, [...fields, `  } as unknown as ${typeName};`])
   }
 
   const lines: string[] = []
@@ -2093,7 +2134,7 @@ const generateObjectParser = (
       // evaluated as the shallow guard plus only its *residual* terms (deeper
       // per-property checks and the no-extras term), so a carries-extras input
       // never runs the same typed checks twice before taking the strip build.
-      if (!exported && deepGuard && fastPathNeedsKnownKeys) {
+      if (!exported && deepGuard !== null && fastPathNeedsKnownKeys) {
         const residual: string[] = []
         for (let i = 0; i < fastPathChecks.length; i++) {
           const deep = fastPathChecks[i] as string
@@ -2108,11 +2149,22 @@ const generateObjectParser = (
           )
         }
         lines.push(`  if (${shallowGuard}) {`)
-        lines.push(
-          residual.length > 0
-            ? `    if (${residual.join(' && ')}) return input as ${typeName};`
-            : `    return input as ${typeName};`,
-        )
+        // The residual is read from the check list, never from the shape
+        // validator, so the key count is taken here whether or not the deep
+        // guard delegated to it.
+        const returnInput = `return input as ${typeName};`
+        if (fastPathKeyCount === null) {
+          lines.push(residual.length > 0 ? `    if (${residual.join(' && ')}) ${returnInput}` : `    ${returnInput}`)
+        } else if (residual.length === 0) {
+          lines.push(...keyCountStatements('    '), `    if (${KEY_COUNT_VAR} === ${fastPathKeyCount}) ${returnInput}`)
+        } else {
+          lines.push(`    if (${residual.join(' && ')}) {`)
+          lines.push(
+            ...keyCountStatements('      '),
+            `      if (${KEY_COUNT_VAR} === ${fastPathKeyCount}) ${returnInput}`,
+          )
+          lines.push(`    }`)
+        }
         lines.push(`  } else {`)
         for (const assertionLine of assertionLines) {
           lines.push(`  ${assertionLine}`)
@@ -2130,7 +2182,7 @@ const generateObjectParser = (
       }
       emitReturn(lines, buildObjectLines(true))
     } else {
-      if (deepGuard) {
+      if (deepGuard !== null) {
         emitDeepGuardReturn(lines)
       }
       if (varsAfterGuard) lines.push(...varDeclLines)
@@ -2142,9 +2194,9 @@ const generateObjectParser = (
         // path already proved the key set — but swapping in the keys-array
         // iterator here once regressed the *hot* path several percent on CI:
         // the extra dead-path bytecode changed the engine's inlining of the
-        // whole parser. The fast-path no-extras test uses own-key semantics;
-        // an inherited-key mismatch merely lands here and keeps the historical
-        // for..in rejection.
+        // whole parser. It also reads the key set exactly as the fast path's
+        // count does (see {@link keyCountStatements}), so an input the count
+        // turned away for an inherited extra is named here.
         lines.push(`  for (const _k in input) {`)
         lines.push(
           `    if (${strictKeyCheck.isUnknown('_k')}) throw new Error(\`[${typeName}] unknown property "\${_k}"\`);`,
@@ -2157,7 +2209,7 @@ const generateObjectParser = (
     lines.push(`  if (!isObject(input)) return ${fallbackObject};`)
     if (!varsAfterGuard) lines.push(...varDeclLines)
     lines.push(...warnLines)
-    if (deepGuard) {
+    if (deepGuard !== null) {
       emitDeepGuardReturn(lines)
     }
     if (varsAfterGuard) lines.push(...varDeclLines)
@@ -3113,9 +3165,9 @@ export const generateShapeValidator = (
   // an input carrying an undeclared key is *not* fast-path eligible — the parser
   // would strip it rather than return `{ ...input }` — so the shape only matches
   // when every key is declared. With every declared property required, the
-  // no-extras test is the cheaper own-key count appended after the typed checks
-  // (which prove all N keys present); otherwise it is the `_hasOnlyKnownKeys`
-  // walk the parser emits under the same `stripKeys` condition.
+  // no-extras test is the cheaper key count taken after the typed checks (which
+  // prove all N keys present); otherwise it is the `_hasOnlyKnownKeys` walk the
+  // parser emits under the same `stripKeys` condition.
   const validatorStripKeys = hasStrictKeys(schema) || stripUnknown
   const validatorKeyCount = validatorStripKeys ? exactKeyCountOf(schema) : null
   const strictKeysGuard =
@@ -3161,34 +3213,39 @@ export const generateShapeValidator = (
   if (hasMinProperties(schema)) checks.push(`Object.keys(input).length >= ${schema.minProperties}`)
   if (hasMaxProperties(schema)) checks.push(`Object.keys(input).length <= ${schema.maxProperties}`)
 
-  // The count form is sound only in conjunction with the typed checks above
-  // (they prove every declared key present) and only for plain objects (a
-  // crafted prototype could satisfy those checks through inherited
-  // properties), so it joins the chain last, prototype-guarded like the
-  // parser's own fast path.
-  if (validatorKeyCount !== null) {
-    checks.push(
-      `Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === ${validatorKeyCount}`,
-    )
-  }
+  return renderShapeValidator(exportPrefix, fnName, checks, validatorKeyCount, strictKeysGuard)
+}
 
-  if (checks.length === 0) {
-    if (strictKeysGuard) {
-      return `${exportPrefix}const ${fnName} = (input: unknown): boolean => {
-  if (!isObject(input)) return false;${strictKeysGuard}
-  return true;
-};`
+/**
+ * Renders a shape predicate from its typed checks and, for a closed object
+ * whose declared properties are all required, the key count that follows them.
+ * The count is sound only after the typed checks, which prove every declared
+ * key present, so it runs as statements once the chain has passed rather than
+ * as a term inside it (see {@link keyCountStatements}). `strictKeysGuard` is
+ * the per-key walk a closed object with an optional property uses instead; the
+ * two never apply together.
+ *
+ * The parser's guard-equivalence check renders the predicate it would need
+ * through this same function and compares byte for byte, so the emitted text
+ * has exactly one source.
+ */
+const renderShapeValidator = (
+  exportPrefix: string,
+  fnName: string,
+  checks: readonly string[],
+  keyCount: number | null,
+  strictKeysGuard: string,
+): string => {
+  const head = `${exportPrefix}const ${fnName} = (input: unknown): boolean => {\n  if (!isObject(input)) return false;${strictKeysGuard}`
+  const chain = checks.join('\n    && ')
+  if (keyCount === null) {
+    if (checks.length === 0) {
+      return strictKeysGuard
+        ? `${head}\n  return true;\n};`
+        : `${exportPrefix}const ${fnName} = (input: unknown): boolean => isObject(input);`
     }
-    return `${exportPrefix}const ${fnName} = (input: unknown): boolean => isObject(input);`
+    return `${head}\n  return ${chain};\n};`
   }
-
-  let body = checks[0] as string
-  for (let i = 1; i < checks.length; i++) {
-    body += '\n    && ' + checks[i]
-  }
-
-  return `${exportPrefix}const ${fnName} = (input: unknown): boolean => {
-  if (!isObject(input)) return false;${strictKeysGuard}
-  return ${body};
-};`
+  const gate = checks.length === 0 ? '' : `\n  if (!(${chain})) return false;`
+  return `${head}${gate}\n${keyCountStatements('  ').join('\n')}\n  return ${KEY_COUNT_VAR} === ${keyCount};\n};`
 }

@@ -42,8 +42,11 @@ mjst compile-api ./routes.ts --out ./dist/handler.ts
 4. **The root type name comes from the schema `title`/filename**, not
    `Document`. Override with `--root-type <name>` (single-schema only; rejected
    with `--schema-dir`).
-5. **Non-JSON input** (`--input typebox|zod|valibot|effect`) works for a single
-   `--schema`; `--schema-dir` only accepts `json`.
+5. **Non-JSON input** (`--input typebox|zod|valibot|effect|avro`) works for a
+   single `--schema`; `--schema-dir` only accepts `json`. The library formats
+   point `--schema` at a JS/TS **module**; `avro` points it at a `.avsc` JSON
+   document, which is read as data (no `import()`, so `--export` does not
+   apply).
 
 ## Common flags
 

@@ -788,9 +788,11 @@ describe('generate-validator-function', () => {
 
   describe('happy-path guard', () => {
     // The early `return true` block (an `&&` chain that proves validity without
-    // allocating an errors array) only appears when the guard is emitted; the
-    // slow path's final return is `... : true`, never a bare `return true`.
-    const hasGuard = (code: string): boolean => code.includes('  ) {\n    return true\n  }')
+    // allocating an errors array, then the key counts of any closed object)
+    // only appears when the guard is emitted; the slow path's final return is
+    // `... : true`, never a bare `return true`.
+    const hasGuard = (code: string): boolean =>
+      /  \) \{\n(?: {4}.*\n)*? {4}(?:if \(.*\) )?return true\n {2}\}/.test(code)
 
     it('emits a boolean guard for an all-required object of bare-typed scalars', () => {
       const schema = {
@@ -867,7 +869,11 @@ describe('generate-validator-function', () => {
       const code = generateValidatorFunction(schema, 'Strict')
 
       expect(hasGuard(code)).toBe(true)
-      expect(code).toContain('Object.keys(obj).length === 1')
+      // A `for…in` count after the typed chain, not an `Object.keys(obj).length`
+      // term inside it: the same verdict on every JSON value, with no keys array
+      // allocated per call.
+      expect(code).toContain('    let _c0 = 0\n    for (const _k0 in obj) _c0++\n    if (_c0 === 1) return true')
+      expect(code).not.toContain('Object.keys(obj)')
 
       const validate = evalValidator(code)
       expect(validate({ id: 1 })).toBe(true)
@@ -877,6 +883,125 @@ describe('generate-validator-function', () => {
         valid: false,
         errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
       })
+    })
+
+    it('compares keys against the declared set when a closed object has an optional property', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { id: { type: 'number' as const }, tag: { type: 'string' as const } },
+        required: ['id'],
+        additionalProperties: false,
+      }
+      const code = generateValidatorFunction(schema, 'Tagged')
+      const guardCode = generateBooleanGuard(schema, 'Tagged')
+
+      // The typed chain proves nothing about `tag`'s presence, so a count would
+      // let `{ id, extra }` through. The validator leaves an optional property
+      // to its cold path; the boolean guard walks the keys against the set.
+      expect(hasGuard(code)).toBe(false)
+      expect(guardCode).toContain('for (const _k0 in obj) if ((_k0 !== "id" && _k0 !== "tag")) return false')
+      expect(guardCode).not.toContain('_c0')
+
+      const validate = evalValidator(code)
+      const guard = evaluateGenerated(guardCode)['isTagged'] as (input: unknown) => boolean
+      for (const [value, expected] of [
+        [{ id: 1 }, true],
+        [{ id: 1, tag: 'a' }, true],
+        [{ id: 1, extra: 'x' }, false],
+        [{ id: 1, tag: 'a', extra: 'x' }, false],
+        [{ id: 1, tag: 2 }, false],
+      ] as const) {
+        expect(validate(value) === true, JSON.stringify(value)).toBe(expected)
+        expect(guard(value), JSON.stringify(value)).toBe(expected)
+      }
+    })
+
+    it('counts only the closed object when it is nested inside an open one', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: {
+          meta: {
+            type: 'object' as const,
+            properties: { a: { type: 'number' as const }, b: { type: 'number' as const } },
+            required: ['a', 'b'],
+            additionalProperties: false,
+          },
+        },
+        required: ['meta'],
+      }
+      const code = generateValidatorFunction(schema, 'Outer')
+      const guardCode = generateBooleanGuard(schema, 'Outer')
+
+      const nestedCount = 'for (const _k0 in (obj.meta as Record<string, unknown>)) _c0++'
+      expect(code).toContain(nestedCount)
+      expect(code).toContain('    if (_c0 === 2) return true')
+      expect(code).not.toContain('in obj) _c')
+      expect(guardCode).toContain(nestedCount)
+      expect(guardCode).toContain('  if (_c0 !== 2) return false')
+      expect(guardCode).not.toContain('in obj) _c')
+
+      const validate = evalValidator(code)
+      const guard = evaluateGenerated(guardCode)['isOuter'] as (input: unknown) => boolean
+      // The root is open, so an extra there is fine; the nested object is not.
+      expect(validate({ meta: { a: 1, b: 2 }, extra: true })).toBe(true)
+      expect(guard({ meta: { a: 1, b: 2 }, extra: true })).toBe(true)
+      expect(validate({ meta: { a: 1, b: 2, extra: true } })).toEqual({
+        valid: false,
+        errors: [{ message: 'must NOT have additional properties', path: '/meta/extra' }],
+      })
+      expect(guard({ meta: { a: 1, b: 2, extra: true } })).toBe(false)
+    })
+
+    it('counts to zero for a closed object that declares no properties', () => {
+      const schema = { type: 'object' as const, properties: {}, additionalProperties: false }
+      const code = generateValidatorFunction(schema, 'Empty')
+      const guardCode = generateBooleanGuard(schema, 'Empty')
+
+      expect(code).toContain('    let _c0 = 0\n    for (const _k0 in obj) _c0++\n    if (_c0 === 0) return true')
+      expect(guardCode).toContain('  let _c0 = 0\n  for (const _k0 in obj) _c0++\n  if (_c0 !== 0) return false')
+
+      const validate = evalValidator(code)
+      const guard = evaluateGenerated(guardCode)['isEmpty'] as (input: unknown) => boolean
+      expect(validate({})).toBe(true)
+      expect(guard({})).toBe(true)
+      expect(validate({ a: 1 })).toEqual({
+        valid: false,
+        errors: [{ message: 'must NOT have additional properties', path: '/a' }],
+      })
+      expect(guard({ a: 1 })).toBe(false)
+      expect(guard([])).toBe(false)
+    })
+
+    // The count walks with `for…in`, so it sees inherited enumerable keys — the
+    // same keys the cold path's `for…in` sweep sees and the same presence the
+    // cold path's `in` reads. That is the point: an own-key count let the guard
+    // accept an input whose cold path reported an error. Pinned in both
+    // directions, since these are the inputs the two key readings disagree on.
+    // (The interpreter counts own keys; the two agree on anything JSON can hold.)
+    it('reads inherited enumerable keys the way the cold path does', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { a: { type: 'number' as const }, b: { type: 'number' as const } },
+        required: ['a', 'b'],
+        additionalProperties: false,
+      }
+      const validate = evalValidator(generateValidatorFunction(schema, 'Pair'))
+      const guard = evaluateGenerated(generateBooleanGuard(schema, 'Pair'))['isPair'] as (input: unknown) => boolean
+
+      // An enumerable key inherited from a crafted (or polluted) prototype is an
+      // extra: the count comes out at 3, and the cold path names the key.
+      const inheritedExtra = Object.assign(Object.create({ extra: 3 }), { a: 1, b: 2 })
+      expect(validate(inheritedExtra)).toEqual({
+        valid: false,
+        errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+      })
+      expect(guard(inheritedExtra)).toBe(false)
+
+      // A declared key the input inherits satisfies `"a" in obj` on the cold path
+      // and is counted on the hot one, so both accept.
+      const inheritedDeclared = Object.assign(Object.create({ a: 1 }), { b: 2 })
+      expect(validate(inheritedDeclared)).toBe(true)
+      expect(guard(inheritedDeclared)).toBe(true)
     })
 
     it('inlines a guard for guardable nested objects, casting through each level', () => {
