@@ -128,7 +128,7 @@
       "x-cli-flag": "--unknown-keys <strategy>",
       "x-icon": "🔢",
       "default": "count-keys",
-      "description": "How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in, allocates nothing, and is the faster form on V8 (Node): roughly 1.7× on the strict validator and 2× on the strict parser. Pick by the runtime the generated code will run on; the generated code never detects it."
+      "description": "How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in, allocates nothing, and is the faster form on V8 (Node). Pick by the runtime the generated code will run on; the generated code never detects it."
     },
     "helpers": {
       "type": "string",

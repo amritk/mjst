@@ -1277,7 +1277,7 @@ type KeyCountCheck = { readonly statements: readonly string[]; readonly verdict:
  *
  * `'count-enumerable'` counts with `for…in` into {@link KEY_COUNT_VAR}. Over a
  * stable shape that is answered from V8's enum cache and allocates nothing —
- * `parseStrict` on Node goes from ~14M to ~29M ops/s — and it needs no prototype
+ * the faster form on Node, by ~10% to 2× depending on the box — and it needs no prototype
  * guard: the count sees the inherited key too, so the smuggled input counts
  * N + 1 and lands on the cold path. What changes for a non-plain input with
  * exactly the declared keys, own or inherited, is only that the fast path accepts

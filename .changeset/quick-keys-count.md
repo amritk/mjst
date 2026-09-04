@@ -17,8 +17,8 @@ null` before the first member read, and read every member (and count every key)
 through the local, at any depth, for required and optional nested objects and
 for object array items alike. V8 had already commoned the loads; on
 JavaScriptCore the local is what lets the guard be optimised at all — under the
-moltar harness `isAssertStrict` on Bun goes from ~45M ops/s to the harness
-floor (~420M, the call eliminated). A guard that hoists or counts is now a run
+moltar harness `isAssertStrict` on Bun 1.4 goes from ~45M ops/s to the harness
+floor (~300M on the measuring box, the call eliminated). A guard that hoists or counts is now a run
 of early exits (`if (!(…)) return …`) rather than one nested `&&` chain. The
 parsers already read nested objects through cached locals and sub-parser
 parameters, so their fast paths keep their shape and gain the option below.
@@ -31,14 +31,14 @@ Object.prototype` guard, which keeps an own-key count sound against an inherited
 declared key); `'count-enumerable'` is `let c = 0; for (const k in obj) c++`,
 which allocates nothing and needs no prototype guard. When a declared property is
 optional both fall back to the per-key `for…in` walk. The two trade places
-between engines, measured under the moltar harness (Node 22 / Bun 1.4, each case
-alone in its own process): `assertStrict` 20M / 420M ops/s with `count-keys`
-against 33M / 43M with `count-enumerable`; `parseStrict` 14M / 41M against
-29M / 22M. The default is **`'count-keys'`** — mjst benches on Bun, where it is
-never the slower form and is 2× faster on the strict parse. Node-only consumers
-gain ~1.7× on the strict validator and ~2× on the strict parser by passing
-`'count-enumerable'`. The choice is made at generation time; the emitted code
-never detects its runtime.
+between engines, measured under the moltar harness (Bun 1.4.0 / Node 22, each
+case alone in its own process): `assertStrict` ~300M / 19M ops/s with
+`count-keys` against 22M / 22M with `count-enumerable`; `parseStrict` 45M / 13M
+against 13M / 14M. The default is **`'count-keys'`** — mjst benches on Bun,
+where it is never the slower form and is 3× faster on the strict parse.
+Node-only consumers gain from `'count-enumerable'` (10–20% on that box, up to
+1.7–2× on faster hardware). The choice is made at generation time; the emitted
+code never detects its runtime.
 
 Every verdict on a value that could have come from JSON is unchanged under
 either strategy, and the differential suites against Ajv and

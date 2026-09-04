@@ -365,10 +365,10 @@ because the two spellings trade places between the engines:
   cache. On JavaScriptCore a `for…in` over a non-extensible object is the engine's
   slow path, and the strict parse runs at half speed.
 
-Under the moltar harness (Node 22 / Bun 1.4, each case alone in its own process)
-`parseStrict` measures ~14M / ~41M ops/s with `count-keys` and ~29M / ~22M with
-`count-enumerable`. The default is what wins on Bun, where this repo benches;
-Node-only consumers should flip it. See
+Under the moltar harness (Bun 1.4.0 / Node 22.22, each case alone in its own
+process) `parseStrict` measures ~45M / ~13M ops/s with `count-keys` and ~13M /
+~14M with `count-enumerable`. The default is what wins on Bun, where this repo
+benches; Node-only consumers should flip it. See
 [Choosing how keys are counted](../generate-validators#choosing-how-keys-are-counted)
 in the sister package for the validator numbers and the full trade-off. Whichever
 you pick, every verdict on a value that could have come from JSON is the same.

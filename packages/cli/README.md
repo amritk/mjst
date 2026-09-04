@@ -429,7 +429,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"><code>"count-keys"</code></td>
 </tr>
 <tr>
-<td colspan="4">How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in, allocates nothing, and is the faster form on V8 (Node): roughly 1.7× on the strict validator and 2× on the strict parser. Pick by the runtime the generated code will run on; the generated code never detects it.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
+<td colspan="4">How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in, allocates nothing, and is the faster form on V8 (Node). Pick by the runtime the generated code will run on; the generated code never detects it.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
 </tr>
 <tr>
 <td>🧰 <code>helpers</code></td>

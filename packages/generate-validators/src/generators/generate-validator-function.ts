@@ -1872,8 +1872,8 @@ type KeySetCheck = {
  * times, and twice more for its key count. Loading it once into `_n<i>` costs
  * nothing on V8, which had already commoned the loads, and is what lets
  * JavaScriptCore optimise the guard at all: with the local, `isAssertStrict`
- * under the moltar harness went from ~45M ops/s to the harness floor (~420M,
- * the call eliminated outright).
+ * under the moltar harness on Bun 1.4 went from ~45M ops/s to the harness floor
+ * (~300M on the measuring box, the call eliminated outright).
  *
  * The load only happens once the parent's chain has proven the parent an
  * object, and the block's first condition is the `typeof … === 'object' && … !==

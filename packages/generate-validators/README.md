@@ -402,20 +402,23 @@ picks one at generation time:
 
 Measured under the moltar harness (benny, the frozen fixture, each case alone in
 its own process — `bun run bench:moltar:leaderboard` prints one row per strategy
-on every runtime it finds), Linux x64, Node 22 / Bun 1.4:
+on every runtime it finds), Linux x64, Bun 1.4.0 / Node 22.22:
 
-| case | `unknownKeys` | Node 22 | Bun 1.4 |
+| case | `unknownKeys` | Bun 1.4 | Node 22 |
 |:--|:--|--:|--:|
-| `assertStrict` (`isX`) | `count-keys` | ~20M ops/s | ~420M ops/s (the harness floor — the call is eliminated) |
-| `assertStrict` (`isX`) | `count-enumerable` | ~33M ops/s | ~43M ops/s |
-| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~14M ops/s | ~41M ops/s |
-| `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~29M ops/s | ~22M ops/s |
+| `assertStrict` (`isX`) | `count-keys` | ~300M ops/s (the harness floor — the call is eliminated) | ~19M ops/s |
+| `assertStrict` (`isX`) | `count-enumerable` | ~22M ops/s | ~22M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~45M ops/s | ~13M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~13M ops/s | ~14M ops/s |
 
 The default is `count-keys` because this repo benches on Bun, where it is never
-the slower form and is 2× faster on the strict parse. Code that will only ever
-run on Node gains ~1.7× on the strict validator and ~2× on the strict parser by
-flipping to `count-enumerable`. The choice is made once, when the code is
-generated: nothing in the emitted file detects its runtime.
+the slower form and is 3× faster on the strict parse. Code that will only ever
+run on Node gains from `count-enumerable`: ~10–20% on this box, and up to
+1.7–2× on faster hardware, where the keys array is what the strict validator
+spends its time on. The choice is made once, when the code is generated: nothing
+in the emitted file detects its runtime. (On Bun 1.3, where a frozen object puts
+`Object.keys` on the same slow path as `for...in`, both strategies sit at ~2M
+ops/s under this fixture and the default is a wash.)
 
 The two strategies also read different key sets — `Object.keys` sees own keys,
 `for...in` sees enumerable ones, inherited included — which no value parsed from
