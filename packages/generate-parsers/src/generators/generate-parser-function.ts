@@ -1365,6 +1365,97 @@ const inlineNestedFastPath = (
 }
 
 /**
+ * One entry of a parser's result object: a declared property, an optional one
+ * that only joins the result when its read is not `undefined`, or a spread
+ * (`...input`, an `allOf` parser's fields).
+ */
+type ResultEntry =
+  | { readonly kind: 'field'; readonly key: string; readonly value: string }
+  | { readonly kind: 'optional'; readonly key: string; readonly read: string; readonly value: string }
+  | { readonly kind: 'spread'; readonly expression: string }
+
+const RESULT_VARIABLE = 'out'
+
+/** The names a plain object inherits, which the result variable cannot be assigned through. */
+const PROTOTYPE_MEMBERS: ReadonlySet<string> = new Set(Object.getOwnPropertyNames(Object.prototype))
+
+/**
+ * The assignable member for `key` on the result variable. A prototype-member
+ * name never reaches here — {@link renderResultObject} keeps a literal for it —
+ * because `out["__proto__"] = v` would set the prototype rather than an own
+ * property, and `out.constructor = v` does not type-check against the
+ * `Function` the record inherits.
+ */
+const resultMember = (key: string): string =>
+  /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key) ? `${RESULT_VARIABLE}.${key}` : `${RESULT_VARIABLE}[${JSON.stringify(key)}]`
+
+/** One line of an object literal for `entry`, at the literal's indentation. */
+const renderLiteralEntry = (entry: ResultEntry, indent: string): string => {
+  if (entry.kind === 'field') return `${indent}${safeLiteralKey(entry.key)}: ${entry.value},`
+  if (entry.kind === 'spread') return `${indent}...${entry.expression},`
+  return `${indent}...(${entry.read} !== undefined && { ${safeLiteralKey(entry.key)}: ${entry.value} }),`
+}
+
+/**
+ * The statements that build and return the result object, optionally behind a
+ * `guard` condition (the deep-guard fast path).
+ *
+ * An optional property used to be a conditional spread in the literal —
+ * `...(_x !== undefined && { x: _x })` — which reads well and costs a lot: the
+ * engine has to treat every such spread as a generic copy, and on V8 it made a
+ * four-property parse with one optional key run at a fraction of the speed of
+ * the same parse with none (7M/s against 65M/s in isolation; the whole
+ * `parseUser` went 26M/s → 45M/s on Node and 9M/s → 24M/s on Bun). So the
+ * literal now carries only the entries up to the first optional one, and the
+ * rest are plain assignments, each optional one behind its `!== undefined`
+ * test. Assignment order is declaration order, so the result's key order is
+ * exactly what the literal produced, and an absent optional property is still
+ * absent rather than present-as-`undefined`.
+ *
+ * The keys that cannot be assigned are the `Object.prototype` member names:
+ * `__proto__` as an assignment target sets the prototype, and the others
+ * (`constructor`, `toString`, …) carry the inherited member's type, which a
+ * schema value does not satisfy. A schema declaring one of those past the first
+ * optional property keeps the whole literal in spread form, which
+ * {@link safeLiteralKey} already makes safe.
+ */
+const renderResultObject = (entries: readonly ResultEntry[], typeName: string, guard?: string): string[] => {
+  const firstOptional = entries.findIndex((entry) => entry.kind === 'optional')
+  const assignable = entries.every(
+    (entry, index) => index < firstOptional || entry.kind === 'spread' || !PROTOTYPE_MEMBERS.has(entry.key),
+  )
+  if (firstOptional === -1 || !assignable) {
+    const open = guard === undefined ? '  return {' : `  if (${guard}) return {`
+    return [
+      open,
+      entries.map((entry) => renderLiteralEntry(entry, '    ')).join('\n'),
+      `  } as unknown as ${typeName};`,
+    ]
+  }
+
+  const indent = guard === undefined ? '  ' : '    '
+  const lines: string[] = []
+  if (guard !== undefined) lines.push(`  if (${guard}) {`)
+  const literal = entries.slice(0, firstOptional)
+  if (literal.length === 0) {
+    lines.push(`${indent}const ${RESULT_VARIABLE}: Record<string, unknown> = {};`)
+  } else {
+    lines.push(`${indent}const ${RESULT_VARIABLE}: Record<string, unknown> = {`)
+    lines.push(literal.map((entry) => renderLiteralEntry(entry, `${indent}  `)).join('\n'))
+    lines.push(`${indent}};`)
+  }
+  for (const entry of entries.slice(firstOptional)) {
+    if (entry.kind === 'field') lines.push(`${indent}${resultMember(entry.key)} = ${entry.value};`)
+    else if (entry.kind === 'optional') {
+      lines.push(`${indent}if (${entry.read} !== undefined) ${resultMember(entry.key)} = ${entry.value};`)
+    } else lines.push(`${indent}Object.assign(${RESULT_VARIABLE}, ${entry.expression});`)
+  }
+  lines.push(`${indent}return ${RESULT_VARIABLE} as unknown as ${typeName};`)
+  if (guard !== undefined) lines.push('  }')
+  return lines
+}
+
+/**
  * Generates a parser for object schemas with properties.
  *
  * Uses an optimized function body with:
@@ -1815,14 +1906,14 @@ const generateObjectParser = (
   // Coerce mode keeps the type-checking-and-coercing expression. Refs, arrays of
   // refs, records of refs and inline nested objects always delegate to their
   // parser in both modes; the input spread is dropped whenever stripping.
-  const buildObjectLines = (directAssign: boolean): string[] => {
-    const objectLines: string[] = []
+  const buildObjectLines = (directAssign: boolean): ResultEntry[] => {
+    const entries: ResultEntry[] = []
     // Per-call so a second build (should one ever be emitted) gets the same
     // budget rather than the leftovers of the first.
     let inlinedSites = 0
     let inlinedProperties = 0
     if (!stripKeys) {
-      objectLines.push('    ...input,')
+      entries.push({ kind: 'spread', expression: 'input' })
     }
 
     // Spread allOf $ref parsers so their field coercions are applied before
@@ -1831,7 +1922,7 @@ const generateObjectParser = (
       for (const entry of schema.allOf) {
         if (isSchemaObject(entry) && hasRef(entry)) {
           const parserName = generateParserName(refToName(entry.$ref, suffix))
-          objectLines.push(`    ...(${parserName}(input) as Record<string, unknown>),`)
+          entries.push({ kind: 'spread', expression: `(${parserName}(input) as Record<string, unknown>)` })
         }
       }
     }
@@ -1858,16 +1949,16 @@ const generateObjectParser = (
           if (inlined !== null && inlinedProperties + inlined.propertyCount <= INLINE_NESTED_MAX_TOTAL_PROPERTIES) {
             inlinedSites++
             inlinedProperties += inlined.propertyCount
-            objectLines.push(
-              `    ${safeLiteralKey(key)}: (${inlined.condition})\n      ? ${inlined.literal}\n      : ${subParserName}(${accessor}),`,
-            )
+            entries.push({
+              kind: 'field',
+              key,
+              value: `(${inlined.condition})\n      ? ${inlined.literal}\n      : ${subParserName}(${accessor})`,
+            })
             continue
           }
-          objectLines.push(`    ${safeLiteralKey(key)}: ${subParserName}(${accessor}),`)
+          entries.push({ kind: 'field', key, value: `${subParserName}(${accessor})` })
         } else {
-          objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${subParserName}(${accessor}) }),`,
-          )
+          entries.push({ kind: 'optional', key, read: accessor, value: `${subParserName}(${accessor})` })
         }
         continue
       }
@@ -1880,11 +1971,14 @@ const generateObjectParser = (
       if (itemSubName) {
         const itemParserName = generateParserName(itemSubName)
         if (isRequired) {
-          objectLines.push(`    ${safeLiteralKey(key)}: validateArray(${accessor}, ${itemParserName}),`)
+          entries.push({ kind: 'field', key, value: `validateArray(${accessor}, ${itemParserName})` })
         } else {
-          objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: validateArray(${accessor}, ${itemParserName}) }),`,
-          )
+          entries.push({
+            kind: 'optional',
+            key,
+            read: accessor,
+            value: `validateArray(${accessor}, ${itemParserName})`,
+          })
         }
         continue
       }
@@ -1894,11 +1988,9 @@ const generateObjectParser = (
         const ref = (propSchema as { $ref: string }).$ref
         const parserName = generateParserName(refToName(ref, suffix))
         if (isRequired) {
-          objectLines.push(`    ${safeLiteralKey(key)}: ${parserName}(${accessor}),`)
+          entries.push({ kind: 'field', key, value: `${parserName}(${accessor})` })
         } else {
-          objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${parserName}(${accessor}) }),`,
-          )
+          entries.push({ kind: 'optional', key, read: accessor, value: `${parserName}(${accessor})` })
         }
         continue
       }
@@ -1909,11 +2001,9 @@ const generateObjectParser = (
         const ref = items.$ref
         const parserName = generateParserName(refToName(ref, suffix))
         if (isRequired) {
-          objectLines.push(`    ${safeLiteralKey(key)}: validateArray(${accessor}, ${parserName}),`)
+          entries.push({ kind: 'field', key, value: `validateArray(${accessor}, ${parserName})` })
         } else {
-          objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: validateArray(${accessor}, ${parserName}) }),`,
-          )
+          entries.push({ kind: 'optional', key, read: accessor, value: `validateArray(${accessor}, ${parserName})` })
         }
         continue
       }
@@ -1924,11 +2014,9 @@ const generateObjectParser = (
         const ref = additionalProps.$ref
         const parserName = generateParserName(refToName(ref, suffix))
         if (isRequired) {
-          objectLines.push(`    ${safeLiteralKey(key)}: validateRecord(${accessor}, ${parserName}),`)
+          entries.push({ kind: 'field', key, value: `validateRecord(${accessor}, ${parserName})` })
         } else {
-          objectLines.push(
-            `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: validateRecord(${accessor}, ${parserName}) }),`,
-          )
+          entries.push({ kind: 'optional', key, read: accessor, value: `validateRecord(${accessor}, ${parserName})` })
         }
         continue
       }
@@ -1944,12 +2032,12 @@ const generateObjectParser = (
           // An optional one needs no entry while the `...input` spread is there;
           // only a strip build (which drops the spread) has to name it.
           if (isRequired) {
-            objectLines.push(`    ${safeLiteralKey(key)}: ${accessor},`)
+            entries.push({ kind: 'field', key, value: accessor })
           } else if (stripKeys) {
-            objectLines.push(`    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${accessor} }),`)
+            entries.push({ kind: 'optional', key, read: accessor, value: accessor })
           }
         } else if (isRequired) {
-          objectLines.push(`    ${safeLiteralKey(key)}: undefined,`)
+          entries.push({ kind: 'field', key, value: 'undefined' })
         }
         continue
       }
@@ -1962,7 +2050,7 @@ const generateObjectParser = (
       } else {
         const defaultValue = getDefaultValue(propSchema)
         // For optional properties we know the value is not undefined because
-        // we're inside the `...(accessor !== undefined && { ... })` check.
+        // the entry is only assigned behind its `accessor !== undefined` test.
         const knownNotUndefined = !isRequired
         valueExpr = generateValidationExpression(
           key,
@@ -1978,19 +2066,17 @@ const generateObjectParser = (
       }
 
       if (isRequired) {
-        objectLines.push(`    ${safeLiteralKey(key)}: ${valueExpr},`)
+        entries.push({ kind: 'field', key, value: valueExpr })
       } else {
-        objectLines.push(`    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${valueExpr} }),`)
+        entries.push({ kind: 'optional', key, read: accessor, value: valueExpr })
       }
     }
 
-    return objectLines
+    return entries
   }
 
-  const emitReturn = (lines: string[], objectLines: string[]): void => {
-    lines.push(`  return {`)
-    lines.push(objectLines.join('\n'))
-    lines.push(`  } as unknown as ${typeName};`)
+  const emitReturn = (lines: string[], entries: readonly ResultEntry[]): void => {
+    lines.push(...renderResultObject(entries, typeName))
   }
 
   // The deep-guard fast path. `{ ...input }` is the only correct shape when the
@@ -2023,7 +2109,7 @@ const generateObjectParser = (
       lines.push(`  if (${deepGuardExpr}) return input as ${typeName};`)
       return
     }
-    const fields: string[] = []
+    const fields: ResultEntry[] = []
     for (const { key, varName, isRequired, propSchema } of propInfo) {
       if (!isSchemaObject(propSchema)) {
         // Same reasoning as buildObjectLines: `true` accepts any value, so it
@@ -2031,24 +2117,20 @@ const generateObjectParser = (
         if (propSchema === true) {
           const acc = safeAccessor('input', key)
           fields.push(
-            isRequired
-              ? `    ${safeLiteralKey(key)}: ${acc},`
-              : `    ...(${acc} !== undefined && { ${safeLiteralKey(key)}: ${acc} }),`,
+            isRequired ? { kind: 'field', key, value: acc } : { kind: 'optional', key, read: acc, value: acc },
           )
         } else if (isRequired) {
-          fields.push(`    ${safeLiteralKey(key)}: undefined,`)
+          fields.push({ kind: 'field', key, value: 'undefined' })
         }
         continue
       }
       const accessor = shouldCacheVariable(propSchema) ? varName : safeAccessor('input', key)
       fields.push(
         isRequired
-          ? `    ${safeLiteralKey(key)}: ${accessor},`
-          : `    ...(${accessor} !== undefined && { ${safeLiteralKey(key)}: ${accessor} }),`,
+          ? { kind: 'field', key, value: accessor }
+          : { kind: 'optional', key, read: accessor, value: accessor },
       )
     }
-    lines.push(`  if (${deepGuardExpr}) return {`)
-    lines.push(fields.join('\n'))
     // `as unknown as`, because every field here is an `unknown` read that only
     // the guard above proves anything about. A plain assertion looked checkable
     // and was not: `_x !== undefined` narrows `unknown` to `{} | null`, which
@@ -2056,7 +2138,7 @@ const generateObjectParser = (
     // missing in type '{}'"), and `Array.isArray(_x)` narrows to `any[]`, which
     // it refuses to convert to a tuple. Both are generated files that do not
     // build, for a check that could never have caught a real mismatch.
-    lines.push(`  } as unknown as ${typeName};`)
+    lines.push(...renderResultObject(fields, typeName, deepGuardExpr as string))
   }
 
   const lines: string[] = []
