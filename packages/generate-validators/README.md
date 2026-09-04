@@ -251,20 +251,22 @@ Keeping the hot function tiny lets the JIT optimise it aggressively, so a valid-
 check beats every other library measured — including the build-time transformer
 typia — while still emitting full JSON-Pointer errors for invalid input, and
 emitting the validator stays far cheaper than compiling a schema at startup.
-Measured on Bun 1.4 (Linux x64), validating valid input at steady state:
+Measured on Bun 1.4.0 (Linux x64, a 4-vCPU cloud box — every table in this
+repo comes from the same machine and runtime), validating valid input at steady
+state:
 
 | schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|--:|
-| small (4 fields) | **~59M** ops/s | ~5.8M ops/s | ~10M ops/s | ~7.6M ops/s | ~2.2M ops/s |
-| order (nested + array) | **~9.5M** ops/s | ~2M ops/s | ~3.9M ops/s | ~3.3M ops/s | ~0.54M ops/s |
-| assert-loose | **~189M** ops/s | ~170M ops/s | ~44M ops/s | ~78M ops/s | ~5M ops/s |
-| assert-strict | **~104M** ops/s | ~68M ops/s | ~21M ops/s | ~42M ops/s | ~1.8M ops/s |
+| small (4 fields) | **~33M** ops/s | ~4.2M ops/s | ~6.1M ops/s | ~5.6M ops/s | ~1.7M ops/s |
+| order (nested + array) | **~6.3M** ops/s | ~1.6M ops/s | ~2.6M ops/s | ~2.5M ops/s | ~0.41M ops/s |
+| assert-loose | **~111M** ops/s | ~88M ops/s | ~27M ops/s | ~48M ops/s | ~2.8M ops/s |
+| assert-strict | **~63M** ops/s | ~34M ops/s | ~13M ops/s | ~29M ops/s | ~0.99M ops/s |
 
 The `assert-loose` / `assert-strict` rows use the same *shape* as
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
 (seven scalar roots plus a nested object): the boolean guard keeps mjst ahead of
-typia on both, by ~11% on `assert-loose` — close enough that the two can trade
-the lead run-to-run — and by ~52% on `assert-strict` (with
+typia on both, by ~25% on `assert-loose` — close enough that the two can trade
+the lead run-to-run — and by ~85% on `assert-strict` (with
 `additionalProperties: false`), where mjst counts keys once and typia does not.
 (typia and TypeBox still win the *invalid* path, where they bail on the first
 error rather than collecting a full error list.)
@@ -275,8 +277,8 @@ an order of magnitude. See
 [Against the moltar harness](#against-the-moltar-harness) for the same functions
 measured under benny, the way the leaderboard measures them.
 
-Preparing a validator costs ~0.3–0.7 ms for mjst codegen and ~0.05–0.2 ms for a
-TypeBox `TypeCompiler` compile, versus ~13–17 ms for an Ajv compile. Every library
+Preparing a validator costs ~0.25–0.9 ms for mjst codegen and ~0.03–0.35 ms for a
+TypeBox `TypeCompiler` compile, versus ~13–18 ms for an Ajv compile. Every library
 agrees on every verdict; parity is asserted before timing.
 
 One caveat on the first two rows: their schemas declare `format` (`uuid`,
@@ -313,7 +315,7 @@ measured.
 `bun run bench:moltar` runs exactly that harness over the same functions, always
 alongside a **no-op** control — a "validator" that checks nothing, which is the
 fastest number the harness can physically produce. One run on this machine
-(Linux x64, Bun 1.3.11 / Node 22.22, valid input):
+(Linux x64, Bun 1.4.0 / Node 22.22, valid input):
 
 | harness | runtime | `assert-loose` | `assert-strict` |
 |:--|:--|--:|--:|
@@ -348,40 +350,43 @@ declared property is required and already proven present), Ajv and Zod sweep
 with `for...in`, TypeBox runs its own sweep. On V8 that costs the same whatever
 the input looks like.
 
-On JavaScriptCore (Bun) it does not. Making an object non-extensible —
-`Object.freeze`, `Object.seal` or a bare `Object.preventExtensions` — turns off
+On JavaScriptCore under Bun 1.3 it did not. Making an object non-extensible —
+`Object.freeze`, `Object.seal` or a bare `Object.preventExtensions` — turned off
 the engine's cached own-keys fast path, and *every* form of key enumeration
-falls back to a generic walk: `Object.keys`, `Object.getOwnPropertyNames`,
-`Reflect.ownKeys` and `for...in` alike. Property reads are untouched (a frozen
-object reads at full speed), so the whole cost lands on the extra-key sweep, and
-therefore on strict schemas only. Frozen inputs are ordinary — a config object
-frozen at startup, a shared fixture, a module-level constant — so `bun run bench`
-carries `small (4 fields, frozen)` and `assert-strict (frozen)` cases to keep it
-measured. One run on this machine (Linux x64, Bun 1.3.11), valid input:
+fell back to a generic walk: `Object.keys`, `Object.getOwnPropertyNames`,
+`Reflect.ownKeys` and `for...in` alike. Property reads were untouched (a frozen
+object read at full speed), so the whole cost landed on the extra-key sweep, and
+therefore on strict schemas only. Bun 1.4.0 no longer shows the cliff — frozen
+and mutable input run at the same speed for every library. Frozen inputs are
+ordinary — a config object frozen at startup, a shared fixture, a module-level
+constant — so `bun run bench` keeps carrying `small (4 fields, frozen)` and
+`assert-strict (frozen)` cases to keep it measured. One run of each on this
+machine (Linux x64), valid input, on both Bun versions:
 
-| `assert-strict` | mutable input | frozen input |
-|:--|--:|--:|
-| mjst (generated) | ~185M ops/s | ~1.7M ops/s |
-| typia (transformed) | ~68M ops/s | ~1.7M ops/s |
-| typebox (compiled) | ~46M ops/s | ~1.7M ops/s |
-| ajv (compiled) | ~24M ops/s | ~1.5M ops/s |
-| zod | ~1.4M ops/s | ~0.7M ops/s |
+| `assert-strict` | Bun 1.4.0 mutable | Bun 1.4.0 frozen | Bun 1.3.11 mutable | Bun 1.3.11 frozen |
+|:--|--:|--:|--:|--:|
+| mjst (generated) | ~63M ops/s | ~67M ops/s | ~82M ops/s | ~1.5M ops/s |
+| typia (transformed) | ~34M ops/s | ~48M ops/s | TYPIA13M | TYPIA13F |
+| typebox (compiled) | ~29M ops/s | ~26M ops/s | ~27M ops/s | ~1.4M ops/s |
+| ajv (compiled) | ~13M ops/s | ~13M ops/s | AJV13M | AJV13F |
+| zod | ~0.99M ops/s | ~1.0M ops/s | ZOD13M | ZOD13F |
 
-It is an engine-level cliff, not an mjst one: every compiled or generated strict
-validator lands within a hair of the same number, because they are all paying
-the same engine slow path. The generated code keeps the key count anyway. Every
-alternative was measured and every one is worse overall. `Object.values(obj)`
-and `Object.keys({ ...obj })` sidestep the cliff, but on the ordinary mutable
-path they cost 28–37× under JSC and 2–7× under V8. Branching on
-`Object.isExtensible(obj)` first keeps the mutable path recognisable, at ~4×
-under JSC — and makes V8 slower in *both* directions (~2× mutable, ~7× frozen),
-where there was no cliff to fix in the first place. Trading a large, portable
-regression for a smaller win on one engine is not a good deal, so the sweep
-stays as it is.
+It was an engine-level cliff, not an mjst one: on Bun 1.3 every compiled or
+generated strict validator lands within a hair of the same number, because they
+are all paying the same engine slow path. The generated code keeps the key count
+anyway. Every alternative was measured (on Bun 1.3.11) and every one is worse
+overall. `Object.values(obj)` and `Object.keys({ ...obj })` sidestep the cliff,
+but on the ordinary mutable path they cost 28–37× under JSC and 2–7× under V8.
+Branching on `Object.isExtensible(obj)` first keeps the mutable path
+recognisable, at ~4× under JSC — and makes V8 slower in *both* directions (~2×
+mutable, ~7× frozen), where there was no cliff to fix in the first place.
+Trading a large, portable regression for a smaller win on one engine is not a
+good deal, so the sweep stays as it is — and Bun 1.4 has since closed the cliff
+on its own.
 
-If it matters for your workload: validate before freezing (the verdict is the
-same either way — `src/generators/frozen-input.test.ts` pins that), or run on a
-V8 runtime, where the cliff does not exist.
+If it matters for your workload on an older Bun: validate before freezing (the
+verdict is the same either way — `src/generators/frozen-input.test.ts` pins
+that), or run on Bun ≥ 1.4 or a V8 runtime, where the cliff does not exist.
 
 ---
 

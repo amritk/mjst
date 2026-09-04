@@ -83,7 +83,7 @@ Most tools in this space pick a single lane — types **or** validation **or** d
 
 ### Benchmarks
 
-mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch. The exported `validateX` runs a tiny inlined boolean guard on the happy path and falls back to a separate error-collecting function only when input is actually invalid, so a valid-input check matches or beats every other library measured — running clear of the build-time transformer typia on every shape measured — comfortably on the object schemas and on `assert-strict`, and by a margin on `assert-loose` small enough that the two can trade the lead run-to-run. The numbers below compare a generated mjst validator against typia, an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
+mjst's validators are *generated* TypeScript — straight-line, monomorphic code with no generic dispatch. The exported `validateX` runs a tiny inlined boolean guard on the happy path and falls back to a separate error-collecting function only when input is actually invalid, so a valid-input check matches or beats every other library measured — running clear of the build-time transformer typia on every shape measured — comfortably on the object schemas and on `assert-strict`, and by a narrower margin on `assert-loose`, where the two are close enough to trade the lead run-to-run. The numbers below compare a generated mjst validator against typia, an Ajv-compiled function, a TypeBox-compiled checker, and a hand-written Zod schema on the same data.
 
 Each schema also generates a boolean type-guard `isX(input): input is X` — a single flat predicate (no error array, no cold-path call) returning the same verdict as `validateX`. It is the inline-friendly equivalent of TypeBox's compiled `check` / typia's `is`, for the common "is this valid?" question where you don't need the error list; `validateX` remains the rich, error-collecting form.
 
@@ -91,12 +91,12 @@ Each schema also generates a boolean type-guard `isX(input): input is X` — a s
 
 | schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|--:|
-| small (4 fields) | **~59M** ops/s | ~5.8M ops/s | ~10M ops/s | ~7.6M ops/s | ~2.2M ops/s |
-| order (nested + array) | **~9.5M** ops/s | ~2M ops/s | ~3.9M ops/s | ~3.3M ops/s | ~0.54M ops/s |
-| assert-loose | **~189M** ops/s | ~170M ops/s | ~44M ops/s | ~78M ops/s | ~5M ops/s |
-| assert-strict | **~104M** ops/s | ~68M ops/s | ~21M ops/s | ~42M ops/s | ~1.8M ops/s |
+| small (4 fields) | **~33M** ops/s | ~4.2M ops/s | ~6.1M ops/s | ~5.6M ops/s | ~1.7M ops/s |
+| order (nested + array) | **~6.3M** ops/s | ~1.6M ops/s | ~2.6M ops/s | ~2.5M ops/s | ~0.41M ops/s |
+| assert-loose | **~111M** ops/s | ~88M ops/s | ~27M ops/s | ~48M ops/s | ~2.8M ops/s |
+| assert-strict | **~63M** ops/s | ~34M ops/s | ~13M ops/s | ~29M ops/s | ~0.99M ops/s |
 
-The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks) — they are not that project's numbers, and they are not comparable with its leaderboard. The shape is shared; the harness is not, and the harness is worth an order of magnitude. Every operation on the leaderboard goes through benny (benchmark.js) into a class-property call, around a single frozen module-level fixture whose verdict is discarded. Running the same generated functions under that harness (`bun run bench:moltar`, one run on Linux x64, Bun 1.3.11 / Node 22.22):
+The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks) — they are not that project's numbers, and they are not comparable with its leaderboard. The shape is shared; the harness is not, and the harness is worth an order of magnitude. Every operation on the leaderboard goes through benny (benchmark.js) into a class-property call, around a single frozen module-level fixture whose verdict is discarded. Running the same generated functions under that harness (`bun run bench:moltar`, one run on Linux x64, Bun 1.4.0 / Node 22.22):
 
 | harness | runtime | assert-loose | assert-strict |
 |:--|:--|--:|--:|
@@ -107,26 +107,26 @@ The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/types
 
 The no-op row is a "validator" that checks nothing, so it is the fastest number that harness can produce: on Node the `assert-loose` figure lands within 20% of it, which is a measurement of benny, not of validation — the leaderboard's ceiling, not any library's, and on CI hardware that ceiling sits lower still. And `assert-strict` on Bun collapses because moltar's fixture is `Object.freeze({ … })`, which costs *every* library about 100x on JavaScriptCore (details and the frozen-input benchmark: [Frozen inputs](./packages/generate-validators#frozen-inputs)).
 
-**Frozen inputs are their own workload.** Enforcing `additionalProperties: false` means proving no undeclared key is there, and every library does that by enumerating keys. On JavaScriptCore, making an object non-extensible (`Object.freeze`, `Object.seal`, `Object.preventExtensions`) disables the engine's cached own-keys fast path, so every key sweep — `Object.keys`, `for...in`, `Reflect.ownKeys` — drops to a generic walk. Property reads are unaffected; only strict schemas pay. Frozen config objects and frozen fixtures are ordinary inputs, so the bench measures them (`assert-strict (frozen)`, `small (4 fields, frozen)`):
+**Frozen inputs are their own workload — on older Bun.** Enforcing `additionalProperties: false` means proving no undeclared key is there, and every library does that by enumerating keys. On JavaScriptCore under Bun 1.3, making an object non-extensible (`Object.freeze`, `Object.seal`, `Object.preventExtensions`) disabled the engine's cached own-keys fast path, so every key sweep — `Object.keys`, `for...in`, `Reflect.ownKeys` — dropped to a generic walk. Property reads were unaffected; only strict schemas paid. Bun 1.4.0 no longer shows the cliff: frozen and mutable input run at the same speed for every library. Frozen config objects and frozen fixtures are ordinary inputs, so the bench keeps measuring them (`assert-strict (frozen)`, `small (4 fields, frozen)`), and the table carries both runtimes on the same machine:
 
-| `assert-strict`, valid input | mutable | frozen |
-|:--|--:|--:|
-| mjst (generated) | ~185M ops/s | ~1.7M ops/s |
-| typia (transformed) | ~68M ops/s | ~1.7M ops/s |
-| typebox (compiled) | ~46M ops/s | ~1.7M ops/s |
-| ajv (compiled) | ~24M ops/s | ~1.5M ops/s |
-| zod | ~1.4M ops/s | ~0.7M ops/s |
+| `assert-strict`, valid input | Bun 1.4.0 mutable | Bun 1.4.0 frozen | Bun 1.3.11 mutable | Bun 1.3.11 frozen |
+|:--|--:|--:|--:|--:|
+| mjst (generated) | ~63M ops/s | ~67M ops/s | ~82M ops/s | ~1.5M ops/s |
+| typia (transformed) | ~34M ops/s | ~48M ops/s | TYPIA13M | TYPIA13F |
+| typebox (compiled) | ~29M ops/s | ~26M ops/s | ~27M ops/s | ~1.4M ops/s |
+| ajv (compiled) | ~13M ops/s | ~13M ops/s | AJV13M | AJV13F |
+| zod | ~0.99M ops/s | ~1.0M ops/s | ZOD13M | ZOD13F |
 
-Everything converges because everything is paying the same engine slow path; V8 has no such cliff. [Frozen inputs](./packages/generate-validators#frozen-inputs) has the alternatives that were measured and why the generated code keeps the key count.
+On Bun 1.3 everything converged because everything was paying the same engine slow path; V8 never had the cliff, and Bun 1.4 has closed it. [Frozen inputs](./packages/generate-validators#frozen-inputs) has the alternatives that were measured and why the generated code keeps the key count.
 
 **Prepare-a-validator cost** (one-shot, lower is better):
 
 | | mjst (codegen) | ajv (compile) | typebox (compile) | zod |
 |:--|--:|--:|--:|--:|
-| small | ~0.47 ms | ~14 ms | ~0.13 ms | n/a — authored in code |
-| order | ~0.66 ms | ~17 ms | ~0.17 ms | n/a — authored in code |
+| small | ~0.58 ms | ~15 ms | ~0.21 ms | n/a — authored in code |
+| order | ~0.88 ms | ~18 ms | ~0.34 ms | n/a — authored in code |
 
-<sub>Measured on Bun 1.4 (Linux x64); micro-benchmark figures vary by machine and runtime. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
+<sub>Measured on Bun 1.4.0 (Linux x64, a 4-vCPU cloud box — every table in this repo comes from the same machine and runtime); micro-benchmark figures vary by machine and runtime. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/generate-validators && bun run bench`.</sub>
 
 **Parsing** replicates both parse modes of the same benchmark — its modes and
 its shapes, under this repo's harness rather than the leaderboard's, with the
@@ -138,15 +138,15 @@ and **rejects** undeclared keys (zod's `.strict()`):
 | schema | mjst (generated) | zod (`.parse`) | typebox (`Value.Parse`) |
 |:--|--:|--:|--:|
 | **parseSafe** — strip extras | | | |
-| small (4 fields) | **~18M** ops/s | ~3.7M ops/s | ~1.6M ops/s |
-| order (nested + array) | **~6.9M** ops/s | ~0.71M ops/s | ~0.24M ops/s |
-| assert (moltar shape) | **~127M** ops/s | ~4.7M ops/s | ~0.78M ops/s |
+| small (4 fields) | **~100M** ops/s ³ | ~2.2M ops/s | ~1.2M ops/s |
+| order (nested + array) | **~5.5M** ops/s | ~0.44M ops/s | ~0.17M ops/s |
+| assert (moltar shape) | **~34M** ops/s | ~2.6M ops/s | ~0.58M ops/s |
 | **parseStrict** — reject extras | | | |
-| small (4 fields) | **~14M** ops/s | ~2.3M ops/s | ~2.04M ops/s |
-| order (nested + array) | **~7M** ops/s | ~0.43M ops/s | ~0.36M ops/s |
-| assert (moltar shape) | **~51M** ops/s | ~1.74M ops/s | ~1.18M ops/s |
+| small (4 fields) | **~24M** ops/s | ~1.3M ops/s | ~1.5M ops/s |
+| order (nested + array) | **~7.7M** ops/s | ~0.26M ops/s | ~0.28M ops/s |
+| assert (moltar shape) | **~30M** ops/s | ~0.97M ops/s | ~0.83M ops/s |
 
-<sub>mjst parses in `strict` mode throughout (throwing on a type mismatch like the others), adding `stripUnknown` for parseSafe and `additionalProperties: false` for parseStrict; zod uses `.object`/`.strictObject` and TypeBox a `Clean+Assert`/`Assert` pipeline. Parity — identical parsed output, and rejection of every wrong-typed (and, in strict mode, extra-keyed) sample — is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/generate-parsers && bun run bench`.</sub>
+<sub>mjst parses in `strict` mode throughout (throwing on a type mismatch like the others), adding `stripUnknown` for parseSafe and `additionalProperties: false` for parseStrict; zod uses `.object`/`.strictObject` and TypeBox a `Clean+Assert`/`Assert` pipeline. Parity — identical parsed output, and rejection of every wrong-typed (and, in strict mode, extra-keyed) sample — is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/generate-parsers && bun run bench`. ³ The bench flags this cell as noisy (±10% across trials): a four-key strip parse is short enough that run-to-run swing matters, so read the ratio rather than the absolute.</sub>
 
 ---
 

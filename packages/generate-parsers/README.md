@@ -298,20 +298,23 @@ keys) and `parseStrict` (assert + reject undeclared keys) halves of
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
 against the other *pure* parsers — the ones that return a new typed value rather
 than mutating in place — [zod](https://zod.dev) and
-[TypeBox](https://github.com/sinclairzx81/typebox). Measured on Bun 1.4 (Linux
-x64), parsing valid input at steady state:
+[TypeBox](https://github.com/sinclairzx81/typebox). Measured on Bun 1.4.0 (Linux
+x64, a 4-vCPU cloud box — every table in this repo comes from the same machine
+and runtime), parsing valid input at steady state:
 
 | case | mode | mjst (generated) | zod | typebox |
 |:--|:--|--:|--:|--:|
-| user (4 fields) | parseSafe | **~18M** ops/s | ~3.7M ops/s | ~1.6M ops/s |
-| order (nested + array) | parseSafe | **~6.9M** ops/s | ~0.71M ops/s | ~0.24M ops/s |
-| user (4 fields) | parseStrict | **~14M** ops/s | ~2.3M ops/s | ~2.04M ops/s |
-| order (nested + array) | parseStrict | **~7M** ops/s | ~0.43M ops/s | ~0.36M ops/s |
+| user (4 fields) | parseSafe | **~100M** ops/s | ~2.2M ops/s | ~1.2M ops/s |
+| order (nested + array) | parseSafe | **~5.5M** ops/s | ~0.44M ops/s | ~0.17M ops/s |
+| user (4 fields) | parseStrict | **~24M** ops/s | ~1.3M ops/s | ~1.5M ops/s |
+| order (nested + array) | parseStrict | **~7.7M** ops/s | ~0.26M ops/s | ~0.28M ops/s |
 
-The upstream `assert` case (seven scalar roots plus a nested object) runs faster
-still — ~51M ops/s strict, ~127M safe — but at that size the numbers swing enough
-run-to-run that the ratio, not the absolute, is the honest signal: mjst lands
-~5–29× ahead of zod across every case above.
+The upstream `assert` case (seven scalar roots plus a nested object) lands at
+~30M ops/s strict and ~34M safe. The `user` safe cell is the outlier: a strip
+parse of four declared keys builds one small object and nothing else, and the
+bench flags it as noisy (±10% across trials), so at that speed the ratio, not
+the absolute, is the honest signal: mjst lands ~12–45× ahead of zod across every
+case above.
 
 What is replicated upstream is the *cases* — the two parse modes and their
 shapes — not the harness. These numbers come from this repo's own measurement
@@ -323,7 +326,7 @@ reproducible run of both harnesses:
 [Against the moltar harness](../generate-validators#against-the-moltar-harness).
 
 The trade is a one-shot **prepare** cost that only mjst pays — generating the
-parser source — which measures **~0.2–0.8 ms** per schema here (zod and TypeBox
+parser source — which measures **~0.2–1.2 ms** per schema here (zod and TypeBox
 author or interpret their parsers with no separate build step, so there is
 nothing to time). That is trivially amortized: you generate once at build time
 and run the emitted code forever.
