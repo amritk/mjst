@@ -319,18 +319,19 @@ fastest number the harness can physically produce. One run on this machine
 
 | harness | runtime | `assert-loose` | `assert-strict` |
 |:--|:--|--:|--:|
-| this package (`measure.ts`) | Bun | ~200M ops/s | ~185M ops/s |
-| benny, moltar's `Benchmark` | Node | ~100M ops/s | ~38M ops/s |
-| benny, moltar's `Benchmark` | Bun | ~70M ops/s | ~2.4M ops/s |
-| *no-op control, benny* | *Node* | *~120M ops/s* | *~120M ops/s* |
-| *no-op control, benny* | *Bun* | *~325M ops/s (±75%)* | *~325M ops/s (±75%)* |
+| this package (`measure.ts`) | Bun | ~112M ops/s | ~63M ops/s |
+| benny, moltar's `Benchmark` | Node | ~51M ops/s | ~20M ops/s |
+| benny, moltar's `Benchmark` | Bun | ~50M ops/s | ~36M ops/s |
+| *no-op control, benny* | *Node* | *~73M ops/s* | *~75M ops/s* |
+| *no-op control, benny* | *Bun* | *~310M ops/s (±40%)* | *~330M ops/s (±40%)* |
 
 Read two things out of that. First, on Node the `assert-loose` figure sits
-within 20% of a validator that does nothing, so under that harness it is not a
+within ~30% of a validator that does nothing, so under that harness it is not a
 validator measurement at all: above that floor a faster validator cannot show
 up as a faster number, and the published leaderboard runs on CI hardware slower
-than this box, where the floor sits lower still. Second, `assert-strict` on Bun collapses to
-~2.4M because moltar's fixture is `Object.freeze({ … })` — see
+than this box, where the floor sits lower still. Second, moltar's fixture is
+`Object.freeze({ … })`: under Bun 1.3 that collapsed the Bun `assert-strict`
+cell to ~2.4M, and Bun 1.4.0 has closed that cliff — see
 [Frozen inputs](#frozen-inputs).
 
 The harness makes no difference to correctness and every difference to the

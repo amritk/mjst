@@ -100,12 +100,12 @@ The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/types
 
 | harness | runtime | assert-loose | assert-strict |
 |:--|:--|--:|--:|
-| this table (`bench/measure.ts`) | Bun | ~200M ops/s | ~185M ops/s |
-| benny, moltar's `Benchmark` class | Node | ~100M ops/s | ~38M ops/s |
-| benny, moltar's `Benchmark` class | Bun | ~70M ops/s | ~2.4M ops/s |
-| *no-op control, same harness* | *Node* | *~120M ops/s* | *~120M ops/s* |
+| this table (`bench/measure.ts`) | Bun | ~112M ops/s | ~63M ops/s |
+| benny, moltar's `Benchmark` class | Node | ~51M ops/s | ~20M ops/s |
+| benny, moltar's `Benchmark` class | Bun | ~50M ops/s | ~36M ops/s |
+| *no-op control, same harness* | *Node* | *~73M ops/s* | *~75M ops/s* |
 
-The no-op row is a "validator" that checks nothing, so it is the fastest number that harness can produce: on Node the `assert-loose` figure lands within 20% of it, which is a measurement of benny, not of validation — the leaderboard's ceiling, not any library's, and on CI hardware that ceiling sits lower still. And `assert-strict` on Bun collapses because moltar's fixture is `Object.freeze({ … })`, which costs *every* library about 100x on JavaScriptCore (details and the frozen-input benchmark: [Frozen inputs](./packages/generate-validators#frozen-inputs)).
+The no-op row is a "validator" that checks nothing, so it is the fastest number that harness can produce: on Node the `assert-loose` figure lands within ~30% of it, which is a measurement of benny, not of validation — the leaderboard's ceiling, not any library's, and on CI hardware that ceiling sits lower still. And moltar's fixture is `Object.freeze({ … })`, which under Bun 1.3 cost *every* library about 100× on `assert-strict` (the Bun cell read ~2.4M); Bun 1.4.0 has closed that cliff (details and the frozen-input benchmark: [Frozen inputs](./packages/generate-validators#frozen-inputs)).
 
 **Frozen inputs are their own workload — on older Bun.** Enforcing `additionalProperties: false` means proving no undeclared key is there, and every library does that by enumerating keys. On JavaScriptCore under Bun 1.3, making an object non-extensible (`Object.freeze`, `Object.seal`, `Object.preventExtensions`) disabled the engine's cached own-keys fast path, so every key sweep — `Object.keys`, `for...in`, `Reflect.ownKeys` — dropped to a generic walk. Property reads were unaffected; only strict schemas paid. Bun 1.4.0 no longer shows the cliff: frozen and mutable input run at the same speed for every library. Frozen config objects and frozen fixtures are ordinary inputs, so the bench keeps measuring them (`assert-strict (frozen)`, `small (4 fields, frozen)`), and the table carries both runtimes on the same machine:
 
