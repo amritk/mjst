@@ -80,6 +80,41 @@ if (!result.valid) {
 }
 ```
 
+### Consuming generated code
+
+Every generated function is exported as a plain `export const`, and the
+`index.ts` barrel re-exports them as `const` aliases (`import { validateDocument
+as validateDocument$0 } … export const validateDocument = validateDocument$0`)
+rather than `export { validateDocument } from './document.js'`. That is
+deliberate, and it matters once the output is consumed as CommonJS. Under ESM the
+two forms are equivalent; compiled to CJS they are not. An `export const` lowers
+to a **data property** (`exports.validateDocument = validateDocument`), while a
+re-export lowers to an **accessor** (`Object.defineProperty(exports,
+'validateDocument', { get() { … } })`) — and a bundler emitting CJS does the same
+to everything it exports (esbuild's `--format=cjs` routes every export through
+its `__export` helper, which defines each one as a getter). A caller that reaches
+the function off the module object on each call — `mod.validateDocument(input)`,
+which is what a compiled `import` does — then pays a getter call per invocation.
+The cost is invisible while one export is all a process ever touches and shows up
+once a second export from the same module has also been hot: in
+[the moltar-harness run below](#against-the-moltar-harness), the identical
+generated code runs ~43% slower on `assertLoose` when the entry is bundled to
+getter exports — and the two entries score the same when that mode is the only
+one the process runs.
+
+So if you bundle the output for a hot path, either keep data-property exports
+(ship the ESM as-is, or compile with `tsc --module commonjs`), or bind the
+function to a local before the loop:
+
+```ts
+// Reaches through the module object on every call — a getter sits on this path.
+for (const row of rows) mod.validateDocument(row)
+
+// Bound once, called directly — no module-object access in the loop.
+const { validateDocument } = mod
+for (const row of rows) validateDocument(row)
+```
+
 ---
 
 ## API
@@ -302,34 +337,63 @@ validator is called directly over a pool of 32 distinct inputs, its verdict is
 folded into an escaping sink so nothing can be optimised away, and the median of
 21 timed trials is reported.
 
-The public leaderboard measures differently. Every operation there goes through
+The public leaderboard measures differently, in two ways that both cost more
+than the validator does. Every operation there goes through
 [benny](https://github.com/caderek/benny) (benchmark.js) into moltar's
 `Benchmark` class, so the timed work is a call inside benchmark.js's compiled
 loop, then a second call through a class property, around a fixture that is one
-shared frozen module-level constant whose verdict `run()` throws away. That
-harness has a floor, and near the top of the range the floor is what gets
-measured.
+shared frozen module-level constant whose verdict `run()` throws away. And all
+four of a library's modes — `parseSafe`, `parseStrict`, `assertLoose`,
+`assertStrict` — share **one process**, reaching a single CommonJS module's
+exports off the module object on every call.
 
-`bun run bench:moltar` runs exactly that harness over the same functions, always
-alongside a **no-op** control — a "validator" that checks nothing, which is the
-fastest number the harness can physically produce. One run on this machine
-(Linux x64, Bun 1.3.11 / Node 22.22, valid input):
+`bun run bench:moltar` reproduces both: the harness, and that process layout.
+It always runs alongside a **no-op** control — a "validator" that checks
+nothing, which is the fastest number the harness can physically produce. One run
+on this machine (Linux x64, Bun 1.3.11 / Node 22.22, valid input, `discarded`
+column):
 
-| harness | runtime | `assert-loose` | `assert-strict` |
+| harness | runtime | `assertLoose` | `assertStrict` |
 |:--|:--|--:|--:|
-| this package (`measure.ts`) | Bun | ~200M ops/s | ~185M ops/s |
-| benny, moltar's `Benchmark` | Node | ~100M ops/s | ~38M ops/s |
-| benny, moltar's `Benchmark` | Bun | ~70M ops/s | ~2.4M ops/s |
-| *no-op control, benny* | *Node* | *~120M ops/s* | *~120M ops/s* |
-| *no-op control, benny* | *Bun* | *~325M ops/s (±75%)* | *~325M ops/s (±75%)* |
+| this package (`measure.ts`) | Bun | ~184M ops/s | ~166M ops/s |
+| benny, moltar's `Benchmark` | Node | ~72M ops/s | ~21M ops/s |
+| benny, moltar's `Benchmark` | Bun | ~54M ops/s | ~2.2M ops/s |
+| *no-op control, benny* | *Node* | *~103M ops/s* | *~106M ops/s* |
+| *no-op control, benny* | *Bun* | *~189M ops/s (±62%)* | *~189M ops/s (±63%)* |
 
-Read two things out of that. First, on Node the `assert-loose` figure sits
-within 20% of a validator that does nothing, so under that harness it is not a
-validator measurement at all: above that floor a faster validator cannot show
-up as a faster number, and the published leaderboard runs on CI hardware slower
-than this box, where the floor sits lower still. Second, `assert-strict` on Bun collapses to
-~2.4M because moltar's fixture is `Object.freeze({ … })` — see
+Read two things out of that. First, on Node the `assertLoose` figure is ~70% of
+what a validator that does nothing scores, so most of what that cell measures is
+the harness: above the floor a faster validator cannot show up as a faster
+number, and the published leaderboard runs on CI hardware slower than this box,
+where the floor sits lower still. Second, `assertStrict` on Bun collapses to
+~2.2M because moltar's fixture is `Object.freeze({ … })` — see
 [Frozen inputs](#frozen-inputs).
+
+#### Why the process layout is part of the measurement
+
+Running all four modes in one process is not cosmetic. Everything reached
+through `mod.assertLoose(…)` pays whatever the module boundary costs, and a
+CommonJS module built by a bundler puts a **getter** on every export (esbuild's
+`--format=cjs` routes them all through its `__export` helper) instead of the
+data property `tsc --module commonjs` writes for an `export const`. That getter
+is free while one export is all the process ever touches, and expensive once a
+second one has been hot in the same process.
+
+So the bench compiles the *same* generated sources into two entry modules and
+runs each mode twice — once fourth in the sequence, once alone in a fresh
+process. On Node, `assertLoose` (`discarded`):
+
+| `assertLoose`, Node | data-property exports (`tsc`) | getter exports (esbuild bundle) |
+|:--|--:|--:|
+| alone in its own process | ~79M ops/s | ~73M ops/s |
+| fourth in the four-mode sequence | ~72M ops/s | ~41M ops/s |
+
+Alone, the two entries agree — the getter costs nothing when nothing else has
+run. In the sequence they diverge by ~43%, and the getter entry has lost ~44% of
+its own isolated figure while the shipped shape gives up ~9% (about what any
+warm process costs). This is why the generated barrels re-export values as
+`const` aliases rather than `export { … } from`, and what
+[Consuming generated code](#consuming-generated-code) is about.
 
 The harness makes no difference to correctness and every difference to the
 number, so quote the two separately or not at all. Both are reproducible here:

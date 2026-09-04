@@ -24,5 +24,10 @@ bun run --filter='@amritk/generate-parsers' generate-readme   # after editing co
 - Default parsers **coerce**; `strict` makes them throw. Keep both paths tested.
 - Shares the `GeneratedFile` = `{ filename, content }` shape with the other
   generators; don't diverge it.
+- **Runtime exports are plain `export const`, never `export { … } from`.** The
+  barrel re-exports values as `const` aliases on purpose: a re-export lowers to a
+  getter on `module.exports` under CommonJS, and a caller reaching the function
+  through the module object pays for it on every call. Type-only re-exports are
+  fine. Pinned by `src/generators/data-property-exports.test.ts`.
 
 Add a changeset for every change (`bunx changeset`).

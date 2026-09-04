@@ -71,6 +71,41 @@ type GeneratedFile = {
 
 Write them to disk however you like.
 
+### Consuming generated code
+
+Every generated parser is exported as a plain `export const`, and the `index.ts`
+barrel re-exports them as `const` aliases (`import { parseInfo as parseInfo$0 } …
+export const parseInfo = parseInfo$0`) rather than `export { parseInfo } from
+'./info.js'`. That is deliberate, and it matters once the output is consumed as
+CommonJS. Under ESM the two forms are equivalent; compiled to CJS they are not.
+An `export const` lowers to a **data property** (`exports.parseInfo =
+parseInfo`), while a re-export lowers to an **accessor**
+(`Object.defineProperty(exports, 'parseInfo', { get() { … } })`) — and a bundler
+emitting CJS does the same to everything it exports (esbuild's `--format=cjs`
+routes every export through its `__export` helper, which defines each one as a
+getter). A caller that reaches the parser off the module object on each call —
+`mod.parseInfo(input)`, which is what a compiled `import` does — then pays a
+getter call per invocation. The cost is invisible while one export is all a
+process ever touches and shows up once a second export from the same module has
+also been hot: in
+[the sister package's moltar-harness run](../generate-validators#against-the-moltar-harness),
+the identical generated code runs ~43% slower on one of its four modes when the
+entry is bundled to getter exports — and the two entries score the same when
+that mode is the only one the process runs.
+
+So if you bundle the output for a hot path, either keep data-property exports
+(ship the ESM as-is, or compile with `tsc --module commonjs`), or bind the parser
+to a local before the loop:
+
+```ts
+// Reaches through the module object on every call — a getter sits on this path.
+for (const row of rows) mod.parseInfo(row)
+
+// Bound once, called directly — no module-object access in the loop.
+const { parseInfo } = mod
+for (const row of rows) parseInfo(row)
+```
+
 ---
 
 ## API

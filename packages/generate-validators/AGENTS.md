@@ -43,6 +43,11 @@ bun run --filter='@amritk/generate-validators' types:check
 - Schema keywords are read with `@amritk/helpers/read-key`, never `'x' in
   schema`: an inherited keyword makes a different validator, and
   `polluted-prototype.test.ts` pins that it cannot.
+- **Runtime exports are plain `export const`, never `export { … } from`.** The
+  barrel re-exports values as `const` aliases on purpose: a re-export lowers to a
+  getter on `module.exports` under CommonJS, and a caller reaching the function
+  through the module object pays for it on every call. Type-only re-exports are
+  fine. Pinned by `src/generators/data-property-exports.test.ts`.
 - Nothing rewrites emitted text. A schema's own strings land in the output as
   data, so a `replaceAll` over a finished function rewrites *them* too —
   `schema-text-is-data.test.ts` pins it. Emit the final spelling first time.

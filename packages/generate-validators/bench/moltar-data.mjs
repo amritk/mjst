@@ -1,7 +1,7 @@
 /**
  * The `moltar/typescript-runtime-type-benchmarks` fixture and harness shape,
- * reproduced verbatim so `moltar.ts` can measure this repo's validators under
- * the conditions that produce the public leaderboard's numbers.
+ * reproduced verbatim so `moltar.ts` can measure this repo's generated code
+ * under the conditions that produce the public leaderboard's numbers.
  *
  * Written as plain JavaScript, not TypeScript, on purpose: the workers run under
  * both Bun and Node (quantifying the runtime gap is half the point of this
@@ -53,9 +53,9 @@ export const validateData = Object.freeze({
 /**
  * moltar's `Benchmark` base class, reproduced in shape: the benchmarked function
  * is a *class property*, so every timed call is a load-then-call through an
- * object field rather than a direct call to a known function. `assertLoose` /
- * `assertStrict` both implement `run()` as `this.fn(validateData)` — the result
- * is discarded, which is what `MODES.discarded` reproduces.
+ * object field rather than a direct call to a known function. All four modes
+ * implement `run()` as `this.fn(validateData)` — the result is discarded, which
+ * is what {@link Discarded} reproduces.
  */
 export class Benchmark {
   constructor(moduleName, fn) {
@@ -64,8 +64,8 @@ export class Benchmark {
   }
 }
 
-/** Faithful to upstream: call, throw the answer away. */
-export class AssertDiscarded extends Benchmark {
+/** Faithful to upstream: call, throw the answer away. Shared by all four modes. */
+export class Discarded extends Benchmark {
   run() {
     this.fn(validateData)
   }
@@ -73,7 +73,7 @@ export class AssertDiscarded extends Benchmark {
 
 /**
  * The same call with the verdict observed. Anything an engine can delete under
- * `AssertDiscarded` it cannot delete here, so the pair measures how much of a
+ * {@link Discarded} it cannot delete here, so the pair measures how much of a
  * "result" is really dead-code elimination.
  */
 export class AssertObserved extends Benchmark {
@@ -84,6 +84,22 @@ export class AssertObserved extends Benchmark {
 
   run() {
     if (this.fn(validateData) === true) this.sink++
+  }
+}
+
+/**
+ * The parse-mode counterpart: a parser answers with a *new object* rather than
+ * `true`, so the sink observes that something came back instead of comparing to
+ * a constant.
+ */
+export class ParseObserved extends Benchmark {
+  constructor(moduleName, fn) {
+    super(moduleName, fn)
+    this.sink = 0
+  }
+
+  run() {
+    if (this.fn(validateData) !== undefined) this.sink++
   }
 }
 
@@ -148,8 +164,42 @@ export const assertZod = (strict) => {
   return strict ? z.strictObject(rootFields) : z.object(rootFields)
 }
 
-/** The two assert cases the leaderboard publishes, keyed by the name used on it. */
-export const MOLTAR_CASES = ['assertLoose', 'assertStrict']
+/**
+ * The four modes the leaderboard publishes for a library, in the order upstream
+ * registers (and runs) them. The order is part of the measurement, not a display
+ * choice: all four share one process, so whichever export runs first is the one
+ * the engine optimises against a cold module object.
+ */
+export const MOLTAR_MODES = ['parseSafe', 'parseStrict', 'assertLoose', 'assertStrict']
 
-/** Whether a case closes its objects to undeclared keys. */
-export const isStrictCase = (caseName) => caseName === 'assertStrict'
+/** Whether a mode closes its objects to undeclared keys. */
+export const isStrictMode = (mode) => mode === 'parseStrict' || mode === 'assertStrict'
+
+/**
+ * Whether a mode returns a new typed value (parse) rather than a verdict
+ * (assert). The two halves need different contracts, sinks and parity checks.
+ */
+export const isParseMode = (mode) => mode === 'parseSafe' || mode === 'parseStrict'
+
+/**
+ * The single contract behind all four modes, exactly as upstream does it: one
+ * declared shape per library file, with the strict modes closing every object.
+ * `assertSchema` / `assertZod` / `assertTypebox` above are it — the parse modes
+ * reuse them rather than declaring a second shape that could drift.
+ *
+ * What each mode does with that contract:
+ *   - **parseSafe** — type-check and *strip* undeclared keys, returning a new
+ *     value (zod's `.strip()`, TypeBox's `Clean + Assert`, mjst's
+ *     `strict + stripUnknown`). The open schema.
+ *   - **parseStrict** — type-check and *reject* undeclared keys, returning a new
+ *     value (zod's `.strictObject`, TypeBox's `Assert`, mjst's `strict`). The
+ *     closed schema.
+ *   - **assertLoose** / **assertStrict** — return a verdict, throwing on invalid
+ *     input. Open and closed schema respectively.
+ */
+export const MODE_DESCRIPTIONS = {
+  parseSafe: 'type-check + strip undeclared keys, returning a new value',
+  parseStrict: 'type-check + reject undeclared keys, returning a new value',
+  assertLoose: 'verdict only, undeclared keys allowed',
+  assertStrict: 'verdict only, undeclared keys rejected',
+}

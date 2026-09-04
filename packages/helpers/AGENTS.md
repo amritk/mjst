@@ -24,5 +24,10 @@ bun run --filter='@amritk/helpers' types:check
   `isObjectSchema` (`type: object`). Keep both, keep the names distinct.
 - This package **ships its `src/`** (see `files`) so consumers can read/inline —
   keep comments accurate.
+- **`generateIndexBarrel` re-exports values as `const` aliases**, never
+  `export { … } from`. The two are equivalent under ESM; compiled to CommonJS a
+  re-export becomes a getter on `module.exports`, which every call through the
+  barrel then pays for. Types keep the re-export form (they emit no runtime
+  code).
 
 Add a changeset for every change (`bunx changeset`).
