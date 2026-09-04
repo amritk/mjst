@@ -373,7 +373,7 @@ left on the strict fast path that JavaScriptCore would not see through. Under
 the moltar harness (Bun 1.4.0 / Node 22.22, each case alone in its own process)
 `parseStrict` then reaches the harness floor on Bun (~200M+ ops/s, the call
 eliminated) with `count-keys` and ~13M with `count-enumerable`, and on Node
-measures ~15M / ~14M. The default is what wins on Bun, where this repo benches;
+measures ~14M with either. The default is what wins on Bun, where this repo benches;
 Node-only consumers should flip it. See
 [Choosing how keys are counted](../generate-validators#choosing-how-keys-are-counted)
 in the sister package for the validator numbers and the full trade-off. Whichever

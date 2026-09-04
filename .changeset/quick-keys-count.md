@@ -30,7 +30,7 @@ over the local (`typeof _nested === "object" && … && Object.keys(_nested).leng
 === 2`), built from the shape validator's own checks so the two cannot disagree,
 one level deep and within the same size budget as the strip-build inlining.
 `parseStrict` under the moltar harness on Bun 1.4 goes from ~45M ops/s to the
-harness floor, and Node gains the saved call (~15%). The call stays where the
+harness floor, and Node gains the saved call (~10%). The call stays where the
 predicate is not one expression: a per-key walk, a `for…in` count under
 `count-enumerable`, or a nested object past the budget.
 
@@ -44,8 +44,8 @@ which allocates nothing and needs no prototype guard. When a declared property i
 optional both fall back to the per-key `for…in` walk. The two trade places
 between engines, measured under the moltar harness (Bun 1.4.0 / Node 22, each
 case alone in its own process): `assertStrict` ~300M / 19M ops/s with
-`count-keys` against 22M / 22M with `count-enumerable`; `parseStrict` 45M / 13M
-against 13M / 14M. The default is **`'count-keys'`** — mjst benches on Bun,
+`count-keys` against 22M / 22M with `count-enumerable`; `parseStrict` ~220M /
+14M against 13M / 14M. The default is **`'count-keys'`** — mjst benches on Bun,
 where it is never the slower form and is 3× faster on the strict parse.
 Node-only consumers gain from `'count-enumerable'` (10–20% on that box, up to
 1.7–2× on faster hardware). The choice is made at generation time; the emitted

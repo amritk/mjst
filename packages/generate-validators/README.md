@@ -408,11 +408,12 @@ on every runtime it finds), Linux x64, Bun 1.4.0 / Node 22.22:
 |:--|:--|--:|--:|
 | `assertStrict` (`isX`) | `count-keys` | ~300M ops/s (the harness floor — the call is eliminated) | ~19M ops/s |
 | `assertStrict` (`isX`) | `count-enumerable` | ~22M ops/s | ~22M ops/s |
-| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~45M ops/s | ~13M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~220M ops/s (the harness floor again) | ~14M ops/s |
 | `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~13M ops/s | ~14M ops/s |
 
 The default is `count-keys` because this repo benches on Bun, where it is never
-the slower form and is 3× faster on the strict parse. Code that will only ever
+the slower form and, with the nested shape check spelled out on the parse fast
+path, lets JavaScriptCore eliminate the strict parse as well. Code that will only ever
 run on Node gains from `count-enumerable`: ~10–20% on this box, and up to
 1.7–2× on faster hardware, where the keys array is what the strict validator
 spends its time on. The choice is made once, when the code is generated: nothing

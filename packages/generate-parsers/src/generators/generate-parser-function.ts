@@ -3455,7 +3455,7 @@ const shapeChecksOf = (
  * The call was the one thing left on the strict fast path that JavaScriptCore
  * would not see through: with it, `parseStrict` under the moltar harness sat at
  * ~45M ops/s on Bun 1.4; with the same checks inlined it reaches the harness
- * floor (~200M+, the call eliminated), and Node gains ~15% from the saved call.
+ * floor (~220M, the call eliminated), and Node gains ~10% from the saved call.
  * The chain is the shape validator's own checks (see {@link shapeChecksOf}) —
  * `isObject` spelled out, as {@link inlineNestedFastPath} does, then the typed
  * checks, then the key count — so the verdict is the predicate's exactly.
