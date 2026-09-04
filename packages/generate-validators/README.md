@@ -350,23 +350,27 @@ measured.
 `bun run bench:moltar` runs exactly that harness over the same functions, always
 alongside a **no-op** control — a "validator" that checks nothing, which is the
 fastest number the harness can physically produce. One run on this machine
-(Linux x64, Bun 1.4.0 / Node 22.22, valid input):
+(Linux x64, Bun 1.4.0 / Node 26.8.1, valid input):
 
 | harness | runtime | `assert-loose` | `assert-strict` |
 |:--|:--|--:|--:|
-| this package (`measure.ts`) | Bun | ~112M ops/s | ~63M ops/s |
-| benny, moltar's `Benchmark` | Node | ~51M ops/s | ~20M ops/s |
-| benny, moltar's `Benchmark` | Bun | ~50M ops/s | ~36M ops/s |
-| *no-op control, benny* | *Node* | *~73M ops/s* | *~75M ops/s* |
-| *no-op control, benny* | *Bun* | *~310M ops/s (±40%)* | *~330M ops/s (±40%)* |
+| this package (`measure.ts`) | Bun | ~190M ops/s | ~171M ops/s |
+| this package (`measure.ts`) | Node | ~90M ops/s | ~37M ops/s |
+| benny, moltar's `Benchmark` | Bun | ~90M ops/s | ~76M ops/s |
+| benny, moltar's `Benchmark` | Node | ~80M ops/s | ~34M ops/s |
+| *no-op control, benny* | *Node* | *~91M ops/s* | *~96M ops/s* |
+| *no-op control, benny* | *Bun* | *~508M ops/s (±46%)* | *~449M ops/s (±48%)* |
 
-Read two things out of that. First, on Node the `assert-loose` figure sits
-within ~30% of a validator that does nothing, so under that harness it is not a
+Read three things out of that. First, on Node the `assert-loose` figure sits
+within 12% of a validator that does nothing, so under that harness it is not a
 validator measurement at all: above that floor a faster validator cannot show
 up as a faster number, and the published leaderboard runs on CI hardware slower
-than this box, where the floor sits lower still. Second, moltar's fixture is
-`Object.freeze({ … })`: under Bun 1.3 that collapsed the Bun `assert-strict`
-cell to ~2.4M, and Bun 1.4.0 has closed that cliff — see
+than this box, where the floor sits lower still. Second, the harness reorders
+the field: under benny on Node this validator leads TypeBox (~80M against
+~54M), the reverse of what `measure.ts` reports for the same two functions on
+the same engine, because benny's floor compresses the top of the range. Third,
+moltar's fixture is `Object.freeze({ … })`: under Bun 1.3 that collapsed the Bun
+`assert-strict` cell to ~2.4M, and Bun 1.4.0 has closed that cliff — see
 [Frozen inputs](#frozen-inputs).
 
 The harness makes no difference to correctness and every difference to the
