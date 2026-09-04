@@ -73,6 +73,42 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('### a')
   })
 
+  // A map's children live one level down, under a key the schema does not name.
+  // The Type line is what says so: `object` over a `### methods` heading read as
+  // `resources.methods`, when the field is at `resources.<name>.methods`.
+  it('labels a map-shaped property as a Record', () => {
+    const content = only(
+      generateMarkdownFiles(
+        {
+          title: 'Config',
+          type: 'object',
+          properties: {
+            resources: {
+              type: 'object',
+              description: 'Resource tree.',
+              additionalProperties: { $ref: '#/$defs/resourceConfig' },
+            },
+            environments: {
+              type: 'object',
+              description: 'Named base URLs.',
+              additionalProperties: { type: 'string' },
+            },
+          },
+          $defs: {
+            resourceConfig: {
+              type: 'object',
+              properties: { methods: { type: 'object', description: 'Method map.' } },
+            },
+          },
+        },
+        { language: 'javascript' },
+      ),
+    )
+    expect(section(content, '## resources')).toContain('**Type:** `Record<string, object>`')
+    expect(section(content, '## resources')).toContain('### methods')
+    expect(section(content, '## environments')).toContain('**Type:** `Record<string, string>`')
+  })
+
   it('renders the type, description, default and derived example of a property', () => {
     const content = only(
       generateMarkdownFiles({

@@ -58,6 +58,64 @@ describe('reference-type', () => {
     expect(referenceType(prop, 'json')).toBe('AuthenticationConfiguration')
   })
 
+  // `object` said nothing about the values, and for a map of objects it left
+  // the value's fields reading as the map's own — nothing on the page said the
+  // key level existed. A map is spelled the way an array already is.
+  it('renders a map as `Record<string, value>`', () => {
+    expect(referenceType({ type: 'object', additionalProperties: { type: 'string' } }, 'json')).toBe(
+      'Record<string, string>',
+    )
+    const resource = { type: 'object', properties: { methods: { type: 'object' } } }
+    expect(referenceType({ type: 'object', additionalProperties: resource }, 'json')).toBe('Record<string, object>')
+  })
+
+  it('names a map value through its x-doc.type', () => {
+    const value = { type: 'object', 'x-doc': { type: 'ResourceConfig' } }
+    expect(referenceType({ type: 'object', additionalProperties: value }, 'json')).toBe(
+      'Record<string, ResourceConfig>',
+    )
+  })
+
+  it('unions the value shapes of patternProperties', () => {
+    const prop = { type: 'object', patternProperties: { '^x-': { type: 'string' }, '^n-': { type: 'number' } } }
+    expect(referenceType(prop, 'json')).toBe('Record<string, string | number>')
+    const both = {
+      type: 'object',
+      additionalProperties: { type: 'string' },
+      patternProperties: { '^x-': { type: 'string' } },
+    }
+    expect(referenceType(both, 'json')).toBe('Record<string, string>')
+  })
+
+  it('reads map-ness without a declared type', () => {
+    expect(referenceType({ additionalProperties: { enum: ['a', 'b'] } }, 'json')).toBe('Record<string, "a" | "b">')
+  })
+
+  // An object that names its fields is documented by its rows; calling it a
+  // `Record` would hide them. And a value shape that says nothing is not
+  // dressed up as `unknown`.
+  it('keeps `object` for a node with named properties or an unlabelled value', () => {
+    const fields = { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: { type: 'string' } }
+    expect(referenceType(fields, 'json')).toBe('object')
+    expect(referenceType({ type: 'object', additionalProperties: {} }, 'json')).toBe('object')
+    expect(referenceType({ type: 'object', additionalProperties: true }, 'json')).toBe('object')
+    expect(referenceType({ type: 'object', additionalProperties: false }, 'json')).toBe('object')
+  })
+
+  it('nests maps and arrays either way round', () => {
+    expect(
+      referenceType({ type: 'object', additionalProperties: { type: 'array', items: { type: 'string' } } }, 'json'),
+    ).toBe('Record<string, string[]>')
+    expect(
+      referenceType({ type: 'array', items: { type: 'object', additionalProperties: { type: 'string' } } }, 'json'),
+    ).toBe('Record<string, string>[]')
+  })
+
+  it('lets x-doc.type override a map label', () => {
+    const prop = { type: 'object', additionalProperties: { type: 'string' }, 'x-doc': { type: 'Environments' } }
+    expect(referenceType(prop, 'json')).toBe('Environments')
+  })
+
   it('reports whether the type label already lists the enum', () => {
     expect(typeShowsEnum({ enum: ['a', 'b'] })).toBe(true)
     expect(typeShowsEnum({ enum: ['a', 'b'], 'x-doc': { type: 'Mode' } })).toBe(false)

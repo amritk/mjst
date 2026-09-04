@@ -1,5 +1,6 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { assignKey } from './assign-key'
 import { assertSchemaDepth, MAX_SCHEMA_DEPTH } from './max-schema-depth'
 import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive } from './mjst-extension'
 import { readKey } from './read-key'
@@ -62,11 +63,6 @@ const MAX_TYPE_DEPTH = Math.floor(MAX_SCHEMA_DEPTH / 5)
 /** True when the node itself declares `name`, inherited values excluded. */
 const declares = (schema: SchemaNode, name: string): boolean => Object.hasOwn(schema as Record<string, unknown>, name)
 
-type ConditionalObjectResult = {
-  schema: JSONSchema.Object
-  thenRef: string | null
-}
-
 /** Options controlling generated type output. */
 export type TypeOptions = {
   /** When true, every property, array, and record in the generated types is emitted as readonly. */
@@ -102,75 +98,249 @@ const refTypeName = (ref: string, options: TypeOptions): string => {
   return 'unknown'
 }
 
-const getConditionalObjectSchema = (schema: JSONSchema): ConditionalObjectResult | null => {
-  if (!isSchemaObject(schema)) {
-    return null
+/**
+ * Keywords that give a schema fragment a shape of its own beyond a property
+ * block. A fragment declaring none of them is "plain": `properties`, `required`
+ * and annotations only, which is how nearly every `if`/`then` pair is written
+ * and the one form two fragments can be folded into a single object literal.
+ */
+const NON_PLAIN_KEYWORDS: ReadonlySet<string> = new Set([
+  '$ref',
+  '$dynamicRef',
+  'allOf',
+  'anyOf',
+  'oneOf',
+  'not',
+  'if',
+  'then',
+  'else',
+  'additionalProperties',
+  'patternProperties',
+  'items',
+  'prefixItems',
+  'const',
+  'enum',
+  'nullable',
+  'x-mjst',
+])
+
+/** True for a fragment made of `properties` and `required` alone (see {@link NON_PLAIN_KEYWORDS}). */
+const isPlainFragment = (schema: JSONSchema): schema is SchemaNode => {
+  if (!isSchemaObject(schema)) return false
+  const type = keywordOf(schema, 'type')
+  if (type !== undefined && type !== 'object') return false
+  return !Object.keys(schema).some((key) => NON_PLAIN_KEYWORDS.has(key))
+}
+
+/** The `required` list a fragment declares, or nothing when it declares none. */
+const requiredOf = (schema: SchemaNode): readonly string[] => {
+  const declared = keywordOf(schema, 'required')
+  return Array.isArray(declared) ? declared.filter((key): key is string => typeof key === 'string') : []
+}
+
+/**
+ * Every value a schema admits, when that set is finite and spelled out —
+ * a `const`, an `enum`, or a `boolean`/`null` type (with the nullable idioms
+ * adding `null`). Undefined for anything open-ended, such as a string.
+ *
+ * This is what makes the *negation* of a condition expressible: "`a` is not
+ * `true`" can only be written as a type when the values `a` may hold are known.
+ */
+const literalDomain = (schema: JSONSchema | undefined): readonly unknown[] | undefined => {
+  if (schema === undefined || !isSchemaObject(schema)) return undefined
+  if (declares(schema, 'const')) return [keywordOf(schema, 'const')]
+  const enumValues = keywordOf(schema, 'enum')
+  if (Array.isArray(enumValues)) return enumValues
+  const type = keywordOf(schema, 'type')
+  const members = Array.isArray(type) ? type : [type]
+  const values: unknown[] = []
+  for (const member of members) {
+    if (member === 'boolean') values.push(true, false)
+    else if (member === 'null') values.push(null)
+    else return undefined
   }
+  if (isNullableSchema(schema)) values.push(null)
+  return values
+}
 
-  if (!declares(schema, 'if') || !declares(schema, 'then')) {
-    return null
+/** Literal equality the way `enum` and `const` define it: by JSON value. */
+const sameLiteral = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+/**
+ * The type of an instance that *fails* an `if` test, or undefined when TypeScript
+ * cannot spell it.
+ *
+ * A plain test fails when some tested property holds a value the test rejects,
+ * or some property the test requires is absent — one union member per way of
+ * failing. A rejected value can only be named against the finite `domain` of
+ * values the enclosing schema lets the property hold: with `a: { type: 'boolean'
+ * }` declared, failing `a: { const: true }` is `{ a?: false }` (absent, or
+ * false). Against an open-ended property there is no such type, and the answer
+ * is honestly "cannot say", which the caller turns into dropping the conditional
+ * rather than guessing.
+ */
+const negateCondition = (
+  condition: SchemaNode,
+  domain: Record<string, JSONSchema> | undefined,
+  options: TypeOptions,
+): string | undefined => {
+  if (!isPlainFragment(condition)) return undefined
+  const tested = keywordMap(condition, 'properties') ?? {}
+  const required = new Set(requiredOf(condition))
+  const readonlyPrefix = options.readonly ? 'readonly ' : ''
+  const absent = (key: string): string => `{ ${readonlyPrefix}${safeKey(key)}?: never }`
+
+  const failures: string[] = []
+  for (const key of Object.keys(tested)) {
+    const test = readKey(tested, key) as JSONSchema
+    // A test that admits every value cannot fail on its own; only its absence
+    // can, and only when the condition also requires the key.
+    const accepted = literalDomain(test)
+    if (accepted === undefined) {
+      const vacuous = test === true || (isSchemaObject(test) && Object.keys(test).length === 0)
+      if (!vacuous) return undefined
+      if (required.has(key)) failures.push(absent(key))
+      continue
+    }
+    const possible = domain === undefined ? undefined : literalDomain(readKey(domain, key) as JSONSchema | undefined)
+    if (possible === undefined) return undefined
+    const rejected = possible.filter((value) => !accepted.some((match) => sameLiteral(value, match)))
+    if (rejected.length === 0) {
+      if (required.has(key)) failures.push(absent(key))
+      continue
+    }
+    const literal = unionOf(rejected.map((value) => JSON.stringify(value)))
+    failures.push(`{ ${readonlyPrefix}${safeKey(key)}${required.has(key) ? '?' : ''}: ${literal} }`)
   }
-
-  const ifSchema = keywordOf(schema, 'if') as JSONSchema
-  const thenSchema = keywordOf(schema, 'then') as JSONSchema
-
-  if (!isSchemaObject(ifSchema) || !isSchemaObject(thenSchema)) {
-    return null
+  for (const key of required) {
+    if (!Object.hasOwn(tested, key)) failures.push(absent(key))
   }
+  // Nothing can fail a test that tests nothing: the conditional is its `then`.
+  return failures.length === 0 ? 'never' : unionOf(failures)
+}
 
-  const ownProperties = keywordOf(schema, 'properties') as Record<string, JSONSchema> | undefined
-  const ifProperties = keywordOf(ifSchema, 'properties') as Record<string, JSONSchema> | undefined
-  const thenProperties = keywordOf(thenSchema, 'properties') as Record<string, JSONSchema> | undefined
-  const hasOwnProperties = ownProperties && typeof ownProperties === 'object'
-  const hasIfProperties = ifProperties && typeof ifProperties === 'object'
-  const hasThenProperties = thenProperties && typeof thenProperties === 'object'
-
-  if (!hasIfProperties && !hasThenProperties) {
-    return null
-  }
-
-  // The conditional fragments are merged *onto* the schema's own properties —
-  // a schema is allowed to declare `properties` alongside `if`/`then`, and
-  // reading only the conditional halves silently dropped everything it declared
-  // unconditionally.
-  const properties = {
-    ...(hasOwnProperties ? ownProperties : {}),
-    ...(hasIfProperties ? ifProperties : {}),
-    ...(hasThenProperties ? thenProperties : {}),
-  }
-
+/**
+ * Renders the type of an instance that satisfies every fragment given: the
+ * `if` and `then` of a conditional read together, or its `else` alone.
+ *
+ * Plain fragments fold into one object literal — `{ type: "http"; scheme: string
+ * }` rather than `{ type: "http" } & { scheme: string }` — with a key both
+ * declare intersected, and a key only `required` names present with any value.
+ * Only the keys a fragment's `required` lists are required: `if.properties`
+ * is a test, not a requirement, and the `then` keys were required only where
+ * `then` says so. Anything else (a `$ref`, a composition) is rendered on its own
+ * and intersected.
+ */
+const branchOf = (fragments: readonly JSONSchema[], options: TypeOptions, depth: number): string => {
+  const members: string[] = []
+  const properties: Record<string, JSONSchema> = {}
   const required = new Set<string>()
-
-  for (const node of [schema, ifSchema, thenSchema]) {
-    const declared = keywordOf(node, 'required')
-    if (Array.isArray(declared)) {
-      for (const key of declared) required.add(key as string)
+  for (const fragment of fragments) {
+    if (!isPlainFragment(fragment)) {
+      members.push(wrapUnion(getTypeScriptType(fragment, options, depth + 1)))
+      continue
     }
-  }
-
-  if (hasIfProperties) {
-    for (const key of Object.keys(ifProperties)) {
-      required.add(key)
+    const declared = keywordMap(fragment, 'properties') ?? {}
+    for (const key of Object.keys(declared)) {
+      const sub = readKey(declared, key) as JSONSchema
+      const existing = readKey(properties, key) as JSONSchema | undefined
+      assignKey(properties, key, existing === undefined ? sub : { allOf: [existing, sub] })
     }
+    for (const key of requiredOf(fragment)) required.add(key)
   }
-
-  if (hasThenProperties) {
-    for (const key of Object.keys(thenProperties)) {
-      required.add(key)
-    }
+  for (const key of required) {
+    if (!Object.hasOwn(properties, key)) assignKey(properties, key, true)
   }
-
-  const thenRefValue = keywordOf(thenSchema, '$ref')
-  const thenRef = typeof thenRefValue === 'string' ? thenRefValue : null
-
-  return {
-    schema: {
-      type: 'object',
-      properties,
-      ...(required.size > 0 ? { required: Array.from(required) } : {}),
-    },
-    thenRef,
+  if (Object.keys(properties).length > 0) {
+    const merged: JSONSchema = { type: 'object', properties, required: [...required] }
+    members.unshift(objectTypeToTs(merged, options, depth))
   }
+  return wrapIntersection(intersectionOf(members))
+}
+
+/**
+ * The type an `if`/`then`/`else` conditional contributes to the schema carrying
+ * it, or undefined when it can soundly contribute nothing.
+ *
+ * An instance either passes the test — and must satisfy `then` — or fails it
+ * and must satisfy `else`; the conditional is the union of the two: `(if ∧ then)
+ * | (¬if ∧ else)`. The first member is always writable. The second needs either
+ * an `else` or a negation {@link negateCondition} can spell; with neither, the
+ * failing instances are unconstrained, the union is `unknown`, and the honest
+ * rendering is to leave the conditional out. That is lossy but sound. The old
+ * rendering folded `if` and `then` into the type as required properties, which
+ * rejected every instance the test did not match — `{}` failed to type-check
+ * against a schema that accepts it.
+ *
+ * `domain` is the property block the negation reads value sets from: the
+ * schema's own `properties`, or the composing schema's when the conditional is
+ * an inline `allOf` member.
+ */
+const conditionalMember = (
+  schema: SchemaNode,
+  domain: Record<string, JSONSchema> | undefined,
+  options: TypeOptions,
+  depth: number,
+): string | undefined => {
+  if (!declares(schema, 'if')) return undefined
+  const condition = keywordOf(schema, 'if') as JSONSchema
+  const thenSchema = declares(schema, 'then') ? (keywordOf(schema, 'then') as JSONSchema) : undefined
+  const elseSchema = declares(schema, 'else') ? (keywordOf(schema, 'else') as JSONSchema) : undefined
+  // An `if` with no branch asserts nothing.
+  if (thenSchema === undefined && elseSchema === undefined) return undefined
+
+  const branch = (sub: JSONSchema | undefined): string =>
+    sub === undefined ? 'unknown' : branchOf([sub], options, depth)
+  // The boolean tests are decided: `true` always takes `then`, `false` `else`.
+  if (condition === true) return thenSchema === undefined ? undefined : branch(thenSchema)
+  if (condition === false) return elseSchema === undefined ? undefined : branch(elseSchema)
+  if (!isSchemaObject(condition)) return undefined
+
+  const matched = branchOf(thenSchema === undefined ? [condition] : [condition, thenSchema], options, depth)
+  const negation = negateCondition(condition, domain, options)
+  if (negation === 'never') return matched === 'unknown' ? undefined : matched
+  const unmatched = wrapIntersection(intersectionOf([wrapUnion(negation ?? 'unknown'), branch(elseSchema)]))
+  if (unmatched === 'unknown' || matched === 'unknown') return undefined
+  return unionOf([matched, unmatched])
+}
+
+/** The schema with its conditional keywords removed, for rendering the rest of it. */
+const withoutConditional = (schema: SchemaNode): SchemaNode => {
+  const rest: Record<string, unknown> = {}
+  for (const key of Object.keys(schema)) {
+    if (key !== 'if' && key !== 'then' && key !== 'else')
+      assignKey(rest, key, readKey(schema as Record<string, unknown>, key))
+  }
+  return rest as SchemaNode
+}
+
+/**
+ * Renders one `allOf` member against the schema composing it.
+ *
+ * A member that is itself a conditional tests the composing schema's
+ * properties — `allOf: [{ if: { a: true }, then: { b: true } }]` next to
+ * `properties: { a, b }` is the usual way "`b` requires `a`" is written — so its
+ * negation is spelled against that schema's property block, where the value
+ * sets live. Rendered on its own it would see no domain at all and drop.
+ */
+const allOfMember = (
+  entry: JSONSchema,
+  domain: Record<string, JSONSchema> | undefined,
+  options: TypeOptions,
+  depth: number,
+): string => {
+  if (!isSchemaObject(entry) || !declares(entry, 'if')) return wrapUnion(getTypeScriptType(entry, options, depth + 1))
+  const own = keywordMap(entry, 'properties')
+  const merged: Record<string, JSONSchema> = {}
+  for (const block of [domain, own]) {
+    if (block === undefined) continue
+    for (const key of Object.keys(block)) assignKey(merged, key, readKey(block, key))
+  }
+  const conditional = conditionalMember(entry, merged, options, depth + 1)
+  const remainder = wrapUnion(getTypeScriptType(withoutConditional(entry), options, depth + 1))
+  // Each member is already parenthesized where it is a union, so the result is
+  // safe as one factor of the composing intersection as it stands.
+  return intersectionOf([remainder, ...(conditional === undefined ? [] : [wrapUnion(conditional)])])
 }
 
 const isObjectLikeSchema = (schema: JSONSchema): schema is JSONSchema.Object => {
@@ -256,6 +426,13 @@ const isNullableSchema = (schema: JSONSchema): boolean =>
 
 /** Parenthesizes a union so it composes safely inside `[]`, `&`, or an optional marker. */
 const wrapUnion = (type: string): string => (type.includes(' | ') ? `(${type})` : type)
+
+/**
+ * Parenthesizes an intersection so it reads as one branch of a union. `A & B |
+ * C` parses the way it is meant to, but a reader has to know the precedence
+ * table to see it.
+ */
+const wrapIntersection = (type: string): string => (type.includes(' & ') ? `(${type})` : type)
 
 /** Appends `| null` unless the rendered type already admits null. */
 const withNull = (type: string): string => (type.split(' | ').includes('null') ? type : `${type} | null`)
@@ -532,15 +709,6 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
  * no shape of its own (so composition keywords alone decide the type).
  */
 const getLocalShapeType = (schema: SchemaNode, options: TypeOptions, depth: number): string | undefined => {
-  // Object-like conditional schemas (`if`/`then`) describe one merged shape.
-  const conditionalResult = getConditionalObjectSchema(schema)
-  if (conditionalResult) {
-    const baseType = objectTypeToTs(conditionalResult.schema, options, depth)
-    return conditionalResult.thenRef
-      ? `(${baseType}) & ${refToName(conditionalResult.thenRef, options.typeSuffix)}`
-      : baseType
-  }
-
   const type = keywordOf(schema, 'type')
   if (!type) {
     const index = getIndexSignature(schema, options, depth)
@@ -668,15 +836,19 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions, depth: numbe
 
   // A schema may declare a shape of its own *and* compose others. Returning
   // either alone silently drops half of what the document says, so the local
-  // shape, the `oneOf`/`anyOf` union, and every `allOf` member are combined into
-  // one intersection.
+  // shape, the conditional, the `oneOf`/`anyOf` union, and every `allOf` member
+  // are combined into one intersection.
   const members: string[] = []
   const localType = getLocalShapeType(schema, options, depth)
   if (localType !== undefined) members.push(localType)
 
+  const domain = keywordMap(schema, 'properties')
+  const conditional = conditionalMember(schema, domain, options, depth)
+  if (conditional !== undefined) members.push(wrapUnion(conditional))
+
   const allOf = keywordOf(schema, 'allOf')
   if (Array.isArray(allOf)) {
-    for (const entry of allOf) members.push(wrapUnion(getTypeScriptType(entry as JSONSchema, options, depth + 1)))
+    for (const entry of allOf) members.push(allOfMember(entry as JSONSchema, domain, options, depth))
   }
 
   const unionBranches = unionBranchesOf(schema)
@@ -718,7 +890,8 @@ const getCompositionMembers = (schema: JSONSchema, options: TypeOptions, depth: 
 
   const allOf = keywordOf(schema, 'allOf')
   if (Array.isArray(allOf)) {
-    for (const entry of allOf) members.push(wrapUnion(getTypeScriptType(entry as JSONSchema, options, depth + 1)))
+    const domain = keywordMap(schema, 'properties')
+    for (const entry of allOf) members.push(allOfMember(entry as JSONSchema, domain, options, depth))
   }
 
   const ref = keywordOf(schema, '$ref')
@@ -761,9 +934,6 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
   }
 
   if (isObjectLikeSchema(schema)) {
-    const conditionalResult = getConditionalObjectSchema(schema)
-    const normalizedSchema = conditionalResult?.schema ?? schema
-    const conditionalThenRef = conditionalResult?.thenRef ?? null
     let jsDocTitle: string | undefined
     let jsDocDescription: string | undefined
 
@@ -773,9 +943,9 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       jsDocDescription = topLevelComment
     }
 
-    const declaredProperties = keywordMap(normalizedSchema, 'properties')
-    const additionalProperties = keywordOf(normalizedSchema, 'additionalProperties')
-    const patternProperties = keywordMap(normalizedSchema, 'patternProperties')
+    const declaredProperties = keywordMap(schema, 'properties')
+    const additionalProperties = keywordOf(schema, 'additionalProperties')
+    const patternProperties = keywordMap(schema, 'patternProperties')
 
     const hasProperties = declaredProperties !== undefined && Object.keys(declaredProperties).length > 0
     const hasAdditionalProperties = typeof additionalProperties === 'object' && additionalProperties !== null
@@ -808,7 +978,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     }
 
     const schemaProps = declaredProperties ?? {}
-    const declaredRequired = keywordOf(normalizedSchema, 'required')
+    const declaredRequired = keywordOf(schema, 'required')
     const requiredSet = new Set<string>(Array.isArray(declaredRequired) ? (declaredRequired as string[]) : [])
     const declaredTypes: string[] = []
     let hasOptionalProperty = false
@@ -841,7 +1011,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     // Open-ended keys declared alongside fixed properties become an index
     // signature inside the same body — dropping them used to erase everything a
     // schema said about the keys it does not name.
-    const index = getIndexSignature(normalizedSchema, options, 0)
+    const index = getIndexSignature(schema, options, 0)
     if (index) {
       appendLine('  ' + buildIndexSignatureLine(index, declaredTypes, hasOptionalProperty, options) + ';')
     }
@@ -851,15 +1021,18 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       result += buildJsDocBlock(jsDocTitle, jsDocDescription)
     }
 
+    const conditional = conditionalMember(schema, declaredProperties, options, 0)
+    const intersected = [
+      ...(conditional === undefined ? [] : [wrapUnion(conditional)]),
+      ...getCompositionMembers(schema, options, 0),
+    ]
+
+    // A body with nothing in it says nothing an intersection member does not
+    // already say — `{} & X` is `X` — so a schema that is only its conditional
+    // or its composition is rendered as those alone.
     let typeBody = properties === '' ? '{}' : '{\n' + properties + '\n}'
-
-    if (conditionalThenRef) {
-      typeBody += ' & ' + refToName(conditionalThenRef, options.typeSuffix)
-    }
-
-    for (const intersectionType of getCompositionMembers(schema, options, 0)) {
-      typeBody += ' & ' + intersectionType
-    }
+    if (properties === '' && intersected.length > 0) typeBody = intersected.join(' & ')
+    else for (const intersectionType of intersected) typeBody += ' & ' + intersectionType
 
     if (isNullableSchema(schema)) typeBody = withNull(typeBody)
 
