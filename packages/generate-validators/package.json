@@ -45,7 +45,8 @@
     "bench": "bun --conditions development ./bench/run.ts",
     "prebench:node": "bun run --filter='@amritk/helpers' build && bun run build",
     "bench:node": "node ./bench/run.ts",
-    "bench:moltar": "bun --conditions development ./bench/moltar.ts"
+    "bench:moltar": "bun --conditions development ./bench/moltar.ts",
+    "bench:moltar:leaderboard": "bun --conditions development ./bench/moltar-leaderboard.ts"
   },
   "imports": {
     "#generators/*": "./src/generators/*.ts"
@@ -62,6 +63,7 @@
     "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
+    "@amritk/generate-parsers": "workspace:*",
     "@amritk/runtime-validators": "workspace:*",
     "@ryoppippi/unplugin-typia": "^2.6.5",
     "@scalar/openapi-parser": "^0.26.1",

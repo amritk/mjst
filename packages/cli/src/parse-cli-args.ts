@@ -1,4 +1,9 @@
 import type { SourceFormat } from '@amritk/adapters/source-format'
+import {
+  isUnknownKeysStrategy,
+  UNKNOWN_KEYS_STRATEGIES,
+  type UnknownKeysStrategy,
+} from '@amritk/helpers/unknown-keys-strategy'
 
 import type { CliConfig } from './cli-config'
 
@@ -22,6 +27,7 @@ type MutableConfig = {
   stripUnknown?: boolean
   caseInsensitive?: boolean
   readonly?: boolean
+  unknownKeys?: UnknownKeysStrategy
   helpers?: 'package' | 'embedded'
   typeSuffix?: string
   banner?: boolean | string
@@ -65,6 +71,7 @@ const VALUE_KEYS = new Set<keyof MutableConfig>([
   'typeSuffix',
   'importExt',
   'rootType',
+  'unknownKeys',
 ])
 
 // Recognized flags that don't map into CliConfig because they're consumed
@@ -172,6 +179,15 @@ const assignValue = (config: MutableConfig, key: string, value: string): boolean
         throw new Error(`Invalid --import-ext value "${value}". Expected one of: js, ts.`)
       }
       config.importExt = parsed
+      return true
+    }
+    case 'unknownKeys': {
+      if (!isUnknownKeysStrategy(value)) {
+        throw new Error(
+          `Invalid --unknown-keys value "${value}". Expected one of: ${UNKNOWN_KEYS_STRATEGIES.join(', ')}.`,
+        )
+      }
+      config.unknownKeys = value
       return true
     }
     default:

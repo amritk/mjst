@@ -1,4 +1,5 @@
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
+import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import {
   type CollectedHelpers,
@@ -101,6 +102,12 @@ type GenerateFileOptions = {
    * already-valid input keeps the exact-match fast path.
    */
   readonly caseInsensitive?: boolean
+  /**
+   * How the generated fast paths prove a closed object carries no undeclared
+   * key — `Object.keys` (the default) or a `for…in` count. See
+   * {@link UnknownKeysStrategy} for the trade-off between the two.
+   */
+  readonly unknownKeys?: UnknownKeysStrategy
 }
 
 /** Result of generating a single parser file. */
@@ -195,12 +202,23 @@ export const generateFile = (
   // The shape validator is generated first so the parser can compare it
   // against its own fast-path guard and call it instead of inlining a
   // duplicate of the check chain (see GenerateParserOptions.shapeValidatorSource).
-  const shapeValidator = generateShapeValidator(schema, typeName, true, typeSuffix, true, stripUnknown, reservedNames)
+  const unknownKeys = options?.unknownKeys ?? DEFAULT_UNKNOWN_KEYS
+  const shapeValidator = generateShapeValidator(
+    schema,
+    typeName,
+    true,
+    typeSuffix,
+    true,
+    stripUnknown,
+    reservedNames,
+    unknownKeys,
+  )
   const parserFunction = generateParserFunction(schema, typeName, {
     useRefImports: true,
     typeSuffix,
     reservedNames,
     shapeValidatorSource: shapeValidator,
+    unknownKeys,
     ...(options?.isRoot !== undefined ? { isRoot: options.isRoot } : {}),
     ...(rootSchema !== undefined ? { rootSchema } : {}),
     ...(options?.logWarnings !== undefined ? { logWarnings: options.logWarnings } : {}),

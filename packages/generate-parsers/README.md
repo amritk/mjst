@@ -95,6 +95,7 @@ Every option after the first two is **positional** — pass them in this order:
 | 12 | `importExt` | `'js' \| 'ts'` | `'js'` | Extension emitted on relative import specifiers. `'js'` is the NodeNext form for output you compile; `'ts'` emits the literal on-disk paths so the sources run unbuilt. |
 | 13 | `caseInsensitive` | `boolean` | `false` | Normalize a mis-cased string to the exact casing of an enum/const member it matches case-insensitively. Coerce mode only. |
 | 14 | `schemas` | `Record<string, unknown>` | — | Documents you have **already loaded**, keyed by the absolute URI a `$ref` names them by. See below. |
+| 15 | `unknownKeys` | `'count-keys' \| 'count-enumerable'` | `'count-keys'` | How a fast path proves a closed object (`additionalProperties: false`, or a `stripUnknown` build) has no undeclared key: a prototype-guarded `Object.keys(input).length` (fastest on Bun) or a `for…in` count (fastest on Node). See [Counting keys on the fast path](#counting-keys-on-the-fast-path). |
 
 Returns: `Promise<GeneratedFile[]>`.
 
@@ -183,6 +184,14 @@ nobody registered still stops the build, with a message naming the ref.
 </tr>
 <tr>
 <td colspan="3">Normalize a mis-cased string to the exact casing of a declared enum/const member it matches case-insensitively (e.g. hElLo → hello) instead of coercing to the default. Coerce mode only — strict parsers still reject a casing mismatch. Correctly-cased input keeps the exact-match fast path, so the hot path is unaffected.</td>
+</tr>
+<tr>
+<td>🔢 <code>unknownKeys</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"count-keys"</code></td>
+</tr>
+<tr>
+<td colspan="3">How a fast path proves a closed object (additionalProperties: false, or a stripUnknown build) carries no undeclared key. 'count-keys' is a prototype-guarded Object.keys(input).length comparison, the faster form on JavaScriptCore (Bun); 'count-enumerable' is a for…in count that allocates nothing, the faster form on V8 (Node). Pick by the runtime the generated code will run on; nothing detects it at runtime.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
 </tr>
 </tbody>
 </table>
@@ -340,6 +349,40 @@ and runtime — reproduce with:
 ```bash
 bun run bench
 ```
+
+### Counting keys on the fast path
+
+A closed object whose declared properties are all required proves "no undeclared
+key" by counting: the typed checks ahead of the count have already proven every
+declared key present, so exactly *n* keys means no extra. `unknownKeys` (the 15th
+positional argument, `--unknown-keys` on the CLI) picks how the count is spelled,
+because the two spellings trade places between the engines:
+
+- **`'count-keys'`** (default) — `Object.getPrototypeOf(input) === Object.prototype
+  && Object.keys(input).length === n`, one more term of the fast-path guard. The
+  prototype guard keeps an own-key count sound: a crafted prototype could satisfy
+  the typed checks through an inherited declared key while an own extra kept the
+  count at *n*, so a non-plain object takes the cold path instead, whose `for…in`
+  rejection sees the inherited key.
+- **`'count-enumerable'`** — `let c = 0; for (const k in input) c++`, as
+  statements behind the guard. It allocates nothing and needs no prototype guard
+  (the count sees inherited keys too), and on V8 it is answered from the enum
+  cache. On JavaScriptCore a `for…in` over a non-extensible object is the engine's
+  slow path, and the strict parse runs at half speed.
+
+A nested object's shape is proven on the parent's fast path by the same checks
+its own shape validator makes, spelled out over the cached local rather than
+called — `typeof _nested === "object" && … && Object.keys(_nested).length === n`
+— one level deep and within a size budget, because a call was the one thing
+left on the strict fast path that JavaScriptCore would not see through. Under
+the moltar harness (Bun 1.4.0 / Node 22.22, each case alone in its own process)
+`parseStrict` then reaches the harness floor on Bun (~200M+ ops/s, the call
+eliminated) with `count-keys` and ~13M with `count-enumerable`, and on Node
+measures ~14M with either. The default is what wins on Bun, where this repo benches;
+Node-only consumers should flip it. See
+[Choosing how keys are counted](../generate-validators#choosing-how-keys-are-counted)
+in the sister package for the validator numbers and the full trade-off. Whichever
+you pick, every verdict on a value that could have come from JSON is the same.
 
 ---
 

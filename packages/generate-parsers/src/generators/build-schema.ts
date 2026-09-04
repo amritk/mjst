@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { foldNullable } from '@amritk/helpers/fold-nullable'
 import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
+import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#helpers/apply-schema-extensions'
@@ -157,6 +158,11 @@ export type GeneratedFile = {
  *   is yours to do (or `@amritk/resolve-refs`'), and a `$ref` to a URI nobody registered still
  *   stops generation. Only the documents actually referenced get files, so registering more
  *   than the schema uses costs nothing in the output.
+ * @param unknownKeys - How the generated fast paths prove a closed object
+ *   (`additionalProperties: false`, or a `stripUnknown` build) carries no undeclared key:
+ *   `'count-keys'` (the default) compares `Object.keys(input).length` behind a plain-prototype
+ *   guard, `'count-enumerable'` counts with `for…in`. The first is the faster form on
+ *   JavaScriptCore (Bun), the second on V8 (Node) — see the README for the measurements.
  * @returns An array of generated TypeScript files
  *
  * @example
@@ -204,6 +210,7 @@ export const buildSchema = async (
   importExt: ImportExtension = 'js',
   caseInsensitive = false,
   schemas?: Readonly<Record<string, unknown>>,
+  unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
 ): Promise<GeneratedFile[]> => {
   assertRootTypeName(rootTypeName)
   const files: GeneratedFile[] = []
@@ -237,6 +244,7 @@ export const buildSchema = async (
       ...(strict !== undefined ? { strict } : {}),
       ...(stripUnknown ? { stripUnknown } : {}),
       ...(caseInsensitive ? { caseInsensitive } : {}),
+      unknownKeys,
     })
 
     files.push({ filename: `${node.filename}.ts`, content: result.content })

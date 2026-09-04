@@ -424,6 +424,15 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td colspan="4">Emit every property, array, and record in the generated type definitions as readonly, producing deeply immutable types. Affects type definitions only; the generated parsers still build and return plain objects.</td>
 </tr>
 <tr>
+<td>🔢 <code>unknownKeys</code></td>
+<td><code>--unknown-keys &lt;strategy&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"count-keys"</code></td>
+</tr>
+<tr>
+<td colspan="4">How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in, allocates nothing, and is the faster form on V8 (Node). Pick by the runtime the generated code will run on; the generated code never detects it.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
+</tr>
+<tr>
 <td>🧰 <code>helpers</code></td>
 <td><code>--helpers &lt;mode&gt;</code></td>
 <td><code>string</code></td>
@@ -511,7 +520,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"></td>
 </tr>
 <tr>
-<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts, allowedRoots) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, unknownKeys, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts, allowedRoots) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
 </tr>
 </tbody>
 </table>

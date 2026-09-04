@@ -31,6 +31,7 @@ import {
   isSchemaObject,
 } from '@amritk/helpers/schema-guards'
 import { maxLengthFailExpr, minLengthFailExpr } from '@amritk/helpers/string-length-check'
+import type { UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { generateDeepEqualCheck } from './generate-deep-equal-check'
@@ -66,6 +67,11 @@ export type StrictAssertionContext = {
   readonly suffix?: string
   readonly rootSchema?: Record<string, unknown>
   readonly stripUnknown?: boolean
+  /**
+   * The parser's `unknownKeys` option, carried so every object parser one of
+   * these contexts reaches counts keys on its fast path the same way.
+   */
+  readonly unknownKeys?: UnknownKeysStrategy
   /**
    * Whether the parser these assertions run inside also emits the private
    * sub-parsers for its inline object properties (and inline-object array

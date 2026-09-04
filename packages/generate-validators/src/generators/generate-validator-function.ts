@@ -44,6 +44,7 @@ import {
   minLengthPassExpr,
 } from '@amritk/helpers/string-length-check'
 import { unknownKeyCheck } from '@amritk/helpers/unknown-key-check'
+import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertGeneratableRefs } from './assert-generatable-refs'
@@ -1828,7 +1829,192 @@ const carriesUnevaluated = (schema: JSONSchema): boolean => {
   )
 }
 
-const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string): string[] | null => {
+/**
+ * One `additionalProperties: false` test a flat guard runs *after* its typed
+ * `&&` chain, as statements over the object held in `obj`: a key count, or a
+ * comparison of every key against the declared set.
+ *
+ * `count` is the declared-key count when every declared property is required.
+ * The typed chain ahead of the test has then proven all N declared keys present,
+ * so "exactly N keys" is "no undeclared key" — no comparison per key. How the
+ * keys are counted is the {@link UnknownKeysStrategy} the guard was built with:
+ * `Object.keys(obj).length` (own keys, the default) or a `for…in` count
+ * (enumerable keys, inherited included, allocating nothing). When a declared
+ * property is optional the chain proves nothing about presence, so `count` is
+ * `null` and every key `for…in` sees is compared against `known` instead.
+ *
+ * Which keys a test sees only matters for a value JSON cannot hold. The cold path
+ * (`validateXErrors`) sweeps undeclared keys with `for…in` and reads presence
+ * with `in`, so a `for…in` count agrees with it exactly: an enumerable key
+ * inherited from a crafted or polluted prototype is an extra on both paths, and
+ * a declared key the input inherits satisfies both. An own-key count rejects the
+ * first too and diverts the second to the cold path, which accepts it — so under
+ * either strategy the guard never accepts a value the cold path rejects, and on
+ * every value that could have come from JSON the two strategies agree with each
+ * other and with the interpreter (which counts own keys).
+ *
+ * `index` keeps the loop locals (`_k<index>`, `_c<index>`) distinct when one
+ * guard tests several objects.
+ */
+type KeySetCheck = {
+  readonly obj: string
+  readonly count: number | null
+  readonly known: readonly string[]
+  readonly index: number
+}
+
+/**
+ * A nested object the guard reads through a local of its own.
+ *
+ * The chain used to read every member of a nested object through a fresh cast —
+ * `typeof (obj.deeplyNested as Record<string, unknown>).foo === 'string'`, once
+ * per member — so a three-field nested object loaded `obj.deeplyNested` three
+ * times, and twice more for its key count. Loading it once into `_n<i>` costs
+ * nothing on V8, which had already commoned the loads, and is what lets
+ * JavaScriptCore optimise the guard at all: with the local, `isAssertStrict`
+ * under the moltar harness on Bun 1.4 went from ~45M ops/s to the harness floor
+ * (~300M on the measuring box, the call eliminated outright).
+ *
+ * The load only happens once the parent's chain has proven the parent an
+ * object, and the block's first condition is the `typeof … === 'object' && … !==
+ * null` shape check on the local, so no member is ever read off a `null`.
+ */
+type NestedGuard = {
+  /** The local the nested value is loaded into, `_n<i>`. */
+  readonly local: string
+  /** The member read that loads it, e.g. `obj.deeplyNested`. */
+  readonly read: string
+  /**
+   * An optional property's block runs only when its local is not `undefined`; a
+   * required one's runs unconditionally, since its shape check rejects `undefined`.
+   */
+  readonly optional: boolean
+  readonly block: GuardBlock
+}
+
+/**
+ * One level of a flat guard. `conditions` is the `&&` chain proving this object
+ * is an object and every scalar member well-typed; `nested` holds the objects it
+ * hoists into locals, each a level of its own; `keyChecks` are the no-extras
+ * tests over this level's object, run last — after the nested blocks, whose
+ * shape checks are what prove the nested keys present.
+ *
+ * {@link renderGuardBlock} turns it into statements: the chain as an early exit,
+ * then each nested local and its block, then the key checks.
+ */
+type GuardBlock = {
+  readonly conditions: string[]
+  readonly nested: NestedGuard[]
+  readonly keyChecks: KeySetCheck[]
+}
+
+/**
+ * What one guard shares across its levels: the counting strategy, and the
+ * counters that keep every hoisted local and every loop local unique within the
+ * function the guard becomes.
+ */
+type GuardContext = {
+  readonly unknownKeys: UnknownKeysStrategy
+  locals: number
+  loops: number
+}
+
+const createGuardContext = (unknownKeys: UnknownKeysStrategy): GuardContext => ({ unknownKeys, locals: 0, loops: 0 })
+
+const emptyGuardBlock = (): GuardBlock => ({ conditions: [], nested: [], keyChecks: [] })
+
+/** A block that is its chain alone renders as one expression; anything more needs statements. */
+const isFlatGuardBlock = (block: GuardBlock): boolean => block.nested.length === 0 && block.keyChecks.length === 0
+
+/**
+ * Renders a {@link KeySetCheck} as statements that `bail` on an undeclared key
+ * and fall through otherwise.
+ */
+const keySetCheckLines = (
+  check: KeySetCheck,
+  bail: string,
+  indent: string,
+  unknownKeys: UnknownKeysStrategy,
+): string[] => {
+  const key = `_k${check.index}`
+  if (check.count === null) {
+    // Inline comparisons at any width: a guard has nowhere to hoist a `Set`,
+    // and the `.every` chain this replaces inlined them too.
+    const unknown = unknownKeyCheck(check.known, '', Number.POSITIVE_INFINITY).isUnknown(key)
+    return [`${indent}for (const ${key} in ${check.obj}) if (${unknown}) ${bail}`]
+  }
+  if (unknownKeys === 'count-keys') {
+    return [`${indent}if (Object.keys(${check.obj}).length !== ${check.count}) ${bail}`]
+  }
+  const count = `_c${check.index}`
+  return [
+    `${indent}let ${count} = 0`,
+    `${indent}for (const ${key} in ${check.obj}) ${count}++`,
+    `${indent}if (${count} !== ${check.count}) ${bail}`,
+  ]
+}
+
+/** How a rendered block is laid out: a statement per line, or one line for an arrow body. */
+type GuardLayout = 'lines' | 'inline'
+
+/**
+ * The chain as an early exit — `if (!(a && b)) bail` — one condition per line so
+ * a wide object reads as a list, or on one line inside an item callback.
+ */
+const renderChainBail = (conditions: readonly string[], bail: string, indent: string, layout: GuardLayout): string[] =>
+  layout === 'inline'
+    ? [`if (!(${conditions.join(' && ')})) ${bail}`]
+    : [`${indent}if (!(`, conditions.map((condition) => `${indent}  ${condition}`).join(' &&\n'), `${indent})) ${bail}`]
+
+/**
+ * Renders a {@link GuardBlock} as the statements of a function body that `bail`s
+ * on the first failed test and falls through once every test has passed. The
+ * caller adds the `return true`.
+ */
+const renderGuardBlock = (
+  block: GuardBlock,
+  bail: string,
+  indent: string,
+  layout: GuardLayout,
+  unknownKeys: UnknownKeysStrategy,
+): string[] => {
+  const lines: string[] = []
+  if (block.conditions.length > 0) lines.push(...renderChainBail(block.conditions, bail, indent, layout))
+  for (const nested of block.nested) {
+    lines.push(`${indent}const ${nested.local} = ${nested.read} as Record<string, unknown>`)
+    if (nested.optional) {
+      lines.push(`${indent}if (${nested.local} !== undefined) {`)
+      lines.push(...renderGuardBlock(nested.block, bail, `${indent}  `, layout, unknownKeys))
+      lines.push(`${indent}}`)
+    } else {
+      lines.push(...renderGuardBlock(nested.block, bail, indent, layout, unknownKeys))
+    }
+  }
+  for (const check of block.keyChecks) lines.push(...keySetCheckLines(check, bail, indent, unknownKeys))
+  return lines
+}
+
+/**
+ * Joins rendered statements onto one line, for an arrow-function body inside an
+ * `&&` chain. A block opener or closer takes a space rather than a `; ` — the
+ * statement before a `}` needs no terminator.
+ */
+const joinInline = (lines: readonly string[]): string => {
+  const trimmed = lines.map((line) => line.trim())
+  return trimmed.reduce((text, line, i) => {
+    if (i === 0) return line
+    const previous = trimmed[i - 1] as string
+    return `${text}${previous.endsWith('{') || line === '}' ? ' ' : '; '}${line}`
+  }, '')
+}
+
+const guardPropConditions = (
+  key: string,
+  propSchema: JSONSchema,
+  objAcc: string,
+  block: GuardBlock,
+  ctx: GuardContext,
+): string[] | null => {
   if (!isSchemaObject(propSchema)) return null
 
   // Dotted access (`obj.number`) for identifier keys, bracket access otherwise.
@@ -1874,10 +2060,16 @@ const guardPropConditions = (key: string, propSchema: JSONSchema, objAcc: string
       return [`typeof ${raw} === 'boolean'`]
     case 'null':
       return [`${raw} === null`]
-    case 'object':
-      // Member access into the nested record is only reached after the shape
-      // check ahead of it in the `&&` chain, so the cast is always safe.
-      return guardObjectConditions(propSchema, raw, `(${raw} as Record<string, unknown>)`)
+    case 'object': {
+      // Hoisted into a local of its own (see {@link NestedGuard}); its block
+      // opens with the shape check that guards every member read, so this level
+      // contributes no condition of its own for it.
+      const local = `_n${ctx.locals++}`
+      const nested = guardObjectConditions(propSchema, local, local, ctx)
+      if (nested === null) return null
+      block.nested.push({ local, read: raw, optional: false, block: nested })
+      return []
+    }
     // Arrays need a per-item loop the guard can't express, and any other type
     // (null, multi-type, untyped) is left to the slow path.
     default:
@@ -1922,10 +2114,11 @@ const arrayRejectedByRequiredProp = (
 }
 
 /**
- * Builds the allocation-free boolean guard for an object schema as a list of
- * `&&` conditions, or `null` when the schema can't be proven valid by a cheap
- * expression. The conditions are ordered so every member access is guarded by
- * the object-shape check that precedes it in the `&&` chain.
+ * Builds the allocation-free boolean guard for an object schema as a
+ * {@link GuardBlock}, or `null` when the schema can't be proven valid by a cheap
+ * test. The chain is ordered so every member access is guarded by the
+ * object-shape check that precedes it, and every nested object is read through
+ * a hoisted local whose block opens with its own shape check.
  *
  * The guard only handles the happy path: every declared property must be
  * required and a bare-typed scalar or a likewise-guardable nested object. Any
@@ -1934,7 +2127,12 @@ const arrayRejectedByRequiredProp = (
  * `additionalProperties` *schema*), or unguardable property makes it bail, and
  * the validator falls back to its full error-collecting body.
  */
-const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string): string[] | null => {
+const guardObjectConditions = (
+  schema: JSONSchema,
+  raw: string,
+  objAcc: string,
+  ctx: GuardContext,
+): GuardBlock | null => {
   if (!isObjectSchema(schema)) return null
   if (hasDependentRequired(schema) || hasPropertyNames(schema) || declaresKey(schema, 'dependentSchemas')) return null
   if (hasMinProperties(schema) || hasMaxProperties(schema) || declaresKey(schema, 'dependencies')) return null
@@ -1966,26 +2164,28 @@ const guardObjectConditions = (schema: JSONSchema, raw: string, objAcc: string):
   // The object shape-check only needs `!Array.isArray` when no required field
   // check would already reject an array (see `arrayRejectedByRequiredProp`).
   const arrayCheck = arrayRejectedByRequiredProp(keys, required, properties) ? '' : ` && !Array.isArray(${raw})`
-  const conditions: string[] = [`typeof ${raw} === 'object' && ${raw} !== null${arrayCheck}`]
+  const block = emptyGuardBlock()
+  block.conditions.push(`typeof ${raw} === 'object' && ${raw} !== null${arrayCheck}`)
 
   for (const key of keys) {
     // An optional property would need an `=== undefined ||` branch and breaks
     // the key-count trick, so the guard only covers all-required objects.
     if (!required.has(key)) return null
-    const propConditions = guardPropConditions(key, properties[key] as JSONSchema, objAcc)
+    const propConditions = guardPropConditions(key, properties[key] as JSONSchema, objAcc, block, ctx)
     if (propConditions === null) return null
-    conditions.push(...propConditions)
+    block.conditions.push(...propConditions)
   }
 
   if (strict) {
     // `additionalProperties: false` with every declared property required: once
     // the typeof checks confirm each key is present, an exact key count proves
-    // there are no extras — TypeBox's trick, with no loop and no Set.
+    // there are no extras — TypeBox's trick, with no comparison per key. It runs
+    // as statements after the chain and the nested blocks (see {@link KeySetCheck}).
     if (!keys.every((key) => required.has(key))) return null
-    conditions.push(`Object.keys(${objAcc}).length === ${keys.length}`)
+    block.keyChecks.push({ obj: objAcc, count: keys.length, known: keys, index: ctx.loops++ })
   }
 
-  return conditions
+  return block
 }
 
 /**
@@ -1997,6 +2197,7 @@ const generateObjectValidator = (
   typeName: string,
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
+  unknownKeys: UnknownKeysStrategy,
 ): string => {
   const vName = validatorName(typeName)
   const required = new Set(hasRequired(schema) ? schema.required : [])
@@ -2076,7 +2277,7 @@ const generateObjectValidator = (
   // through to the error-collecting path, which produces the same verdict and
   // full JSON-Pointer errors. Schemas with constraints the guard can't express
   // produce no guard at all (`null`), leaving behaviour unchanged.
-  const guard = guardObjectConditions(schema, 'input', 'obj')
+  const guard = guardObjectConditions(schema, 'input', 'obj', createGuardContext(unknownKeys))
 
   // The cold, error-collecting body. When there's a guard this is a separate
   // (unexported) function reached only on failure; the hot path never enters it
@@ -2119,21 +2320,32 @@ const generateObjectValidator = (
   // property to check (`{ "type": "object", "properties": {} }`, which the OpenAPI
   // corpus really does carry) guards on the shape alone, and then the binding is
   // an unused local in the *exported* function.
-  const guardText = guard.join('\n')
+  // A guard that is one chain stays the `if (…) { return true }` it always was.
+  // One that hoists a nested object or tests a key set is a sequence of early
+  // exits instead (see {@link GuardBlock}): each level's chain, each nested
+  // local, each no-extras test bails to the cold path on its own, and `return
+  // true` is what is left once every one has passed. The cold call appears once
+  // per exit, which is a few bytes of bytecode and nothing on the hot path.
   const collectName = `${vName}Errors`
+  const bail = `return ${collectName}(input, _path)`
+  const guardLines = isFlatGuardBlock(guard)
+    ? [
+        `  if (`,
+        guard.conditions.map((condition) => `    ${condition}`).join(' &&\n'),
+        `  ) {`,
+        `    return true`,
+        `  }`,
+        `  ${bail}`,
+      ]
+    : [...renderGuardBlock(guard, bail, '  ', 'lines', unknownKeys), `  return true`]
   return withHoisted(
     ctx.hoisted,
     [
       collectBody(collectName, false),
       ``,
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      ...(readsObjBinding(guardText) ? [`  const obj = input as Record<string, unknown>`] : []),
-      `  if (`,
-      guard.map((condition) => `    ${condition}`).join(' &&\n'),
-      `  ) {`,
-      `    return true`,
-      `  }`,
-      `  return ${collectName}(input, _path)`,
+      ...(readsObjBinding(guardLines.join('\n')) ? [`  const obj = input as Record<string, unknown>`] : []),
+      ...guardLines,
       `}`,
     ].join('\n'),
   )
@@ -2181,47 +2393,43 @@ const valueCanHaveType = (value: unknown, type: string): boolean => {
  * validator. Used for a property value or an array item; `acc` is the expression
  * yielding the value.
  */
-const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): string | null => {
+/**
+ * The keywords whose verdict the flat form can't mirror exactly. A leaf carrying
+ * one defers to the validator: the caller turns a single `null` into a full
+ * fallback guard.
+ */
+const flatLeafBails = (schema: Exclude<JSONSchema, boolean>): boolean =>
+  hasRef(schema) ||
+  hasConst(schema) ||
+  hasOneOf(schema) ||
+  declaresKey(schema, 'anyOf') ||
+  declaresKey(schema, 'allOf') ||
+  declaresKey(schema, 'not') ||
+  declaresKey(schema, 'if') ||
+  declaresKey(schema, 'contains') ||
+  declaresKey(schema, 'prefixItems') ||
+  // A draft-07 tuple: the fixed positions live in an *array* `items` and the
+  // tail in `additionalItems`. Neither is expressible flat, and reading past
+  // them let the guard accept tuples `validateX` rejects.
+  Array.isArray(readKey(schema as Record<string, unknown>, 'items')) ||
+  declaresKey(schema, 'additionalItems') ||
+  carriesUnevaluated(schema) ||
+  getMjstInstanceOf(schema) !== undefined ||
+  getMjstPrimitive(schema) !== undefined
+
+/**
+ * True for a leaf {@link booleanLeafExpr} would route to the object case — a
+ * `type: "object"` node the flat form does not refuse outright. Every caller
+ * that can hold a statement hoists such a leaf into a local of its own instead
+ * (see {@link NestedGuard}), so the expression form never has to read a nested
+ * member through a cast.
+ */
+const isNestedObjectLeaf = (schema: JSONSchema): schema is Exclude<JSONSchema, boolean> =>
+  isSchemaObject(schema) && !flatLeafBails(schema) && hasType(schema) && schema.type === 'object'
+
+const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): string | null => {
   if (!isSchemaObject(schema)) return null
-
-  /**
-   * `acc`, spelled so a constrained check compiles.
-   *
-   * The guard is one `&&` chain and TypeScript narrows it by the `typeof` test in
-   * front, but narrowing needs a stable *reference*. A nested member reads
-   * through a cast — `(obj.a as Record<string, unknown>).b` — and TypeScript will
-   * not carry a narrowing across two spellings of the same cast expression, so
-   * `…b.length >= 2` came out as `Object is of type 'unknown'` and the generated
-   * file did not compile for a schema as ordinary as a nested object with a
-   * `minLength`. Where the reference cannot be narrowed the check says the type
-   * itself, which is sound: the `typeof` that proves it is already ahead of it in
-   * the same chain.
-   */
-  const typed = (type: string): string => (narrowable ? acc : `(${acc} as ${type})`)
-
-  // Anything whose verdict the flat form can't mirror exactly: defer to the
-  // validator (the caller turns a single `null` into a full fallback guard).
-  if (
-    hasRef(schema) ||
-    hasConst(schema) ||
-    hasOneOf(schema) ||
-    declaresKey(schema, 'anyOf') ||
-    declaresKey(schema, 'allOf') ||
-    declaresKey(schema, 'not') ||
-    declaresKey(schema, 'if') ||
-    declaresKey(schema, 'contains') ||
-    declaresKey(schema, 'prefixItems') ||
-    // A draft-07 tuple: the fixed positions live in an *array* `items` and the
-    // tail in `additionalItems`. Neither is expressible flat, and reading past
-    // them let the guard accept tuples `validateX` rejects.
-    Array.isArray(readKey(schema as Record<string, unknown>, 'items')) ||
-    declaresKey(schema, 'additionalItems') ||
-    carriesUnevaluated(schema) ||
-    getMjstInstanceOf(schema) !== undefined ||
-    getMjstPrimitive(schema) !== undefined
-  ) {
-    return null
-  }
+  if (flatLeafBails(schema)) return null
 
   // enum — the same membership test the validator uses, ANDed with whatever else
   // the node says rather than standing in for it. Returning it alone was unsound
@@ -2261,42 +2469,45 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
     // written as the pass condition (`x >= min`) because the validator's error
     // condition is its negation; the length checks come from the same
     // `string-length-check` emitter the validator uses, for the same reason.
+    // A constrained check reads `acc` again after the `typeof`, and TypeScript
+    // narrows it there because every `acc` is a *reference* — `obj.a`, `_n0.b`,
+    // `_it` — never a cast expression: nested members read through a hoisted
+    // local (see {@link NestedGuard}), and a narrowing does not survive two
+    // spellings of `(obj.a as Record<string, unknown>).b`.
     case 'string': {
-      const str = typed('string')
       const parts = [`typeof ${acc} === 'string'`]
-      if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${str})`)
+      if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
       // The exact negations of the validator's length conditions, from the same
       // `string-length-check` emitter, so the guard counts code points too.
-      if (hasMinLength(schema)) parts.push(minLengthPassExpr(str, schema.minLength))
-      if (hasMaxLength(schema)) parts.push(maxLengthPassExpr(str, schema.maxLength))
+      if (hasMinLength(schema)) parts.push(minLengthPassExpr(acc, schema.minLength))
+      if (hasMaxLength(schema)) parts.push(maxLengthPassExpr(acc, schema.maxLength))
       return withMembership(parts.join(' && '))
     }
     case 'number':
     case 'integer': {
-      const num = typed('number')
       const parts = [`typeof ${acc} === 'number'`]
       if (t === 'integer') parts.push(`Number.isInteger(${acc})`)
       if (hasMinimum(schema))
-        parts.push(boundPassExpr(num, 'minimum', schema.minimum, hasStrictExclusiveMinimum(schema)))
+        parts.push(boundPassExpr(acc, 'minimum', schema.minimum, hasStrictExclusiveMinimum(schema)))
       if (hasMaximum(schema))
-        parts.push(boundPassExpr(num, 'maximum', schema.maximum, hasStrictExclusiveMaximum(schema)))
-      if (hasExclusiveMinimum(schema)) parts.push(boundPassExpr(num, 'minimum', schema.exclusiveMinimum, true))
-      if (hasExclusiveMaximum(schema)) parts.push(boundPassExpr(num, 'maximum', schema.exclusiveMaximum, true))
-      if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(num, schema.multipleOf))
+        parts.push(boundPassExpr(acc, 'maximum', schema.maximum, hasStrictExclusiveMaximum(schema)))
+      if (hasExclusiveMinimum(schema)) parts.push(boundPassExpr(acc, 'minimum', schema.exclusiveMinimum, true))
+      if (hasExclusiveMaximum(schema)) parts.push(boundPassExpr(acc, 'maximum', schema.exclusiveMaximum, true))
+      if (hasMultipleOf(schema)) parts.push(multipleOfPassExpr(acc, schema.multipleOf))
       return withMembership(parts.join(' && '))
     }
     case 'boolean':
       return withMembership(`typeof ${acc} === 'boolean'`)
     case 'null':
       return withMembership(`${acc} === null`)
-    case 'object': {
-      // Members below this point read through the cast, so nothing under it can
-      // be narrowed by the chain.
-      const parts = booleanObjectParts(schema, acc, `(${acc} as Record<string, unknown>)`, false)
-      return parts === null ? null : withMembership(parts.join(' && '))
-    }
+    case 'object':
+      // Never reached for a leaf {@link isNestedObjectLeaf} admits: every caller
+      // hoists such a leaf into a local and builds its block directly, because
+      // the block is statements and this is an expression. What arrives here is
+      // an object node with something the block form refuses too.
+      return null
     case 'array':
-      return withMembership(booleanArrayExpr(schema, acc, narrowable))
+      return withMembership(booleanArrayExpr(schema, acc, ctx))
     default:
       return null
   }
@@ -2316,22 +2527,21 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, narrowable = true): st
  * what the slow path would reject — without the array copy that materialising
  * with `Array.from` used to cost every guard call.
  */
-const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): string | null => {
-  // `Array.isArray` narrows a reference but not a cast expression — see the note
-  // on `typed` in {@link booleanLeafExpr}.
-  const arr = narrowable ? acc : `(${acc} as unknown[])`
+const booleanArrayExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): string | null => {
+  // `acc` is always a reference (see the note above the leaf cases), so
+  // `Array.isArray` narrows it and the length reads below type-check as written.
   const parts = [`Array.isArray(${acc})`]
   // Length / uniqueness, mirroring the validator's checks exactly so the guard's
   // verdict matches the slow path's.
-  if (hasMinItems(schema)) parts.push(`${arr}.length >= ${schema.minItems}`)
-  if (hasMaxItems(schema)) parts.push(`${arr}.length <= ${schema.maxItems}`)
+  if (hasMinItems(schema)) parts.push(`${acc}.length >= ${schema.minItems}`)
+  if (hasMaxItems(schema)) parts.push(`${acc}.length <= ${schema.maxItems}`)
   if (hasUniqueItems(schema) && schema.uniqueItems === true) {
     // Same scalar-vs-structural split as the validator, so the guard's verdict
     // matches the slow path's — for object items in a reordered key order, and
     // for the `NaN`/`null` pair a `JSON.stringify` projection used to conflate.
     parts.push(
       arrayItemsAreScalarOnly(schema as Record<string, unknown>)
-        ? `new Set(${acc} as unknown[]).size === ${arr}.length`
+        ? `new Set(${acc} as unknown[]).size === ${acc}.length`
         : `allUnique(${acc} as unknown[])`,
     )
   }
@@ -2344,28 +2554,44 @@ const booleanArrayExpr = (schema: JSONSchema, acc: string, narrowable = true): s
   // `{ "type": "array", "items": false }` while `validateX` rejected it. (A tuple
   // never reaches here — `prefixItems` and an array `items` both bail in
   // {@link booleanLeafExpr}.)
-  if (readKey(schema as Record<string, unknown>, 'items') === false) return `${base} && ${arr}.length === 0`
+  if (readKey(schema as Record<string, unknown>, 'items') === false) return `${base} && ${acc}.length === 0`
   // `items: true`, and an absent `items`, constrain nothing.
   if (!hasItems(schema)) return base
   const items = schema.items
   if (!isSchemaObject(items)) return base
   if (hasRef(items)) return null
   // Validate each item in full, mirroring the validator's per-item checks so the
-  // guard reaches the identical verdict. `booleanLeafExpr` returns `null` for item
-  // schemas it can't express flat — bail so the validator decides, keeping the
-  // guard from ever accepting what the slow path would reject.
-  const itemExpr = booleanLeafExpr(items, '_it')
+  // guard reaches the identical verdict. A `null` from either builder means the
+  // item schema can't be expressed flat — bail so the validator decides, keeping
+  // the guard from ever accepting what the slow path would reject.
+  if (isNestedObjectLeaf(items)) {
+    // An object item is hoisted like a nested member (see {@link NestedGuard}):
+    // the callback loads it into a local, runs the local's block with `return
+    // false` as the bail, and answers `true` once every test has passed — all on
+    // the one line the surrounding `&&` chain is laid out in.
+    const local = `_n${ctx.locals++}`
+    const block = booleanObjectParts(items, local, local, ctx)
+    if (block === null) return null
+    const body = joinInline([
+      `const ${local} = _it as Record<string, unknown>`,
+      ...renderGuardBlock(block, 'return false', '', 'inline', ctx.unknownKeys),
+      `return true`,
+    ])
+    return `${base} && everyItem(${acc} as unknown[], (_it) => { ${body} })`
+  }
+  const itemExpr = booleanLeafExpr(items, '_it', ctx)
   if (itemExpr === null) return null
   return `${base} && everyItem(${acc} as unknown[], (_it) => (${itemExpr}))`
 }
 
 /**
- * Builds the `&&` conditions proving an object value is valid (same verdict as
- * the error-collecting validator), or `null` when any property or object-level
- * keyword can't be mirrored flat. `raw` yields the value (for the shape check);
- * `objAcc` is the same value narrowed to a record (for member access).
+ * Builds the {@link GuardBlock} proving an object value is valid (same verdict
+ * as the error-collecting validator), or `null` when any property or
+ * object-level keyword can't be mirrored flat. `raw` yields the value (for the
+ * shape check); `objAcc` is the same value narrowed to a record (for member
+ * access) — the two differ only at the root, where `input` is narrowed as `obj`.
  */
-const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, narrowable = true): string[] | null => {
+const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, ctx: GuardContext): GuardBlock | null => {
   if (!isObjectSchema(schema)) return null
   // A `type: "object"` node can still carry a `$ref`, a `const`/`enum`, or an
   // `x-mjst` hint alongside its object keywords. None of them is in the parts
@@ -2399,7 +2625,8 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, nar
   // `typeof` accepts) — the same sound optimisation the validator's hot guard
   // uses. Kept when no such property exists.
   const arrayCheck = arrayRejectedByRequiredProp(keys, required, properties) ? '' : ` && !Array.isArray(${raw})`
-  const parts: string[] = [`typeof ${raw} === 'object' && ${raw} !== null${arrayCheck}`]
+  const block = emptyGuardBlock()
+  block.conditions.push(`typeof ${raw} === 'object' && ${raw} !== null${arrayCheck}`)
 
   for (const key of keys) {
     const propSchema = properties[key]
@@ -2411,9 +2638,19 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, nar
     // pathological anyway, so losing the flat guard for it costs nothing real.
     if (PROTOTYPE_MEMBERS.has(key)) return null
     const member = safeAccessor(objAcc, key)
-    const expr = booleanLeafExpr(propSchema, member, narrowable)
+    if (isNestedObjectLeaf(propSchema)) {
+      // Hoisted into a local of its own (see {@link NestedGuard}). An optional
+      // nested object's block runs only when the local is not `undefined` —
+      // the `=== undefined ||` branch of the expression form, as statements.
+      const local = `_n${ctx.locals++}`
+      const nested = booleanObjectParts(propSchema, local, local, ctx)
+      if (nested === null) return null
+      block.nested.push({ local, read: member, optional: !required.has(key), block: nested })
+      continue
+    }
+    const expr = booleanLeafExpr(propSchema, member, ctx)
     if (expr === null) return null
-    parts.push(required.has(key) ? expr : `(${member} === undefined || (${expr}))`)
+    block.conditions.push(required.has(key) ? expr : `(${member} === undefined || (${expr}))`)
   }
 
   // A `required` key with no `properties` entry has no type check to piggyback
@@ -2425,24 +2662,20 @@ const booleanObjectParts = (schema: JSONSchema, raw: string, objAcc: string, nar
   // prototype-member names included, so the two cannot drift.
   for (const key of required) {
     if (Object.hasOwn(properties, key)) continue
-    parts.push(hasOwnCheck(objAcc, key))
+    block.conditions.push(hasOwnCheck(objAcc, key))
   }
 
   if (strict) {
-    // `additionalProperties: false`: with every property required, an exact key
-    // count proves no extras (the typeof checks above already proved presence);
-    // otherwise sweep the keys against the declared set.
-    if (keys.length === 0) {
-      parts.push(`Object.keys(${objAcc}).length === 0`)
-    } else if (keys.every((key) => required.has(key))) {
-      parts.push(`Object.keys(${objAcc}).length === ${keys.length}`)
-    } else {
-      const known = keys.map((key) => `_k === ${JSON.stringify(key)}`).join(' || ')
-      parts.push(`Object.keys(${objAcc}).every((_k) => ${known})`)
-    }
+    // `additionalProperties: false` joins as a test after the chain and the
+    // nested blocks (see {@link KeySetCheck}): a bare count when every property
+    // is required (vacuously so for an object declaring none), since the typed
+    // checks have by then proved presence; a comparison of every key against the
+    // declared set otherwise.
+    const allRequired = keys.every((key) => required.has(key))
+    block.keyChecks.push({ obj: objAcc, count: allRequired ? keys.length : null, known: keys, index: ctx.loops++ })
   }
 
-  return parts
+  return block
 }
 
 /**
@@ -2507,8 +2740,16 @@ const typeDescribesEveryAcceptedValue = (schema: JSONSchema): boolean => {
  *
  * The signature is `input is TypeName` whenever that narrowing is sound, and a
  * plain `boolean` when it is not — see {@link typeDescribesEveryAcceptedValue}.
+ *
+ * `unknownKeys` picks how a closed object's no-extras test counts keys — see
+ * {@link UnknownKeysStrategy}.
  */
-export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suffix = ''): string => {
+export const generateBooleanGuard = (
+  schema: JSONSchema,
+  typeName: string,
+  _suffix = '',
+  unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+): string => {
   const name = guardName(typeName)
   const returns = typeDescribesEveryAcceptedValue(rewriteNullable(schema) as JSONSchema)
     ? `input is ${typeName}`
@@ -2526,23 +2767,32 @@ export const generateBooleanGuard = (schema: JSONSchema, typeName: string, _suff
   // which the object parts do not model. Both would make the guard disagree with
   // the validator, and a guard that disagrees is worse than no guard, so those
   // fall back to calling `validateX`.
-  if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
-    const parts = booleanObjectParts(rewritten, 'input', 'obj')
-    if (parts === null) return fallback
+  const ctx = createGuardContext(unknownKeys)
+  if (declaresObjectType(rewritten)) {
+    // A `$ref`, a `const`/`enum` or an `x-mjst` hint beside the object keywords
+    // is something the block form refuses too, so the answer is the fallback
+    // either way — say so here rather than fall through to a leaf that would.
+    if (!objectRootIsSelfContained(rewritten)) return fallback
+    const block = booleanObjectParts(rewritten, 'input', 'obj', ctx)
+    if (block === null) return fallback
+    // A guard that is one chain is the chain itself. One that hoists a nested
+    // object or tests a key set is a sequence of early exits (see
+    // {@link GuardBlock}), with `return true` once every test has passed.
+    const body = isFlatGuardBlock(block)
+      ? [`  return (`, block.conditions.map((part) => `    ${part}`).join(' &&\n'), `  )`]
+      : [...renderGuardBlock(block, 'return false', '  ', 'lines', unknownKeys), `  return true`]
     return [
       `export const ${name} = (input: unknown): ${returns} => {`,
       // Same unused-local as the validator's hot guard: a node with no property
       // to read guards on the shape alone and never touches the narrowing.
-      ...(readsObjBinding(parts.join('\n')) ? [`  const obj = input as Record<string, unknown>`] : []),
-      `  return (`,
-      parts.map((part) => `    ${part}`).join(' &&\n'),
-      `  )`,
+      ...(readsObjBinding(body.join('\n')) ? [`  const obj = input as Record<string, unknown>`] : []),
+      ...body,
       `}`,
     ].join('\n')
   }
 
   // Non-object roots (scalar, enum, array) can often be expressed inline too.
-  const expr = booleanLeafExpr(rewritten, 'input')
+  const expr = booleanLeafExpr(rewritten, 'input', ctx)
   if (expr === null) return fallback
   return `export const ${name} = (input: unknown): ${returns} => ${expr}`
 }
@@ -3007,6 +3257,7 @@ export const generateValidatorFunction = (
   typeName: string,
   suffix = '',
   rootSchema?: Record<string, unknown>,
+  unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
 ): string => {
   assertGeneratableRefs(schema, typeName)
 
@@ -3030,7 +3281,7 @@ export const generateValidatorFunction = (
   // {@link declaresKeywordOutside} routes it on to the general emitter and every
   // keyword composes.
   if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
-    return generateObjectValidator(rewritten, typeName, suffix, document)
+    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys)
   }
 
   return generateScalarValidator(rewritten, typeName, suffix, document)
