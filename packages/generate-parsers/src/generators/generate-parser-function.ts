@@ -2407,7 +2407,15 @@ const generateObjectParser = (
   if (canSplit) {
     preamble.push(emitAssertObjectFunction())
     preamble.push(emitAssertFunction())
-    lines.push(`  ${assertObjectName}(input);`)
+    // Behind the object test, not unconditional: a call the fast path always
+    // makes to a function that can throw is a call JavaScriptCore keeps, and
+    // with it the whole parser — under the moltar harness on Bun 1.4 the strict
+    // and the strip parse both sat at ~50M ops/s where ~220M is the floor. On
+    // the never-taken branch the call is dead to the optimiser and the throw
+    // stays out of the fast-path function, which is all the split needs.
+    // TypeScript narrows `input` the same either way: the guard on one side,
+    // the assertion on the other.
+    lines.push(`  if (!isObject(input)) ${assertObjectName}(input);`)
     if (!varsAfterGuard) lines.push(...varDeclLines)
     if (shallowGuard) {
       // A statement, not a `return` — see the split's note above: making the

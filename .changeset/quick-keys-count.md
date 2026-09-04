@@ -34,6 +34,13 @@ harness floor, and Node gains the saved call (~10%). The call stays where the
 predicate is not one expression: a per-key walk, a `for…in` count under
 `count-enumerable`, or a nested object past the budget.
 
+The cold-path split's object check is called behind the object test —
+`if (!isObject(input)) _assertDocObject(input)` — rather than unconditionally. A
+call the fast path always makes to a function that can throw is a call
+JavaScriptCore keeps, and with it the whole parser: under the moltar harness on
+Bun 1.4 the strict and the strip parse both measured ~50M ops/s with the
+unconditional call and ~220M, the harness floor, behind the test.
+
 **`unknownKeys: 'count-keys' | 'count-enumerable'`** — on `buildSchema` (15th
 positional), `buildValidatorSchema` (5th), and the CLI (`--unknown-keys`, or
 `unknownKeys` in the config file). `'count-keys'` is `Object.keys(obj).length
