@@ -133,15 +133,16 @@ const isTree = validateGuard({
 
 Pick the right tool for the shape of your workload. There are two regimes, and they have opposite winners.
 
-**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Representative numbers from `bun run bench` (Bun 1.3.11, Linux x64 — your hardware will differ, run it yourself; the other tables in this repo are on Bun 1.4, so compare within a table rather than across):
+**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Representative numbers from `bun run bench` (Bun 1.4.0, Linux x64, the same machine and runtime as every other table in this repo — your hardware will differ, run it yourself):
 
 | schema | `validate` (cold) | Ajv (compile + run) | speedup |
 |:---|---:|---:|---:|
-| small | ~0.015 ms | ~8.5 ms | **~570×** |
-| wide (40 props) | ~0.09 ms | ~12 ms | **~140×** |
-| deep (`$ref`) | ~0.17 ms | ~11 ms | **~66×** |
+| small | ~0.022 ms | ~16 ms | **~715×** |
+| wide (40 props) | ~0.10 ms | ~21 ms | **~210×** |
+| deep (`$ref` + arrays) | ~0.20 ms | ~18 ms | **~90×** |
+| assert (7 scalars + nested) | ~0.015 ms | ~14 ms | **~900×** |
 
-**Steady state — one schema, many values.** Here Ajv still wins: once compiled, its JIT'd function outruns this one by roughly **3–6×** per call (`validate`; the guard path is closer). If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — nothing that stops short of emitting a function will match generated straight-line code, and this package does not pretend otherwise.
+**Steady state — one schema, many values.** Here Ajv still wins: once compiled, its JIT'd function outruns this one by roughly **3.5–8×** per call (`validate`; the guard path is closer, at **2.5–7×**). If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — nothing that stops short of emitting a function will match generated straight-line code, and this package does not pretend otherwise.
 
 So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → generate ahead of time**.
 
