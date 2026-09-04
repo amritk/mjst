@@ -27,7 +27,7 @@ export const toKebabCase = (value: string): string =>
  * ESM import specifier (`#` opens a URL fragment, so `'./#named.ts'` is
  * unloadable), and a shell-friendly file the user can actually open.
  */
-const UNSAFE_FILENAME_CHARS = /[^\p{ID_Continue}.\-]+/gu
+const UNSAFE_FILENAME_CHARS = /[^\p{ID_Continue}.-]+/gu
 
 /**
  * A short, stable suffix for a ref whose name normalizes away to nothing
@@ -54,8 +54,8 @@ const normalizeFilename = (raw: string, ref: string): string => {
   const cleaned = raw
     .replace(UNSAFE_FILENAME_CHARS, '-')
     .replace(/-{2,}/g, '-')
-    .replace(/^[.\-]+/, '')
-    .replace(/[.\-]+$/, '')
+    .replace(/^[.-]+/, '')
+    .replace(/[.-]+$/, '')
   return cleaned === '' ? `ref-${stableSuffix(ref)}` : cleaned
 }
 

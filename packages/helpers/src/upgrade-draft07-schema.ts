@@ -183,9 +183,29 @@ export const upgradeDraft07Schema = (schema: Record<string, unknown>): Record<st
   // resolve $ref". Only refs written *inside* `definitions` were being rewritten,
   // which is the same document and the same rename, so the split was an
   // oversight rather than a decision.
+  const rewrittenRest = rewriteDefinitionsRefs(rest) as Record<string, unknown>
+
+  // A schema may carry *both* blocks — draft-07 tools accept unknown keywords,
+  // so an authored `$defs` beside `definitions` is legal and its refs already
+  // point at `#/$defs/...`. The trailing spread used to replace that block
+  // wholesale, silently deleting every authored entry and leaving its refs
+  // dangling. Merge instead; on the (inherently ambiguous) name collision the
+  // renamed `definitions` entry wins, since the rename is what this function
+  // exists to perform.
+  const authoredDefs = readKey(rewrittenRest, '$defs')
+  const mergedDefs: Record<string, unknown> = {}
+  if (typeof authoredDefs === 'object' && authoredDefs !== null && !Array.isArray(authoredDefs)) {
+    for (const [key, value] of Object.entries(authoredDefs as Record<string, unknown>)) {
+      assignKey(mergedDefs, key, value)
+    }
+  }
+  for (const [key, value] of Object.entries(hoistedDefs)) {
+    assignKey(mergedDefs, key, value)
+  }
+
   return {
-    ...(rewriteDefinitionsRefs(rest) as Record<string, unknown>),
-    $defs: hoistedDefs,
+    ...rewrittenRest,
+    $defs: mergedDefs,
   }
 }
 

@@ -68,6 +68,13 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/asyncapi": {
+      "name": "@amritk/asyncapi",
+      "version": "0.1.0",
+      "dependencies": {
+        "@amritk/helpers": "workspace:*",
+      },
+    },
     "packages/cli": {
       "name": "@amritk/mjst",
       "version": "0.14.9",
@@ -77,6 +84,7 @@
       "dependencies": {
         "@amritk/adapters": "workspace:*",
         "@amritk/api": "workspace:*",
+        "@amritk/asyncapi": "workspace:*",
         "@amritk/generate-examples": "workspace:*",
         "@amritk/generate-parsers": "workspace:*",
         "@amritk/generate-validators": "workspace:*",
@@ -211,6 +219,8 @@
     "@amritk/adapters": ["@amritk/adapters@workspace:packages/adapters"],
 
     "@amritk/api": ["@amritk/api@workspace:packages/api"],
+
+    "@amritk/asyncapi": ["@amritk/asyncapi@workspace:packages/asyncapi"],
 
     "@amritk/generate-examples": ["@amritk/generate-examples@workspace:packages/generate-examples"],
 

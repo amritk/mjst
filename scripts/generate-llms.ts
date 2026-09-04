@@ -30,6 +30,7 @@ const ORDER = [
   'generate-markdown',
   'runtime-validators',
   'adapters',
+  'asyncapi',
   'resolve-refs',
   'yaml',
   'helpers',

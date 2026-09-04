@@ -26,7 +26,7 @@ type ConfigKeySpec = {
 export const CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   schema: { type: 'string' },
   schemaDir: { type: 'string' },
-  input: { type: 'string', enum: ['json', 'typebox', 'zod', 'valibot', 'effect', 'avro'] },
+  input: { type: 'string', enum: ['json', 'typebox', 'zod', 'valibot', 'effect', 'avro', 'asyncapi'] },
   export: { type: 'string' },
   outDir: { type: 'string' },
   outFile: { type: 'string' },
