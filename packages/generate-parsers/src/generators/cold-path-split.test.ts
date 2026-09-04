@@ -7,16 +7,22 @@ import { generateParserFunction } from './generate-parser-function'
 /**
  * A generated parser is fast because the engine can inline it into its caller
  * and then delete the object it builds. Both of those stop the moment the
- * function gets big — and the cold half is what makes it big: a
+ * function gets big — and the diagnostics are what make it big: a
  * `throw new Error(...)` per field, each carrying a template literal and an
  * `"x" in input` probe, none of which a valid document ever executes.
  *
- * So the emitter splits: the exported parser holds the loads, one boolean chain
- * and the literal built from those loads, and everything else lives in a
- * `_parse…Slow` function it hands off to. These tests pin that split by its
- * observable signature — no `throw` and no template literal anywhere in a
- * fast-path function — because it is invisible to every behavioural test in the
- * suite and would be undone by an innocent-looking edit.
+ * So the emitter moves them out: the parser holds the loads, one boolean chain
+ * and the literal built from those loads, and calls `_assert…` as a *statement*
+ * when the chain fails. These tests pin two things that are invisible to every
+ * behavioural test in the suite and would be undone by an innocent-looking edit:
+ *
+ *  - no `throw` and no template literal anywhere in a fast-path function, which
+ *    is what keeps it inside the inlining budget; and
+ *  - **one** `return` on the strip-build fast path. An earlier version moved the
+ *    build out too and handed off with `return _parse…Slow(input)`; that makes
+ *    the returned value a phi of the local literal and an opaque call result,
+ *    JavaScriptCore stops scalar-replacing the literal, and every flat parser
+ *    under ~24 properties ran ~3x slower on Bun.
  */
 describe('cold-path-split', () => {
   /** The moltar `assert` benchmark shape: seven scalars plus one nested object. */
@@ -58,13 +64,15 @@ describe('cold-path-split', () => {
   const functions = (source: string): Map<string, string> => {
     const found = new Map<string, string>()
     for (const block of source.split('\n\n')) {
-      const name = /^(?:export )?const ([A-Za-z0-9_$]+) = /.exec(block)?.[1]
+      // The object-check helper carries an explicit `asserts` annotation, which
+      // TypeScript requires for an assertion function held in a `const`.
+      const name = /^(?:export )?const ([A-Za-z0-9_$]+)\b/.exec(block)?.[1]
       if (name !== undefined) found.set(name, block)
     }
     return found
   }
 
-  /** The parsers on the hot path: every emitted `parse…`, minus the `_parse…Slow` halves. */
+  /** The parsers on the hot path: every emitted `parse…`, minus the `_assert…` helpers. */
   const fastPathFunctions = (source: string): [string, string][] =>
     [...functions(source)].filter(([name]) => name.startsWith('parse'))
 
@@ -90,12 +98,12 @@ describe('cold-path-split', () => {
 
   it('puts the diagnostics in the cold function, in the order they were emitted before', () => {
     const source = generateParserFunction(assertSchema(false), 'Assert', { strict: true, stripUnknown: true })
-    const cold = functions(source).get('_parseAssertSlow')
+    const cold = functions(source).get('_assertAssert')
     expect(cold).toBeDefined()
 
     const messages = [...(cold as string).matchAll(/\[Assert\] ([^"`$]+)/g)].map((match) => match[1])
+    expect(functions(source).get('_assertAssertObject')).toContain('[Assert] expected object, got ')
     expect(messages).toEqual([
-      'expected object, got ',
       "missing required property 'number'",
       "field 'number' expected number, got ",
       "missing required property 'negNumber'",
@@ -193,7 +201,7 @@ describe('cold-path-split', () => {
       'Named',
       { strict: true },
     )
-    expect(source).not.toContain('_parseNamedSlow')
+    expect(source).not.toContain('_assertNamed(')
     expect(source).toContain('throw new Error')
   })
 

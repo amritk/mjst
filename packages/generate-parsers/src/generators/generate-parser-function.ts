@@ -2219,64 +2219,72 @@ const generateObjectParser = (
   // the vars in its own guard, so it always keeps them first.
   const varsAfterGuard = deepGuardCallsShape && shallowGuard === null
 
-  // A parser that has a fast path is emitted as *two* functions. What made the
-  // single-function form slow was never the checks: it was that the whole cold
-  // half — a `throw new Error(...)` per field, each with its own template
-  // literal and `"x" in input` probe — sat in the same body, and a body that
+  // A parser with a fast path is emitted with its diagnostics in a separate
+  // function. What made the single-function form slow was never the checks: it
+  // was that a `throw new Error(...)` per field, each with its own template
+  // literal and `"x" in input` probe, sat in the same body, and a body that
   // large blows V8's inlining budget. The caller then pays a real call and a
   // real allocation for a parse the engine could otherwise have inlined and
-  // escape-analysed away. Split out, the hot function is loads, one boolean
-  // chain and a literal built from those loads, and it inlines.
+  // escape-analysed away.
   //
-  // The split needs a fast path to protect, so a parser without one is emitted
-  // whole. `--log-warnings` also opts out: its `console.warn` loop has to run
-  // for *every* input, fast path included, so there is no cold half to move.
-  const canSplit = !logWarnings && (deepGuard !== null || shallowGuard !== null)
-  // Underscore-prefixed so the name can never collide with a parser: those are
+  // What moves out is *only* the assertions. The build stays, so the fast path
+  // keeps the same `return` it always had. That distinction is the whole design:
+  // an earlier version moved the build out too and handed off with
+  // `return _parse…Slow(input)`, which makes the returned value a phi of the
+  // local literal and an opaque call result. JavaScriptCore then cannot
+  // scalar-replace the literal, and every flat parser under ~24 properties ran
+  // ~3x slower on Bun with a caller that reads the parsed fields. Calling a
+  // `void` assertion helper as a *statement* keeps the single return, and
+  // measured level with the unsplit form on Bun while keeping the inlining win
+  // on V8.
+  //
+  // The split needs a fast path to protect and diagnostics to move, so a parser
+  // without either is emitted whole. Coerce parsers have no diagnostics at all —
+  // their cold half *is* the returned value — so they keep the single-function
+  // form. `--log-warnings` opts out too: its `console.warn` loop has to run for
+  // every input, fast path included.
+  const assertBodyLines = [...assertionLines.slice(1), ...(shallowGuard === null ? unknownKeyThrowLines() : [])]
+  const canSplit =
+    !logWarnings && strict === true && (deepGuard !== null || shallowGuard !== null) && assertBodyLines.length > 0
+  // Underscore-prefixed so the names can never collide with a parser: those are
   // all `parse${TypeName}`, and no type name starts with one.
-  const slowName = `_${functionName}Slow`
+  const assertName = `_assert${typeName}`
+  const assertObjectName = `_assert${typeName}Object`
 
   /**
-   * Everything the fast path does not answer for, in the order the
-   * single-function form ran it: the object check, the cached reads, the
-   * per-property assertions, the undeclared-key rejection, and the general
-   * build. Reached only after the fast path has declined the input, so nothing
-   * here is on the hot path — but it still *returns* rather than only throwing,
-   * because a value the guard cannot prove is not necessarily invalid: a
-   * null-prototype object fails the own-key count, and a coerce parser repairs
-   * what a strict one would reject.
+   * The object check, as a TypeScript assertion function. Spelling it this way
+   * rather than leaving `if (!isObject(input)) throw …` inline is what keeps the
+   * fast path free of both a throw and a template literal while still narrowing
+   * `input` for the reads that follow — a `never`-returning helper would have to
+   * be called in `return` position, which reintroduces the phi the split exists
+   * to avoid. The message is `generateObjectStrictAssertion`'s own first line,
+   * so it is unchanged.
    */
-  const emitSlowFunction = (): string => {
-    const slow: string[] = [`const ${slowName} = (input: unknown): ${typeName} => {`]
-    // Spelled out rather than taken from `assertionLines[0]`: the two produce
-    // the same message, and this is the form the single-function parser has
-    // always emitted.
-    slow.push(
-      strict
-        ? `  if (!isObject(input)) throw new Error(\`[${typeName}] expected object, got \${input === null ? "null" : typeof input}\`);`
-        : `  if (!isObject(input)) return ${fallbackObject};`,
-    )
-    slow.push(...varDeclLines)
-    if (strict) {
-      for (const assertionLine of assertionLines.slice(1)) slow.push(assertionLine)
-      // The shallow-guard form never emitted this loop (its strict assertions
-      // carry the rejection); keeping that split exact keeps its messages exact.
-      if (shallowGuard === null) slow.push(...unknownKeyThrowLines())
-    }
-    emitReturn(slow, buildObjectLines(strict === true))
-    slow.push(`}`)
-    return slow.join('\n')
-  }
+  const emitAssertObjectFunction = (): string =>
+    `const ${assertObjectName}: (input: unknown) => asserts input is Record<string, unknown> = (input) => {\n` +
+    `${assertionLines[0] as string}\n};`
+
+  /**
+   * The per-property diagnostics, in the order the single-function form ran
+   * them, plus the undeclared-key rejection where that form emitted one. Returns
+   * nothing: it either throws or leaves the caller to build, exactly as the
+   * inline assertion block did.
+   */
+  const emitAssertFunction = (): string =>
+    `const ${assertName} = (input: Record<string, unknown>): void => {\n${assertBodyLines.join('\n')}\n};`
 
   const lines: string[] = []
   lines.push(`${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {`)
 
   if (canSplit) {
-    preamble.push(emitSlowFunction())
-    lines.push(`  if (!isObject(input)) return ${slowName}(input);`)
+    preamble.push(emitAssertObjectFunction())
+    preamble.push(emitAssertFunction())
+    lines.push(`  ${assertObjectName}(input);`)
     if (!varsAfterGuard) lines.push(...varDeclLines)
     if (shallowGuard) {
-      lines.push(`  if (!(${shallowGuard})) return ${slowName}(input);`)
+      // A statement, not a `return` — see the split's note above: making the
+      // returned value a phi with a call result is what costs JSC the literal.
+      lines.push(`  if (!(${shallowGuard})) ${assertName}(input);`)
       // A private sub-parser hands input that is already exactly the declared
       // shape (no extras at any level) back by reference, so a clean array
       // element or nested object costs no allocation. The deep guard is
@@ -2311,8 +2319,13 @@ const generateObjectParser = (
       lines.push(...hoisted)
       emitReturn(lines, objectLines)
     } else {
+      // The deep-guard form already had two returns before the split (the guard
+      // literal and the general build), so extracting the assertions costs it no
+      // scalar replacement it still had.
       emitDeepGuardReturn(lines)
-      lines.push(`  return ${slowName}(input);`)
+      if (varsAfterGuard) lines.push(...varDeclLines)
+      lines.push(`  ${assertName}(input);`)
+      emitReturn(lines, buildObjectLines(true))
     }
   } else if (strict) {
     // Guard first: a non-object throws straight away; a clean, well-typed input
