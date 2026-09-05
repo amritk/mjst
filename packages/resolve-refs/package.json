@@ -1,7 +1,7 @@
 {
   "name": "@amritk/resolve-refs",
   "version": "0.7.1",
-  "description": "Resolve and inline JSON Schema / OpenAPI $refs \u2014 internal, cross-file, and remote \u2014 with session caching and a default-deny SSRF guard.",
+  "description": "Resolve and inline JSON Schema / OpenAPI $refs — internal, cross-file, and remote — with session caching and a default-deny SSRF guard.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
