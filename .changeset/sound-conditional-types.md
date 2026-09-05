@@ -1,5 +1,6 @@
 ---
 '@amritk/helpers': minor
+'@amritk/generate-parsers': patch
 '@amritk/mjst': patch
 ---
 
@@ -32,8 +33,20 @@ were already right; only the declared type was wrong.
   conditional is **dropped** from the type, which is what 0.7.1 did for the
   `allOf`-wrapped form. Lossy but sound: nothing the schema accepts is refused.
   A `$defs` entry that is nothing but an `if`/`then` (OpenAPI's `type-http`)
-  therefore emits `{}`, where it used to emit an intersection that rejected
-  every other security-scheme type.
+  therefore emits `{}` in its own file, where it used to emit an intersection
+  that rejected every other security-scheme type.
+- An `allOf` member that is a local `$ref` to such a definition is read
+  through when the generator has the root document (every generator passes
+  it): the composing type keeps the ref's name *and* gains the definition's
+  conditional lowered against its own property block, so OpenAPI's
+  `security-scheme` narrows on `type` the way the schema does — `TypeHttp &
+  ({ type: "http"; scheme: string } | { type?: "apiKey" | … })`.
 
 An `allOf` member that is only its conditional renders as that union rather than
 as `{} & (…)`, and `if: true` / `if: false` take their decided branch.
+
+The coerce parser's non-object fallback is asserted to the type when the schema
+composes a conditional through `allOf` (inline or by `$ref`), as it already was
+for a schema carrying its own `if`: a literal built from the schema's own
+required keys lands in no branch of the lowered union, and the emitted file did
+not compile — nor did it before, when the same intersection was `never`.

@@ -896,6 +896,52 @@ describe('generateTypeDefinition', () => {
     )
   })
 
+  // OpenAPI's security scheme: the per-type rules are `$ref`s to conditional
+  // definitions, each testing the `type` the composing schema enumerates. The
+  // definition's own file cannot see that enumeration and drops its
+  // conditional; here the reference is read through, so the composed type
+  // narrows on `type` the way the schema does.
+  it('lowers an allOf $ref to a conditional against the composing property block', () => {
+    const rootSchema = {
+      $defs: {
+        'type-http': {
+          if: { properties: { type: { const: 'http' } }, required: ['type'] },
+          then: { properties: { scheme: { type: 'string' } }, required: ['scheme'] },
+        },
+        'type-apikey': {
+          if: { properties: { type: { const: 'apiKey' } }, required: ['type'] },
+          then: { properties: { name: { type: 'string' } }, required: ['name'] },
+        },
+      },
+    }
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { type: { enum: ['apiKey', 'http', 'mutualTLS'] }, description: { type: 'string' } },
+      required: ['type'],
+      allOf: [{ $ref: '#/$defs/type-http' }, { $ref: '#/$defs/type-apikey' }],
+    }
+
+    expect(generateTypeDefinition(schema, 'SecurityScheme', { rootSchema })).toBe(
+      'export type SecurityScheme = {\n  type: "apiKey" | "http" | "mutualTLS";\n  description?: string;\n} & ' +
+        'TypeHttp & ({ type: "http"; scheme: string } | { type?: "apiKey" | "mutualTLS" }) & ' +
+        'TypeApikey & ({ type: "apiKey"; name: string } | { type?: "http" | "mutualTLS" });',
+    )
+  })
+
+  // Without the root document the reference cannot be read, and the member is
+  // the type name alone — what every `$ref` member has always been.
+  it('leaves an allOf $ref alone without a root schema to resolve it in', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { type: { enum: ['apiKey', 'http'] } },
+      allOf: [{ $ref: '#/$defs/type-http' }],
+    }
+
+    expect(generateTypeDefinition(schema, 'SecurityScheme')).toBe(
+      'export type SecurityScheme = {\n  type?: "apiKey" | "http";\n} & TypeHttp;',
+    )
+  })
+
   it('intersects a then $ref onto the matched branch only', () => {
     const schema: JSONSchema = {
       type: 'object',

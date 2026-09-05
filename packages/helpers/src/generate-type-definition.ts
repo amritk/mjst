@@ -167,11 +167,11 @@ const literalDomain = (schema: JSONSchema | undefined): readonly unknown[] | und
 const sameLiteral = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
 
 /**
- * The type of an instance that *fails* an `if` test, or undefined when TypeScript
- * cannot spell it.
+ * The ways an instance can *fail* an `if` test, each as a type, or undefined
+ * when TypeScript cannot spell them. An empty list is a test nothing can fail.
  *
  * A plain test fails when some tested property holds a value the test rejects,
- * or some property the test requires is absent — one union member per way of
+ * or some property the test requires is absent — one member per way of
  * failing. A rejected value can only be named against the finite `domain` of
  * values the enclosing schema lets the property hold: with `a: { type: 'boolean'
  * }` declared, failing `a: { const: true }` is `{ a?: false }` (absent, or
@@ -183,7 +183,7 @@ const negateCondition = (
   condition: SchemaNode,
   domain: Record<string, JSONSchema> | undefined,
   options: TypeOptions,
-): string | undefined => {
+): readonly string[] | undefined => {
   if (!isPlainFragment(condition)) return undefined
   const tested = keywordMap(condition, 'properties') ?? {}
   const required = new Set(requiredOf(condition))
@@ -215,8 +215,7 @@ const negateCondition = (
   for (const key of required) {
     if (!Object.hasOwn(tested, key)) failures.push(absent(key))
   }
-  // Nothing can fail a test that tests nothing: the conditional is its `then`.
-  return failures.length === 0 ? 'never' : unionOf(failures)
+  return failures
 }
 
 /**
@@ -297,9 +296,20 @@ const conditionalMember = (
   if (!isSchemaObject(condition)) return undefined
 
   const matched = branchOf(thenSchema === undefined ? [condition] : [condition, thenSchema], options, depth)
-  const negation = negateCondition(condition, domain, options)
-  if (negation === 'never') return matched === 'unknown' ? undefined : matched
-  const unmatched = wrapIntersection(intersectionOf([wrapUnion(negation ?? 'unknown'), branch(elseSchema)]))
+  const failures = negateCondition(condition, domain, options)
+  // Nothing can fail a test that tests nothing: the conditional is its `then`.
+  if (failures !== undefined && failures.length === 0) return matched === 'unknown' ? undefined : matched
+  const elseType = branch(elseSchema)
+  // Bracketed by how many ways there are to fail, not by the text: a single
+  // failure can carry a union of its own (`{ a?: false | null }`) and needs none.
+  const negated = failures === undefined ? undefined : unionOf(failures)
+  const bracketed = failures !== undefined && failures.length > 1 ? `(${negated})` : negated
+  const unmatched =
+    elseType === 'unknown'
+      ? (negated ?? 'unknown')
+      : bracketed === undefined
+        ? elseType
+        : `(${bracketed} & ${elseType})`
   if (unmatched === 'unknown' || matched === 'unknown') return undefined
   return unionOf([matched, unmatched])
 }
@@ -315,13 +325,32 @@ const withoutConditional = (schema: SchemaNode): SchemaNode => {
 }
 
 /**
+ * The conditional definition an `allOf` member's local `$ref` points at, when
+ * it points at one. OpenAPI's security scheme composes its per-type rules as
+ * `allOf: [{ $ref: '#/$defs/type-http' }, …]`, each definition an `if`/`then`
+ * on the `type` the composing schema enumerates; the definition's own file
+ * cannot see that enumeration, so its conditional drops there and the ref would
+ * name a type that says nothing. Reading the definition here is what lets the
+ * composing type narrow on `type` the way the schema does.
+ */
+const referencedConditional = (entry: SchemaNode, options: TypeOptions): SchemaNode | undefined => {
+  const ref = keywordOf(entry, '$ref')
+  if (typeof ref !== 'string' || !ref.startsWith('#') || options.rootSchema === undefined) return undefined
+  const resolved = resolveRef(ref, options.rootSchema) as JSONSchema | undefined
+  return resolved !== undefined && isSchemaObject(resolved) && declares(resolved, 'if') ? resolved : undefined
+}
+
+/**
  * Renders one `allOf` member against the schema composing it.
  *
- * A member that is itself a conditional tests the composing schema's
- * properties — `allOf: [{ if: { a: true }, then: { b: true } }]` next to
- * `properties: { a, b }` is the usual way "`b` requires `a`" is written — so its
- * negation is spelled against that schema's property block, where the value
- * sets live. Rendered on its own it would see no domain at all and drop.
+ * A member that is itself a conditional — inline, or a `$ref` to one — tests
+ * the composing schema's properties: `allOf: [{ if: { a: true }, then: { b:
+ * true } }]` next to `properties: { a, b }` is the usual way "`b` requires `a`"
+ * is written. So its negation is spelled against that schema's property block,
+ * where the value sets live; rendered on its own it would see no domain at all
+ * and drop. A referenced conditional keeps its type name in the intersection
+ * too, so the emitted import stays used and whatever else the definition
+ * declares still applies.
  */
 const allOfMember = (
   entry: JSONSchema,
@@ -329,15 +358,21 @@ const allOfMember = (
   options: TypeOptions,
   depth: number,
 ): string => {
-  if (!isSchemaObject(entry) || !declares(entry, 'if')) return wrapUnion(getTypeScriptType(entry, options, depth + 1))
-  const own = keywordMap(entry, 'properties')
+  const source = isSchemaObject(entry)
+    ? declares(entry, 'if')
+      ? entry
+      : referencedConditional(entry, options)
+    : undefined
+  if (source === undefined) return wrapUnion(getTypeScriptType(entry, options, depth + 1))
+  const own = keywordMap(source, 'properties')
   const merged: Record<string, JSONSchema> = {}
   for (const block of [domain, own]) {
     if (block === undefined) continue
     for (const key of Object.keys(block)) assignKey(merged, key, readKey(block, key))
   }
-  const conditional = conditionalMember(entry, merged, options, depth + 1)
-  const remainder = wrapUnion(getTypeScriptType(withoutConditional(entry), options, depth + 1))
+  const conditional = conditionalMember(source, merged, options, depth + 1)
+  const rest = source === entry ? withoutConditional(entry) : entry
+  const remainder = wrapUnion(getTypeScriptType(rest, options, depth + 1))
   // Each member is already parenthesized where it is a union, so the result is
   // safe as one factor of the composing intersection as it stands.
   return intersectionOf([remainder, ...(conditional === undefined ? [] : [wrapUnion(conditional)])])

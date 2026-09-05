@@ -17,9 +17,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
  *
  * This suite holds the three to one verdict per sample. Everything the
  * validator accepts must be assignable to the generated type, must come back
- * unchanged from the strict parser, and must come back unchanged and still
- * valid from the coercing one; everything it rejects the strict parser must
- * throw on. Where the type can narrow as far as the schema does (a boolean or
+ * unchanged from the strict parser, and must come back from the coercing one
+ * with its own keys intact and still valid (a coercing parser may add what a
+ * composed definition defaults, so it is not held to identity); everything it
+ * rejects the strict parser must throw on. Where the type can narrow as far as the schema does (a boolean or
  * enum discriminant), the sample the validator rejects must fail to compile
  * too; where the type is deliberately lossy, the sample compiles and the case
  * says so.
@@ -106,6 +107,35 @@ const CASES: readonly Case[] = [
       { value: { kind: 'a', x: '1' }, valid: true },
       { value: { kind: 'a' }, valid: false },
       { value: { kind: 'a', x: 1 }, valid: false },
+    ],
+  },
+  // OpenAPI's security-scheme shape: the rules are `$ref`s to conditional
+  // definitions, read through against the `type` enumerated here.
+  {
+    name: 'allof-ref-conditionals',
+    schema: {
+      type: 'object',
+      properties: { type: { enum: ['apiKey', 'http'] }, description: { type: 'string' } },
+      required: ['type'],
+      allOf: [{ $ref: '#/$defs/typeHttp' }, { $ref: '#/$defs/typeApiKey' }],
+      $defs: {
+        typeHttp: {
+          if: { properties: { type: { const: 'http' } }, required: ['type'] },
+          then: { properties: { scheme: { type: 'string' } }, required: ['scheme'] },
+        },
+        typeApiKey: {
+          if: { properties: { type: { const: 'apiKey' } }, required: ['type'] },
+          then: { properties: { name: { type: 'string' } }, required: ['name'] },
+        },
+      },
+    },
+    samples: [
+      { value: { type: 'http', scheme: 'basic' }, valid: true },
+      { value: { type: 'apiKey', name: 'X-Key', description: 'header' }, valid: true },
+      { value: { type: 'http' }, valid: false },
+      { value: { type: 'apiKey' }, valid: false },
+      { value: { type: 'apiKey', scheme: 'basic' }, valid: false },
+      { value: {}, valid: false },
     ],
   },
   // A string discriminant has no finite domain to negate against, so the type
@@ -317,7 +347,7 @@ describe('conditional-agreement', () => {
         }
         expect(runtime?.parseStrict(sample.value), label).toEqual(sample.value)
         const coerced = runtime?.parseCoerce(sample.value)
-        expect(coerced, label).toEqual(sample.value)
+        expect(coerced, label).toMatchObject(sample.value)
         expect(runtime?.validate(coerced), label).toBe(true)
       }
     })
