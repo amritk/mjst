@@ -56,7 +56,7 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 |:---|:---|:---|
 | `remote` | `true` | Whether http(s) refs may be fetched at all. |
 | `localRefs` | `true` | Whether `$ref`s to other files on disk may be read. `false` still reads the root document you named — it refuses everything a ref reaches out to. |
-| `allowedRoots` | `[dirname(root)]` | Directories a local `$ref` must resolve inside. The default confines a ref to the folder holding the root document. |
+| `allowedRoots` | `[dirname(root)]` | Directories a local `$ref` must resolve inside. The default confines a ref to the folder holding the root document; for a root loaded from a URL the default is `[]`, so no local file is read at all. |
 | `allowedHosts` | `[]` | If non-empty, only these hosts may be fetched. Matched case-insensitively; an entry without a port matches any port, one with a port must match it (a URL that omits the port counts as its protocol default). An explicit entry bypasses the private-host and DNS guards. |
 | `allowPrivateHosts` | `false` | Allow loopback/private/link-local targets. Left off, these are refused as an SSRF guard. |
 | `verifyDns` | `true` | Resolve each remote host and refuse it when any address it resolves to is non-public. Pass `false` where names resolve at an egress proxy rather than locally. |
@@ -74,7 +74,8 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 
 Errors (a missing file, a refused host, a refused path, a bad URL, a document too
 deeply nested) are collected on `result.errors` rather than thrown; the
-corresponding ref resolves to `{}` so the rest of the document still resolves.
+referencing node is left in place as its `$ref` (nothing is inlined) so the rest
+of the document still resolves.
 Each error carries the `path` to the reference that caused it — a path in the
 document you named, ending in the keyword (`['properties', 'pet', '$ref']`) — so
 a caller can anchor a diagnostic on the `$ref` a reader has to fix. It is empty
@@ -190,15 +191,20 @@ recursive cycles intact, and records a diagnostic for every external ref. The
 registry, no scoping, no diagnostics — and re-resolves each ref on every
 encounter, so the gap is the production resolver's *total* per-call cost against
 the cheapest thing that produces the same inlined shape. Both are asserted to
-produce byte-identical output before either is timed. Representative numbers
-(Bun 1.4, Linux x64 — your hardware will differ, run `bun run bench` yourself):
+produce byte-identical output before either is timed. Medians of three runs on each runtime, one machine (Linux x64, a 4-vCPU cloud
+box, Bun 1.4.0 and Node 26.8.1 — your hardware will differ, run `bun run bench`
+or `bun run bench:node` yourself):
 
-| schema | cached | naive | speedup |
-|:---|---:|---:|---:|
-| chain (40 `$ref` → `$ref` links) | ~5.4k ops/s | ~1.2k ops/s | **~4.5×** |
-| reuse-heavy (50 refs → 1 def) | ~8.2k ops/s | ~12.6k ops/s | ~0.65× |
-| cyclic tree | ~47k ops/s | ~210k ops/s | ~0.22× |
-| wide-distinct (60 defs, each used once) | ~3.4k ops/s | ~10.2k ops/s | ~0.34× |
+| schema | Bun: cached | Bun: naive | Bun speedup | Node: cached | Node: naive | Node speedup |
+|:---|---:|---:|---:|---:|---:|---:|
+| chain (40 `$ref` → `$ref` links) | ~4.6k ops/s | ~1.1k ops/s | **~4.1×** | ~4.7k ops/s | ~1.1k ops/s | **~4.1×** |
+| reuse-heavy (50 refs → 1 def) | ~6.9k ops/s | ~11k ops/s | ~0.62× | ~6.6k ops/s | ~10k ops/s | ~0.66× |
+| cyclic tree | ~50k ops/s | ~183k ops/s | ~0.27× | ~58k ops/s | ~184k ops/s | ~0.31× |
+| wide-distinct (60 defs, each used once) | ~3.7k ops/s | ~9.5k ops/s | ~0.39× | ~3.4k ops/s | ~9.0k ops/s | ~0.38× |
+
+The two engines agree on every row to within a few percent, which is what you
+would expect from a resolver whose cost is one document walk rather than a hot
+inner loop.
 
 Memoization overtakes the naive walk only on the **chain** shape, where a long
 indirection path is expensive to re-resolve and the cache collapses it to one
@@ -212,5 +218,6 @@ rows are kept in the table precisely to show that trade honestly rather than
 cherry-picking the one shape the cache wins.
 
 Opting into `trackOrigins` (which records where each inlined value came from)
-costs nothing measurable on these small schemas: the four rows land between −24%
-and +16%, straddling zero, which is run-to-run noise rather than a price.
+costs nothing measurable on these small schemas, on either runtime: the four
+rows land between −9% and +7% on Bun and between −3% and +1% on Node, straddling
+zero in both cases, which is run-to-run noise rather than a price.

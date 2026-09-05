@@ -8,8 +8,8 @@ on. Four packages in this monorepo consume schemas, and all four are held to it
 | Package | What is measured | Rate |
 | --- | --- | --- |
 | `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | **1281 / 1281 (100%)** |
-| `@amritk/generate-validators` | generated predicate validators | 1268 / 1281 (99.0%) |
-| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1237 / 1281 (96.6%) |
+| `@amritk/generate-validators` | generated predicate validators | 1274 / 1281 (99.5%) |
+| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1240 / 1281 (96.8%) |
 | `@amritk/resolve-refs` | verdict preserved after inlining (`$ref` corpus) | **170 / 170 (100%)** |
 
 All four are run with the `remotes/` documents below supplied through whatever
@@ -51,8 +51,10 @@ Deliberately not vendored:
 - **`optional/`** — the suite's own name for behavior an implementation may
   decline: `format` assertion, arbitrary-precision numbers, ECMAScript regex
   corner cases. The required set is the bar implementations report against.
-- **Other drafts** — the packages target 2020-12; draft-07 input is upgraded to
-  it before anything sees it.
+- **Other drafts** — the packages target 2020-12. The generators upgrade
+  draft-07 input to it before anything sees it (`upgradeDraft07Schema`, via the
+  shared ref-graph walk); the runtime interpreter reads the draft-07 spellings
+  of `items`/`additionalItems` and `dependencies` in place.
 
 | Path | Source | License |
 | --- | --- | --- |
@@ -60,8 +62,8 @@ Deliberately not vendored:
 | `remotes/draft2020-12/**` | same repository — `remotes/draft2020-12/**` | MIT (© 2012 Julian Berman) |
 
 To refresh, re-fetch the same files from upstream and commit the result. A case
-whose `description` changed upstream surfaces as an unknown expected-failure key,
-which is the intended way to notice.
+whose `description` changed upstream surfaces as a stale expected-failure entry
+(one that no longer matches any failing case), which is the intended way to notice.
 
 ## Using it from a test
 

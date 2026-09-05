@@ -168,28 +168,35 @@ apply your own rule.
 
 ## Performance
 
-Run it yourself with `bun run bench`. Numbers below are a median of three runs
-on one Linux x64 machine under Bun 1.4 — treat the ratios as the durable part
-and the absolute throughput as a property of that box.
+Run it yourself with `bun run bench` (Bun) or `bun run bench:node` (Node, against
+the built package). Numbers below are a median of three runs of each on one
+Linux x64 machine (a 4-vCPU cloud box, the same one every table in this repo
+comes from), Bun 1.4.0 and Node 26.8.1 — treat the ratios as the durable part
+and the absolute throughput as a property of that box, which drifts between
+sittings.
 
 **Parse to a source-mapped tree** — the job this package exists for. `js-yaml` cannot produce positions, so it is not a candidate here.
 
-| fixture | @amritk/yaml | yaml (eemeli) | speedup |
-| --- | --- | --- | --- |
-| small (155 B) | 455k ops/s | 15.4k ops/s | **29.9×** |
-| medium (2 KB) | 37.0k ops/s | 1.0k ops/s | **35.6×** |
-| large (100 KB) | 628 ops/s | 19.4 ops/s | **32.3×** |
+| fixture | Bun: @amritk/yaml | Bun: yaml (eemeli) | Bun speedup | Node: @amritk/yaml | Node: yaml | Node speedup |
+| --- | --- | --- | --- | --- | --- | --- |
+| small (155 B) | 386k ops/s | 13.4k ops/s | **28.8×** | 418k ops/s | 12.1k ops/s | **34.6×** |
+| medium (2 KB) | 40.0k ops/s | 1.10k ops/s | **36.4×** | 35.9k ops/s | 1.10k ops/s | **32.6×** |
+| large (100 KB) | 759 ops/s | 23.0 ops/s | **33.0×** | 667 ops/s | 21.3 ops/s | **31.3×** |
 
 **Parse to plain data** — all three can do this.
 
-| fixture | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
-| --- | --- | --- | --- | --- | --- |
-| small | 258k | 14.6k | 124k | 17.1× | 2.01× |
-| medium | 21.9k | 1.2k | 10.7k | 18.7× | 2.10× |
-| large | 403 | 23.3 | 227 | 17.0× | 1.70× |
+| fixture | runtime | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
+| --- | --- | --- | --- | --- | --- | --- |
+| small | Bun | 265k | 15.0k | 151k | 17.7× | 1.75× |
+| small | Node | 303k | 11.1k | 136k | 27.3× | 2.23× |
+| medium | Bun | 25.4k | 1.20k | 12.3k | 21.2× | 2.07× |
+| medium | Node | 26.5k | 1.00k | 11.5k | 26.5× | 2.30× |
+| large | Bun | 447 | 23.4 | 251 | 19.1× | 1.78× |
+| large | Node | 456 | 20.3 | 255 | 22.5× | 1.79× |
 
 **Bundle size** (minified + gzipped) — what each parser adds to an application
-that imports it. The bench bundles a small consumer of each library rather than
+that imports it. This one table has no runtime split: it measures what the
+bundler emits, which is the same bytes whoever runs them. The bench bundles a small consumer of each library rather than
 the library's own entry point, so the numbers reflect code that is actually
 reachable. Ours covers the full surface (`parse`, `parseDocument`, `nodeAtPath`,
 `lineCounter`); `js-yaml` gets only `load`, because it has no positioned-tree
@@ -278,11 +285,11 @@ The one thing that *does* throw is the guard against a document built to exhaust
 | `BAD_TAG` | a verbatim tag missing its closing `>`, or a tag holding a flow indicator |
 | `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
 | `BAD_DIRECTIVE` | a malformed `%YAML` version, or content after it |
-| `DUPLICATE_DIRECTIVE` | a second `%YAML` directive on one document |
+| `DUPLICATE_DIRECTIVE` | a second `%YAML` directive on one document (a `%TAG` handle declared twice reuses the code as a warning) |
 | `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it |
 | `DEPTH_LIMIT` | nesting past the parser's depth cap |
 
-Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), a `%TAG` handle declared twice (`DUPLICATE_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
 
 ### Not supported
 
@@ -347,7 +354,9 @@ Which five, and why each is the answer it is:
 The suite settles conformance; it does not settle the handful of documents where
 the three parsers simply answer differently. These are the ones that exist, found
 by fuzzing all three against each other over ~90k generated documents plus the
-full suite corpus. Everything not listed here agrees.
+full suite corpus — a one-off run rather than a check in the test suite; what CI
+pins is the agreement with `yaml` in `src/differential.test.ts`. Everything not
+listed here agreed at the time of that run.
 
 | document | @amritk/yaml | `yaml` | `js-yaml` |
 | --- | --- | --- | --- |

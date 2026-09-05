@@ -1,6 +1,6 @@
-import { getByPointer } from '../src/get-by-pointer'
-import { resolveRefs } from '../src/resolve-refs'
-import { REF_BENCH_CASES } from './schemas'
+import { resolveRefs } from '@amritk/resolve-refs'
+
+import { REF_BENCH_CASES } from './schemas.ts'
 
 /**
  * Benchmarks the internal `$ref` resolution *strategy*.
@@ -15,6 +15,35 @@ import { REF_BENCH_CASES } from './schemas'
  *
  *   bun run bench
  */
+
+/**
+ * Walks a JSON Pointer (RFC 6901) to the value it addresses. The naive baseline
+ * deliberately carries its own copy rather than importing the resolver's
+ * internal `getByPointer`: the point of the comparison is a from-scratch
+ * inliner, and the package exports only its public entry, so borrowing an
+ * internal would also pin the bench to one module layout and keep it from
+ * running against the built package under Node.
+ */
+const pointerGet = (root: unknown, pointer: string): unknown => {
+  if (pointer === '' || pointer === '/') return root
+  const decode = (segment: string): string => {
+    let decoded = segment
+    try {
+      decoded = decodeURIComponent(segment)
+    } catch {
+      // leave invalid percent-escapes as-is, exactly as the resolver does
+    }
+    return decoded.replace(/~1/g, '/').replace(/~0/g, '~')
+  }
+  let current: unknown = root
+  for (const segment of pointer.replace(/^\//, '').split('/').map(decode)) {
+    if (current === null || typeof current !== 'object') return undefined
+    const key = Array.isArray(current) ? Number(segment) : segment
+    if (!Object.hasOwn(current, key)) return undefined
+    current = (current as Record<string, unknown>)[key]
+  }
+  return current
+}
 
 /**
  * Naive resolver: inlines internal refs with no cross-call memoization. `seen`
@@ -41,7 +70,7 @@ const naiveResolve = (node: unknown, root: unknown, seen: Set<string>): unknown 
       return kept
     }
     seen.add(ref)
-    const resolved = naiveResolve(getByPointer(root, ref.slice(1)), root, seen)
+    const resolved = naiveResolve(pointerGet(root, ref.slice(1)), root, seen)
     seen.delete(ref)
     return resolved
   }

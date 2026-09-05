@@ -14,7 +14,7 @@ rules.
 | `oas31.json` | `https://spec.openapis.org/oas/3.1/schema/2025-11-23` | **none** — verbatim |
 | `oas32.json` | `https://spec.openapis.org/oas/3.2/schema/2025-11-23` | **none** — verbatim |
 | `oas30.json` | `https://spec.openapis.org/oas/3.0/schema/2024-10-18` | **none** — verbatim |
-| `oas20.json` | `https://spec.openapis.org/oas/2.0/schema/2017-08-27` | external draft-04 metaschema `$ref`s inlined as local `definitions` (see below) |
+| `oas20.json` | `https://spec.openapis.org/oas/2.0/schema/2017-08-27` | external draft-04 metaschema `$ref`s inlined as local `definitions` (see below); top-level `id` and `$schema` removed |
 
 ## Why these run without a dialect engine
 
@@ -32,8 +32,8 @@ but never fetches remote documents.
 - **2.0** is the one exception: its draft-04 schema `$ref`s an *external*
   metaschema (`http://json-schema.org/draft-04/schema#/...`) for ~15 numeric and
   string facet definitions. The interpreter throws on those unresolvable remote
-  refs, so `oas20.json` inlines them as local `definitions` — the only file that
-  differs from its upstream source.
+  refs, so `oas20.json` inlines them as local `definitions` and drops the top-level
+  `id` and `$schema` keys — the only file that differs from its upstream source.
 
 ## Refreshing
 

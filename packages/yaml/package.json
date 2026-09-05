@@ -1,7 +1,7 @@
 {
   "name": "@amritk/yaml",
   "version": "0.7.2",
-  "description": "A fast, featherweight, zero-dependency YAML parser for OpenAPI tooling — with exact source positions (line:column) on every node.",
+  "description": "A fast, featherweight, zero-dependency YAML parser for OpenAPI tooling \u2014 with exact source positions (line:column) on every node.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -45,7 +45,10 @@
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
     "test": "NODE_ENV=production vitest run --root ../.. yaml",
-    "bench": "bun run ./bench/run.ts"
+    "prebench": "bun run build",
+    "bench": "bun run ./bench/run.ts",
+    "prebench:node": "bun run build",
+    "bench:node": "node ./bench/run.ts"
   },
   "exports": {
     ".": {

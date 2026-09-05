@@ -133,15 +133,27 @@ const isTree = validateGuard({
 
 Pick the right tool for the shape of your workload. There are two regimes, and they have opposite winners.
 
-**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Representative numbers from `bun run bench` (Bun 1.3.11, Linux x64 — your hardware will differ, run it yourself; the other tables in this repo are on Bun 1.4, so compare within a table rather than across):
+**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Numbers from `bun run bench` and `bun run bench:node`, medians of three runs on one machine (Linux x64, a 4-vCPU cloud box, Bun 1.4.0 and Node 26.8.1 — the same machine and runtimes as every table in this repo; your hardware will differ, run it yourself):
 
 | schema | `validate` (cold) | Ajv (compile + run) | speedup |
 |:---|---:|---:|---:|
-| small | ~0.015 ms | ~8.5 ms | **~570×** |
-| wide (40 props) | ~0.09 ms | ~12 ms | **~140×** |
-| deep (`$ref`) | ~0.17 ms | ~11 ms | **~66×** |
+| **Bun 1.4.0 / JavaScriptCore** | | | |
+| small | ~0.016 ms | ~11 ms | **~728×** |
+| wide (40 props) | ~0.11 ms | ~15 ms | **~139×** |
+| deep (`$ref` + arrays) | ~0.14 ms | ~15 ms | **~102×** |
+| assert (7 scalars + nested) | ~0.017 ms | ~11 ms | **~646×** |
+| **Node 26.8.1 / V8** | | | |
+| small | ~0.013 ms | ~5.0 ms | **~399×** |
+| wide (40 props) | ~0.063 ms | ~7.2 ms | **~115×** |
+| deep (`$ref` + arrays) | ~0.092 ms | ~7.4 ms | **~81×** |
+| assert (7 scalars + nested) | ~0.014 ms | ~5.2 ms | **~358×** |
 
-**Steady state — one schema, many values.** Here Ajv still wins: once compiled, its JIT'd function outruns this one by roughly **3–6×** per call (`validate`; the guard path is closer). If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — nothing that stops short of emitting a function will match generated straight-line code, and this package does not pretend otherwise.
+The win is smaller on V8 for a reason worth knowing: Ajv's compile costs about
+half as much there (~5–7 ms against ~11–15 ms), while this interpreter's cold
+walk is only a little faster. So the advantage is ~80–400× on Node and
+~100–730× on Bun — the same shape of answer, a different size.
+
+**Steady state — one schema, many values.** Here Ajv still wins on Bun: once compiled, its JIT'd function outruns this one by roughly **3.6–8.9×** per call (`validate`; the guard path is closer, at **2.4–6.8×**). On Node the gap is wider on three cases (**5.4–11×** for `validate`) and inverts on one: the 40-property `wide` schema, where the interpreter's guard runs **1.2×** *faster* than Ajv's compiled function and `validate` reaches 0.8× of it. If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — nothing that stops short of emitting a function will match generated straight-line code, and this package does not pretend otherwise.
 
 So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → generate ahead of time**.
 
@@ -151,9 +163,9 @@ What keeps the interpreter lean:
 - **Every per-node question answered once.** Which keywords a node carries, its property key list, its `required` set, its compiled `pattern`s, which type-specific checks can possibly apply — all of it is settled when the node is specialized and closed over by its step, instead of being rediscovered on every value.
 - **Lazy, reused caches.** The one thing a node cannot settle is where a `$ref` points when the document declares `$id`s, because that depends on the base URI in scope at call time. Those targets are memoized the first time they are followed and reused on later calls.
 - **Nothing built for errors that never happen.** The error array and every failure message are created only when a failure is actually recorded and will actually be read, so valid input — and the whole guard path — never builds one. That is not the same as zero allocation: `unevaluatedProperties`/`unevaluatedItems` allocate an annotation tracker, and `uniqueItems` builds a `Set` past eight primitive elements. A branch probe (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) runs in the guard's own context, or in the one boolean-mode child an error-collecting validator keeps for its lifetime, and the run context itself is reused across calls — so a validator that has been called once allocates nothing more for valid input. Everything genuinely reusable — property keys, the `required` set, compiled `patternProperties`, dependency entry lists — is memoized per schema node instead of rebuilt per call.
-- **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats)`.
+- **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats, limits, schemas)`.
 
-> Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~240k random and mutated values (20 schema shapes × 12k values, zero divergences) — so "fast" never comes at the cost of "correct".
+> Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case; `bun run bench` times them on Bun and `bun run bench:node` on Node, against the built package. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~240k random and mutated values (20 schema shapes × 12k values, zero divergences) — so "fast" never comes at the cost of "correct".
 
 ---
 
@@ -174,7 +186,7 @@ Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: Valid
 
 ### `validateGuard<T>(schema, options?)`
 
-Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and never builds an error object or message, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override.
+Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and never builds an error object or message, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override. One exception to the narrowing: a schema with no `type` (nor `enum`, `const`, or `$ref`) that carries only object- or array-shaped keywords also accepts non-objects, so its guard is a plain `(input: unknown) => boolean` rather than an `input is T` predicate — declare a `type` to get a narrowing guard (`Infer` recovers the described type either way).
 
 ### `parse(schema, options?)` — `@amritk/runtime-validators/parse`
 
@@ -248,7 +260,9 @@ is tunable per call via `options.limits`:
 
 > **The ReDoS screen is a filter, not a guarantee.** It rejects two recognizable
 > shapes — nested unbounded quantifiers (`(a+)+$`) and a provably ambiguous
-> alternation under an unbounded quantifier (`(a|a)+$`) — across every `pattern`
+> alternation under an unbounded quantifier (`(a|a)+$`) — plus, as a conservative
+> fallback, any pattern whose groups nest too deeply (more than 100 levels) to
+> analyse — across every `pattern`
 > and `patternProperties` key anywhere in the document. Deciding whether an
 > arbitrary regex backtracks catastrophically means deciding language ambiguity,
 > which no cheap syntactic pass can do, so patterns that are genuinely

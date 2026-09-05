@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { buildValidatorSchema } from '@amritk/generate-validators'
 import { TypeCompiler } from '@sinclair/typebox/compiler'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
-import { buildValidatorSchema } from '../src/index.ts'
 import { opsCell } from './measure.ts'
 import { BENCH_CASES } from './schemas.ts'
 import { LIBRARY_IDS, LIBRARY_LABELS, LIBRARY_PRELOADS, type LibraryId } from './validators.ts'
@@ -38,14 +38,27 @@ const padStart = (s: string, width: number): string => s.padStart(width)
 
 const BENCH_DIR = fileURLToPath(new URL('.', import.meta.url))
 
+/**
+ * Whether this process is Bun. The bench runs under either runtime: Bun resolves
+ * the `@amritk/*` workspace packages to their TypeScript sources through the
+ * `development` condition, while Node has no such loader and resolves them to
+ * the built `dist` through the same exports map — so the flag is passed only
+ * where it means something, and `bench:node` builds first.
+ */
+const IS_BUN = typeof Bun !== 'undefined'
+
+/**
+ * The libraries this runtime can host. typia's checks are produced by a
+ * compile-time transform delivered through a Bun preload, so Node cannot build
+ * one at all; it is dropped from the run rather than reported as a zero.
+ */
+const HOSTABLE: readonly LibraryId[] = IS_BUN ? LIBRARY_IDS : LIBRARY_IDS.filter((lib) => lib !== 'typia')
+
 /** Spawns an isolated worker to time one library against one case. */
 const runWorker = (caseName: string, lib: LibraryId): WorkerResult => {
-  // `--conditions development` resolves the `@amritk/*` workspace packages to
-  // their TypeScript sources (no build step needed). Libraries whose codegen is
-  // a load-time transform also get their Bun preload.
   const preload = LIBRARY_PRELOADS[lib]
-  const flags = ['--conditions', 'development']
-  if (preload) flags.push('--preload', `${BENCH_DIR}${preload}`)
+  const flags = IS_BUN ? ['--conditions', 'development'] : []
+  if (preload && IS_BUN) flags.push('--preload', `${BENCH_DIR}${preload}`)
   const stdout = execFileSync(process.execPath, [...flags, WORKER, caseName, lib], {
     encoding: 'utf8',
     maxBuffer: 1024 * 1024,
@@ -77,17 +90,17 @@ const run = async (): Promise<void> => {
     console.log(`## ${benchCase.name}\n`)
 
     const results = new Map<LibraryId, WorkerResult>()
-    for (const lib of LIBRARY_IDS) results.set(lib, runWorker(benchCase.name, lib))
+    for (const lib of HOSTABLE) results.set(lib, runWorker(benchCase.name, lib))
 
-    const parity = LIBRARY_IDS.map((lib) => `${LIBRARY_LABELS[lib]}=${results.get(lib)?.parityDetail}`).join('  ')
+    const parity = HOSTABLE.map((lib) => `${LIBRARY_LABELS[lib]}=${results.get(lib)?.parityDetail}`).join('  ')
     console.log(`  parity (valid/invalid): ${parity}`)
-    for (const lib of LIBRARY_IDS) {
+    for (const lib of HOSTABLE) {
       if (!results.get(lib)?.parityOk) console.log(`  ⚠ ${LIBRARY_LABELS[lib]} disagreed on a verdict`)
     }
     console.log('')
 
     console.log(`  ${pad('validator', 20)}${padStart('valid ops/s', 20)}${padStart('invalid ops/s', 20)}`)
-    for (const lib of LIBRARY_IDS) {
+    for (const lib of HOSTABLE) {
       const r = results.get(lib)
       if (!r) continue
       const valid = padStart(opsCell(r.valid.median, r.valid.spread), 20)

@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { buildValidatorSchema } from '@amritk/generate-validators'
 import { TypeCompiler } from '@sinclair/typebox/compiler'
 import type { ValidateFunction } from 'ajv'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
-import { buildValidatorSchema } from '../src/index.ts'
 import type { BenchCase } from './schemas.ts'
 
 /** A validator that returns a plain boolean, normalising each library's verdict. */
@@ -52,10 +52,22 @@ const makeAjv = (): Ajv => {
  * cleanly. Used both to build the steady-state validator and (via
  * {@link buildValidatorSchema} directly) to time the cold codegen cost.
  */
+
+/**
+ * Rewrites the generated files' relative `./x.js` import specifiers to `./x.ts`.
+ * The emitted source carries `.js` specifiers because that is what a compiled
+ * consumer needs, and Bun resolves them back to the `.ts` files on disk. Node
+ * does not: its type stripping resolves a specifier literally, so `./x.js` is a
+ * missing file. Pointing the specifier at the file actually written lets both
+ * runtimes import the same generated module with no transpile step, which is
+ * what makes the Node column measure the same code as the Bun one.
+ */
+const toTsSpecifiers = (source: string): string => source.replace(/(from '\.[^']*)\.js'/g, "$1.ts'")
+
 const loadMjstValidator = async (benchCase: BenchCase): Promise<BoolValidator> => {
   const files = await buildValidatorSchema(benchCase.schema, benchCase.typeName)
   const dir = mkdtempSync(join(tmpdir(), 'mjst-bench-'))
-  for (const file of files) writeFileSync(join(dir, file.filename), file.content)
+  for (const file of files) writeFileSync(join(dir, file.filename), toTsSpecifiers(file.content))
 
   const mod = await import(pathToFileURL(join(dir, 'index.ts')).href)
   rmSync(dir, { recursive: true, force: true })

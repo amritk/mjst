@@ -748,7 +748,7 @@ would land outside `outDir` is refused rather than written.
 The config table on its own, as a string. `$refs` must already be inlined —
 `dereferenceSchema` does that.
 
-### `dereferenceSchema(schema: Record<string, unknown>): unknown`
+### `dereferenceSchema(schema: Record<string, unknown>): ConfigSchema`
 
 Inlines every `$ref` against the document's own `$defs`, the way both renderers
 do before rendering.

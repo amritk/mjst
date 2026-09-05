@@ -1,7 +1,7 @@
+import { validate, validateGuard } from '@amritk/runtime-validators'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
-import { validate, validateGuard } from '../src/index.ts'
 import { BENCH_CASES } from './schemas.ts'
 
 /**

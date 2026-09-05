@@ -249,27 +249,60 @@ happy path it runs a single allocation-free boolean guard — a pure `&&` chain 
 when an object is closed with `additionalProperties: false` — and `return true`s
 straight away, only calling a separate error-collecting function when something
 is actually wrong.
-Keeping the hot function tiny lets the JIT optimise it aggressively, so a valid-input
-check beats every other library measured — including the build-time transformer
-typia — while still emitting full JSON-Pointer errors for invalid input, and
-emitting the validator stays far cheaper than compiling a schema at startup.
-Measured on Bun 1.4 (Linux x64), validating valid input at steady state:
+Keeping the hot function tiny lets the JIT optimise it aggressively, so a
+valid-input check beats every other library measured on JavaScriptCore — the
+build-time transformer typia included — while still emitting full JSON-Pointer
+errors for invalid input, and emitting the validator stays far cheaper than
+compiling a schema at startup. On V8 that lead is not universal: TypeBox's
+compiled checker wins the `assert-loose` shape outright and draws level on
+`assert-strict`, which is why both engines get a table rather than one standing
+in for the other.
+
+Both were measured together on one machine (Linux x64, a 4-vCPU cloud box, Bun
+1.4.0 and Node 26.8.1 — the same machine and runtimes as every table in this
+repo). Each cell is the median of three separate runs of the whole suite. Treat
+the absolutes as a property of that box: within one sitting a cell repeats to
+within a few percent, but the same suite measured again hours later moved by
+~60% across every case at once, so the ratios are the durable part and a
+remembered number is not a baseline.
+
+**Bun 1.4.0 / JavaScriptCore**, validating valid input at steady state:
 
 | schema | mjst (generated) | typia (transformed) | ajv (compiled) | typebox (compiled) | zod |
 |:--|--:|--:|--:|--:|--:|
-| small (4 fields) | **~59M** ops/s | ~5.8M ops/s | ~10M ops/s | ~7.6M ops/s | ~2.2M ops/s |
-| order (nested + array) | **~9.5M** ops/s | ~2M ops/s | ~3.9M ops/s | ~3.3M ops/s | ~0.54M ops/s |
-| assert-loose | **~189M** ops/s | ~170M ops/s | ~44M ops/s | ~78M ops/s | ~5M ops/s |
-| assert-strict | **~104M** ops/s | ~68M ops/s | ~21M ops/s | ~42M ops/s | ~1.8M ops/s |
+| small (4 fields) | **~59M** ops/s | ~6.7M ops/s | ~11M ops/s | ~8.9M ops/s | ~2.4M ops/s |
+| order (nested + array) | **~10M** ops/s | ~2.6M ops/s | ~4.1M ops/s | ~3.6M ops/s | ~0.50M ops/s |
+| assert-loose | **~190M** ops/s | ~170M ops/s | ~46M ops/s | ~80M ops/s | ~3.6M ops/s |
+| assert-strict | **~171M** ops/s | ~58M ops/s | ~23M ops/s | ~45M ops/s | ~1.4M ops/s |
+
+**Node 26.8.1 / V8**, the same cases. typia is absent because its checks come
+from a compile-time transform delivered as a Bun preload, so the Node run cannot
+build one at all:
+
+| schema | mjst (generated) | ajv (compiled) | typebox (compiled) | zod |
+|:--|--:|--:|--:|--:|
+| small (4 fields) | **~56M** ops/s | ~7.0M ops/s | ~6.6M ops/s | ~2.2M ops/s |
+| order (nested + array) | **~8.9M** ops/s | ~2.8M ops/s | ~2.9M ops/s | ~0.48M ops/s |
+| assert-loose | ~90M ops/s | ~71M ops/s | **~138M** ops/s | ~6.0M ops/s |
+| assert-strict | ~37M ops/s | ~25M ops/s | **~37M** ops/s | ~3.6M ops/s |
+
+Read the two together. On the object schemas — the shapes an application
+actually validates — the generated validator leads on both engines, by 5–9× over
+the next-fastest on Bun and 2.4–8× on Node. On the moltar shapes it leads
+everything on JavaScriptCore and loses the loose one to TypeBox on V8 (~138M
+against ~90M), with `assert-strict` a coin toss. Those two cases are seven
+scalar roots and a nested object: near-trivial work where the engine's own
+inlining decides the winner, not the validator's design.
 
 The `assert-loose` / `assert-strict` rows use the same *shape* as
 [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
-(seven scalar roots plus a nested object): the boolean guard keeps mjst ahead of
-typia on both, by ~11% on `assert-loose` — close enough that the two can trade
-the lead run-to-run — and by ~52% on `assert-strict` (with
+(seven scalar roots plus a nested object): on JavaScriptCore the boolean guard
+keeps mjst ahead of typia on both, by ~12% on `assert-loose` — close enough that
+the two trade the lead run-to-run — and by ~3× on `assert-strict` (with
 `additionalProperties: false`), where mjst counts keys once and typia does not.
-(typia and TypeBox still win the *invalid* path, where they bail on the first
-error rather than collecting a full error list.)
+On V8 the same two rows go the other way against TypeBox, as the tables above
+show. (typia and TypeBox still win the *invalid* path on both engines, where
+they bail on the first error rather than collecting a full error list.)
 
 They are **not** that project's numbers and they do not belong next to its
 leaderboard: the shape is shared, the harness is not, and the harness is worth
@@ -277,9 +310,16 @@ an order of magnitude. See
 [Against the moltar harness](#against-the-moltar-harness) for the same functions
 measured under benny, the way the leaderboard measures them.
 
-Preparing a validator costs ~0.3–0.7 ms for mjst codegen and ~0.05–0.2 ms for a
-TypeBox `TypeCompiler` compile, versus ~13–17 ms for an Ajv compile. Every library
-agrees on every verdict; parity is asserted before timing.
+Preparing a validator, by runtime (medians over the four cases above):
+
+| | mjst codegen | TypeBox compile | Ajv compile |
+|:--|--:|--:|--:|
+| Bun 1.4.0 | ~0.30–0.66 ms | ~0.04–0.23 ms | ~9.7–13 ms |
+| Node 26.8.1 | ~0.27–0.58 ms | ~0.04–0.11 ms | ~5.3–6.4 ms |
+
+Ajv's compile is the one prepare cost that roughly halves on V8; the other two
+are within a whisker of each other on both engines. Every library agrees on
+every verdict; parity is asserted before timing.
 
 One caveat on the first two rows: their schemas declare `format` (`uuid`,
 `email`), and Ajv, typia, zod, and TypeBox all check it, while mjst's generated
@@ -294,7 +334,8 @@ numbers stay reproducible. Micro-benchmark figures vary by machine and runtime �
 reproduce with:
 
 ```bash
-bun run bench
+bun run bench        # Bun / JavaScriptCore
+bun run bench:node   # Node / V8 (builds the package first, then runs it under node)
 ```
 
 ### Against the moltar harness
@@ -315,22 +356,27 @@ measured.
 `bun run bench:moltar` runs exactly that harness over the same functions, always
 alongside a **no-op** control — a "validator" that checks nothing, which is the
 fastest number the harness can physically produce. One run on this machine
-(Linux x64, Bun 1.3.11 / Node 22.22, valid input):
+(Linux x64, Bun 1.4.0 / Node 26.8.1, valid input):
 
 | harness | runtime | `assert-loose` | `assert-strict` |
 |:--|:--|--:|--:|
-| this package (`measure.ts`) | Bun | ~200M ops/s | ~185M ops/s |
-| benny, moltar's `Benchmark` | Node | ~100M ops/s | ~38M ops/s |
-| benny, moltar's `Benchmark` | Bun | ~70M ops/s | ~2.4M ops/s |
-| *no-op control, benny* | *Node* | *~120M ops/s* | *~120M ops/s* |
-| *no-op control, benny* | *Bun* | *~325M ops/s (±75%)* | *~325M ops/s (±75%)* |
+| this package (`measure.ts`) | Bun | ~190M ops/s | ~171M ops/s |
+| this package (`measure.ts`) | Node | ~90M ops/s | ~37M ops/s |
+| benny, moltar's `Benchmark` | Bun | ~90M ops/s | ~76M ops/s |
+| benny, moltar's `Benchmark` | Node | ~80M ops/s | ~34M ops/s |
+| *no-op control, benny* | *Node* | *~91M ops/s* | *~96M ops/s* |
+| *no-op control, benny* | *Bun* | *~508M ops/s (±46%)* | *~449M ops/s (±48%)* |
 
-Read two things out of that. First, on Node the `assert-loose` figure sits
-within 20% of a validator that does nothing, so under that harness it is not a
+Read three things out of that. First, on Node the `assert-loose` figure sits
+within 12% of a validator that does nothing, so under that harness it is not a
 validator measurement at all: above that floor a faster validator cannot show
 up as a faster number, and the published leaderboard runs on CI hardware slower
-than this box, where the floor sits lower still. Second, `assert-strict` on Bun collapses to
-~2.4M because moltar's fixture is `Object.freeze({ … })` — see
+than this box, where the floor sits lower still. Second, the harness reorders
+the field: under benny on Node this validator leads TypeBox (~80M against
+~54M), the reverse of what `measure.ts` reports for the same two functions on
+the same engine, because benny's floor compresses the top of the range. Third,
+moltar's fixture is `Object.freeze({ … })`: under Bun 1.3 that collapsed the Bun
+`assert-strict` cell to ~2.4M, and Bun 1.4.0 has closed that cliff — see
 [Frozen inputs](#frozen-inputs).
 
 The harness makes no difference to correctness and every difference to the
@@ -351,40 +397,49 @@ because each declared property is required and already proven present — see
 `for...in` alternative), Ajv and Zod sweep with `for...in`, TypeBox runs its own
 sweep. On V8 that costs the same whatever the input looks like.
 
-On JavaScriptCore (Bun) it does not. Making an object non-extensible —
-`Object.freeze`, `Object.seal` or a bare `Object.preventExtensions` — turns off
+On JavaScriptCore under Bun 1.3 it did not. Making an object non-extensible —
+`Object.freeze`, `Object.seal` or a bare `Object.preventExtensions` — turned off
 the engine's cached own-keys fast path, and *every* form of key enumeration
-falls back to a generic walk: `Object.keys`, `Object.getOwnPropertyNames`,
-`Reflect.ownKeys` and `for...in` alike. Property reads are untouched (a frozen
-object reads at full speed), so the whole cost lands on the extra-key sweep, and
-therefore on strict schemas only. Frozen inputs are ordinary — a config object
-frozen at startup, a shared fixture, a module-level constant — so `bun run bench`
-carries `small (4 fields, frozen)` and `assert-strict (frozen)` cases to keep it
-measured. One run on this machine (Linux x64, Bun 1.3.11), valid input:
+fell back to a generic walk: `Object.keys`, `Object.getOwnPropertyNames`,
+`Reflect.ownKeys` and `for...in` alike. Property reads were untouched (a frozen
+object read at full speed), so the whole cost landed on the extra-key sweep, and
+therefore on strict schemas only. Bun 1.4.0 no longer shows the cliff — frozen
+and mutable input run at the same speed for every library. Frozen inputs are
+ordinary — a config object frozen at startup, a shared fixture, a module-level
+constant — so `bun run bench` keeps carrying `small (4 fields, frozen)` and
+`assert-strict (frozen)` cases to keep it measured. Medians of three runs on
+this machine (Linux x64), valid input, on both current runtimes and on the Bun
+version that had the cliff:
 
-| `assert-strict` | mutable input | frozen input |
-|:--|--:|--:|
-| mjst (generated) | ~185M ops/s | ~1.7M ops/s |
-| typia (transformed) | ~68M ops/s | ~1.7M ops/s |
-| typebox (compiled) | ~46M ops/s | ~1.7M ops/s |
-| ajv (compiled) | ~24M ops/s | ~1.5M ops/s |
-| zod | ~1.4M ops/s | ~0.7M ops/s |
+| `assert-strict` | Bun 1.4.0 mutable | Bun 1.4.0 frozen | Node 26 mutable | Node 26 frozen | Bun 1.3.11 mutable | Bun 1.3.11 frozen |
+|:--|--:|--:|--:|--:|--:|--:|
+| mjst (generated) | ~171M ops/s | ~166M ops/s | ~37M ops/s | ~35M ops/s | ~82M ops/s | ~1.5M ops/s |
+| typia (transformed) | ~58M ops/s | ~89M ops/s | n/a | n/a | ~37M ops/s | ~1.5M ops/s |
+| typebox (compiled) | ~45M ops/s | ~46M ops/s | ~37M ops/s | ~35M ops/s | ~27M ops/s | ~1.4M ops/s |
+| ajv (compiled) | ~23M ops/s | ~22M ops/s | ~25M ops/s | ~25M ops/s | ~12M ops/s | ~1.2M ops/s |
+| zod | ~1.4M ops/s | ~1.4M ops/s | ~3.6M ops/s | ~3.6M ops/s | ~0.91M ops/s | ~0.47M ops/s |
 
-It is an engine-level cliff, not an mjst one: every compiled or generated strict
-validator lands within a hair of the same number, because they are all paying
-the same engine slow path. The generated code keeps the key count anyway. Every
-alternative was measured and every one is worse overall. `Object.values(obj)`
-and `Object.keys({ ...obj })` sidestep the cliff, but on the ordinary mutable
-path they cost 28–37× under JSC and 2–7× under V8. Branching on
-`Object.isExtensible(obj)` first keeps the mutable path recognisable, at ~4×
-under JSC — and makes V8 slower in *both* directions (~2× mutable, ~7× frozen),
-where there was no cliff to fix in the first place. Trading a large, portable
-regression for a smaller win on one engine is not a good deal, so the sweep
-stays as it is.
+<sub>typia is Bun-only: its checks come from a compile-time transform delivered
+as a Bun preload, so the Node run cannot build one.</sub>
 
-If it matters for your workload: validate before freezing (the verdict is the
-same either way — `src/generators/frozen-input.test.ts` pins that), or run on a
-V8 runtime, where the cliff does not exist.
+It was an engine-level cliff, not an mjst one: on Bun 1.3 every compiled or
+generated strict validator lands within a hair of the same number, because they
+are all paying the same engine slow path. The Node 26 columns are flat, frozen
+or not, which is what "V8 never had it" looks like measured rather than
+asserted. The generated code keeps the key count
+anyway. Every alternative was measured (on Bun 1.3.11) and every one is worse
+overall. `Object.values(obj)` and `Object.keys({ ...obj })` sidestep the cliff,
+but on the ordinary mutable path they cost 28–37× under JSC and 2–7× under V8.
+Branching on `Object.isExtensible(obj)` first keeps the mutable path
+recognisable, at ~4× under JSC — and makes V8 slower in *both* directions (~2×
+mutable, ~7× frozen), where there was no cliff to fix in the first place.
+Trading a large, portable regression for a smaller win on one engine is not a
+good deal, so the sweep stays as it is — and Bun 1.4 has since closed the cliff
+on its own.
+
+If it matters for your workload on an older Bun: validate before freezing (the
+verdict is the same either way — `src/generators/frozen-input.test.ts` pins
+that), or run on Bun ≥ 1.4 or a V8 runtime, where the cliff does not exist.
 
 ### Choosing how keys are counted
 
@@ -402,22 +457,25 @@ picks one at generation time:
 
 Measured under the moltar harness (benny, the frozen fixture, each case alone in
 its own process — `bun run bench:moltar:leaderboard` prints one row per strategy
-on every runtime it finds), Linux x64, Bun 1.4.0 / Node 22.22:
+on every runtime it finds), Linux x64. The Node 22 column is the earlier
+measurement this option was introduced against; the Node 26 column is the same
+harness on the current runtime:
 
-| case | `unknownKeys` | Bun 1.4 | Node 22 |
-|:--|:--|--:|--:|
-| `assertStrict` (`isX`) | `count-keys` | ~300M ops/s (the harness floor — the call is eliminated) | ~19M ops/s |
-| `assertStrict` (`isX`) | `count-enumerable` | ~22M ops/s | ~22M ops/s |
-| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~220M ops/s (the harness floor again) | ~14M ops/s |
-| `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~13M ops/s | ~14M ops/s |
+| case | `unknownKeys` | Bun 1.4 | Node 22 | Node 26 |
+|:--|:--|--:|--:|--:|
+| `assertStrict` (`isX`) | `count-keys` | ~441M ops/s (the harness floor — the call is eliminated) | ~19M ops/s | ~31M ops/s |
+| `assertStrict` (`isX`) | `count-enumerable` | ~42M ops/s | ~22M ops/s | ~30M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-keys` | ~359M ops/s (the harness floor again) | ~14M ops/s | ~29M ops/s |
+| `parseStrict` (`@amritk/generate-parsers`) | `count-enumerable` | ~22M ops/s | ~14M ops/s | ~26M ops/s |
 
-The default is `count-keys` because this repo benches on Bun, where it is never
-the slower form and, with the nested shape check spelled out on the parse fast
-path, lets JavaScriptCore eliminate the strict parse as well. Code that will only ever
-run on Node gains from `count-enumerable`: ~10–20% on this box, and up to
-1.7–2× on faster hardware, where the keys array is what the strict validator
-spends its time on. The choice is made once, when the code is generated: nothing
-in the emitted file detects its runtime. (On Bun 1.3, where a frozen object puts
+The default is `count-keys` because it is never the slower form on Bun and,
+with the nested shape check spelled out on the parse fast path, lets
+JavaScriptCore eliminate the strict parse as well. The Node case has changed
+with the engine: on Node 22 `count-enumerable` was level or slightly ahead,
+which is where the advice to flip it for Node-only builds came from, but on
+Node 26 the default is ahead in both rows. Keep it unless you are pinned to an
+older V8 and have measured your own shapes. The choice is made once, when the
+code is generated: nothing in the emitted file detects its runtime. (On Bun 1.3, where a frozen object puts
 `Object.keys` on the same slow path as `for...in`, both strategies sit at ~2M
 ops/s under this fixture and the default is a wash.)
 

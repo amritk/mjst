@@ -65,7 +65,7 @@ Express, Fastify, Koa, NestJS (Node) — with a
 
 **Integration recipes**
 - [App context: Drizzle, sessions](#app-context-drizzle-sessions-anything-per-request) · [Guards](#guards-authorize-once-declare-the-outcome) · [Deny-by-default: `secureRoutes`](#deny-by-default-secureroutes) · [Auth: Better Auth](#auth-better-auth) · [Sessions: a production setup](#sessions-a-production-setup)
-- [Observability](#observability-metrics-and-request-logs) · [OpenAPI: servers, auth schemes, components](#openapi-servers-auth-schemes-shared-components) · [Error reporting: Sentry](#error-reporting-sentry) · [Typed client for external consumers: Hey API](#typed-client-for-external-consumers-hey-api) · [Schemas from Zod, TypeBox, Valibot, Effect](#schemas-from-zod-typebox-valibot-effect)
+- [Observability](#observability-metrics-and-request-logs) · [OpenAPI: servers, auth schemes, components](#openapi-servers-auth-schemes-shared-components) · [Error reporting: Sentry](#error-reporting-sentry) · [Typed client for external consumers](#typed-client-for-external-consumers) · [Schemas from Zod, TypeBox, Valibot, Effect](#schemas-from-zod-typebox-valibot-effect)
 
 **About**
 - [Integration philosophy](#integration-philosophy) · [Requirements and stability](#requirements-and-stability) · [Scope notes](#scope-notes)
@@ -114,12 +114,15 @@ A framework is still a framework. This package has no:
   (`onResponse`), and per-route [`guards`](#guards-authorize-once-declare-the-outcome)
   cover the same ground with a flatter model — and on the Node adapter there are
   no hooks at all, [by design](#serving-it): you use the host framework's chain.
-- **WebSockets.** Server-sent events are first class (`sseStream`, `formatSse`,
-  and [streaming responses](#streaming-and-raw-responses)); socket upgrades are
-  the host's job.
-- **Static file serving, JSX/SSR, or template rendering.** Nothing here renders
-  HTML except the Scalar docs page [`createDocs`](#framework-parity-helpers)
-  serves.
+- **Serving WebTransport.** Server-sent events are first class (`sseStream`,
+  `formatSse`, and [streaming responses](#streaming-and-raw-responses)), and
+  WebSocket upgrades (`upgradeWebSocket`, `acceptWebSocket`) plus typed message
+  contracts are covered under [Realtime](#realtime-webtransport-with-a-websocket-fallback);
+  a WebTransport *server* is not (see there for why).
+- **JSX/SSR or template rendering.** Nothing here renders HTML except the
+  Scalar docs page [`createDocs`](#framework-parity-helpers) serves; static
+  files go through the injected-reader [`createStatic`](#static-files) hook, not
+  a built-in filesystem layer.
 - **A plugin ecosystem.** CORS, CSRF, rate limiting, security headers, ETag,
   compression, request IDs, and health checks ship as
   [hook factories](#built-in-security-hooks); beyond those you write it or take
@@ -324,7 +327,8 @@ if (reply.status === 404) /* declared, typed, no body */;
   `RequestParamsOf` / `RequestQueryOf` / `RequestBodyOf` /
   `RequestHeadersOf` / `RequestCookiesOf` (the request slots, `undefined`
   when undeclared), and `ClientReplyOf` / `RouteReplyOf` (the client and
-  handler reply unions). Error payloads become named exports instead of
+  handler reply unions; `RouteReplyOf` is handler-side, so it comes from the
+  root `@amritk/api` rather than `@amritk/api/client`). Error payloads become named exports instead of
   inline `as { ... }` casts at every use site:
 
   ```ts
@@ -824,7 +828,7 @@ running a fetch handler (including a compiled module's `fetch` export) on
 - Validation failures answer `400` with `{ error: 'validation_failed', source,
   errors }` where `errors` carries the same `{ message, path }` shape as
   `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
-  or `body`. The `errors` option reshapes this (and the other built-in
+  `cookies`, or `body`. The `errors` option reshapes this (and the other built-in
   bodies) when deployed clients already parse a different envelope.
 
 ### String formats
@@ -1037,9 +1041,8 @@ implementRoute(importCsv, ({ body }) => ({ status: 200, body: { rows: body.split
 await client.importCsv({ body: csvText, headers: { 'content-type': 'text/csv' } })
 ```
 
-Sending these formats from the derived client is opt-in: register
-`formBodySerializer` / `multipartBodySerializer` in `createClient` (see the
-typed-client section above) so JSON-only apps never bundle them.
+Unlike `form` / `multipart`, these two need no serializer registered in
+`createClient`: the client sends `text` and `bytes` bodies as they are.
 
 ### Streaming and raw responses
 
@@ -1084,7 +1087,7 @@ const proxy = defineRoute({
   path: '/legacy',
   responses: { 200: { body: legacySchema } },
   // Reuse an existing Response-building helper (or an upstream fetch) unchanged.
-  handler: async ({ request }) => raw(await fetch(new URL(request.raw as Request), { redirect: 'manual' })),
+  handler: async ({ request }) => raw(await fetch((request.raw as Request).url, { redirect: 'manual' })),
 })
 ```
 
@@ -1274,13 +1277,15 @@ const handler = toFetchHandler(api, {
 
 **`createSecurityHeaders(options?)`** — an `onResponse` decorator that stamps
 the browser-hardening headers (`x-content-type-options: nosniff`,
-`x-frame-options: SAMEORIGIN`, `referrer-policy: no-referrer`, the
-cross-origin isolation trio, …) only when the handler didn't already set them.
+`x-frame-options: SAMEORIGIN`, `referrer-policy: no-referrer`,
+`cross-origin-opener-policy` / `cross-origin-resource-policy`,
+`origin-agent-cluster`, …) only when the handler didn't already set them.
 **HSTS and CSP default off** on purpose: `strict-transport-security` on a bare
 IP or a plain-HTTP dev origin locks browsers out, and no single CSP fits every
 app — opt into both explicitly (`strictTransportSecurity: true`,
-`contentSecurityPolicy: "…"`) for a production HTTPS deployment. Any field
-takes `false` to omit or a string to override.
+`contentSecurityPolicy: "…"`) for a production HTTPS deployment. Every field
+except `contentSecurityPolicy` (a string only) takes `false` to omit or a
+string to override.
 
 **`createCors(options)`** — preflight answerer (`onRequest`) plus allow/expose
 stamper (`onResponse`), applied to *every* response including 404s and gate
@@ -1711,7 +1716,7 @@ back off a route gives `… | undefined` — pass the standalone constant to
 **What this does not do:** there is no OpenAPI representation. OpenAPI has no
 vocabulary for a bidirectional message union, so `messages` never appears in
 the document — the contract stays the single source of truth, and an AsyncAPI
-projection remains a separate question. See the plan doc for why a parallel
+projection remains a separate question. See [the plan doc](../../docs/api-framework-plan.md) for why a parallel
 channel DSL was set aside.
 
 ### Client-side auth refresh
@@ -1944,7 +1949,8 @@ differential corpus pins each one.
 Staleness is detected, not silent: the emitted module bakes a
 `contractsHash` and recomputes it over the imported routes at init — a
 schema or path edited after compilation logs a one-line
-"stale compiled module" warning (never a throw) until you regenerate. The
+`[@amritk/api] Stale compiled module` message via `console.error` (never a
+throw) until you regenerate. The
 `mjst compile-api` CLI subcommand wraps the build step
 (`mjst compile-api ./src/routes.ts --out src/api.compiled.ts`), and
 `fetchToNodeHandler` bridges the compiled `fetch` export onto
@@ -1977,12 +1983,15 @@ targets. Reproduce with `bun run bench:workerd`, `bun run bench:vs` (Node), or
 `bun run bench:vs:bun`.
 
 Every table below was re-measured together on one machine (Bun 1.4.0 /
-Node 22.22, Linux x64, workerd 1.20260730). Both the box and the runtimes differ
-from the ones earlier revisions were taken on, and Bun 1.4 in particular made
-web-standard `Request`/`Response` construction far cheaper — bare Hono reads
-~503k ops/s on Bun here against ~185k on the previous revision — so the whole Bun
-column moved for reasons that have nothing to do with this package. Compare
-columns within a table, not against a figure you remember.
+Node 26.8.1, Linux x64, a 4-vCPU cloud box, workerd via Miniflare 4.20260730 —
+the same machine and runtimes as every other benchmark table in this repo). Two
+warnings about the absolute figures. Bun 1.4 made web-standard
+`Request`/`Response` construction far cheaper than Bun 1.3, so the Bun column
+moved for reasons that have nothing to do with this package. And this box's
+throughput drifts between sittings: the same suite, same runtime, same commit
+read 60% faster an hour later, uniformly across cases. Ratios within a table
+survive that; a remembered absolute does not. Compare columns within a table,
+not against a figure you remember.
 
 Under **workerd**, the runtime `compileToModule` exists for, measured inside a
 real isolate (Miniflare, one fresh isolate per cell) rather than in a stand-in
@@ -1991,17 +2000,17 @@ isolates differ from one another by more than trials within one isolate do:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | **~136k ops/s** ¹ | ~132k | ~62k | ~110k |
-| dynamic GET, params validated | **~117k** ¹ | ~68k | ~58k | ~98k |
-| POST, body validated | **~34k** ¹ | ~28k | ~25k | ~29k |
+| static GET | **~163k ops/s** ¹ | ~160k | ~96k | ~152k |
+| dynamic GET, params validated | **~153k** ¹ | ~88k | ~63k | ~137k |
+| POST, body validated | **~41k** ¹ | ~35k | ~33k | ~39k |
 
-Under **Node/V8** — the same engine workerd runs, without workerd around it:
+Under **Node 26/V8** — the same engine workerd runs, without workerd around it:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | **~164k ops/s** ¹ | ~152k | ~112k | ~155k |
-| dynamic GET, params validated | **~137k** ¹ | ~62k | ~80k | ~124k |
-| POST, body validated | **~56k** ¹ | ~48k | ~40k | ~53k |
+| static GET | **~150k ops/s** ¹ | ~143k | ~107k | ~124k |
+| dynamic GET, params validated | **~131k** ¹ | ~70k | ~80k | ~101k |
+| POST, body validated | ~59k ¹ | ~53k | ~49k | **~59k** |
 
 Under **Bun/JavaScriptCore**, where web-standard `Request`/`Response` objects
 are far cheaper to build than undici's and more of the difference is the
@@ -2009,9 +2018,9 @@ framework rather than the runtime:
 
 | case | hono (no validation) | hono + zod | runtime engine (dev) | compiled engine (prod) |
 |:--|--:|--:|--:|--:|
-| static GET | ~503k ops/s ¹ | ~518k | ~418k | **~561k** |
-| dynamic GET, params validated | **~393k** ¹ | ~143k | ~210k | ~348k |
-| POST, body validated | **~224k** ¹ | ~149k | ~140k | ~195k |
+| static GET | ~574k ops/s ¹ | ~514k | ~478k | **~610k** |
+| dynamic GET, params validated | **~423k** ¹ | ~145k | ~286k | ~418k |
+| POST, body validated | **~265k** ¹ | ~172k | ~189k | ~232k |
 
 <sub>¹ hono-bare does no validation; every @amritk/api column validates, and
 the runtime column validates responses too (`validateResponses: true`, the
@@ -2020,14 +2029,14 @@ every case before it is timed.</sub>
 
 Read the ratios, not the absolutes. Against the like-for-like column —
 `hono + zod`, the other stack that actually validates — the compiled engine
-leads on Bun (1.1–2.4×) and on Node (1.0–2.0×), and is mixed under workerd
-(0.83–1.44×): widest wherever params and query have to be coerced and checked,
-narrowest (and on workerd, behind) on the static GET, where there is no
+leads on Bun (1.2–2.9×) and under workerd (0.95–1.6×), and is mixed on Node
+(0.87–1.4×): widest wherever params and query have to be coerced and checked,
+narrowest (and on Node's static GET, slightly behind) where there is no
 validation work to win back.
 
-Against *unvalidated* Hono it now leads only Bun's static GET (1.12×) and trails
-everywhere else — 0.87–0.89× on Bun's other two cases, 0.91–0.95× across Node,
-0.81–0.85× across workerd. That is a change from the previous revision, which
+Against *unvalidated* Hono it leads only Bun's static GET (1.06×) and ties or
+trails everywhere else — 0.88–0.99× on Bun's other two cases, 0.77–1.00× across
+Node, 0.89–0.95× across workerd. That is a change from the previous revision, which
 had it level with or ahead of bare Hono on the GET cases, and the cause is the
 runtimes rather than this package: bare Hono skips the validation every other
 column performs, and it now skips it fast enough that compiling the validation
@@ -2036,9 +2045,9 @@ older reason — it is dominated by reading and parsing the body, which every
 column pays and none of the compiler's work removes.
 
 The runtime (development) engine — no build step, response validation on — lands
-at 0.81–1.47× of `hono + zod` on Bun, 0.74–1.29× on Node, and 0.47–0.89× under
-workerd. Its workerd static-GET cell is also the least trustworthy number in
-these tables: the five isolates spread from 31k to 88k around a 62k median,
+at 0.93–1.97× of `hono + zod` on Bun, 0.75–1.14× on Node, and 0.60–0.94× under
+workerd. Its workerd dynamic-GET cell is also the least trustworthy number in
+these tables: the five isolates spread from 46k to 82k around a 63k median,
 which is the pause behaviour described next rather than a throughput figure.
 
 **On the pauses this table used to warn about.** An earlier revision reported
@@ -2061,8 +2070,8 @@ the object out of V8's in-object slots, taking the compiled engine from 852 to
 1276 bytes per request. Inheriting the getter from a shared prototype keeps
 the deferral and gives the layout back. The compiled engine now allocates
 **816 bytes per request against both Hono columns' 1196**, and its slow batches
-have stopped standing out: p95 sits at **1.11× its median**, tighter than bare
-Hono's 1.16× and `hono + zod`'s 1.31×, where before it stalled on 5 batches in
+have stopped standing out: p95 sits at **1.15× its median**, tighter than bare
+Hono's 1.17× and `hono + zod`'s 1.58×, where before it stalled on 5 batches in
 60 and lost 29% of its wall clock to them.
 
 The runtime engine had a second, unrelated cost: it ran the whole request
@@ -2072,13 +2081,13 @@ handler never needs to yield, and the frame and promise were pure overhead.
 `Api.handle` now returns `ApiResponse | Promise<ApiResponse>` and the pipeline
 stays synchronous until something genuinely asynchronous appears. On the static
 GET that took it from 2115 to 1510 bytes per request, and from ~69k to ~93k
-ops/s on the machine that change was measured on. It still allocates 1510 bytes
-per request here.
+ops/s on the machine that change was measured on. It allocates 1378 bytes per
+request here.
 
 What that did *not* fix is the pause. The runtime engine's batch times under
-workerd are still bimodal: a p95 around **2.6× its median** (86 ms against
-33 ms), a discrete event rather than a broad spread, and the same instability
-shows up as the 31k–88k spread across isolates in its static-GET cell above.
+workerd are still bimodal: a p95 around **3.2× its median** (58 ms against
+18 ms), a discrete event rather than a broad spread, and the same instability
+shows up as the 46k–82k spread across isolates in its dynamic-GET cell above.
 Removing the async machinery did not move it and neither did turning response
 validation off, so it is a major collection driven by something still
 unaccounted for. The compiled engine — the production path — does not show it.

@@ -193,7 +193,7 @@ A ruleset is a plain object (authored as YAML, JSON, or a JS module):
 
 | Field | Description |
 | --- | --- |
-| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`. |
+| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`, `resolved` (default `true`; `false` runs the rule against the document as written, before `$ref` dereferencing), and `documentationUrl`. |
 | `then` | `{ function, field?, functionOptions? }` — `field` narrows the match to a child (`@key` targets the property name). |
 | `extends` | A ruleset (or list) to inherit rules from: a file path or npm package. `[target, 'recommended' \| 'all' \| 'off']` controls what it contributes. |
 | `functions` / `functionsDir` | Custom functions to load by name (default dir `functions/`). |
@@ -230,7 +230,7 @@ Anything outside that grammar is a ruleset error (`createRuleset` throws and nam
 | `resolveNamedRuleset(name, basePath?, options?)` | Resolve an `extends` reference (file path or npm package) to its definition. |
 | `builtinFunctions` | The registry of built-in rule functions. |
 
-The engine internals (`createDocument`, `lint`, `query`, `validateRuleset`, `parseWithPointers`, `createFixPlugin`, `DiagnosticSeverity`, and the rule/diagnostic types) are re-exported from the package root for advanced use.
+The engine internals (`createDocument`, `lint`, `lintWithResult`, `query`, `validateRuleset`, `parseWithPointers`, `createFixPlugin`, …) are re-exported from the package root for advanced use; `DiagnosticSeverity` and the rule/diagnostic types (`IDiagnostic`, `RulesetDefinition`, `IRuleDefinition`, …) live on the `@amritk/lint/types` subpath.
 
 ---
 
@@ -259,7 +259,7 @@ const findings = await lint(spec, { ruleset })
 | `oasFixers` | Auto-fixers for the mechanically-repairable OpenAPI rules (pass to `fixDocument` alongside a built OpenAPI ruleset). |
 | `loadOasSchema(version)` | Lazily load one OpenAPI version's official structural meta-schema (`'2.0'` / `'3.0'` / `'3.1'` / `'3.2'`), vendored as raw `.json` from `spec.openapis.org` (3.0/3.1/3.2 verbatim; 2.0 with its external draft-04 metaschema refs inlined). See [`schemas/README.md`](./src/rules/openapi/schemas/README.md). |
 
-The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.
+The structural rules validate against the **official `spec.openapis.org` meta-schemas, vendored as raw `.json`** ([`schemas/`](./src/rules/openapi/schemas/)). 3.0/3.1/3.2 are byte-for-byte verbatim; only 2.0 differs (its external draft-04 metaschema refs are inlined, since the offline interpreter never fetches remote refs, and its top-level `id`/`$schema` keys are dropped). OpenAPI 3.1/3.2 express Schema Objects as JSON Schema 2020-12 via a local `$dynamicRef`/`$dynamicAnchor`, which `@amritk/runtime-validators` resolves natively — so the whole document envelope is validated against the official schema with no bundling or dialect engine, while Schema Object internals stay permissive.
 
 `$ref` resolution stays the caller's job: the preset doesn't pull in a resolver, so for rules that need the dereferenced document (`resolved: true`) pass a `resolve` function to the core `lintWithResult` (for example wrapping [`@amritk/resolve-refs`](../resolve-refs)). The `mjst lint` CLI already wires one up.
 
@@ -300,13 +300,21 @@ Structural validation runs **once per document, against the document as written*
 
 ## Benchmarks
 
-The `bench/` suite pits `@amritk/lint` head-to-head against **[Spectral](https://github.com/stoplightio/spectral)** — the OpenAPI linter this package is modelled on (hence the `spectral:oas` alias) — over the real-world specs the test suite lints: Swagger's petstore, the DigitalOcean API, and the OpenAI API (~17 KB to ~2.8 MB, spanning a small config and a genuinely large document). Both do the same job: **parse → dereference internal `$ref`s → run their recommended OpenAPI ruleset** (mjst dereferences in memory with [`@amritk/resolve-refs`](../resolve-refs), exactly as the CLI does; Spectral uses its own default resolver). Representative numbers (Bun 1.4, Linux x64 — your hardware will differ, run `bun run bench` yourself):
+The `bench/` suite pits `@amritk/lint` head-to-head against **[Spectral](https://github.com/stoplightio/spectral)** — the OpenAPI linter this package is modelled on (hence the `spectral:oas` alias) — over the real-world specs the test suite lints: Swagger's petstore, the DigitalOcean API, and the OpenAI API (~17 KB to ~2.8 MB, spanning a small config and a genuinely large document). Both do the same job: **parse → dereference internal `$ref`s → run their recommended OpenAPI ruleset** (mjst dereferences in memory with [`@amritk/resolve-refs`](../resolve-refs), exactly as the CLI does; Spectral uses its own default resolver). Medians of three runs on each runtime, one machine (Linux x64, a 4-vCPU cloud box, Bun 1.4.0 and Node 26.8.1 — your hardware will differ, run `bun run bench` or `bun run bench:node` yourself):
 
-| document | size | mjst | Spectral | speedup | findings (mjst / Spectral) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| petstore (Swagger) | 17 KB | ~5 ms | ~95 ms | **~19×** | 2 / 2 |
-| digitalocean | 105 KB | ~27 ms | ~375 ms | **~14×** | 2411 / 4319 |
-| openai | 2.8 MB | ~0.73 s | ~7.4 s | **~10×** | 1278 / 474 |
+| document | size | runtime | mjst | Spectral | speedup | findings (mjst / Spectral) |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| petstore (Swagger) | 17 KB | Bun | ~4 ms | ~87 ms | **~21×** | 2 / 2 |
+| petstore (Swagger) | 17 KB | Node | ~5 ms | ~50 ms | **~9.5×** | 2 / 2 |
+| digitalocean | 105 KB | Bun | ~25 ms | ~318 ms | **~13×** | 2411 / 4319 |
+| digitalocean | 105 KB | Node | ~23 ms | ~276 ms | **~12×** | 2411 / 4319 |
+| openai | 2.8 MB | Bun | ~0.65 s | ~7.9 s | **~12×** | 587 / 474 |
+| openai | 2.8 MB | Node | ~0.75 s | ~5.5 s | **~7.3×** | 587 / 474 |
+
+The lead is smaller on Node throughout, and for the same reason in every row:
+Spectral runs materially faster on V8 than on JavaScriptCore — a third quicker
+on the OpenAI spec — while this linter is close to even between the two. The
+ratio is the thing that moves, not our side of it.
 
 An earlier revision of this table reported the OpenAI row as mjst-only, because
 Spectral's JSONPath engine (`nimma`) threw on that spec under Bun. It no longer
@@ -316,7 +324,7 @@ runtime-specific and may come back.
 
 Each `lint` figure is the mean wall time of one whole pass — **every rule, not a subset** — dominated by real work: JSONPath matching, the rule functions, and the dereference pass. A fresh document is parsed on every iteration on both sides, matching how the tools are actually called. The finding counts differ because the two rulesets are not byte-identical (different rule implementations and `$ref` resolution), so this is a **throughput** comparison rather than a correctness parity check — but on petstore both land on the same two findings.
 
-**Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms**, versus **~0.28 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
+**Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms** on Bun and **~0.06 ms** on Node, versus **~0.26 ms** and **~0.24 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
 
 ---
 

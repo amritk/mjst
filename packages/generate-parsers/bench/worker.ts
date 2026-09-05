@@ -33,7 +33,7 @@ const parse = await buildParser(libId, parseCase)
 // orchestrator can flag a disagreement in the table instead of aborting.
 let outputOk = false
 try {
-  outputOk = Bun.deepEquals(parse(parseCase.input), parseCase.expected)
+  outputOk = isDeepStrictEqual(parse(parseCase.input), parseCase.expected)
 } catch {
   outputOk = false
 }

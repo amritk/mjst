@@ -25,7 +25,7 @@ The library adapters lean on their source library's own JSON Schema exporter (Zo
 
 - strips the dialect marker (`$schema`) the generators don't need,
 - rewrites constructs JSON Schema can't express — runtime `Date`, `bigint` — into the shared [`x-mjst`](#the-x-mjst-extension) hint the generators read, and
-- **warns and continues** on anything genuinely unrepresentable rather than throwing, so one unsupported field never blocks generation.
+- **warns and continues** on anything genuinely unrepresentable rather than throwing, so one unsupported field never blocks generation (pass `{ strict: true }` to make a lossy construct throw instead).
 
 ---
 
@@ -43,12 +43,12 @@ The source libraries are **optional peer dependencies** — each adapter dynamic
 | Input format | Install |
 |:---|:---|
 | `typebox` | *(nothing — see below)* |
-| `zod` | `zod@>=4` |
+| `zod` | `zod@>=4`, **or** `zod@3` plus `zod-to-json-schema@>=3` |
 | `valibot` | `valibot@>=1` **and** `@valibot/to-json-schema@>=1` |
 | `effect` | `effect@>=3` |
 | `avro` | *(nothing — an Avro schema is plain JSON)* |
 
-If the required package is missing (or too old), the adapter throws a clear, actionable error naming what to install — e.g. *"The Zod adapter requires 'zod' (v4 or later) to be installed in your project."*
+If the required package is missing, the adapter throws a clear, actionable error naming what to install — e.g. *"The Zod adapter requires either 'zod' v4+ (for its native toJSONSchema) or the 'zod-to-json-schema' package (a fallback for Zod 3). Neither was found — install one in your project."*
 
 > [!NOTE]
 > The TypeBox adapter deliberately does **not** import TypeBox. It works purely on the plain-object shape of the schema (via a JSON round-trip), so TypeBox stays a dependency of your schema module alone, never of mjst.
@@ -57,7 +57,7 @@ If the required package is missing (or too old), the adapter throws a clear, act
 
 ## Usage
 
-Each adapter is a function `(source: unknown) => Promise<JSONSchema>` (the TypeBox and Avro adapters are synchronous, but are exposed through `getAdapter` with the same signature for uniformity — so always `await` when you go through it). Import them by subpath:
+Each adapter is a function `(source: unknown, options?: { strict?: boolean }) => Promise<JSONSchema>` (the TypeBox and Avro adapters are synchronous, but are exposed through `getAdapter` with the same signature for uniformity — so always `await` when you go through it). `strict: true` makes a lossy construct throw instead of widening (Zod, Valibot, Avro). Import them by subpath:
 
 ```ts
 import { avroToJsonSchema } from '@amritk/adapters/avro-to-json-schema'
@@ -98,7 +98,7 @@ A TypeBox schema is already a JSON Schema object at runtime — it just carries 
 ### Zod
 
 > [!IMPORTANT]
-> **Zod 4 or later only.** The adapter relies on Zod's native `toJSONSchema`, which does not exist before Zod 4 (see [`src/zod-to-json-schema.ts`](./src/zod-to-json-schema.ts)). On Zod 3 you'll get a clear error rather than a silent miss.
+> **Zod 4 preferred.** The adapter relies on Zod's native `toJSONSchema`, which does not exist before Zod 4 (see [`src/zod-to-json-schema.ts`](./src/zod-to-json-schema.ts)). On Zod 3 it falls back to the optional [`zod-to-json-schema`](https://github.com/StefanTerdell/zod-to-json-schema) package — install it alongside Zod 3 — and with neither available you'll get a clear error rather than a silent miss.
 
 ```ts
 import { z } from 'zod'
@@ -130,7 +130,7 @@ const User = v.object({
 const jsonSchema = await valibotToJsonSchema(User)
 ```
 
-Requires both `valibot` and `@valibot/to-json-schema`. As with Zod, `v.date()` / `v.bigint()` are rescued into `x-mjst` hints via the converter's `overrideSchema` hook. The converter runs in `errorMode: 'warn'`, so any other unsupported construct degrades to an open schema and is logged rather than throwing.
+Requires both `valibot` and `@valibot/to-json-schema`. As with Zod, `v.date()` / `v.bigint()` are rescued into `x-mjst` hints via the converter's `overrideSchema` hook. The converter runs in `errorMode: 'ignore'` (targeting draft 2020-12), so any other unsupported construct degrades to an open schema; mjst collects those and reports them in one batched `[mjst] Valibot adapter: …` warning rather than throwing.
 
 ### Effect
 
@@ -254,10 +254,10 @@ Both schema→type paths honour the brand identically:
 
 Some source types have no faithful JSON Schema representation and are **not** rescued into an `x-mjst` hint. Rather than fail the whole conversion, the adapters widen those to "accept anything" (`{}`) — which means **the generated type is wider than the source schema** — and emit a `[mjst]` warning to stderr so the widening is visible, never silent. Behaviour per library:
 
-- **Zod.** These Zod types become "accept anything": `symbol`, `nan`, `void`, `undefined`, `never`, `map`, `set`, `promise`, `function`. When any appear, the adapter logs, e.g.: *"[mjst] Zod adapter: function, symbol have no JSON Schema representation and became 'accept anything'. The generated type will be wider than the Zod schema."*
-- **Valibot.** The converter runs in `errorMode: 'warn'`: an unsupported construct degrades to an open schema and `@valibot/to-json-schema` logs which one, so the widening is reported by the converter itself.
+- **Zod.** These Zod types become "accept anything": `symbol`, `nan`, `void`, `undefined`, `never`, `map`, `set`, `promise`, `function`. When any appear, the adapter logs, e.g.: *"[mjst] Zod adapter: function, symbol have no full JSON Schema representation and were widened. The generated type will be wider than the Zod schema."*
+- **Valibot.** The converter runs in `errorMode: 'ignore'`: an unsupported construct degrades to an open schema, and the adapter collects every such construct from the converter's override hooks and reports them in one `[mjst] Valibot adapter: …` warning of the same shape as Zod's.
 - **TypeBox.** An extended `type` string with no mapping (see below) is left unchanged with a warning: *"[mjst] TypeBox type '…' has no JSON Schema or x-mjst mapping; leaving it unchanged."*
-- **Avro.** Only the `decimal` and `duration` logical types widen, each degrading to its base type: *"[mjst] Avro adapter: the decimal logical type (precision/scale) has no full JSON Schema representation and was widened."* Everything else in Avro maps exactly, or is rejected outright — a duplicate name, a reference to an undefined name, or a malformed `record`/`enum`/`fixed` throws rather than converting to something wrong.
+- **Avro.** Only the `decimal` and `duration` logical types widen, each degrading to its base type: *"[mjst] Avro adapter: the decimal logical type (precision/scale) has no full JSON Schema representation and was widened. The generated type will be wider than the Avro schema."* Everything else in Avro maps exactly, or is rejected outright — a duplicate name, a reference to an undefined name, or a malformed `record`/`enum`/`fixed` throws rather than converting to something wrong.
 - **Effect.** Effect does not widen — it is stricter. `JSONSchema.make` throws on any unrepresentable type, wherever it sits. The adapter catches that and descends structurally, rebuilding the container (struct, array, union, refinement, …) and rescuing every `BigIntFromSelf` / `DateFromSelf` leaf it reaches into an `x-mjst` hint. Only a leaf it has no rescue for (a raw `symbol`, say) is fatal, and then it throws an actionable message rather than Effect's opaque one: replace the type with a JSON-representable one, or add a `jsonSchema` annotation to that field.
 
 If any of these matter to your schema, prefer a representable alternative (e.g. model a set as an array) or add the library's own JSON Schema annotation.
