@@ -28,6 +28,8 @@ Output:
   --types-only          Generate type definitions only, without parser functions
   --validators          Also emit validateX/isX validators into a validators/ subdir
   --examples            Also emit fast-check arbitraries + example values under examples/
+  --message-contracts   Also emit @amritk/api channel contracts under contracts/ (--input asyncapi only)
+  --discriminator <p>   Property naming which message a frame is, for --message-contracts (default: type)
   --build               Compile the generated files to .js/.d.ts (implies --import-ext js)
   --force               Overwrite pre-existing files in the output destination
   --import-ext <ext>    Extension on generated relative imports: ts (default) or js

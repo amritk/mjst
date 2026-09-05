@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
+import type { ExtractionIssue } from '@amritk/asyncapi'
 import { extractAsyncApi, listMessageSchemas } from '@amritk/asyncapi'
 import { buildSchema } from '@amritk/generate-parsers'
 import { buildValidatorSchema } from '@amritk/generate-validators'
@@ -16,8 +17,10 @@ import { combineGeneratedFiles } from './combine-files'
 import { createOutputWriter, type OutputWriter } from './create-output-writer'
 import { detectHelpersMode } from './detect-helpers-mode'
 import { emitExamples } from './emit-examples'
+import { CONTRACTS_DIR, CONTRACTS_PEER, emitMessageContracts } from './emit-message-contracts'
 import { ensureOutputDir } from './ensure-output-dir'
 import { HELP_TEXT } from './help-text'
+import { isDependencyDeclared } from './is-dependency-declared'
 import { loadAsyncApiDocument } from './load-asyncapi-document'
 import { loadConfig } from './load-config'
 import { loadSchema } from './load-schema'
@@ -33,6 +36,14 @@ import { resolveImportExt } from './resolve-import-ext'
  * output directory entirely.
  */
 const ROOT_TYPE_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+/**
+ * A property name we are willing to emit as the message discriminator. It lands
+ * in generated source inside a single-quoted literal, so the shape is held to
+ * what cannot end that literal — the same bargain `x-mjst`'s reader strikes for
+ * the value it accepts from a document.
+ */
+const DISCRIMINATOR_PATTERN = /^[A-Za-z_$][\w$-]*$/
 
 /** The schema's base filename without extension, used to derive the root type name. */
 const schemaBaseName = (schemaPath: string): string => basename(schemaPath).replace(/\.[^.]+$/, '')
@@ -494,6 +505,25 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
 }
 
 /**
+ * Points out that the contracts just written import a package the output's own
+ * project has not asked for.
+ *
+ * The same nearest-package.json walk `--helpers` auto-detection uses, and for
+ * the same reason: `@amritk/api` being *resolvable* from here proves nothing
+ * about whether the consuming project can import it, since a hoisted install
+ * puts mjst's own dependencies within reach of code that never declared them.
+ * This is a tip, not an error — generating a contract for a project that is
+ * about to install the package is a perfectly ordinary order of operations.
+ */
+const reportContractsPeer = (outputDir: string): void => {
+  if (isDependencyDeclared(outputDir, CONTRACTS_PEER)) return
+  console.log(
+    `Tip: the generated contracts import ${CONTRACTS_PEER}, which is not a declared dependency of the project ` +
+      `at ${outputDir}. Install it there (it is a peer of the generated code, not of the mjst CLI).`,
+  )
+}
+
+/**
  * Generates parsers for every message schema an AsyncAPI document declares,
  * giving each message its own `channels/<channel>/<message>/` subtree under
  * `outputDir` — structurally the {@link runRecursive} job, with the document
@@ -514,7 +544,12 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
     console.warn(`Warning: ${issue.path}: ${issue.message}`)
   }
 
-  if (schemas.length === 0) {
+  // `--message-contracts` can carry a document the parser generators cannot: a
+  // channel of pure signals (`{"type":"ack"}`) declares no payload to generate
+  // from, and still projects onto a perfectly good contract.
+  const contractsPossible = config.messageContracts === true && model.channels.some((c) => c.messages.length > 0)
+
+  if (schemas.length === 0 && !contractsPossible) {
     console.error(
       `Error: no generatable message schemas found in ${documentPath}. ` +
         'Every message either declares no payload/headers or uses a non-JSON-Schema schemaFormat (see warnings above).',
@@ -530,6 +565,10 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
   const sharedHelpers = new Map<string, string>()
   const writer = await createOutputWriter(outputDir, config.force)
   const exampleTasks: ExampleTask[] = []
+  /** Contract projection problems, reported after the tree lands rather than mid-stage. */
+  const contractIssues: ExtractionIssue[] = []
+  let contractMessageCount = 0
+  let contractChannelCount = 0
 
   const stageAll = async (): Promise<void> => {
     for (const extracted of schemas) {
@@ -576,18 +615,68 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
     for (const [filename, content] of sharedHelpers) {
       await writer.stage(filename, content)
     }
+
+    // Same writer as the parser tree, deliberately: a run that asks for both
+    // should land both or neither, and the manifest that records what this run
+    // owns has to cover the contracts too.
+    if (config.messageContracts) {
+      const contracts = await emitMessageContracts({
+        model,
+        writer,
+        bannerPrefix: config.banner ? resolveBanner(config.banner) : '',
+        ...(config.discriminator !== undefined ? { discriminator: config.discriminator } : {}),
+      })
+      contractIssues.push(...contracts.issues)
+      contractMessageCount = contracts.messageCount
+      contractChannelCount = contracts.channelCount
+    }
   }
 
   const writtenTsFiles = await commitOrDiscard(writer, stageAll)
 
   for (const filename of writtenTsFiles) console.log(`Generated: ${filename}`)
 
+  if (config.messageContracts) {
+    for (const issue of contractIssues) {
+      console.warn(`Warning: ${issue.path}: ${issue.message}`)
+    }
+  }
+
+  // The pre-flight check above only knows whether there was anything to try.
+  // A document whose messages all lack a direction, or whose payloads are all
+  // refused, gets that far and produces nothing — and exiting 0 having written
+  // no files reads as "your document is empty" rather than "nothing here could
+  // be generated".
+  if (writtenTsFiles.length === 0) {
+    console.error(
+      `Error: nothing was generated from ${documentPath}. ` +
+        'No message declares a payload the generators can use, and no channel projected onto a contract ' +
+        '(see the warnings above).',
+    )
+    process.exit(1)
+  }
+
+  if (config.messageContracts) {
+    console.log(`\nMessage contracts: ${contractMessageCount} message(s) across ${contractChannelCount} channel(s)`)
+    reportContractsPeer(outputDir)
+  }
+
   if (exampleTasks.length > 0) {
     await runExamples(config, outputDir, exampleTasks)
   }
 
   if (config.build) {
-    await buildOutput(outputDir, writtenTsFiles, config.typesOnly)
+    // The contracts stay as `.ts`, for the reason the examples do: they import
+    // a peer (`@amritk/api`) that the output's project may not have installed
+    // yet, and handing tsc an unresolvable import fails the whole compilation —
+    // including the parsers, which needed nothing of the sort. They are still
+    // committed through this run's writer, so the manifest owns them and a
+    // rerun reclaims them.
+    await buildOutput(
+      outputDir,
+      writtenTsFiles.filter((file) => !file.startsWith(`${CONTRACTS_DIR}/`)),
+      config.typesOnly,
+    )
   } else {
     console.log(`\nTotal files generated: ${writtenTsFiles.length}`)
   }
@@ -708,6 +797,35 @@ const run = async (): Promise<void> => {
     if (config.export) {
       console.error(
         'Error: --export applies to module inputs (typebox, zod, ...); an AsyncAPI document has no exports.',
+      )
+      process.exit(1)
+    }
+  } else if (config.messageContracts) {
+    // Channels, operations and their directions are AsyncAPI's alone; a JSON
+    // Schema or a TypeBox module has nothing to project onto a contract.
+    console.error('Error: --message-contracts requires --input asyncapi; there are no channels to project otherwise.')
+    process.exit(1)
+  }
+
+  // A messages contract is a `defineMessages({ ... })` value the consumer
+  // imports and hands to bindMessages, so there is nothing of it left in a
+  // types-only run.
+  if (config.messageContracts && config.typesOnly) {
+    console.error('Error: --message-contracts cannot be combined with --types-only, which emits no runtime code.')
+    process.exit(1)
+  }
+
+  if (config.discriminator !== undefined) {
+    if (!config.messageContracts) {
+      console.error('Error: --discriminator only applies to --message-contracts. Add --message-contracts, or drop it.')
+      process.exit(1)
+    }
+    // The name is written into generated TypeScript inside a quoted literal, and
+    // read as a property off every frame. Anything else either does not compile
+    // or does not name a property.
+    if (!DISCRIMINATOR_PATTERN.test(config.discriminator)) {
+      console.error(
+        `Error: invalid --discriminator "${config.discriminator}". Expected a property name of letters, digits, _, $ or -, not starting with a digit.`,
       )
       process.exit(1)
     }

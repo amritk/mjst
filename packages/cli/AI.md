@@ -41,14 +41,25 @@ mjst compile-api ./routes.ts --out ./dist/handler.ts
    point `--schema` at a JS/TS **module**; `avro` points it at a `.avsc` JSON
    document, which is read as data (no `import()`, so `--export` does not
    apply).
+6. **`--input asyncapi`** reads an AsyncAPI 2.x/3.0 document (JSON or YAML) and
+   generates from every message payload/headers schema, one subtree per message.
+   It rejects `--schema-dir`, `--out-file`, `--root-type`, and `--export`.
+7. **`--message-contracts`** (AsyncAPI only) additionally writes
+   `contracts/<channel>.ts` — a `defineMessages({ ... })` per channel, plus a
+   barrel. Those files import **`@amritk/api`**, which the *consuming* project
+   installs; the CLI does not put it there, and `--build` leaves the contracts
+   as `.ts` for that reason. Incompatible with `--types-only`. Use
+   `--discriminator <prop>` when the document tags frames with something other
+   than `type`; a channel carrying `x-mjst: { discriminator }` keeps its own.
 
 ## Common flags
 
 `--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
-`--validators`, `--examples`, `--types-only`, `--build`, `--strict`,
-`--strip-unknown`, `--unknown-keys count-keys|count-enumerable`, `--readonly`,
-`--import-ext ts|js`, `--config <path>`,
-`--resolve-remote` / `--allowed-hosts` (SSRF-guarded remote `$ref`s).
+`--validators`, `--examples`, `--message-contracts`, `--discriminator`,
+`--types-only`, `--build`, `--strict`, `--strip-unknown`,
+`--unknown-keys count-keys|count-enumerable`, `--readonly`,
+`--import-ext ts|js`, `--config <path>`, `--resolve-remote` /
+`--allowed-hosts` (SSRF-guarded remote `$ref`s).
 
 ## Lint gotchas
 

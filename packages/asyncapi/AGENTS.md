@@ -4,7 +4,8 @@ Contributor guide for AI agents editing **this package**. Repo-wide rules:
 [`../../AGENTS.md`](../../AGENTS.md). Consuming the package? See [`AI.md`](./AI.md).
 
 Extracts message payload/headers schemas from AsyncAPI 2.x/3.0 documents as
-self-contained JSON Schema 2020-12 for the mjst generators.
+self-contained JSON Schema 2020-12 for the mjst generators, and projects each
+channel onto an `@amritk/api` `defineMessages` contract.
 
 ## Commands
 
@@ -32,3 +33,14 @@ bun run --filter='@amritk/asyncapi' types:check
   `extract-channels-v3.ts`.
 - The real-document corpus lives in `fixtures/asyncapi/` (shared with the lint
   preset) — extend it rather than inventing inline documents for new cases.
+- **The contract layer never imports `@amritk/api`.** `defineMessages` is the
+  *generated code's* peer, not this package's; `resolve-discriminator.ts` keeps
+  its own `DEFAULT_DISCRIMINATOR = 'type'` literal in step with the runtime's,
+  and the CLI's keystone test is what holds the two together.
+- **A message's map key is its wire tag.** `buildChannelContract` keys each
+  direction by the message name, and `stripDiscriminator` removes the tag from
+  the payload — because the runtime removes it from the frame before
+  validating, and `assertMessageSchema` refuses a payload that still declares
+  it. A payload whose tag names something *other* than the message becomes an
+  issue rather than a silent rewrite: the wire tag and the contract key would
+  disagree, and the emitted contract would listen for a frame that never comes.
