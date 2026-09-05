@@ -1,6 +1,6 @@
 {
   "name": "@amritk/asyncapi",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Extract JSON Schemas from AsyncAPI 2.x/3.0 documents for the mjst generators.",
   "type": "module",
   "sideEffects": false,

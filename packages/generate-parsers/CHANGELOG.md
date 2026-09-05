@@ -1,5 +1,171 @@
 # @amritk/generate-parsers
 
+## 0.21.0
+
+### Minor Changes
+
+- eb425fe: Nested objects are hoisted into a local on every fast path, and how a closed
+  object proves it has no undeclared key is now an option: `unknownKeys`.
+
+  **Hoisting.** The validators' `isX` / `validateX` guards used to read every
+  member of a nested object through a fresh cast — `typeof (obj.deeplyNested as
+Record<string, unknown>).foo`, once per member, plus twice more for the key
+  count. They now load each nested object once, `const _n0 = obj.deeplyNested as
+Record<string, unknown>`, guard it with `typeof _n0 === 'object' && _n0 !==
+null` before the first member read, and read every member (and count every key)
+  through the local, at any depth, for required and optional nested objects and
+  for object array items alike. V8 had already commoned the loads; on
+  JavaScriptCore the local is what lets the guard be optimised at all — under the
+  moltar harness `isAssertStrict` on Bun 1.4 goes from ~45M ops/s to the harness
+  floor (~300M on the measuring box, the call eliminated). A guard that hoists
+  or counts is now a run of early exits (`if (!(…)) return …`) rather than one
+  nested `&&` chain.
+
+  The parsers already read nested objects through cached locals, but their fast
+  path proved a nested object with a _call_ — `validateDoc_NestedShape(_nested)` —
+  and that call was the one thing left on the strict fast path JavaScriptCore
+  would not see through. The parent's guard now spells the nested predicate out
+  over the local (`typeof _nested === "object" && … && Object.keys(_nested).length
+=== 2`), built from the shape validator's own checks so the two cannot disagree,
+  one level deep and within the same size budget as the strip-build inlining.
+  `parseStrict` under the moltar harness on Bun 1.4 goes from ~45M ops/s to the
+  harness floor, and Node gains the saved call (~10%). The call stays where the
+  predicate is not one expression: a per-key walk, a `for…in` count under
+  `count-enumerable`, or a nested object past the budget.
+
+  The cold-path split's object check is called behind the object test —
+  `if (!isObject(input)) _assertDocObject(input)` — rather than unconditionally. A
+  call the fast path always makes to a function that can throw is a call
+  JavaScriptCore keeps, and with it the whole parser: under the moltar harness on
+  Bun 1.4 the strict and the strip parse both measured ~50M ops/s with the
+  unconditional call and ~220M, the harness floor, behind the test.
+
+  **`unknownKeys: 'count-keys' | 'count-enumerable'`** — on `buildSchema` (15th
+  positional), `buildValidatorSchema` (5th), and the CLI (`--unknown-keys`, or
+  `unknownKeys` in the config file). `'count-keys'` is `Object.keys(obj).length
+=== N` (in the parsers behind an `Object.getPrototypeOf(input) ===
+Object.prototype` guard, which keeps an own-key count sound against an inherited
+  declared key); `'count-enumerable'` is `let c = 0; for (const k in obj) c++`,
+  which allocates nothing and needs no prototype guard. When a declared property is
+  optional both fall back to the per-key `for…in` walk. The two trade places
+  between engines, measured under the moltar harness (Bun 1.4.0 / Node 22, each
+  case alone in its own process): `assertStrict` ~300M / 19M ops/s with
+  `count-keys` against 22M / 22M with `count-enumerable`; `parseStrict` ~220M /
+  14M against 13M / 14M. The default is **`'count-keys'`** — mjst benches on Bun,
+  where it is never the slower form and is 3× faster on the strict parse.
+  Node-only consumers gain from `'count-enumerable'` (10–20% on that box, up to
+  1.7–2× on faster hardware). The choice is made at generation time; the emitted
+  code never detects its runtime.
+
+  Every verdict on a value that could have come from JSON is unchanged under
+  either strategy, and the differential suites against Ajv and
+  `@amritk/runtime-validators` pass as before. The two strategies do read
+  different key sets on a value JSON cannot hold (an enumerable key on a crafted
+  prototype): `for…in` agrees with the cold paths exactly, `Object.keys` accepts an
+  inherited extra the cold path would report — which is what `main` always did.
+
+  `@amritk/helpers` gains `unknown-keys-strategy` (the type, the list, the default
+  and a guard), shared by both generators and the CLI. `bun run
+bench:moltar:leaderboard` prints one row per strategy for every runtime it
+  finds, so both variants are measured side by side.
+
+- 7947ca4: Move a generated object parser's diagnostics out of its fast path.
+
+  A parser used to carry its whole diagnostic half — a `throw new Error(...)` per
+  field, each with its own template literal and `"x" in input` probe — in the same
+  function body as the fast path. That body is large enough to exceed V8's inlining
+  budget, so every call stayed a real call and every returned object a real
+  allocation, even for a caller that discards the result.
+
+  The per-property assertions now live in a private `_assert<Type>` the fast path
+  calls as a _statement_ when its type chain fails, and the object check in a
+  `_assert<Type>Object` assertion function. The build stays where it was, so the
+  fast path keeps the single `return` it always had — which matters: an earlier
+  version moved the build out too and handed off with `return _parse<Type>Slow(input)`,
+  making the returned value a phi of the local literal and an opaque call result.
+  JavaScriptCore then cannot scalar-replace the literal, and every flat parser under
+  ~24 properties measured ~3x slower on Bun against a caller that reads the parsed
+  fields. Coerce parsers have no diagnostics to move — their cold half _is_ the
+  returned value — so they keep the single-function form unchanged.
+
+  Nested fields inlined into the fast path are now bound to a local and read once
+  instead of being re-read for the literal after the type test, and the inlined
+  condition drops the `typeof`/`!== null`/`!Array.isArray` prefix the caller's
+  guard has already proven.
+
+  No behaviour change: the same values parse, the same values throw, with the same
+  messages in the same order.
+
+  Measured, Node 22, caller reads every parsed field: the moltar `assert` shape
+  goes 16.4M → 23.4M ops/s. Under `moltar/typescript-runtime-type-benchmarks`'
+  own harness, `parseSafe` goes ~40M → ~65M. Bun is unchanged across the board.
+  One case pays for it: the nested `Order · safe` shape is ~5% slower under this
+  package's harness.
+
+  Adds `bun run bench:moltar` to the package: the same parsers under that harness,
+  with a no-op floor and a discarded/observed pair so a number that is really
+  dead-code elimination is visible as one.
+
+### Patch Changes
+
+- 3c5d1c9: Performance: faster steady-state validation and parsing.
+
+  - `@amritk/runtime-validators`: a prepared validator now keeps one run context for its lifetime instead of allocating a context, a budget holder and a ref stack per call, and branch probes (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) run in place rather than in a fresh context each. A scoped `$ref` (a document with `$id`) caches the target it resolved for the base last seen, and `uniqueItems` compares up to eight primitives pairwise instead of building a `Set`. Measured on the bench suite against `main` (Bun, isolated processes, median of 21 trials): the guard path runs 1.2–2.3× faster on valid input and 1.5–3.4× faster on invalid input, and the error-collecting path 1.1–1.6× faster.
+  - `@amritk/generate-parsers`: a parser's result object is no longer built with a conditional spread per optional property (`...(_x !== undefined && { x: _x })`); the optional properties are assigned after the literal, in declared order, so the output and its key order are unchanged while a parse that builds an object with optional properties runs 1.5–2.8× faster on the bench suite (`Order · strict` 6.6M → 10.3M ops/s, `User · strict` 11.7M → 32.5M ops/s; V8 gains at least as much, since it treats the conditional spread as a generic copy).
+  - `@amritk/generate-validators`: the boolean guard (`isX`) iterates array items through a new `everyItem` helper exported from the generated `validation-result.ts` instead of copying the array with `Array.from` on every call.
+
+- c8cb8b0: Generated types no longer reject instances an `if`/`then` conditional accepts.
+
+  An `if` is a test, not a requirement, and its `then` binds only the instances
+  that pass the test. The type generator used to fold the `if` and `then` property
+  blocks into the surrounding object as _required_ properties, and merged an
+  `else` in beside them. `{ allOf: [{ if: { a: true }, then: { b: true } }] }` next
+  to optional `a` and `b` emitted `{ a?: boolean; b?: boolean } & { a: true; b:
+true }`, so `{}` and `{ a: false }` — both valid — failed to type-check; the bare
+  form emitted `{ a: true; b: true }` outright. The runtime validators and parsers
+  were already right; only the declared type was wrong.
+
+  **Lowering chosen: a union, with a sound fallback.** A conditional now lowers to
+  `(if ∧ then) | (¬if ∧ else)`:
+
+  - The matched branch folds `if` and `then` into one literal, requiring only
+    the keys their own `required` lists name, with a `then` `$ref` intersected
+    onto that branch alone (`({ kind: "a" } & Extra) | { kind?: "b" }`).
+  - The unmatched branch is the negation of the test, spelled against the finite
+    values the tested property may hold — a `boolean`, `enum`, `const` or `null`
+    type declared in the schema's own `properties`, or in the composing schema's
+    when the conditional is an inline `allOf` member — intersected with `else`
+    when there is one. So the example above becomes `{ a?: boolean; b?: boolean }
+& ({ a: true; b: true } | { a?: false })`, which TypeScript narrows on the
+    way the schema does.
+  - When the unmatched side cannot be spelled — the tested property is a string,
+    the test is a `$ref` or a composition, and there is no `else` — the
+    conditional is **dropped** from the type, which is what 0.7.1 did for the
+    `allOf`-wrapped form. Lossy but sound: nothing the schema accepts is refused.
+    A `$defs` entry that is nothing but an `if`/`then` (OpenAPI's `type-http`)
+    therefore emits `{}` in its own file, where it used to emit an intersection
+    that rejected every other security-scheme type.
+  - An `allOf` member that is a local `$ref` to such a definition is read
+    through when the generator has the root document (every generator passes
+    it): the composing type keeps the ref's name _and_ gains the definition's
+    conditional lowered against its own property block, so OpenAPI's
+    `security-scheme` narrows on `type` the way the schema does — `TypeHttp &
+({ type: "http"; scheme: string } | { type?: "apiKey" | … })`.
+
+  An `allOf` member that is only its conditional renders as that union rather than
+  as `{} & (…)`, and `if: true` / `if: false` take their decided branch.
+
+  The coerce parser's non-object fallback is asserted to the type when the schema
+  composes a conditional through `allOf` (inline or by `$ref`), as it already was
+  for a schema carrying its own `if`: a literal built from the schema's own
+  required keys lands in no branch of the lowered union, and the emitted file did
+  not compile — nor did it before, when the same intersection was `never`.
+
+- Updated dependencies [21145a6]
+- Updated dependencies [eb425fe]
+- Updated dependencies [c8cb8b0]
+  - @amritk/helpers@0.19.0
+
 ## 0.20.1
 
 ### Patch Changes

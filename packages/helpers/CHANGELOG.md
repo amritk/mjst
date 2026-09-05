@@ -1,5 +1,185 @@
 # @amritk/helpers
 
+## 0.19.0
+
+### Minor Changes
+
+- eb425fe: Nested objects are hoisted into a local on every fast path, and how a closed
+  object proves it has no undeclared key is now an option: `unknownKeys`.
+
+  **Hoisting.** The validators' `isX` / `validateX` guards used to read every
+  member of a nested object through a fresh cast — `typeof (obj.deeplyNested as
+Record<string, unknown>).foo`, once per member, plus twice more for the key
+  count. They now load each nested object once, `const _n0 = obj.deeplyNested as
+Record<string, unknown>`, guard it with `typeof _n0 === 'object' && _n0 !==
+null` before the first member read, and read every member (and count every key)
+  through the local, at any depth, for required and optional nested objects and
+  for object array items alike. V8 had already commoned the loads; on
+  JavaScriptCore the local is what lets the guard be optimised at all — under the
+  moltar harness `isAssertStrict` on Bun 1.4 goes from ~45M ops/s to the harness
+  floor (~300M on the measuring box, the call eliminated). A guard that hoists
+  or counts is now a run of early exits (`if (!(…)) return …`) rather than one
+  nested `&&` chain.
+
+  The parsers already read nested objects through cached locals, but their fast
+  path proved a nested object with a _call_ — `validateDoc_NestedShape(_nested)` —
+  and that call was the one thing left on the strict fast path JavaScriptCore
+  would not see through. The parent's guard now spells the nested predicate out
+  over the local (`typeof _nested === "object" && … && Object.keys(_nested).length
+=== 2`), built from the shape validator's own checks so the two cannot disagree,
+  one level deep and within the same size budget as the strip-build inlining.
+  `parseStrict` under the moltar harness on Bun 1.4 goes from ~45M ops/s to the
+  harness floor, and Node gains the saved call (~10%). The call stays where the
+  predicate is not one expression: a per-key walk, a `for…in` count under
+  `count-enumerable`, or a nested object past the budget.
+
+  The cold-path split's object check is called behind the object test —
+  `if (!isObject(input)) _assertDocObject(input)` — rather than unconditionally. A
+  call the fast path always makes to a function that can throw is a call
+  JavaScriptCore keeps, and with it the whole parser: under the moltar harness on
+  Bun 1.4 the strict and the strip parse both measured ~50M ops/s with the
+  unconditional call and ~220M, the harness floor, behind the test.
+
+  **`unknownKeys: 'count-keys' | 'count-enumerable'`** — on `buildSchema` (15th
+  positional), `buildValidatorSchema` (5th), and the CLI (`--unknown-keys`, or
+  `unknownKeys` in the config file). `'count-keys'` is `Object.keys(obj).length
+=== N` (in the parsers behind an `Object.getPrototypeOf(input) ===
+Object.prototype` guard, which keeps an own-key count sound against an inherited
+  declared key); `'count-enumerable'` is `let c = 0; for (const k in obj) c++`,
+  which allocates nothing and needs no prototype guard. When a declared property is
+  optional both fall back to the per-key `for…in` walk. The two trade places
+  between engines, measured under the moltar harness (Bun 1.4.0 / Node 22, each
+  case alone in its own process): `assertStrict` ~300M / 19M ops/s with
+  `count-keys` against 22M / 22M with `count-enumerable`; `parseStrict` ~220M /
+  14M against 13M / 14M. The default is **`'count-keys'`** — mjst benches on Bun,
+  where it is never the slower form and is 3× faster on the strict parse.
+  Node-only consumers gain from `'count-enumerable'` (10–20% on that box, up to
+  1.7–2× on faster hardware). The choice is made at generation time; the emitted
+  code never detects its runtime.
+
+  Every verdict on a value that could have come from JSON is unchanged under
+  either strategy, and the differential suites against Ajv and
+  `@amritk/runtime-validators` pass as before. The two strategies do read
+  different key sets on a value JSON cannot hold (an enumerable key on a crafted
+  prototype): `for…in` agrees with the cold paths exactly, `Object.keys` accepts an
+  inherited extra the cold path would report — which is what `main` always did.
+
+  `@amritk/helpers` gains `unknown-keys-strategy` (the type, the list, the default
+  and a guard), shared by both generators and the CLI. `bun run
+bench:moltar:leaderboard` prints one row per strategy for every runtime it
+  finds, so both variants are measured side by side.
+
+- c8cb8b0: Generated types no longer reject instances an `if`/`then` conditional accepts.
+
+  An `if` is a test, not a requirement, and its `then` binds only the instances
+  that pass the test. The type generator used to fold the `if` and `then` property
+  blocks into the surrounding object as _required_ properties, and merged an
+  `else` in beside them. `{ allOf: [{ if: { a: true }, then: { b: true } }] }` next
+  to optional `a` and `b` emitted `{ a?: boolean; b?: boolean } & { a: true; b:
+true }`, so `{}` and `{ a: false }` — both valid — failed to type-check; the bare
+  form emitted `{ a: true; b: true }` outright. The runtime validators and parsers
+  were already right; only the declared type was wrong.
+
+  **Lowering chosen: a union, with a sound fallback.** A conditional now lowers to
+  `(if ∧ then) | (¬if ∧ else)`:
+
+  - The matched branch folds `if` and `then` into one literal, requiring only
+    the keys their own `required` lists name, with a `then` `$ref` intersected
+    onto that branch alone (`({ kind: "a" } & Extra) | { kind?: "b" }`).
+  - The unmatched branch is the negation of the test, spelled against the finite
+    values the tested property may hold — a `boolean`, `enum`, `const` or `null`
+    type declared in the schema's own `properties`, or in the composing schema's
+    when the conditional is an inline `allOf` member — intersected with `else`
+    when there is one. So the example above becomes `{ a?: boolean; b?: boolean }
+& ({ a: true; b: true } | { a?: false })`, which TypeScript narrows on the
+    way the schema does.
+  - When the unmatched side cannot be spelled — the tested property is a string,
+    the test is a `$ref` or a composition, and there is no `else` — the
+    conditional is **dropped** from the type, which is what 0.7.1 did for the
+    `allOf`-wrapped form. Lossy but sound: nothing the schema accepts is refused.
+    A `$defs` entry that is nothing but an `if`/`then` (OpenAPI's `type-http`)
+    therefore emits `{}` in its own file, where it used to emit an intersection
+    that rejected every other security-scheme type.
+  - An `allOf` member that is a local `$ref` to such a definition is read
+    through when the generator has the root document (every generator passes
+    it): the composing type keeps the ref's name _and_ gains the definition's
+    conditional lowered against its own property block, so OpenAPI's
+    `security-scheme` narrows on `type` the way the schema does — `TypeHttp &
+({ type: "http"; scheme: string } | { type?: "apiKey" | … })`.
+
+  An `allOf` member that is only its conditional renders as that union rather than
+  as `{} & (…)`, and `if: true` / `if: false` take their decided branch.
+
+  The coerce parser's non-object fallback is asserted to the type when the schema
+  composes a conditional through `allOf` (inline or by `$ref`), as it already was
+  for a schema carrying its own `if`: a literal built from the schema's own
+  required keys lands in no branch of the lowered union, and the emitted file did
+  not compile — nor did it before, when the same intersection was `never`.
+
+### Patch Changes
+
+- 21145a6: The generate pipeline now consumes AsyncAPI documents: `mjst --input asyncapi
+--schema api.yaml --out-dir src/generated` walks an AsyncAPI 2.0–2.6 or 3.0
+  document (JSON or YAML) and generates parsers — plus `--validators`,
+  `--examples`, `--build`, and the rest of the existing flags — for **every
+  message payload and headers schema** it declares, each in its own
+  `channels/<channel>/<message>[-headers]/` subtree, exactly the way
+  `--schema-dir` gives each schema file its own directory.
+
+  **What "consumes" means, concretely.** A new `@amritk/asyncapi` package (this
+  release) does the document work, and it is usable on its own
+  (`extractAsyncApi(document)` → normalized model, `listMessageSchemas(model)` →
+  generator inputs; no I/O, parsing and cross-file `$ref` resolution stay the
+  caller's job):
+
+  - Both majors normalize into one 3.0-shaped model. 2.x `publish` becomes
+    `receive` and `subscribe` becomes `send` — directions named from the
+    application's point of view, the same convention as `@amritk/api`'s message
+    contracts, and the reason AsyncAPI 3.0 renamed the pair itself.
+  - Message and operation traits are shallow-merged _before_ `schemaFormat` is
+    read, so a trait-contributed format gates its payload like an inline one.
+  - Payloads are normalized to the JSON Schema 2020-12 the generators expect:
+    the AsyncAPI default dialect (a draft-07 superset) and declared draft-07 go
+    through the draft-07 upgrade, OpenAPI-format payloads get `nullable` folded
+    into `type`, declared 2020-12 passes through. 3.0 Multi Format Schema
+    Objects are unwrapped.
+  - Every `$ref` into `#/components/schemas/...` is rebased into a local
+    `$defs` with the referenced components copied in transitively, so each
+    extracted schema is **self-contained** — and still yields one named type
+    per component rather than an inlined blob.
+  - A payload whose `schemaFormat` is not a JSON Schema dialect (Avro,
+    Protobuf, RAML, …) is skipped with a warning naming the message and format;
+    the document's other messages still generate. Only a document yielding
+    nothing generatable fails the run.
+
+  **`mjst lint` grows preset names.** `--ruleset asyncapi` (aliases
+  `loupe:asyncapi`, `spectral:asyncapi`) and `--ruleset oas` (aliases
+  `loupe:oas`, `spectral:oas`) now resolve to the built-in presets from
+  `@amritk/lint/rules/*` — previously the presets shipped in the library but the
+  CLI could only load ruleset _files_, so linting an AsyncAPI document from the
+  CLI meant writing a JS ruleset by hand. Unknown names still resolve as file
+  paths.
+
+  **`@amritk/adapters`**: `SourceFormat` gains `'asyncapi'`. It is a
+  document-on-disk format like `'json'`, not an adapter — `getAdapter('asyncapi')`
+  still throws, and the CLI branches before reaching it.
+
+  Flag interactions: `--input asyncapi` rejects `--schema-dir`, `--out-file`,
+  `--root-type`, and `--export`, each with an error saying why. Root type names
+  come from message identity (`lightMeasured` → `LightMeasured`), never the
+  schema `title` — two messages titled "Event" stay distinct. Colliding output
+  names dedupe deterministically (`-2`, `-3`, …) with a warning rather than
+  failing, because documents in the wild collide.
+
+  **`@amritk/helpers`**: `upgradeDraft07Schema` now merges the renamed
+  `definitions` into an authored `$defs` block instead of replacing it — a
+  draft-07 document carrying both no longer loses every authored entry (and the
+  refs pointing at them) during the upgrade.
+
+  This is phase one of AsyncAPI support: generating `defineMessages`-compatible
+  channel contracts, and projecting AsyncAPI documents _from_ `@amritk/api`
+  route contracts, are the planned follow-ups.
+
 ## 0.18.0
 
 ### Minor Changes
