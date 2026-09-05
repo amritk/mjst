@@ -760,86 +760,260 @@ describe('generateTypeDefinition', () => {
     expect(result).toContain('name?: string;')
   })
 
-  it('generates type from conditional if/then object fragments', () => {
+  // An `if` is a test, never a requirement, and its `then` binds only the
+  // instances that pass it. With no `else` and no way to spell "fails the
+  // test", the instances that fail it are unconstrained — so the conditional
+  // says nothing about the type, and the sound rendering is to leave it out.
+  // Folding both halves in as required properties (what this used to do)
+  // rejected the `{}` and `{ type: "apiKey" }` the schema accepts.
+  it('drops a bare if/then whose unmatched side cannot be spelled', () => {
     const schema: JSONSchema = {
-      if: {
-        properties: {
-          type: {
-            const: 'http',
-          },
-        },
-      },
-      then: {
-        properties: {
-          scheme: {
-            type: 'string',
-          },
-        },
-        required: ['scheme'],
-      },
+      if: { properties: { type: { const: 'http' } } },
+      then: { properties: { scheme: { type: 'string' } }, required: ['scheme'] },
     }
 
-    const result = generateTypeDefinition(schema, 'TypeHttp')
-
-    expect(result).toStrictEqual('export type TypeHttp = {\n' + '  type: "http";\n' + '  scheme: string;\n' + '};')
+    expect(generateTypeDefinition(schema, 'TypeHttp')).toBe('export type TypeHttp = {};')
   })
 
-  it('generates required property from then properties without explicit required', () => {
-    const schema: JSONSchema = {
-      if: {
-        properties: {
-          type: {
-            const: 'http',
-          },
-        },
-      },
-      then: {
-        properties: {
-          bearerFormat: {
-            type: 'string',
-          },
-        },
-      },
-    }
-
-    const result = generateTypeDefinition(schema, 'TypeHttp')
-
-    expect(result).toStrictEqual(
-      'export type TypeHttp = {\n' + '  type: "http";\n' + '  bearerFormat: string;\n' + '};',
-    )
-  })
-
-  it('generates required discriminator for conditional type-http schema with $comment JSDoc', () => {
+  it('keeps the JSDoc of a conditional it drops', () => {
     const schema: JSONSchema = {
       $comment: 'https://spec.openapis.org/oas/v3.1#security-scheme-object',
       if: {
-        properties: {
-          type: {
-            const: 'http',
-          },
-          scheme: {
-            type: 'string',
-            pattern: '^[Bb][Ee][Aa][Rr][Ee][Rr]$',
-          },
-        },
+        properties: { type: { const: 'http' }, scheme: { type: 'string', pattern: '^[Bb][Ee][Aa][Rr][Ee][Rr]$' } },
         required: ['type', 'scheme'],
       },
-      then: {
-        properties: {
-          bearerFormat: {
-            type: 'string',
-          },
-        },
-      },
+      then: { properties: { bearerFormat: { type: 'string' } } },
     }
 
     const result = generateTypeDefinition(schema, 'TypeHttp')
 
     expect(result).toContain('* TypeHttp')
     expect(result).toContain('* https://spec.openapis.org/oas/v3.1#security-scheme-object')
-    expect(result).toContain('type: "http";')
-    expect(result).toContain('scheme: string;')
-    expect(result).toContain('bearerFormat: string;')
+    expect(result).toContain('export type TypeHttp = {};')
+    expect(result).not.toContain('bearerFormat')
+  })
+
+  // The test reads a property the schema declares as a boolean, so the
+  // instances that fail it *can* be named: `a` absent, or `a: false`. The
+  // conditional then lowers to a union the type checker can narrow on.
+  it('lowers a bare if/then to a union when the tested property has a finite domain', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { a: { type: 'boolean' }, b: { type: 'boolean' } },
+      if: { properties: { a: { const: true } }, required: ['a'] },
+      then: { properties: { b: { const: true } }, required: ['b'] },
+    }
+
+    expect(generateTypeDefinition(schema, 'Cond')).toBe(
+      'export type Cond = {\n  a?: boolean;\n  b?: boolean;\n} & ({ a: true; b: true } | { a?: false });',
+    )
+  })
+
+  // `else` is what the instances failing the test must satisfy, so it joins
+  // the unmatched branch rather than being merged in next to `then`.
+  it('lowers a bare if/then/else to a union of the two branches', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { a: { type: 'boolean' }, b: { type: 'boolean' }, c: { type: 'string' } },
+      if: { properties: { a: { const: true } }, required: ['a'] },
+      then: { properties: { b: { const: true } }, required: ['b'] },
+      else: { properties: { c: { type: 'string' } }, required: ['c'] },
+    }
+
+    expect(generateTypeDefinition(schema, 'Bare')).toBe(
+      'export type Bare = {\n  a?: boolean;\n  b?: boolean;\n  c?: string;\n} & ' +
+        '({ a: true; b: true } | ({ a?: false } & { c: string }));',
+    )
+  })
+
+  // An `else` that only requires a key is folded the way `if` and `then` are —
+  // rendered generically, a presence-only fragment said nothing at all.
+  it('folds a presence-only else into the unmatched branch', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { a: { type: 'boolean' }, c: { type: 'string' } },
+      if: { properties: { a: { const: true } }, required: ['a'] },
+      then: { required: ['c'] },
+      else: { required: ['c'] },
+    }
+
+    expect(generateTypeDefinition(schema, 'Both')).toBe(
+      'export type Both = {\n  a?: boolean;\n  c?: string;\n} & ({ a: true; c: unknown } | ({ a?: false } & { c: unknown }));',
+    )
+  })
+
+  // With an `else`, the unmatched branch is spelled by the `else` alone when the
+  // test cannot be negated — an over-approximation, never a rejection.
+  it('uses else as the unmatched branch when the test cannot be negated', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { kind: { type: 'string' } },
+      if: { properties: { kind: { const: 'a' } }, required: ['kind'] },
+      then: { properties: { a: { type: 'number' } }, required: ['a'] },
+      else: { properties: { b: { type: 'number' } }, required: ['b'] },
+    }
+
+    expect(generateTypeDefinition(schema, 'Either')).toBe(
+      'export type Either = {\n  kind?: string;\n} & ({ kind: "a"; a: number } | { b: number });',
+    )
+  })
+
+  // The downstream shape: the conditional as an inline `allOf` member beside the
+  // property block it tests. Rendered alone the member sees no property types,
+  // so the composing schema's block is what its negation reads.
+  it('lowers an allOf-wrapped if/then against the composing property block', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      allOf: [
+        {
+          if: { properties: { binaryResponseApi: { const: true } }, required: ['binaryResponseApi'] },
+          then: { properties: { responseApi: { const: true } }, required: ['responseApi'] },
+        },
+      ],
+      properties: { responseApi: { type: 'boolean' }, binaryResponseApi: { type: 'boolean' } },
+      additionalProperties: false,
+    }
+
+    expect(generateTypeDefinition(schema, 'PythonBackCompatOptions', { readonly: true })).toBe(
+      'export type PythonBackCompatOptions = {\n' +
+        '  readonly responseApi?: boolean;\n' +
+        '  readonly binaryResponseApi?: boolean;\n' +
+        '} & ({ readonly binaryResponseApi: true; readonly responseApi: true } | { readonly binaryResponseApi?: false });',
+    )
+  })
+
+  // The same member with nothing to negate against reverts to the sound
+  // rendering: the conditional is dropped and the property block stands alone.
+  it('drops an allOf-wrapped if/then the composing block cannot negate', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { mode: { type: 'string' }, level: { type: 'number' } },
+      allOf: [{ if: { properties: { mode: { const: 'strict' } }, required: ['mode'] }, then: { required: ['level'] } }],
+    }
+
+    expect(generateTypeDefinition(schema, 'Options')).toBe(
+      'export type Options = {\n  mode?: string;\n  level?: number;\n};',
+    )
+  })
+
+  // OpenAPI's security scheme: the per-type rules are `$ref`s to conditional
+  // definitions, each testing the `type` the composing schema enumerates. The
+  // definition's own file cannot see that enumeration and drops its
+  // conditional; here the reference is read through, so the composed type
+  // narrows on `type` the way the schema does.
+  it('lowers an allOf $ref to a conditional against the composing property block', () => {
+    const rootSchema = {
+      $defs: {
+        'type-http': {
+          if: { properties: { type: { const: 'http' } }, required: ['type'] },
+          then: { properties: { scheme: { type: 'string' } }, required: ['scheme'] },
+        },
+        'type-apikey': {
+          if: { properties: { type: { const: 'apiKey' } }, required: ['type'] },
+          then: { properties: { name: { type: 'string' } }, required: ['name'] },
+        },
+      },
+    }
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { type: { enum: ['apiKey', 'http', 'mutualTLS'] }, description: { type: 'string' } },
+      required: ['type'],
+      allOf: [{ $ref: '#/$defs/type-http' }, { $ref: '#/$defs/type-apikey' }],
+    }
+
+    expect(generateTypeDefinition(schema, 'SecurityScheme', { rootSchema })).toBe(
+      'export type SecurityScheme = {\n  type: "apiKey" | "http" | "mutualTLS";\n  description?: string;\n} & ' +
+        'TypeHttp & ({ type: "http"; scheme: string } | { type?: "apiKey" | "mutualTLS" }) & ' +
+        'TypeApikey & ({ type: "apiKey"; name: string } | { type?: "http" | "mutualTLS" });',
+    )
+  })
+
+  // Without the root document the reference cannot be read, and the member is
+  // the type name alone — what every `$ref` member has always been.
+  it('leaves an allOf $ref alone without a root schema to resolve it in', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { type: { enum: ['apiKey', 'http'] } },
+      allOf: [{ $ref: '#/$defs/type-http' }],
+    }
+
+    expect(generateTypeDefinition(schema, 'SecurityScheme')).toBe(
+      'export type SecurityScheme = {\n  type?: "apiKey" | "http";\n} & TypeHttp;',
+    )
+  })
+
+  it('intersects a then $ref onto the matched branch only', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { kind: { enum: ['a', 'b'] } },
+      if: { properties: { kind: { const: 'a' } }, required: ['kind'] },
+      then: { $ref: '#/$defs/extra' },
+    }
+
+    expect(generateTypeDefinition(schema, 'ThenRef')).toBe(
+      'export type ThenRef = {\n  kind?: "a" | "b";\n} & (({ kind: "a" } & Extra) | { kind?: "b" });',
+    )
+  })
+
+  it('lowers a conditional on a nested property inline', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: {
+        inner: {
+          type: 'object',
+          properties: { a: { type: 'boolean' }, b: { type: 'string' } },
+          if: { properties: { a: { const: true } }, required: ['a'] },
+          then: { required: ['b'] },
+        },
+      },
+    }
+
+    expect(generateTypeDefinition(schema, 'Nested')).toBe(
+      'export type Nested = {\n  inner?: { a?: boolean; b?: string } & ({ a: true; b: unknown } | { a?: false });\n};',
+    )
+  })
+
+  // A test without `required` passes on an absent key as well, so only a
+  // present, rejected value fails it: `{ a: false }`, not `{ a?: false }`.
+  it('requires the rejected value when the test does not require the key', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { a: { type: 'boolean' }, b: { type: 'boolean' } },
+      if: { properties: { a: { const: true } } },
+      then: { required: ['b'] },
+    }
+
+    expect(generateTypeDefinition(schema, 'Loose')).toBe(
+      'export type Loose = {\n  a?: boolean;\n  b?: boolean;\n} & ({ a?: true; b: unknown } | { a: false });',
+    )
+  })
+
+  // A test that only requires keys fails when one of them is absent, whatever
+  // the property types are — no domain needed.
+  it('negates a presence-only test as absence', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'string' } },
+      if: { required: ['a'] },
+      then: { required: ['b'] },
+    }
+
+    expect(generateTypeDefinition(schema, 'Presence')).toBe(
+      'export type Presence = {\n  a?: string;\n  b?: string;\n} & ({ a: unknown; b: unknown } | { a?: never });',
+    )
+  })
+
+  it('takes the decided branch of a boolean if', () => {
+    const always: JSONSchema = { type: 'object', if: true, then: { properties: { a: { type: 'string' } } } }
+    const never: JSONSchema = {
+      type: 'object',
+      if: false,
+      then: { properties: { a: { type: 'string' } } },
+      else: { properties: { b: { type: 'number' } } },
+    }
+
+    expect(generateTypeDefinition(always, 'Always')).toBe('export type Always = { a?: string };')
+    expect(generateTypeDefinition(never, 'Never')).toBe('export type Never = { b?: number };')
   })
 
   it('generates intersection type for schema with allOf $ref entries', () => {

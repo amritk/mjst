@@ -634,7 +634,7 @@ An **example** is either a code string, or an object:
 | Keyword | Where it lands |
 | --- | --- |
 | `title`, `description` | The page title, and each property's prose (full markdown, not just the first paragraph). A property name is rendered as a code span unless it is plain enough to survive a heading; an `x-doc.title` is prose and is not, having no row to be checked against |
-| `type`, `enum`, `const`, `anyOf` / `oneOf` / `allOf`, `items` | The **Type:** label — `string[]`, `'json' \| 'yaml'`, `string \| null` |
+| `type`, `enum`, `const`, `anyOf` / `oneOf` / `allOf`, `items`, `additionalProperties` / `patternProperties` | The **Type:** label — `string[]`, `'json' \| 'yaml'`, `string \| null`, and `Record<string, T>` for a map-shaped object (one that describes its values rather than naming fields), `T` being the value shape's own label |
 | `default` | **Default:**, written in the page's language |
 | `examples` | The derived code example (the first one), plus **Examples:** for the rest. A tuple position past the first gets the inline list only — the positions before it are other shapes, and inventing them would produce a sample that does not validate |
 | `required` | **Required** on the property it names |

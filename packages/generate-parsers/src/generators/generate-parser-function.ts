@@ -509,6 +509,19 @@ const generateFallbackObject = (
   if (isSchemaObject(schema) && ('if' in schema || 'then' in schema || 'else' in schema)) {
     return `{} as ${typeName}`
   }
+  // The same holds for a conditional composed in through `allOf` — inline, or a
+  // `$ref` to a definition that is one (OpenAPI's security scheme). The type
+  // generator lowers those to a union the composing type narrows on, and a
+  // literal built from this schema's own required keys lands in no branch of
+  // it: `{ type: "apiKey" }` against a type whose `apiKey` branch requires
+  // `name`. An `allOf` member merged into `properties` is already accounted
+  // for; these are the ones that are not.
+  if (isSchemaObject(schema) && hasAllOf(schema)) {
+    const composesConditional = schema.allOf.some(
+      (member) => isSchemaObject(member) && (hasRef(member) || 'if' in member || 'then' in member || 'else' in member),
+    )
+    if (composesConditional) return `{} as ${typeName}`
+  }
 
   const requiredProps: string[] = []
 

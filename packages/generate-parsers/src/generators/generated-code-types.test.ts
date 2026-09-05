@@ -119,6 +119,36 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
       properties: { include: { type: 'string', description: 'Glob such as **/*.ts to match' } },
     },
   ],
+  // The type generator lowers a conditional to a union the composing type
+  // narrows on, and a fallback literal built from the schema's own required
+  // keys lands in no branch of it — the coerce parser has to assert it.
+  [
+    'allof-conditional',
+    {
+      type: 'object',
+      properties: { a: { type: 'boolean' }, b: { type: 'boolean' } },
+      allOf: [{ if: { properties: { a: { const: true } }, required: ['a'] }, then: { required: ['b'] } }],
+    },
+  ],
+  [
+    'allof-ref-conditionals',
+    {
+      type: 'object',
+      properties: { type: { enum: ['apiKey', 'http'] } },
+      required: ['type'],
+      allOf: [{ $ref: '#/$defs/typeHttp' }, { $ref: '#/$defs/typeApiKey' }],
+      $defs: {
+        typeHttp: {
+          if: { properties: { type: { const: 'http' } }, required: ['type'] },
+          then: { properties: { scheme: { type: 'string' } }, required: ['scheme'] },
+        },
+        typeApiKey: {
+          if: { properties: { type: { const: 'apiKey' } }, required: ['type'] },
+          then: { properties: { name: { type: 'string' } }, required: ['name'] },
+        },
+      },
+    },
+  ],
   [
     'refs',
     {

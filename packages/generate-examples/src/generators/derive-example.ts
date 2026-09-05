@@ -710,10 +710,10 @@ const deriveObject = (schema: JSONSchema, ctx: DeriveContext): Record<string, un
     if (!hasIndexSignature && !declaredKeys.has(key)) ctx.needsAssertion = true
   }
 
-  // The mirror image: the type generator folds an `if`/`then` pair's properties
-  // into the declared type *as required*, but nothing structural tells the
-  // deriver to produce them, so it emits `{}` against a type demanding keys.
-  // Neither side is wrong on its own; the literal just needs asserting.
+  // The mirror image: the type generator lowers an `if`/`then` pair to a union
+  // of its branches (or drops it), and nothing structural tells the deriver
+  // which branch the value it emits lands in, so the literal may not narrow to
+  // the declared type on its own. Neither side is wrong; it just needs asserting.
   const raw = schema as Record<string, unknown>
   if (Object.hasOwn(raw, 'if') && Object.hasOwn(raw, 'then')) ctx.needsAssertion = true
 

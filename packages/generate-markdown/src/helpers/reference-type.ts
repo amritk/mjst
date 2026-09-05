@@ -1,6 +1,6 @@
 import { displayType } from '#helpers/display-type'
 import { formatInlineLiteral } from '#helpers/format-literal'
-import { asArray, asSchema, isObject } from '#helpers/guards'
+import { asArray, asProperties, asSchema, isObject } from '#helpers/guards'
 import { readDocMeta } from '#helpers/read-doc-meta'
 import type { SchemaProperty } from '#types/schema'
 
@@ -56,7 +56,8 @@ const unionOf = (parts: readonly string[]): string =>
  * - an `enum` renders as a literal union (`'json' | 'yaml'`) rather than the
  *   flattened `string`, because the allowed values *are* the type a reader
  *   needs to know, and
- * - a typed array renders as `string[]` rather than `array`.
+ * - a typed array renders as `string[]` rather than `array`, and
+ * - a map renders as `Record<string, T>` rather than `object`.
  *
  * `x-doc.type` wins over everything. Plenty of real config types — a callback
  * signature, a named TypeScript type — have no JSON Schema spelling at all, and
@@ -74,6 +75,7 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
   if (prop.const !== undefined) return formatInlineLiteral(prop.const, language)
 
   if (typeof prop.type === 'string') {
+    if (prop.type === 'object') return mapType(prop, language, depth) ?? 'object'
     if (prop.type !== 'array') return prop.type
     const items = Array.isArray(prop.items) ? prop.items[0] : prop.items
     const item = isObject(items) ? referenceType(asSchema(items), language, depth + 1) : ''
@@ -109,7 +111,36 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
     // is the answer this was written to stop giving.
   ].map((part) => (splitTopLevel(part, ' | ').length > 1 ? `(${part})` : part))
   if (parts.length > 0) return parts.join(' & ')
-  return displayType(prop)
+  // A node that never says `type: 'object'` is still a map when it describes
+  // its values — the table renderer's fallback would call it nothing at all.
+  return mapType(prop, language, depth) ?? displayType(prop)
+}
+
+/**
+ * The label for a map-shaped object — one that describes its values through
+ * `additionalProperties` / `patternProperties` rather than naming fields — or
+ * undefined for an object that is not one.
+ *
+ * `object` for `environments: { additionalProperties: { type: 'string' } }`
+ * said nothing about the values being strings, and `object` for a map of
+ * `resourceConfig` left a reader to take the value's fields as the map's own:
+ * nothing on the page said the key level existed. `Record<string, T>` is the
+ * same courtesy `T[]` already extends to arrays. The value label is
+ * `referenceType` again, so an `x-doc.type` on the value shape names it
+ * (`Record<string, ResourceConfig>`) and a union of pattern shapes reads as
+ * one.
+ *
+ * An object with named `properties` beside its extras is not a map — its rows
+ * document the fields, and calling it a `Record` would hide them — and a value
+ * shape with no label of its own (`additionalProperties: {}`) is left as
+ * `object` rather than dressed up as `Record<string, unknown>`.
+ */
+const mapType = (prop: SchemaProperty, language: string, depth: number): string | undefined => {
+  if (Object.keys(asProperties(prop.properties)).length > 0) return undefined
+  const shapes = [prop.additionalProperties, ...Object.values(asProperties(prop.patternProperties))].filter(isObject)
+  if (shapes.length === 0) return undefined
+  const value = unionOf(shapes.map((shape) => referenceType(asSchema(shape), language, depth + 1)))
+  return value.length > 0 ? `Record<string, ${value}>` : undefined
 }
 
 /**

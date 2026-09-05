@@ -116,7 +116,7 @@ Set `skip: true` on a target to keep its config in place without generating it.
 
 ### resources
 
-**Type:** `object`
+**Type:** `Record<string, object>`
 
 Resource tree that defines the generated client and resource shape.
 
@@ -150,7 +150,7 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 | --- | --- | --- | --- |
 | `defaultClientName` | `string` |  | Class name of the generated client. |
 | `defaultTimeout` | `number` | `30000` | Request timeout in milliseconds. |
-| `defaultHeaders` | `object` |  | Headers every generated request sends. |
+| `defaultHeaders` | `Record<string, string>` |  | Headers every generated request sends. |
 | `defaultRetries` | `object` |  | Retry policy the generated runtime applies to failed requests. |
 
 #### defaultClientName
@@ -185,7 +185,7 @@ Insertion order of environments. The first entry is the SDK default.
 
 ### environments
 
-**Type:** `object`
+**Type:** `Record<string, string>`
 
 **Required**
 
