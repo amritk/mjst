@@ -48,20 +48,12 @@ describe('create-output-writer', () => {
     expect(await readdir(outDir)).toEqual(['_helpers'])
   })
 
-  it('refuses to overwrite a file it did not write, naming the path', async () => {
+  // Ownership tracking is gone on purpose: an output directory is generated
+  // output, and git is where an unwanted replacement shows up and gets reverted.
+  it('replaces a pre-existing file at a generated path', async () => {
     await writeFile(join(outDir, 'index.ts'), 'export const IMPORTANT = 42')
 
     const writer = await createOutputWriter(outDir)
-
-    await expect(writer.stage('index.ts', 'export * from "./obj"')).rejects.toThrow(/Refusing to overwrite/)
-    // The hand-written file is still intact and untouched.
-    expect(await readFile(join(outDir, 'index.ts'), 'utf-8')).toBe('export const IMPORTANT = 42')
-  })
-
-  it('overwrites a pre-existing file when --force was passed', async () => {
-    await writeFile(join(outDir, 'index.ts'), 'export const IMPORTANT = 42')
-
-    const writer = await createOutputWriter(outDir, true)
     await writer.stage('index.ts', 'export * from "./obj"')
     await writer.commit()
 
@@ -82,37 +74,19 @@ describe('create-output-writer', () => {
   })
 
   // Regenerating into the same directory is the normal workflow, so a rerun has
-  // to be able to replace its own output without --force.
-  it('replaces output a previous run claimed, but still guards a hand-written file', async () => {
+  // to land cleanly over its own output.
+  it('replaces its own output on a rerun', async () => {
     const first = await createOutputWriter(outDir)
     await first.stage('obj.ts', 'export type Obj = { a: string }')
     await first.commit()
 
-    await writeFile(join(outDir, 'hand-written.ts'), 'export const IMPORTANT = 42')
-
     const second = await createOutputWriter(outDir)
-    await expect(second.stage('obj.ts', 'export type Obj = { a: number }')).resolves.toBeUndefined()
-    await expect(second.stage('hand-written.ts', 'export type Obj = never')).rejects.toThrow(/Refusing to overwrite/)
+    await second.stage('obj.ts', 'export type Obj = { a: number }')
     await second.commit()
 
     expect(await readFile(join(outDir, 'obj.ts'), 'utf-8')).toContain('a: number')
-    expect(await readFile(join(outDir, 'hand-written.ts'), 'utf-8')).toBe('export const IMPORTANT = 42')
-  })
-
-  it('keeps claiming a path it generated once, even when a later run skips it', async () => {
-    const first = await createOutputWriter(outDir)
-    await first.stage('gone.ts', 'export type Gone = never')
-    await first.stage('obj.ts', 'export type Obj = never')
-    await first.commit()
-
-    // A run that emits only obj.ts must not disown gone.ts …
-    const second = await createOutputWriter(outDir)
-    await second.stage('obj.ts', 'export type Obj = never')
-    await second.commit()
-
-    // … so a later run that emits it again is still allowed to replace it.
-    const third = await createOutputWriter(outDir)
-    await expect(third.stage('gone.ts', 'export type Gone = string')).resolves.toBeUndefined()
+    // Nothing bookkeeping-shaped is left beside the output.
+    expect(await readdir(outDir)).toEqual(['obj.ts'])
   })
 
   it('allows nested paths that stay inside the output directory', async () => {

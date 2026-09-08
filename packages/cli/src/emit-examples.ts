@@ -15,10 +15,9 @@ export type EmitExamplesOptions = {
   /**
    * The run's writer, rooted at the output destination. Examples used to be
    * written straight to disk with `mkdir` + `writeFile`, which meant the one
-   * output tree mjst emits that skipped the ownership check — a hand-written
-   * `examples/index.ts` was overwritten without a word. Taking the writer instead
-   * of a directory makes that impossible to reintroduce: there is no path here
-   * that does not go through staging, the manifest, and `--force`.
+   * output tree mjst emits that skipped staging entirely — a failure part-way
+   * through left a half-written `examples/` tree behind. Taking the writer
+   * instead of a directory makes that impossible to reintroduce.
    */
   readonly writer: OutputWriter
   /**

@@ -86,15 +86,11 @@ export type CliConfig = {
    */
   readonly build?: boolean
   /**
-   * When true, generated files may overwrite files that already exist in the
-   * output destination. By default a collision with a file mjst did not generate
-   * (a hand-written `index.ts`, say) aborts the run rather than silently
-   * replacing it — and with `build`, deleting it afterwards. Regeneration does
-   * not need this: each run records what it wrote in a `.mjst-manifest.json` at
-   * the root of the output directory, and reclaims those paths freely. With
-   * `outFile` the "output directory" is the directory holding that file, so the
-   * manifest lands beside it — generated examples and the `build` output already
-   * do.
+   * @deprecated No longer has any effect, and is accepted only so existing
+   * scripts and config files keep running. Generated files always replace
+   * whatever is at their path; version control is where an unwanted replacement
+   * shows up and gets reverted. `build` still only ever deletes the intermediate
+   * sources the run itself committed.
    */
   readonly force?: boolean
   /**

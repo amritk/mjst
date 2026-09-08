@@ -31,7 +31,7 @@ Output:
   --message-contracts   Also emit @amritk/api channel contracts under contracts/ (--input asyncapi only)
   --discriminator <p>   Property naming which message a frame is, for --message-contracts (default: type)
   --build               Compile the generated files to .js/.d.ts (implies --import-ext js)
-  --force               Overwrite pre-existing files in the output destination
+  --force               Deprecated; ignored (generated files always overwrite)
   --import-ext <ext>    Extension on generated relative imports: ts (default) or js
   --helpers <mode>      Runtime helpers: package or embedded (default: auto-detect from package.json)
   --root-type <name>    Root type name for a single --schema run (default: schema title or filename)
