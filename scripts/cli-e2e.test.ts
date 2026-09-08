@@ -543,42 +543,34 @@ describe('cli-e2e', () => {
       })
     })
 
-  // Regression: --out-file skipped the output writer entirely and wrote with a
-  // bare writeFile, so `--out-file src/types.ts` overwrote a hand-written file
-  // without a word — and --build then unlinked that same path as an intermediate
-  // source, leaving the user with neither their file nor a warning, at exit 0.
-  it('refuses to overwrite a hand-written --out-file target, and does not delete it under --build', async () => {
-    const caseDir = join(workDir, 'out-file-clobber')
+  // Regression pin on the half of the old ownership guard that survives: --build
+  // used to unlink every name it had compiled, so `--out-file src/types.ts` took
+  // the generated file *and* whatever else was sitting in that directory. It is
+  // handed only the paths this run committed now.
+  it('does not delete a sibling of the --out-file target under --build', async () => {
+    const caseDir = join(workDir, 'out-file-build-sibling')
     await mkdir(join(caseDir, 'src'), { recursive: true })
     const schemaPath = join(caseDir, 'schema.json')
     await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
     const outFile = join(caseDir, 'src', 'types.ts')
-    await writeFile(outFile, 'export const IMPORTANT = 42', 'utf-8')
+    const sibling = join(caseDir, 'src', 'app.ts')
+    await writeFile(sibling, 'export const IMPORTANT = 42', 'utf-8')
 
-    const refused = await runCli(['--schema', schemaPath, '--out-file', outFile, '--types-only', '--build'])
+    const built = await runCli(['--schema', schemaPath, '--out-file', outFile, '--types-only', '--build'])
 
-    expect(refused.code).not.toBe(0)
-    expect(refused.stderr).toMatch(/Refusing to overwrite/)
-    // The hand-written file survived both the write and the --build cleanup, and
-    // nothing else was left behind in its directory.
-    expect(await readFile(outFile, 'utf-8')).toBe('export const IMPORTANT = 42')
-    expect(await readdir(join(caseDir, 'src'))).toEqual(['types.ts'])
-
-    // --force is the documented escape hatch and still overwrites.
-    const forced = await runCli(['--schema', schemaPath, '--out-file', outFile, '--types-only', '--force'])
-
-    expect(forced.code).toBe(0)
-    expect(await readFile(outFile, 'utf-8')).toContain('type Plan')
+    expect(built.code).toBe(0)
+    expect(await readFile(sibling, 'utf-8')).toBe('export const IMPORTANT = 42')
+    // The generated .ts was compiled away to a .d.ts; the sibling was left alone.
+    expect((await readdir(join(caseDir, 'src'))).sort()).toEqual(['app.ts', 'types.d.ts'])
   })
 
-  // The other half of the guarantee: a target mjst generated itself is still
-  // reclaimed without ceremony, otherwise every regeneration would need --force.
-  it('regenerates its own --out-file output without --force', async () => {
+  it('regenerates its --out-file output, replacing what is there, with no sidecar', async () => {
     const caseDir = join(workDir, 'out-file-regenerate')
     await mkdir(caseDir, { recursive: true })
     const schemaPath = join(caseDir, 'schema.json')
     await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
     const outFile = join(caseDir, 'types.ts')
+    await writeFile(outFile, 'export const IMPORTANT = 42', 'utf-8')
 
     const first = await runCli(['--schema', schemaPath, '--out-file', outFile, '--types-only'])
     const second = await runCli(['--schema', schemaPath, '--out-file', outFile, '--types-only'])
@@ -586,35 +578,40 @@ describe('cli-e2e', () => {
     expect(first.code).toBe(0)
     expect(second.code).toBe(0)
     expect(await readFile(outFile, 'utf-8')).toContain('type Plan')
-    // The record of ownership lives beside the generated file, because that is
-    // the only place it can survive a clean checkout.
-    expect(await readdir(caseDir)).toContain('.mjst-manifest.json')
+    // No ownership bookkeeping is left beside the generated file.
+    expect((await readdir(caseDir)).sort()).toEqual(['schema.json', 'types.ts'])
   })
 
-  // Regression: example output was written with a bare mkdir + writeFile, so a
-  // hand-written examples/index.ts was overwritten silently at exit 0 — the same
-  // clobber the writer prevents for parsers, one directory over.
-  it('refuses to overwrite a hand-written file under examples/', async () => {
-    const caseDir = join(workDir, 'examples-clobber')
+  // --force guarded the removed ownership check. It stays accepted so existing
+  // scripts keep running, warns, and changes nothing about the result.
+  it('accepts the deprecated --force flag with a warning', async () => {
+    const caseDir = join(workDir, 'force-deprecated')
+    await mkdir(caseDir, { recursive: true })
+    const schemaPath = join(caseDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
+    const outFile = join(caseDir, 'types.ts')
+
+    const forced = await runCli(['--schema', schemaPath, '--out-file', outFile, '--types-only', '--force'])
+
+    expect(forced.code).toBe(0)
+    expect(forced.stderr).toMatch(/--force is deprecated/)
+    expect(await readFile(outFile, 'utf-8')).toContain('type Plan')
+  })
+
+  it('replaces a pre-existing file under examples/', async () => {
+    const caseDir = join(workDir, 'examples-replace')
     const outDir = join(caseDir, 'generated')
     await mkdir(join(outDir, 'examples'), { recursive: true })
     const schemaPath = join(caseDir, 'schema.json')
     await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
-    const handWritten = join(outDir, 'examples', 'index.ts')
-    await writeFile(handWritten, 'export const IMPORTANT = 42', 'utf-8')
+    const existing = join(outDir, 'examples', 'index.ts')
+    await writeFile(existing, 'export const IMPORTANT = 42', 'utf-8')
 
     const flags = ['--schema', schemaPath, '--outDir', outDir, '--helpers', 'embedded', '--examples']
-    const refused = await runCli(flags)
 
-    expect(refused.code).not.toBe(0)
-    expect(refused.stderr).toMatch(/Refusing to overwrite/)
-    expect(await readFile(handWritten, 'utf-8')).toBe('export const IMPORTANT = 42')
-
-    const forced = await runCli([...flags, '--force'])
-
-    expect(forced.code).toBe(0)
-    expect(await readFile(handWritten, 'utf-8')).not.toContain('IMPORTANT')
-    // And a plain rerun reclaims the example files it now owns, no --force.
+    expect((await runCli(flags)).code).toBe(0)
+    expect(await readFile(existing, 'utf-8')).not.toContain('IMPORTANT')
+    // And a plain rerun lands over its own example output just as cleanly.
     expect((await runCli(flags)).code).toBe(0)
   })
 

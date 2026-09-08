@@ -394,7 +394,7 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="4">Allow generated files to overwrite files that already exist in the output destination. By default a collision with a file mjst did not generate (a hand-written index.ts, say) aborts the run before anything is written, because the generator would otherwise replace it — and, under build, delete it along with the other intermediate sources. Regenerating never needs this flag: each run records what it wrote in a .mjst-manifest.json at the root of the output directory, and anything listed there is replaced freely.</td>
+<td colspan="4">Deprecated and ignored. Generated files always replace whatever is at their path, so this flag no longer does anything; it is still accepted so existing scripts and config files keep running. Reverting an unwanted replacement is version control's job. Compilation under build still only removes the intermediate sources the run itself generated.</td>
 </tr>
 <tr>
 <td>⚠️ <code>logWarnings</code></td>

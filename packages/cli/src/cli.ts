@@ -127,19 +127,16 @@ type ExampleTask = {
  * tests, not compiled alongside the runtime parsers.
  *
  * Every task shares one writer, so the example tree lands as a unit — and it is a
- * *second* writer, created after the parser tree has committed. That ordering
- * matters: a writer reads the manifest once, at creation, so an examples writer
- * made too early would not see the paths the parser run just claimed and would
- * drop them from the manifest it writes. Keeping the examples out of the parser
- * writer is what keeps them out of the `--build` file list, which is exactly the
- * set of paths that run committed.
+ * *second* writer, deliberately, rather than the one the parser tree used.
+ * `--build` compiles exactly the paths its writer committed, so keeping the
+ * examples on a writer of their own is what keeps them out of that file list.
  */
 const runExamples = async (
   config: Partial<CliConfig>,
   outputDir: string,
   tasks: readonly ExampleTask[],
 ): Promise<void> => {
-  const writer = await createOutputWriter(outputDir, config.force)
+  const writer = await createOutputWriter(outputDir)
   const written = await commitOrDiscard(writer, async () => {
     for (const task of tasks) {
       await emitExamples({
@@ -308,7 +305,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
     config.unknownKeys,
   )
 
-  const writer = await createOutputWriter(outputDir, config.force)
+  const writer = await createOutputWriter(outputDir)
   const written = await commitOrDiscard(writer, async () => {
     for (const file of files) {
       const isHelper = file.filename.startsWith('_helpers/')
@@ -337,20 +334,11 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
  * generated definition (and dropping the cross-file imports that are no longer
  * needed) into `outFilePath`. Currently used for types-only output.
  *
- * The writer is rooted at the file's own directory, which is where its
- * `.mjst-manifest.json` lands. That is a deliberate trade: `--out-file` usually
- * points *into* hand-written source (`--out-file src/types.ts`), so the manifest
- * ends up beside code mjst does not own. We take it anyway, because the
- * alternatives are worse. Ownership has to outlive the process — without a record
- * on disk the second run cannot tell its own output from a file somebody typed,
- * leaving only "always clobber" (the bug this closes) or "always demand
- * `--force`" (which breaks the regenerate-on-schema-change loop that is the whole
- * point of `--out-file`). Anything further away — a cache under `node_modules`,
- * say — disappears on a clean checkout, so CI would refuse to regenerate. And the
- * directory is already one mjst writes into on this path: `--examples` puts an
- * `examples/` tree there and `--build` drops the compiled `.d.ts` beside the
- * source. The manifest lists only the paths this run generated, so it never
- * claims a sibling; it is a hidden file the user can gitignore.
+ * The writer is rooted at the file's own directory, which is the directory this
+ * flow writes into: the named file itself, plus an `examples/` tree under
+ * `--examples` and the compiled `.d.ts` under `--build`. Nothing else in there is
+ * touched, which is what makes it safe to aim at hand-written source
+ * (`--out-file src/types.ts`) — that file is replaced, its siblings are not.
  */
 const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, outFilePath: string): Promise<void> => {
   const schema = await loadSchema(config, schemaPath)
@@ -380,12 +368,11 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
 
   const combined = combineGeneratedFiles(files)
 
-  // Same writer as the directory flows, and for the same reason twice over: the
-  // target is often a hand-written `src/types.ts`, which used to be overwritten
-  // silently — and then, under `--build`, deleted along with the other
-  // intermediate sources, so the user was left with neither their file nor a
-  // warning. `--build` is now handed the path this run actually committed.
-  const writer = await createOutputWriter(outputDir, config.force)
+  // Same writer as the directory flows. It matters most here: the target is often
+  // inside hand-written source (`src/types.ts`), and `--build` used to unlink
+  // every name it had compiled. It is now handed only the path this run
+  // committed, so it can never delete a sibling it did not create.
+  const writer = await createOutputWriter(outputDir)
   const written = await commitOrDiscard(writer, async () => {
     await writer.stage(basename(outFilePath), config.banner ? resolveBanner(config.banner) + combined : combined)
   })
@@ -429,7 +416,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
   // Helper sources are identical across schemas, so collect them by filename and
   // write the deduplicated set once at the output root.
   const sharedHelpers = new Map<string, string>()
-  const writer = await createOutputWriter(outputDir, config.force)
+  const writer = await createOutputWriter(outputDir)
   /** Example emission is deferred until the parser tree has landed (see below). */
   const exampleTasks: ExampleTask[] = []
 
@@ -563,7 +550,7 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
   const helpersMode = resolveHelpersMode(config, outputDir)
 
   const sharedHelpers = new Map<string, string>()
-  const writer = await createOutputWriter(outputDir, config.force)
+  const writer = await createOutputWriter(outputDir)
   const exampleTasks: ExampleTask[] = []
   /** Contract projection problems, reported after the tree lands rather than mid-stage. */
   const contractIssues: ExtractionIssue[] = []
@@ -617,8 +604,7 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
     }
 
     // Same writer as the parser tree, deliberately: a run that asks for both
-    // should land both or neither, and the manifest that records what this run
-    // owns has to cover the contracts too.
+    // should land both or neither.
     if (config.messageContracts) {
       const contracts = await emitMessageContracts({
         model,
@@ -670,8 +656,7 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
     // a peer (`@amritk/api`) that the output's project may not have installed
     // yet, and handing tsc an unresolvable import fails the whole compilation —
     // including the parsers, which needed nothing of the sort. They are still
-    // committed through this run's writer, so the manifest owns them and a
-    // rerun reclaims them.
+    // committed through this run's writer, so a rerun replaces them cleanly.
     await buildOutput(
       outputDir,
       writtenTsFiles.filter((file) => !file.startsWith(`${CONTRACTS_DIR}/`)),
@@ -732,6 +717,16 @@ const run = async (): Promise<void> => {
   if (config.outDir && config.outFile) {
     console.error('Error: provide only one of --out-dir or --out-file, not both.')
     process.exit(1)
+  }
+
+  // Accepted and ignored rather than rejected: --force was the escape hatch from
+  // an ownership check that no longer exists, and erroring on it would break the
+  // package.json scripts that had to carry it. Warn so it gets dropped, but do
+  // not fail a run over a flag that now describes the default.
+  if (config.force) {
+    console.warn(
+      'Warning: --force is deprecated and does nothing; generated files always replace what is at their path.',
+    )
   }
 
   // The root type name becomes a TypeScript identifier *and* the output filename,
