@@ -6,5 +6,9 @@
     }
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["**/*.test.ts"]
+  // Tests are type-checked here, unlike the other packages': the generated
+  // channel contracts under `src/generated-contracts/` only prove anything if
+  // the compiler reads them, and the assertions pinning what their derived
+  // unions narrow to live in the test beside them.
+  "exclude": ["src/.fixtures-contracts*"]
 }

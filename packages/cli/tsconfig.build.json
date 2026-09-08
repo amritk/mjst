@@ -3,5 +3,8 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist"
-  }
+  },
+  // The package's own tsconfig type-checks the tests and the generated-contract
+  // fixtures; the published build must contain neither.
+  "exclude": ["**/*.test.ts", "src/.fixtures-contracts*", "src/generated-contracts"]
 }

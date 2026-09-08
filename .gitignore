@@ -39,3 +39,6 @@ content.json
 
 # Agent worktrees (Claude Code background agents)
 .claude/worktrees/
+
+# Generated-contract scratch trees written by the CLI tests
+packages/cli/src/.fixtures-contracts-*/

@@ -16,6 +16,8 @@ describe('help-text', () => {
       '--types-only',
       '--validators',
       '--examples',
+      '--message-contracts',
+      '--discriminator',
       '--build',
       '--force',
       '--import-ext',

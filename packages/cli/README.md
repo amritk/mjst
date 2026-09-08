@@ -361,6 +361,24 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td colspan="4">Also emit test-data files for every schema into an examples/ subdirectory of the output destination: a fast-check arbitrary (FooArbitrary) that produces schema-valid values and a concrete fooExample value. Under schemaDir the examples mirror the schema layout so they never collide with the parser output. The generated arbitraries import fast-check, which consumers must install as a (dev) dependency; the static example values have no runtime dependencies.</td>
 </tr>
 <tr>
+<td>🔌 <code>messageContracts</code></td>
+<td><code>--message-contracts</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit a @amritk/api channel contract per AsyncAPI channel into a contracts/ subdirectory: one defineMessages({ ... }) module naming every message that channel carries — keyed by the value its discriminator property carries on the wire, with that property stripped out of each payload because the runtime removes it before validating — plus a barrel re-exporting them. Requires input 'asyncapi', which is the only input that has channels and operations to project from. Incompatible with typesOnly: a contract is a runtime value, not a type. The generated modules import @amritk/api, which the consuming project must install; it is not a dependency of the generated parsers.</td>
+</tr>
+<tr>
+<td>🏷️ <code>discriminator</code></td>
+<td><code>--discriminator &lt;prop&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"type"</code></td>
+</tr>
+<tr>
+<td colspan="4">Property name that says which message a frame is, for the contracts messageContracts emits. Defaults to 'type', matching @amritk/api. A channel that declares its own with 'x-mjst': { 'discriminator': '...' } keeps it — one flag covers a whole run, and a run may span channels that disagree. Only meaningful together with messageContracts.<br><strong>Examples:</strong> <code>"event"</code></td>
+</tr>
+<tr>
 <td>🔨 <code>build</code></td>
 <td><code>--build</code></td>
 <td><code>boolean</code></td>

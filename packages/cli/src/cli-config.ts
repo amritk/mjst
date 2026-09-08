@@ -62,6 +62,25 @@ export type CliConfig = {
    */
   readonly examples?: boolean
   /**
+   * When true, also emit a `@amritk/api` channel contract per AsyncAPI channel
+   * into a `contracts/` subdirectory: one `defineMessages({ ... })` module
+   * naming every message that channel carries, keyed by its wire discriminator
+   * value, plus a barrel. Requires `input: 'asyncapi'` — the contracts are
+   * projected from the document's channels and operations, which no other input
+   * format has. Incompatible with `typesOnly`: a contract is a runtime value.
+   *
+   * The generated modules import `@amritk/api`, which the *consuming* project
+   * must have installed; it is not a dependency of the generated parsers.
+   */
+  readonly messageContracts?: boolean
+  /**
+   * Property name that says which message a frame is, for the contracts
+   * `messageContracts` emits. Defaults to `'type'`, matching `@amritk/api`.
+   * A channel that declares its own via `x-mjst: { discriminator }` keeps it —
+   * one flag covers a whole run, and a run may span channels that disagree.
+   */
+  readonly discriminator?: string
+  /**
    * When true, compile the generated TypeScript files to .js and .d.ts output.
    * The .ts source files are removed after compilation.
    */

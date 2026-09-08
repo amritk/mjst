@@ -13,7 +13,9 @@
       "!fixtures/asyncapi/**/*.json",
       "!fixtures/json-schema-test-suite/**/*.json",
       "!packages/lint/src/rules/openapi/schemas/*.json",
-      "!packages/lint/src/rules/asyncapi/schemas/*.json"
+      "!packages/lint/src/rules/asyncapi/schemas/*.json",
+      "!packages/cli/src/generated-contracts/**",
+      "!packages/cli/src/.fixtures-contracts*/**"
     ]
   },
   "formatter": {

@@ -34,6 +34,8 @@ export const CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   typesOnly: { type: 'boolean' },
   validators: { type: 'boolean' },
   examples: { type: 'boolean' },
+  messageContracts: { type: 'boolean' },
+  discriminator: { type: 'string' },
   build: { type: 'boolean' },
   force: { type: 'boolean' },
   logWarnings: { type: 'boolean' },

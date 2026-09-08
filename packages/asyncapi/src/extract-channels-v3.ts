@@ -1,3 +1,4 @@
+import { getMjstDiscriminator } from '@amritk/helpers/mjst-extension'
 import { readKey } from '@amritk/helpers/read-key'
 
 import { mergeTraits } from './merge-traits'
@@ -294,9 +295,11 @@ export const extractChannelsV3 = (
       }
     }
 
+    const discriminator = getMjstDiscriminator(channel)
     channels.push({
       key: channelKey,
       ...(typeof address === 'string' && address !== '' ? { address } : {}),
+      ...(discriminator !== undefined ? { discriminator } : {}),
       messages,
     })
   }
