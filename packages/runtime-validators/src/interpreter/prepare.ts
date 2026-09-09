@@ -23,8 +23,13 @@ const cache = new WeakMap<object, Map<string, (input: unknown) => unknown>>()
  * right trade: a schema used with more than a handful of configurations is being
  * varied per call, which the cache could never have helped anyway, and building a
  * validator here is cheap (there is no compile step).
+ *
+ * One configuration can occupy up to three entries, because `validate` is a
+ * hot/cold pair: the split validator itself, the guard it runs first, and — only
+ * once something has actually failed — the error-collecting half. So the budget
+ * is three times the number of configurations it is meant to cover.
  */
-const MAX_CACHED_VARIANTS = 16
+const MAX_CACHED_VARIANTS = 48
 
 const normalizeFormats = (formats: ValidateOptions['formats']): 'all' | ReadonlySet<string> => {
   if (formats === 'all') return 'all'
@@ -69,14 +74,24 @@ const registryKey = (schemas: SchemaDocuments | undefined): string => {
   return `${token}:${Object.keys(schemas).sort().join(',')}`
 }
 
+/**
+ * Which of the three validators a cache entry holds: the boolean `guard`, the
+ * error-collecting `errors` half, or the `split` that runs the first and falls
+ * through to the second. All three can exist for one configuration, so the mode
+ * has to be part of the key rather than implied by it.
+ */
+type ValidatorMode = 'guard' | 'errors' | 'split'
+
+const MODE_KEY: Readonly<Record<ValidatorMode, string>> = { guard: 'g', errors: 'e', split: 's' }
+
 const cacheKey = (
-  emitErrors: boolean,
+  mode: ValidatorMode,
   formats: 'all' | ReadonlySet<string>,
   limits: ResolvedLimits,
   schemas: SchemaDocuments | undefined,
 ): string => {
   const formatsKey = formats === 'all' ? '*' : [...formats].sort().join(',')
-  return `${emitErrors ? 'e' : 'g'}|${formatsKey}|${limitsCacheKey(limits)}|${registryKey(schemas)}`
+  return `${MODE_KEY[mode]}|${formatsKey}|${limitsCacheKey(limits)}|${registryKey(schemas)}`
 }
 
 /**
@@ -172,6 +187,33 @@ const makeValidator = (
 }
 
 /**
+ * Runs `build` through the per-schema cache, so asking for the same validator
+ * twice hands back the same closure — and with it the same warm regex and `$ref`
+ * caches. Only object/array schemas can be `WeakMap` keys; a boolean schema is
+ * trivial, so skipping the cache for it costs nothing.
+ */
+const cached = (
+  schema: unknown,
+  key: string,
+  build: () => (input: unknown) => unknown,
+): ((input: unknown) => unknown) => {
+  if (typeof schema !== 'object' || schema === null) return build()
+
+  let byKey = cache.get(schema)
+  if (!byKey) {
+    byKey = new Map()
+    cache.set(schema, byKey)
+  }
+
+  const existing = byKey.get(key)
+  if (existing) return existing
+
+  const validator = build()
+  if (byKey.size < MAX_CACHED_VARIANTS) byKey.set(key, validator)
+  return validator
+}
+
+/**
  * Returns a validator for the schema, reusing a cached one when the same schema
  * object and configuration have been requested before.
  */
@@ -183,24 +225,52 @@ export const prepareValidator = (
   const formats = normalizeFormats(options?.formats)
   const limits = resolveLimits(options?.limits)
   const schemas = options?.schemas
+  const key = cacheKey(emitErrors ? 'errors' : 'guard', formats, limits, schemas)
+  return cached(schema, key, () => makeValidator(schema, formats, emitErrors, limits, schemas))
+}
 
-  // Only object/array schemas can be WeakMap keys. Boolean schemas are trivial,
-  // so skipping the cache for them costs nothing.
-  if (typeof schema !== 'object' || schema === null) {
-    return makeValidator(schema, formats, emitErrors, limits, schemas)
-  }
+/**
+ * The error-collecting validator, split into a hot and a cold half — what
+ * `validate` and `assert` actually hand back.
+ *
+ * Collecting errors is not free even when there are none to collect: the
+ * error-mode step carries the path string it would need to report a failure, and
+ * it cannot short-circuit, because a second failure further along is another
+ * error to name. The guard has neither obligation, and on the schemas in
+ * `bench/` it runs 1.6–2.0× faster on valid input as a result.
+ *
+ * So valid input takes the guard's path and stops there, and only a value that
+ * has *already failed* pays for the walk that can explain why. That trade costs
+ * the invalid path a second walk (measured at 0–28%), which is the right way
+ * round: a validator in production says "yes" far more often than it says "no",
+ * and the run that says "no" is about to be turned into an error response
+ * anyway. It is also the split `@amritk/generate-validators` already emits, so
+ * the two packages now reach a verdict the same way.
+ *
+ * The error-collecting half is built on first use rather than up front, so a
+ * validator that is never handed anything invalid never builds one.
+ *
+ * The two halves are required to agree — `guard-parity.test.ts` and the
+ * differential fuzz both hold them to it — and where they somehow did not, the
+ * error half is authoritative: it is the one that can say what it saw.
+ */
+export const prepareSplitValidator = (
+  schema: unknown,
+  options: ValidateOptions | undefined,
+): ((input: unknown) => unknown) => {
+  const formats = normalizeFormats(options?.formats)
+  const limits = resolveLimits(options?.limits)
+  const schemas = options?.schemas
+  const key = cacheKey('split', formats, limits, schemas)
 
-  let byKey = cache.get(schema)
-  if (!byKey) {
-    byKey = new Map()
-    cache.set(schema, byKey)
-  }
+  return cached(schema, key, () => {
+    const guard = prepareValidator(schema, options, false)
+    let collectErrors: ((input: unknown) => unknown) | null = null
 
-  const key = cacheKey(emitErrors, formats, limits, schemas)
-  const existing = byKey.get(key)
-  if (existing) return existing
-
-  const validator = makeValidator(schema, formats, emitErrors, limits, schemas)
-  if (byKey.size < MAX_CACHED_VARIANTS) byKey.set(key, validator)
-  return validator
+    return (input: unknown): unknown => {
+      if (guard(input) === true) return true
+      collectErrors ??= prepareValidator(schema, options, true)
+      return collectErrors(input)
+    }
+  })
 }

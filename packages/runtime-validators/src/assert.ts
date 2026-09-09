@@ -1,4 +1,4 @@
-import { prepareValidator } from '@/interpreter/prepare'
+import { prepareSplitValidator } from '@/interpreter/prepare'
 
 import type { FromSchema } from './from-schema'
 import type { ValidateOptions, ValidationError, ValidationFailedError, ValidationResult } from './types'
@@ -67,7 +67,7 @@ const validationFailedError = (errors: ValidationError[]): ValidationFailedError
  * ```
  */
 export const assert = <const S = unknown>(schema: S, value: unknown, options?: ValidateOptions): FromSchema<S> => {
-  const validator = prepareValidator(schema, options, true) as (input: unknown) => ValidationResult
+  const validator = prepareSplitValidator(schema, options) as (input: unknown) => ValidationResult
   const result = validator(value)
   if (result === true) return value as FromSchema<S>
   throw validationFailedError(result.errors)

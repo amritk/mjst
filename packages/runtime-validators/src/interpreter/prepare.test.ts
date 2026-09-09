@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { prepareValidator } from '@/interpreter/prepare'
+import { prepareSplitValidator, prepareValidator } from '@/interpreter/prepare'
+
+import { CASES, makeRng, mutate, randomValue } from '../differential-corpus.test-utils'
 
 describe('prepare', () => {
   it('hands back the same validator for the same schema and configuration', () => {
@@ -59,5 +61,73 @@ describe('prepare', () => {
     const schema = { type: 'number' }
     const first = { limits: { maxDepth: 42 } }
     expect(prepareValidator(schema, first, false)).toBe(prepareValidator(schema, first, false))
+  })
+
+  it('hands back the same split validator for the same schema and configuration', () => {
+    const schema = { type: 'object', properties: { a: { type: 'string' } } }
+    expect(prepareSplitValidator(schema, undefined)).toBe(prepareSplitValidator(schema, undefined))
+    // The split is its own mode: neither half it composes is the same object.
+    expect(prepareSplitValidator(schema, undefined)).not.toBe(prepareValidator(schema, undefined, true))
+    expect(prepareSplitValidator(schema, undefined)).not.toBe(prepareValidator(schema, undefined, false))
+  })
+
+  it('builds the error-collecting half only once something has actually failed', () => {
+    // The whole point of the split: a validator that is never handed anything
+    // invalid never pays to build the half that explains why. Observed through
+    // the cache, which is where that half lands the moment it is built.
+    const schema = { type: 'string' }
+    const split = prepareSplitValidator(schema, undefined)
+
+    const errorHalf = () => prepareValidator(schema, undefined, true)
+    const beforeAnyCall = errorHalf()
+
+    expect(split('ok')).toBe(true)
+    // Valid input alone never reaches for it, so the entry the probe just made
+    // is still the one there.
+    expect(errorHalf()).toBe(beforeAnyCall)
+
+    expect(split(42)).toEqual({ valid: false, errors: [{ message: 'must be string', path: '' }] })
+  })
+
+  it('reports through the split exactly what the error-collecting half reports', () => {
+    // The split returns the error half's own result, so nothing about the
+    // errors — count, order, paths — depends on having gone through the guard.
+    const schema = {
+      type: 'object',
+      properties: { age: { type: 'integer', minimum: 18 }, name: { type: 'string' } },
+      required: ['age', 'name'],
+    }
+    const bad = { age: 5 }
+
+    expect(prepareSplitValidator(schema, undefined)(bad)).toEqual(prepareValidator(schema, undefined, true)(bad))
+  })
+
+  it('agrees with the error-collecting half across the fuzz corpus', () => {
+    // The split is only sound while the guard and the error half reach the same
+    // verdict: a value the guard wrongly rejected would come back through the
+    // error half, and one it wrongly accepted would never be looked at again.
+    // So they are held to each other over the same schemas and values the
+    // differential fuzz runs against Ajv.
+    for (const testCase of CASES) {
+      const guard = prepareValidator(testCase.schema, undefined, false)
+      const collect = prepareValidator(testCase.schema, undefined, true)
+      const rng = makeRng(0x5eed + testCase.name.length)
+
+      let divergence: { value: unknown; guard: boolean; errors: boolean } | undefined
+      for (let i = 0; i < 4000 && divergence === undefined; i++) {
+        let value: unknown =
+          i % 2 === 0 ? structuredClone(testCase.seeds[i % testCase.seeds.length]) : randomValue(rng, 3)
+        for (let m = Math.floor(rng() * 4); m > 0; m--) value = mutate(rng, value)
+
+        const guardSaid = guard(value) === true
+        const errorsSaid = collect(value) === true
+        if (guardSaid !== errorsSaid) divergence = { value, guard: guardSaid, errors: errorsSaid }
+      }
+
+      expect(
+        divergence,
+        divergence && `${testCase.name} diverged on ${JSON.stringify(divergence.value)}`,
+      ).toBeUndefined()
+    }
   })
 })
