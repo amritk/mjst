@@ -126,8 +126,18 @@ export type InterpreterContext = {
   readonly caches: ValidatorCaches
   /** Collected errors, lazily allocated so valid input never allocates. */
   errors: ValidationError[] | null
-  /** Set in guard mode on the first failure so the walk can unwind. */
+  /**
+   * Set on the first failure in guard mode, and in error mode once the error
+   * list has reached {@link maxErrors}. Either way it means "stop walking": the
+   * verdict is settled and nothing further will be recorded.
+   */
   failed: boolean
+  /**
+   * Ceiling on collected errors (see {@link ValidateLimits.maxErrors}). Read
+   * only in error mode; a branch context never records an error, so its value
+   * there is irrelevant.
+   */
+  readonly maxErrors: number
   /**
    * The active `$ref`/`$dynamicRef` recursion path as flattened `schema, value`
    * pairs. Shared by reference with nested branch contexts so a cycle routed
@@ -422,11 +432,18 @@ export const matchesType = (type: string, value: unknown): boolean => {
  * Records a failure. In error mode it appends `{ message, path }` (allocating
  * the array on first use); in guard mode it just trips the `failed` flag so the
  * walk unwinds without building any error objects.
+ *
+ * Error mode trips the same flag once the list is full. Every error already
+ * recorded is a real failure — probes run in a boolean child and never reach
+ * here — so the verdict cannot change, and past the cap the rest of the walk
+ * exists only to allocate objects for a report nobody reads to the end. Tripping
+ * `failed` unwinds it through the checks the guard path already uses.
  */
 export const fail = (ctx: InterpreterContext, message: string, path: string): void => {
   if (ctx.emitErrors) {
     if (ctx.errors === null) ctx.errors = []
     ctx.errors.push({ message, path })
+    if (ctx.errors.length >= ctx.maxErrors) ctx.failed = true
   } else {
     ctx.failed = true
   }
@@ -633,6 +650,7 @@ export const newBranchContext = (ctx: InterpreterContext): InterpreterContext =>
   failed: false,
   refStack: ctx.refStack,
   maxDepth: ctx.maxDepth,
+  maxErrors: ctx.maxErrors,
   budget: ctx.budget,
   branch: null,
 })

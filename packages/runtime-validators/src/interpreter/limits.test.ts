@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assert } from '@/assert'
-import { hasUnsafeRegex, isValidationLimitError } from '@/interpreter/limits'
+import { DEFAULT_MAX_ERRORS, hasUnsafeRegex, isValidationLimitError } from '@/interpreter/limits'
 import { validate } from '@/validate'
 import { validateGuard } from '@/validate-guard'
 
@@ -821,5 +821,81 @@ describe('limits', () => {
 
   it('surfaces a limit breach through assert as a throw', () => {
     expect(() => assert(nestedAnyOf(40), 123, { limits: { maxSteps: 50_000 } })).toThrow(/step budget/i)
+  })
+
+  it('caps collected errors at maxErrors and stops walking once it is full', () => {
+    // A large, uniformly-wrong document used to cost one error object per
+    // element: 200,000 of them for a 200,000-element array. The verdict is
+    // settled long before that, so the run stops at the cap.
+    const schema = { type: 'array', items: { type: 'string' } }
+    const wrongThroughout = Array.from({ length: 5_000 }, (_, i) => i)
+
+    const capped = validate(schema, { limits: { maxErrors: 10 } })(wrongThroughout)
+    expect(capped).not.toBe(true)
+    expect(capped === true ? [] : capped.errors).toHaveLength(10)
+
+    // The errors kept are the first ones found, in order, and each is real.
+    expect(capped === true ? [] : capped.errors.slice(0, 2)).toEqual([
+      { message: 'must be string', path: '/0' },
+      { message: 'must be string', path: '/1' },
+    ])
+  })
+
+  it('defaults maxErrors to a bound a report can still be read at', () => {
+    const schema = { type: 'array', items: { type: 'string' } }
+    const result = validate(schema)(Array.from({ length: 5_000 }, (_, i) => i))
+    expect(result === true ? [] : result.errors).toHaveLength(DEFAULT_MAX_ERRORS)
+  })
+
+  it('collects every error when maxErrors is Infinity', () => {
+    const schema = { type: 'array', items: { type: 'string' } }
+    const result = validate(schema, { limits: { maxErrors: Number.POSITIVE_INFINITY } })(
+      Array.from({ length: 2_500 }, (_, i) => i),
+    )
+    expect(result === true ? [] : result.errors).toHaveLength(2_500)
+  })
+
+  it('does not let the cap change the verdict for valid input', () => {
+    // The cap only ever stops a run that has already failed, so a valid value is
+    // untouched by it however low it is set.
+    const schema = { type: 'array', items: { type: 'string' } }
+    expect(validate(schema, { limits: { maxErrors: 1 } })(['a', 'b', 'c'])).toBe(true)
+    expect(validateGuard(schema, { limits: { maxErrors: 1 } })(['a', 'b', 'c'])).toBe(true)
+  })
+
+  it('reaches the same verdict at any cap, and reports the same first errors', () => {
+    // Truncation must never turn an invalid value into a valid one, nor reorder
+    // what it does report.
+    const schema = {
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'string' }, c: { type: 'string' } },
+      required: ['a', 'b', 'c'],
+    }
+    const bad = { a: 1, b: 2, c: 3 }
+
+    const all = validate(schema, { limits: { maxErrors: Number.POSITIVE_INFINITY } })(bad)
+    const two = validate(schema, { limits: { maxErrors: 2 } })(bad)
+    expect(all).not.toBe(true)
+    expect(two).not.toBe(true)
+    expect(two === true ? [] : two.errors).toEqual(all === true ? [] : all.errors.slice(0, 2))
+  })
+
+  it('caps errors reached through assert too', () => {
+    // `assert` formats every collected error into its message, so an uncapped
+    // run there builds a megabyte-long string as well as the array.
+    try {
+      assert({ type: 'array', items: { type: 'string' } }, [1, 2, 3, 4, 5], { limits: { maxErrors: 2 } })
+      expect.unreachable('assert should have thrown')
+    } catch (error) {
+      expect((error as { errors: unknown[] }).errors).toHaveLength(2)
+    }
+  })
+
+  it('does not throw when the error cap is reached', () => {
+    // Unlike maxDepth/maxSteps, a full error list is not a breach: the run
+    // reached a verdict and the cap only says how much of it to carry back.
+    const result = validate({ type: 'array', items: { type: 'string' } }, { limits: { maxErrors: 1 } })([1, 2])
+    expect(isValidationLimitError(result)).toBe(false)
+    expect(result).not.toBe(true)
   })
 })

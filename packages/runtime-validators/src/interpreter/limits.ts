@@ -3,7 +3,7 @@ import { DATA_KEYWORDS, SCHEMA_MAPS } from '@/interpreter/keywords'
 /**
  * Resource limits that keep a single validation from turning into a
  * denial-of-service. The interpreter walks arbitrary (and possibly untrusted)
- * schemas over arbitrary (and possibly untrusted) data, so three unbounded
+ * schemas over arbitrary (and possibly untrusted) data, so four unbounded
  * costs need a ceiling:
  *
  *  - **Recursion depth** — deeply nested data against a recursive schema
@@ -18,12 +18,22 @@ import { DATA_KEYWORDS, SCHEMA_MAPS } from '@/interpreter/keywords'
  *    input. These sources are screened for the two shapes we can recognize
  *    soundly before a validator is built — but the screen is a best-effort
  *    filter, not a guarantee. {@link ValidateLimits.allowUnsafePatterns}.
+ *  - **Error accumulation** — an error-collecting run records one object per
+ *    failure, so a large document that is wrong throughout costs memory
+ *    proportional to its own size: a 200,000-element array of the wrong type
+ *    produced 200,000 error objects. {@link ValidateLimits.maxErrors}.
  *
  * Every limit is generous enough that ordinary schemas and documents never trip
- * it, and each is configurable. Exceeding a runtime limit throws a
+ * it, and each is configurable. Exceeding `maxDepth` or `maxSteps` throws a
  * {@link isValidationLimitError | ValidationLimitError} — the same
  * fail-loud contract the interpreter already uses for an unresolvable `$ref` or
  * an unknown `type`, rather than silently returning a verdict.
+ *
+ * {@link ValidateLimits.maxErrors} is the one that does not throw, because there
+ * is nothing wrong to report: the run has already reached a verdict — a value
+ * with more errors than the cap is invalid however many more there are — and the
+ * cap only says how many of them are worth carrying back. So it stops collecting
+ * and returns the verdict with the errors it has.
  */
 
 /** Tunable per-validation resource ceilings. See {@link ValidateLimits} usage in the module doc. */
@@ -48,6 +58,17 @@ export type ValidateLimits = {
    * safety — see the ReDoS screen section below.
    */
   readonly allowUnsafePatterns?: boolean
+  /**
+   * Maximum number of errors one validation collects. Once this many have been
+   * recorded the run stops — the value is already invalid, and every further
+   * error is another object to allocate for a report nobody reads to the end.
+   * Guards a large, uniformly-wrong document from costing memory proportional to
+   * its own size. Defaults to {@link DEFAULT_MAX_ERRORS}; pass `Infinity` to
+   * collect every error however many there are.
+   *
+   * Ignored by {@link validateGuard}, which never builds an error object at all.
+   */
+  readonly maxErrors?: number
 }
 
 /**
@@ -67,22 +88,32 @@ export const DEFAULT_MAX_DEPTH = 512
  */
 export const DEFAULT_MAX_STEPS = 10_000_000
 
+/**
+ * Default cap on collected errors. Set where a report is still a report: a
+ * response listing a thousand failures has long since stopped being read
+ * field-by-field, while the memory it costs (~40 KB) is nothing. Ordinary
+ * invalid input produces a handful and never comes near it.
+ */
+export const DEFAULT_MAX_ERRORS = 1000
+
 /** The resolved, defaulted form of {@link ValidateLimits} threaded through a run. */
 export type ResolvedLimits = {
   readonly maxDepth: number
   readonly maxSteps: number
   readonly allowUnsafePatterns: boolean
+  readonly maxErrors: number
 }
 
 export const resolveLimits = (limits: ValidateLimits | undefined): ResolvedLimits => ({
   maxDepth: limits?.maxDepth ?? DEFAULT_MAX_DEPTH,
   maxSteps: limits?.maxSteps ?? DEFAULT_MAX_STEPS,
   allowUnsafePatterns: limits?.allowUnsafePatterns ?? false,
+  maxErrors: limits?.maxErrors ?? DEFAULT_MAX_ERRORS,
 })
 
 /** A stable key for the resolved limits, so {@link resolveLimits} folds into the prepare-cache key. */
 export const limitsCacheKey = (limits: ResolvedLimits): string =>
-  `${limits.maxDepth}:${limits.maxSteps}:${limits.allowUnsafePatterns ? 1 : 0}`
+  `${limits.maxDepth}:${limits.maxSteps}:${limits.allowUnsafePatterns ? 1 : 0}:${limits.maxErrors}`
 
 const LIMIT_ERROR_NAME = 'ValidationLimitError'
 

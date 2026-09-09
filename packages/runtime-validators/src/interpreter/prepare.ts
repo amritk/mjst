@@ -165,6 +165,7 @@ const makeValidator = (
     failed: false,
     refStack: [],
     maxDepth: limits.maxDepth,
+    maxErrors: limits.maxErrors,
     budget: { steps: limits.maxSteps },
     branch: null,
   }
