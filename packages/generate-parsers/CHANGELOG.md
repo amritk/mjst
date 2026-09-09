@@ -1,5 +1,167 @@
 # @amritk/generate-parsers
 
+## 0.22.0
+
+### Minor Changes
+
+- da4af50: Coerce booleans from a token table instead of `Boolean(x)`
+
+  A coercing parser repaired `type: 'boolean'` with `Boolean(x)`, which is a
+  JavaScript truthiness test rather than a reading of the value. Every non-empty
+  string is truthy, so `"false"`, `"no"`, `"off"` and `"0"` — every conventional
+  way of writing _off_ — parsed as `true`, silently enabling whatever the flag
+  guarded. `2` and `{}` parsed as `true` just as confidently. This is the headline
+  case for env-var-style configuration, which is exactly the input a coercing
+  parser is handed.
+
+  The coercion is now a table, applied to the value trimmed and case-folded:
+
+  - `true`, `yes`, `y`, `on`, `1` and the number `1` → `true`
+  - `false`, `no`, `n`, `off`, `0`, `""` and the number `0` → `false`
+  - anything else → the schema's `default` (`false` when none is declared)
+
+  The last rule is what the other scalars already do: a value that does not denote
+  a boolean is not repaired into a guess. `Number("abc")` is `NaN` and falls back
+  to the default for the same reason.
+
+  **Behaviour change:** any generated parser for a boolean property returns a
+  different value for the inputs above. A document that said `"false"` and was
+  parsed as `true` now parses as `false`, and a value with no boolean reading
+  (`2`, `"maybe"`, an object, `null`) now takes the declared default instead of
+  `true`. Values that were already booleans are untouched and still take the
+  fast path — the table only runs where `Boolean(x)` used to.
+
+  This is wider than Ajv's `coerceTypes`, which accepts `"true"` / `"false"`, the
+  numbers `1` / `0` and `null`, and rejects the rest. A coercing parser cannot
+  reject, so the choice was between a default and a wrong answer.
+
+- c226e64: Dispatch a union written as a property value, closing the coercion gap
+
+  The scored dispatcher reached a union as a definition, as a `$ref`, and as an
+  array's `items`, but not one written directly under `properties`. Nothing claimed
+  it, so a value matching no branch was handed back untouched. That was the whole
+  of the remaining invalid-output gap on the published Scalar configuration schema
+  — all 41 of 4000 documents, every one at `siteConfig.logo`, whose `logo` is
+  `anyOf: [<uri string>, { darkMode, lightMode }]`.
+
+  A union property now gets the same private dispatcher an array's union items
+  get: match a branch's shape predicate, otherwise score the branches and repair
+  toward the best fit. Over the same 4000 documents, **every coerced output is now
+  a valid instance of its own schema** (was 41 invalid), and all 2514 documents Ajv
+  rejects are repaired into ones it accepts (was 2496). Strict verdicts are
+  untouched at 0 disagreements with Ajv — this path is coerce-only, and the map it
+  uses is local to the parser so the shape validator keeps its existing inline
+  union check and the two cannot drift.
+
+  **Also fixes a code-generation bug that reached `main`.** A dispatcher over
+  _scalar_ branches repairs through an inline expression that re-tests the value's
+  type, and TypeScript narrows inside the arm a guard opened: after
+  `if (typeof input === "boolean") return …`, the string arm of the boolean token
+  table read `input.trim()` on `never`, so the generated file did not compile. It
+  needed both the scored dispatcher and the token-table boolean coercion to be
+  reachable, which is why neither change surfaced it alone. The repaired value is
+  now read through a binding declared `unknown` that the guards cannot narrow,
+  while the guards keep testing `input`. Emitted output for unions of objects and
+  `$ref`s is unchanged, so nothing pays for the alias that does not need it.
+
+  Two shapes stay on the general coercion path by design: a union carrying its own
+  keywords alongside its branches (`{ anyOf: […], required: […] }`), which a
+  dispatcher would silently drop, and a union of bare scalars in property position,
+  where scoring has no keys to read so every branch ties and the first wins —
+  exactly what that path already does.
+
+- 36927c8: Dispatch and repair union values by scoring their branches
+
+  A coercing parser promises that whatever it returns is a valid instance of the
+  schema that produced it. A union-typed value broke that promise outright: unless
+  its branches were `$ref`s sharing a discriminant, the generator emitted a blind
+  `input as T` cast, so every element of a union-typed array was handed back
+  exactly as it arrived. Measured over 4000 mutated documents of the published
+  Scalar configuration schema, **2418 coerced outputs were invalid** against their
+  own schema. **41 now are**, and all 41 are the one shape called out below.
+
+  A union parser is now built in two steps:
+
+  - **Recognition.** Each branch's shape predicate runs first, so a value already
+    in a branch's shape takes that branch's parser and comes back unchanged. Valid
+    input costs one predicate call, is never rebuilt, and never reaches the
+    scoring.
+  - **Scoring.** A value matching no branch is scored against every branch and
+    repaired toward the best fit. A `const` tag is near-decisive: a matching tag
+    names the branch, a present-but-wrong tag rules it out. Below that a present
+    required property is strong evidence, and a present, well-typed declared
+    property is weak evidence. Ties keep the earliest branch, matching `anyOf`
+    order.
+
+  Scoring is what makes the choice defensible rather than positional. Repairing
+  `{ name, folder }` toward whichever branch is written first would invent the
+  `sidebar` that branch requires and discard the `folder` the author actually
+  wrote; reading the keys that are present picks the branch they came from. Every
+  term is decided at build time, so the emitted code is a few property reads and
+  no schema walking.
+
+  This covers unions reached as a definition, as an array's `items` (including
+  recursive ones, where a branch's parser calls back into the dispatcher), and
+  unions whose branches are scalars rather than objects.
+
+  **Behaviour change:** a top-level union now repairs a non-member by _coercing_
+  it toward the best branch instead of discarding it for that branch's default, so
+  `{ anyOf: [{ type: 'string' }, { type: 'number' }] }` turns `true` into `"true"`
+  rather than `""`. This is what a property of the same shape has always done —
+  the top-level union was the only place in the generator that threw a coercible
+  scalar away. `undefined` still falls back to the default, having nothing to
+  convert.
+
+  Still outside the contract: a union written directly as a _property value_
+  (rather than as a definition or an array's `items`) is not dispatched, and a
+  value matching no branch is passed through. Ajv's `coerceTypes` rejects those
+  documents rather than repairing them, so this is not a gap against Ajv.
+
+- 42bc8fe: Enforce union `items` that reach a recursive `$ref`, and stop stubbing scalar definitions
+
+  A strict parser promises to throw on every document its schema rejects. Measured
+  against Ajv over the published Scalar configuration schema
+  (`https://cdn.scalar.com/schema/scalar-config.json`), it accepted **771 of 4000**
+  mutated documents that Ajv rejects. It now agrees on all 4000.
+
+  Every one of those traced to a single chain, fixed here end to end:
+
+  - **Scalar definitions generated a `=> false` stub shape validator.** Any `$defs`
+    entry with neither `properties` nor union branches — `{ type: 'string' }`
+    included — fell through to the conservative stub. A stub is not merely a missed
+    optimization: it reports a _valid_ value as out of shape, so a `$ref` to a plain
+    string made its whole parent untrustworthy. These now emit the real predicate,
+    constraints and all (`pattern`, code-point length bounds, numeric bounds,
+    `multipleOf`), which is exact in both directions.
+  - **The false-soundness trust walk mirrored that stub**, distrusting the same
+    definitions and propagating the distrust up through every enclosing union.
+  - **With the union distrusted, an array's `items` were checked by nothing but
+    `Array.isArray`.** The inline subschema matcher refuses a union whose branch
+    reaches a _cyclic_ `$ref`, because proving it inline would mean unrolling the
+    cycle — and the strict item check had no fallback for that. It now falls back to
+    the union _membership_ check, which inlines nothing: a `$ref` branch becomes a
+    call to that definition's generated `validate…Shape`, and a recursive
+    definition's validator calls itself, so the recursion bottoms out on the data.
+
+  Two coercion fixes came with it, both in service of the standing contract that a
+  coercing parser's output is a valid instance of its own schema:
+
+  - **A `$ref`-d constrained scalar is now coerced against its constraints.** The
+    root scalar parser was a flat `typeof` test with a literal fallback, so
+    `"Bad Slug"` was handed back unrepaired against a `pattern`, and the `""` it
+    fell back to was itself invalid under `minLength: 1`.
+  - **A pattern-derived default is now verified against its own pattern.** The
+    previous defaults were unverified substring guesses, and several did not match:
+    `^\+?\d{3}\d{4}$` was answered with `"+1234567890"`, three digits too many.
+    Defaults are now synthesized by reading the pattern, checked against it (and
+    against any length bounds) before being used, and omitted when nothing verifies.
+
+  One boundary is documented rather than changed: a coercing parser still passes an
+  array element matching no branch of a union through unrepaired, because choosing a
+  branch to coerce toward would discard information for a non-discriminated union.
+  Ajv's `coerceTypes` rejects those documents rather than repairing them. Use a
+  strict parser when you need the verdict.
+
 ## 0.21.1
 
 ### Patch Changes
