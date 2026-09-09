@@ -465,7 +465,8 @@ describe('build-schema', () => {
     }
 
     const result = await buildSchema(schema, 'Document')
-    const passwordFile = result.find((file) => file.filename === 'password.ts')
+    // Nested under `oauth-flows`, so named for both — see `refToFilename`.
+    const passwordFile = result.find((file) => file.filename === 'oauth-flows-password.ts')
 
     expect(passwordFile).toBeDefined()
     // JSDoc should contain the plain-text $comment description
@@ -498,7 +499,8 @@ describe('build-schema', () => {
     }
 
     const result = await buildSchema(schema, 'Document')
-    const passwordFile = result.find((file) => file.filename === 'password.ts')
+    // Nested under `oauth-flows`, so named for both — see `refToFilename`.
+    const passwordFile = result.find((file) => file.filename === 'oauth-flows-password.ts')
 
     expect(passwordFile).toBeDefined()
     // URL $comment is emitted as the description in the JSDoc block

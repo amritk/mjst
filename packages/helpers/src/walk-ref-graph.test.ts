@@ -284,7 +284,9 @@ describe('walk-ref-graph', () => {
   })
 
   describe('name collisions', () => {
-    it('throws when two definitions reduce to the same filename', () => {
+    it('throws when two definitions genuinely reduce to the same filename', () => {
+      // `Pet` and `pet` differ only in case, so nothing in either ref tells them
+      // apart and renaming has to be the author's call.
       const schema = {
         type: 'object',
         properties: { a: { $ref: '#/$defs/Pet' }, b: { $ref: '#/$defs/pet' } },
@@ -294,8 +296,41 @@ describe('walk-ref-graph', () => {
       expect(() => collect(schema, 'Doc')).toThrow(/both generate the file "pet\.ts"/)
     })
 
+    it('names a nested definition after its parent, so two of them do not collide', () => {
+      // The shape this exists for: the same definition name under two parents is
+      // ordinary in a real document, and it used to stop generation outright.
+      const schema = {
+        type: 'object',
+        properties: { u: { $ref: '#/$defs/user/$defs/meta' }, o: { $ref: '#/$defs/order/$defs/meta' } },
+        $defs: {
+          user: { $defs: { meta: { type: 'object', properties: { id: { type: 'string' } } } } },
+          order: { $defs: { meta: { type: 'object', properties: { total: { type: 'number' } } } } },
+        },
+      }
+
+      expect(collect(schema, 'Doc').map((n) => n.filename)).toEqual(['doc', 'user-meta', 'order-meta'])
+    })
+
+    it('keeps each colliding definition pointing at its own schema', () => {
+      // The failure the old throw existed to prevent: one file serving two
+      // definitions means every reference to the loser resolves to the wrong
+      // shape. Renaming has to keep them distinct, not merely distinct-looking.
+      const schema = {
+        type: 'object',
+        properties: { u: { $ref: '#/$defs/user/$defs/meta' }, o: { $ref: '#/$defs/order/$defs/meta' } },
+        $defs: {
+          user: { $defs: { meta: { type: 'object', properties: { id: { type: 'string' } } } } },
+          order: { $defs: { meta: { type: 'object', properties: { total: { type: 'number' } } } } },
+        },
+      }
+
+      const byFilename = new Map(collect(schema, 'Doc').map((n) => [n.filename, n.schema]))
+      expect(byFilename.get('user-meta')).toEqual({ type: 'object', properties: { id: { type: 'string' } } })
+      expect(byFilename.get('order-meta')).toEqual({ type: 'object', properties: { total: { type: 'number' } } })
+    })
+
     // `refToName` folds separators away, so these keep distinct files but land
-    // on one type name — and the importer gets two `import { FooBar }` lines.
+    // on one type name — and the importer would get two `import { FooBar }` lines.
     it('throws when two definitions reduce to the same type name', () => {
       const schema = {
         type: 'object',
@@ -314,6 +349,21 @@ describe('walk-ref-graph', () => {
       }
 
       expect(() => collect(schema, 'Contact')).toThrow(/the root type Contact/)
+    })
+
+    it('names definitions in different embedded resources after their resource', () => {
+      // The same shape one level up: `first#/$defs/stuff` and `second#/$defs/stuff`
+      // are different definitions, and the base URI is what says so.
+      const schema = {
+        $id: 'https://example.com/base',
+        $ref: 'first#/$defs/stuff',
+        $defs: {
+          first: { $id: 'first', $defs: { stuff: { type: 'string' } } },
+          second: { $id: 'second', $defs: { stuff: { type: 'number' } } },
+        },
+      }
+
+      expect(collect(schema, 'Doc').map((n) => n.filename)).toContain('first-stuff')
     })
 
     it('merges two spellings of one definition instead of reporting a collision', () => {
@@ -422,12 +472,14 @@ describe('walk-ref-graph', () => {
     })
 
     it('follows an anchor into a registered document', () => {
+      // The file is named for the document it came from as well as the
+      // definition, so two documents can each define a `t`.
       const names = filenames(
         { $ref: 'https://example.com/a.json#thing' },
         { 'https://example.com/a.json': { $defs: { t: { $anchor: 'thing', type: 'string' } } } },
       )
 
-      expect(names).toEqual(['doc', 't'])
+      expect(names).toEqual(['doc', 'a-t'])
     })
 
     // Reachability is what decides this, not registration: a caller may register

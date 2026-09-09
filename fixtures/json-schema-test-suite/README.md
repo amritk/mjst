@@ -9,8 +9,8 @@ on. Four packages in this monorepo consume schemas, and all four are held to it
 | --- | --- | --- |
 | `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | **1281 / 1281 (100%)** |
 | `@amritk/runtime-validators` | `format` assertion (the optional corpus) | 786 / 861 (91.3%) |
-| `@amritk/generate-validators` | generated predicate validators | 1274 / 1281 (99.5%) |
-| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1240 / 1281 (96.8%) |
+| `@amritk/generate-validators` | generated predicate validators | 1276 / 1281 (99.6%) |
+| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1242 / 1281 (97.0%) |
 | `@amritk/resolve-refs` | verdict preserved after inlining (`$ref` corpus) | **170 / 170 (100%)** |
 
 All four are run with the `remotes/` documents below supplied through whatever

@@ -461,6 +461,65 @@ const cachedExtractRefs = (cache: RootCache, schema: JSONSchema): Set<string> =>
 }
 
 /**
+ * Claims a filename and a type name for `ref`.
+ *
+ * Names are a pure function of the ref (see {@link refToFilename}), so two
+ * definitions in different parents — `#/$defs/user/$defs/meta` and
+ * `#/$defs/order/$defs/meta`, or an `Error` in each of two embedded resources —
+ * already get distinct names and never reach the collision below. That matters
+ * because every emitter turns a `$ref` into an import name on its own: a name
+ * assigned here rather than derived there would have to be threaded through all
+ * of them to be believed.
+ *
+ * What is left is a genuine ambiguity — two different refs whose *whole* derived
+ * names coincide (`#/$defs/a-b` and `#/$defs/a/$defs/b`) — and that still stops
+ * the build. Renaming has to be the caller's call: the name is what every
+ * emitted import is keyed on, and a silently wrong type is the worst outcome
+ * available.
+ *
+ * Returns `undefined` when the ref needs no file of its own, which happens when
+ * an existing file already holds the identical definition: `upgradeDraft07Schema`
+ * deliberately aliases every URI-keyed definition to a short name, so two refs
+ * point at the same object and one file serves both.
+ */
+const claimNames = (
+  ref: string,
+  resolved: unknown,
+  typeSuffix: string,
+  filenameOwners: Map<string, NameOwner>,
+  typeNameOwners: Map<string, NameOwner>,
+): { filename: string; typeName: string } | undefined => {
+  const filename = refToFilename(ref)
+  const typeName = refToName(ref, typeSuffix)
+
+  const fileOwner = filenameOwners.get(filename)
+  if (fileOwner !== undefined) {
+    if (sameDefinition(fileOwner.resolved, resolved)) return undefined
+    throw new Error(
+      `"${ref}" and ${fileOwner.label} both generate the file "${filename}.ts", so only one of them can be ` +
+        'emitted and every reference to the other would resolve to the wrong type. Rename one definition.',
+    )
+  }
+
+  // A free filename whose type name is taken is still a collision: `refToName`
+  // folds separators away (`foo-bar`, `foo.bar` and `fooBar` all become
+  // `FooBar`), so both files *are* emitted and the importer ends up with two
+  // `import { FooBar }` lines that do not parse.
+  const typeOwner = typeNameOwners.get(typeName)
+  if (typeOwner !== undefined) {
+    throw new Error(
+      `"${ref}" and ${typeOwner.label} both generate the type name "${typeName}" from different files, so the ` +
+        'generated output would import that name twice and fail to parse. Rename one definition.',
+    )
+  }
+
+  const owner: NameOwner = { label: `"${ref}"`, resolved }
+  filenameOwners.set(filename, owner)
+  typeNameOwners.set(typeName, owner)
+  return { filename, typeName }
+}
+
+/**
  * Walks a JSON Schema and its entire `$ref` / `$dynamicRef` graph, invoking
  * `visit` once per distinct output file: first the root, then every reachable
  * definition (breadth-first). This is the single, shared traversal the parser,
@@ -615,48 +674,18 @@ export const walkRefGraph = (
       )
     }
 
-    // Two definitions that reduce to one name used to collapse silently, and a
-    // silently wrong type is the worst outcome available — so a real collision
-    // now stops the build. Renaming has to be the caller's call: the name is
-    // what every emitted import is keyed on.
-    //
-    // Filenames collide on case and separators (`Pet`/`pet`); the first one
-    // generated won and the second was dropped, so every reference to it got
-    // the other one's shape. Type names collide more widely still, because
-    // `refToName` folds separators away (`foo-bar`, `foo.bar`, and `fooBar` all
-    // become `FooBar`) — and that half was worse, since both files *were*
-    // emitted and the importer ended up with two `import { FooBar }` lines that
-    // do not parse.
-    const filename = refToFilename(ref)
-    const typeName = refToName(ref, typeSuffix)
-    const fileOwner = filenameOwners.get(filename)
+    // Filenames used to collide on nesting as well as on case (`Pet`/`pet`), and
+    // the first one generated won while the second was dropped, so every
+    // reference to it got the other one's shape. Nesting is now part of the name
+    // — see {@link claimNames} — and what remains a collision still stops the
+    // build rather than emitting a silently wrong type.
+    const claimed = claimNames(ref, resolved, typeSuffix, filenameOwners, typeNameOwners)
 
-    if (fileOwner) {
-      // Same target under two spellings is not a collision: `upgradeDraft07Schema`
-      // deliberately aliases every URI-keyed definition to a short name, so both
-      // refs point at the identical object and one file serves both.
-      if (!sameDefinition(fileOwner.resolved, resolved)) {
-        throw new Error(
-          `"${ref}" and ${fileOwner.label} both generate the file "${filename}.ts", so only one of them can be ` +
-            'emitted and every reference to the other would resolve to the wrong type. Rename one definition.',
-        )
-      }
-    } else {
-      const typeOwner = typeNameOwners.get(typeName)
-      if (typeOwner) {
-        throw new Error(
-          `"${ref}" and ${typeOwner.label} both generate the type name "${typeName}" from different files, so the ` +
-            'generated output would import that name twice and fail to parse. Rename one definition.',
-        )
-      }
-
-      const owner: NameOwner = { label: `"${ref}"`, resolved }
-      filenameOwners.set(filename, owner)
-      typeNameOwners.set(typeName, owner)
+    if (claimed !== undefined) {
       visit({
         ref,
-        typeName,
-        filename,
+        typeName: claimed.typeName,
+        filename: claimed.filename,
         schema: resolveDynamicRefs(resolved as JSONSchema, dynamicRefMap),
         rootSchema: upgraded,
         isRoot: false,

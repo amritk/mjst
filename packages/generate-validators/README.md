@@ -212,7 +212,7 @@ official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema
 (the required Draft 2020-12 tests — 1281 cases), compiles and links the emitted
 files in memory, and runs the suite's instances through the real generated code:
 
-**1274 / 1281 cases pass (99.5%).**
+**1276 / 1281 cases pass (99.6%).**
 
 The suite's `remotes/` documents and the 2020-12 dialect metaschema are supplied
 through the `schemas` option, which is how the suite intends a validator that does
@@ -220,10 +220,9 @@ no I/O to answer the retrieval step. Everything else — applying the base URIs,
 walking anchors across documents, naming and emitting a file per definition — the
 generator still has to do.
 
-Of the 7 that do not pass: four `$dynamicRef`s whose binding depends on the
+Of the 5 that do not pass: four `$dynamicRef`s whose binding depends on the
 evaluation path (a generator emits one function per definition, shared by every
-path that reaches it, so it cannot bind per path), two definitions in different
-embedded resources that reduce to one filename, and `$vocabulary`. Nothing on the
+path that reaches it, so it cannot bind per path), and `$vocabulary`. Nothing on the
 list is a keyword that silently returns the wrong answer.
 
 Every case is named in

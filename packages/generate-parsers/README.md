@@ -331,7 +331,7 @@ each schema in the official
 (the required Draft 2020-12 tests — 1281 cases), links the emitted files in
 memory, and runs the suite's instances through the real generated code:
 
-**1240 / 1281 cases pass (96.8%).**
+**1242 / 1281 cases pass (97.0%).**
 
 A case passes only if the parser throws exactly when the spec says invalid *and*
 returns an accepted document unchanged — strict mode does not coerce, so a parser
@@ -343,14 +343,14 @@ no I/O to answer the retrieval step. Everything else — applying the base URIs,
 walking anchors across documents, emitting a parser per definition and an import
 graph that links — the generator still has to do.
 
-Of the 41 that do not, **18** follow from the third departure above — the
+Of the 39 that do not, **18** follow from the third departure above — the
 `ignores a non-object` cases plus three `ref.json` cases where a recursive `$ref`
 lands on a root that declares `properties` — and **12** are a keyword strict mode will not
 approximate (a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) —
 those cost a build error naming the cause, never a wrong verdict. The rest: **8**
 `$dynamicRef`s whose binding depends on the evaluation path (a generator emits one
-function per definition, shared by every path that reaches it), **2** embedded
-resources whose definitions reduce to one filename, and one `$vocabulary` case.
+function per definition, shared by every path that reaches it), and one
+`$vocabulary` case.
 
 Every one is listed in
 `src/generators/json-schema-conformance-expected-failures.test-utils.ts` with the

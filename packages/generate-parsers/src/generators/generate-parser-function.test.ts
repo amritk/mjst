@@ -845,11 +845,11 @@ describe('generate-parser-function', () => {
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
   const _nested = input.nested;
-  if ((_nested === undefined || validateTypeShape(_nested))) return { ...input } as User;
+  if ((_nested === undefined || validateDeeplyTypeShape(_nested))) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_nested !== undefined) out.nested = parseType(_nested);
+  if (_nested !== undefined) out.nested = parseDeeplyType(_nested);
   return out as unknown as User;
 }`,
     )
