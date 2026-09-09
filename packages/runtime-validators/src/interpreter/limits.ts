@@ -1,4 +1,5 @@
 import { DATA_KEYWORDS, SCHEMA_MAPS } from '@/interpreter/keywords'
+import { compilePattern } from '@/interpreter/runtime'
 
 /**
  * Resource limits that keep a single validation from turning into a
@@ -358,7 +359,7 @@ const SURROGATE_CODE_UNIT = /[\uD800-\uDFFF]/
  * model (a group, a multi-character branch, an unrecognized escape) answers
  * `false`, which keeps {@link hasAmbiguousAlternation} sound rather than broad.
  */
-const branchMatchesChar = (branch: string, ch: string): boolean => {
+const branchMatchesChar = (branch: string, ch: string, budget: ScreenBudget): boolean => {
   if (singleLiteralChar(branch) === ch) return true
   // `.` matches everything but a line terminator, and we never compile with `s`.
   if (branch === '.') return ch !== '\n' && ch !== '\r'
@@ -367,6 +368,7 @@ const branchMatchesChar = (branch: string, ch: string): boolean => {
   // class cannot backtrack, so compiling and testing it here is exact and safe.
   if (branch.startsWith('[') && skipClass(branch, 0) === branch.length) {
     try {
+      budget.compiles++
       return new RegExp(`^${branch}$`, 'u').test(ch)
     } catch {
       return false
@@ -407,6 +409,12 @@ const MAX_ANCHOR_SCAN = 20_000
 type ScreenBudget = {
   /** Remaining branch-pair comparisons for rule 2. */
   comparisons: number
+  /**
+   * Regular expressions compiled so far. Not a ceiling — the two budgets above
+   * are what bound the work — but a count of it, which is what makes that bound
+   * testable. See {@link regexScreenCompiles}.
+   */
+  compiles: number
   /** Remaining work units for rule 1's anchor exemption: body characters and class comparisons alike. */
   anchorChars: number
 }
@@ -431,9 +439,9 @@ const hasAmbiguousAlternation = (branches: readonly string[], budget: ScreenBudg
       if (--budget.comparisons < 0) return false
       const y = branches[b] as string
       if (x === y) return true
-      if (xChar !== null && branchMatchesChar(y, xChar)) return true
+      if (xChar !== null && branchMatchesChar(y, xChar, budget)) return true
       const yChar = singleLiteralChar(y)
-      if (yChar !== null && branchMatchesChar(x, yChar)) return true
+      if (yChar !== null && branchMatchesChar(x, yChar, budget)) return true
     }
   }
   return false
@@ -471,7 +479,7 @@ type RegionScan = {
  * exactly — an unrecognized escape, a backreference, a class that will not
  * compile — answers `true` and costs the caller its anchor.
  */
-const atomMayMatchChar = (atom: string, ch: string): boolean => {
+const atomMayMatchChar = (atom: string, ch: string, budget: ScreenBudget): boolean => {
   const literal = singleLiteralChar(atom)
   if (literal !== null) return literal === ch
   // `.` matches everything but a line terminator, and we never compile with `s`.
@@ -496,6 +504,7 @@ const atomMayMatchChar = (atom: string, ch: string): boolean => {
   if (atom.startsWith('[') && skipClass(atom, 0) === atom.length) {
     for (const flags of ['u', '']) {
       try {
+        budget.compiles++
         if (new RegExp(`^${atom}$`, flags).test(ch)) return true
       } catch {
         // Undecidable under a reading the runtime might pick: assume it matches.
@@ -621,7 +630,7 @@ const noOtherAtomConsumes = (body: string, from: number, to: number, anchor: str
     // `RegExp` compiles than the allowance pays for.
     budget.anchorChars -= Math.max(1, token.next - i)
     if (budget.anchorChars < 0) return false
-    if (token.consuming && atomMayMatchChar(body.slice(i, token.next), anchor)) return false
+    if (token.consuming && atomMayMatchChar(body.slice(i, token.next), anchor, budget)) return false
     i = token.next
   }
   return true
@@ -795,11 +804,11 @@ const readUnits = (body: string, budget: ScreenBudget): Unit[] | null => {
  * classes (`\w` against `[a-z]`) would need a real intersection, which JavaScript
  * gives no way to compute, so they are refused rather than guessed at.
  */
-const atomsAreDisjoint = (a: string, b: string): boolean => {
+const atomsAreDisjoint = (a: string, b: string, budget: ScreenBudget): boolean => {
   const aChar = singleLiteralChar(a)
-  if (aChar !== null) return !atomMayMatchChar(b, aChar)
+  if (aChar !== null) return !atomMayMatchChar(b, aChar, budget)
   const bChar = singleLiteralChar(b)
-  return bChar !== null && !atomMayMatchChar(a, bChar)
+  return bChar !== null && !atomMayMatchChar(a, bChar, budget)
 }
 
 /**
@@ -852,7 +861,7 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
         // pins it.
         budget.anchorChars -= left.length + right.length
         if (budget.anchorChars < 0) return false
-        if (!atomsAreDisjoint(left, right)) return false
+        if (!atomsAreDisjoint(left, right, budget)) return false
       }
     }
     if (!unit.repeats || unit.atom === null) continue
@@ -874,7 +883,7 @@ const hasUniqueDerivation = (body: string, budget: ScreenBudget): boolean => {
         // is what the compiler actually reads.
         budget.anchorChars -= unit.atom.length + first.length
         if (budget.anchorChars < 0) return false
-        if (!atomsAreDisjoint(unit.atom, first)) return false
+        if (!atomsAreDisjoint(unit.atom, first, budget)) return false
       }
       if (!follower.nullable) break
     }
@@ -1074,8 +1083,36 @@ const scanRegion = (source: string, i: number, depth: number, budget: ScreenBudg
  * not "this is safe" — see the module doc for the known gaps.
  */
 export const hasUnsafeRegex = (source: string): boolean => {
-  const scan = scanRegion(source, 0, 0, { comparisons: MAX_AMBIGUITY_COMPARISONS, anchorChars: MAX_ANCHOR_SCAN })
+  const scan = scanRegion(source, 0, 0, {
+    comparisons: MAX_AMBIGUITY_COMPARISONS,
+    anchorChars: MAX_ANCHOR_SCAN,
+    compiles: 0,
+  })
   return scan.height >= 2 || scan.ambiguous || scan.tooDeep
+}
+
+/**
+ * How many regular expressions screening `source` compiles.
+ *
+ * This is the screen's own dominant cost — a character-class comparison decides
+ * its answer by compiling the class — and therefore the thing the budgets exist
+ * to bound. Reading it directly is what lets "bounded work" be *asserted* rather
+ * than inferred from a stopwatch.
+ *
+ * A timing ratio was the obvious proxy and a bad one. Under the contention of the
+ * full suite — a dozen vitest instances at once — the same screen measured
+ * anywhere from 7x to 21x its control, and the regression it exists to catch
+ * measured 21-25x, so no threshold could both survive the load and catch the bug.
+ * Counting compiles is deterministic: the same source is the same number every
+ * time, on any machine, under any load. It is also the number the regression
+ * actually moved — undercharging the budget bought ~300,000 compiles for a
+ * 20,000 allowance, which no budget reading could see, because the budget was
+ * exactly what was being lied to.
+ */
+export const regexScreenCompiles = (source: string): number => {
+  const budget: ScreenBudget = { comparisons: MAX_AMBIGUITY_COMPARISONS, anchorChars: MAX_ANCHOR_SCAN, compiles: 0 }
+  scanRegion(source, 0, 0, budget)
+  return budget.compiles
 }
 
 // --- Schema pattern walk ---------------------------------------------------
@@ -1120,7 +1157,7 @@ export type SchemaScreen = {
  * blow the native stack with a `RangeError` that `isValidationLimitError` does
  * not recognize — turning a rejected schema into a consumer's 500.
  */
-const walkSchema = (schema: unknown, visit: ((source: string) => void) | null): SchemaScreen => {
+const walkSchema = (schema: unknown, visit: (source: string) => void): SchemaScreen => {
   if (schema === null || typeof schema !== 'object') return { declaresId: false }
   const seen = new Set<object>()
   const stack: object[] = [schema]
@@ -1156,7 +1193,7 @@ const walkSchema = (schema: unknown, visit: ((source: string) => void) | null): 
       const child = record[key]
       if (typeof child === 'string') {
         // Only at a schema node: inside a name map these are property names.
-        if (!inMap && key === 'pattern') visit?.(child)
+        if (!inMap && key === 'pattern') visit(child)
         else if (!inMap && key === '$id' && child !== '') declaresId = true
         continue
       }
@@ -1178,29 +1215,41 @@ const walkSchema = (schema: unknown, visit: ((source: string) => void) | null): 
 }
 
 /**
- * Walks `schema` once at validator-build time, screening every
- * `pattern`/`patternProperties` source for catastrophic backtracking — throwing
- * a {@link validationLimitError} on the first unsafe one, so an unsafe schema
- * fails fast at construction rather than mid-request — and reporting the
- * {@link SchemaScreen} facts the interpreter needs before it starts.
+ * Walks `schema` once at validator-build time, checking every
+ * `pattern`/`patternProperties` source and reporting the {@link SchemaScreen}
+ * facts the interpreter needs before it starts.
  *
- * With `allowUnsafePatterns` the regex screen is skipped but the walk still
- * runs: it is the same traversal either way, and its other findings are not
- * optional.
+ * Two things are checked, and both fail *here* rather than mid-request:
+ *
+ *  - **The source compiles at all.** `pattern: "("` is a schema mistake, and it
+ *    used to surface as a bare `SyntaxError` thrown out of the validator the
+ *    first time a value happened to reach that node — which for a node the data
+ *    does not always reach means a validator that works until one day it does
+ *    not. Ajv rejects it at compile; so does this, now.
+ *  - **The source is not prone to catastrophic backtracking**, unless
+ *    `allowUnsafePatterns` says the schema is trusted.
+ *
+ * The compile is not extra work in total: every pattern the validator reaches is
+ * compiled anyway, and this is where the result is cached, so a pattern is
+ * compiled once either way. What changes is *when* — and that a pattern nothing
+ * reaches is now compiled too, which is the point.
  */
 export const screenSchema = (schema: unknown, allowUnsafePatterns: boolean): SchemaScreen =>
-  walkSchema(
-    schema,
-    allowUnsafePatterns
-      ? null
-      : (source) => {
-          if (hasUnsafeRegex(source)) {
-            throw validationLimitError(
-              `Unsafe regular expression in schema "pattern": ${JSON.stringify(source)} is prone to catastrophic ` +
-                'backtracking (ReDoS risk) — it nests unbounded quantifiers, repeats an ambiguous alternation, or ' +
-                'nests groups too deeply to analyse. Rewrite it, or pass ' +
-                '`limits: { allowUnsafePatterns: true }` if the schema is trusted.',
-            )
-          }
-        },
-  )
+  walkSchema(schema, (source) => {
+    if (!allowUnsafePatterns && hasUnsafeRegex(source)) {
+      throw validationLimitError(
+        `Unsafe regular expression in schema "pattern": ${JSON.stringify(source)} is prone to catastrophic ` +
+          'backtracking (ReDoS risk) — it nests unbounded quantifiers, repeats an ambiguous alternation, or ' +
+          'nests groups too deeply to analyse. Rewrite it, or pass ' +
+          '`limits: { allowUnsafePatterns: true }` if the schema is trusted.',
+      )
+    }
+    try {
+      compilePattern(source)
+    } catch (error) {
+      throw new Error(
+        `Invalid regular expression in schema "pattern": ${JSON.stringify(source)} — ${(error as Error).message}. ` +
+          'A pattern that does not compile can never match, so the constraint it was meant to express is not there.',
+      )
+    }
+  })

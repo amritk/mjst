@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assert } from '@/assert'
-import { DEFAULT_MAX_ERRORS, hasUnsafeRegex, isValidationLimitError } from '@/interpreter/limits'
+import { DEFAULT_MAX_ERRORS, hasUnsafeRegex, isValidationLimitError, regexScreenCompiles } from '@/interpreter/limits'
 import { validate } from '@/validate'
 import { validateGuard } from '@/validate-guard'
 
@@ -643,70 +643,40 @@ describe('limits', () => {
     expect(admitted).toBeGreaterThan(100)
   })
 
-  it('screens an anchored body against a wide alternation in bounded time', () => {
+  it('screens an anchored body against a wide alternation in bounded work', () => {
     // Rule 1's exemption compares each repeated atom against the first character
     // of every branch that follows it, and each comparison can compile a
     // `RegExp`. Charging the shared budget once per *follower* rather than once
     // per *comparison* undercounted that by the branch count: distinct literals
     // in front of a 2,600-branch alternation forced ~300,000 compiles for 20,000
     // budget, and screening this one pattern took 294 ms — against 0.27 ms
-    // before the exemption existed. Now the budget stops it, at about 15 ms.
+    // before the exemption existed.
     //
-    // Measured as a *ratio* against the same shape with 26x fewer branches, not
-    // as a wall-clock bound. A bound has to sit below the bug to guard anything
-    // — an initial 2,000 ms left the exact 294 ms regression green — but once it
-    // is that tight it starts failing under the CPU contention of the full suite,
-    // which runs a dozen vitest instances at once. The ratio has neither problem:
-    // if the budget holds, cost is capped and barely moves with branch count
-    // (measured 2.4x); if the charge is per follower again, cost tracks the
-    // branch count (measured 21-25x, against 26.4x more branches). Contention
-    // scales both measurements together and cancels out.
+    // Measured as *compiles*, not milliseconds, and not budget consumption
+    // either. Budget consumption cannot see this bug: undercharging was the bug,
+    // so the budget reads a tidy 20,000 in both directions. A stopwatch could see
+    // it and could not be trusted to — under the contention of the full suite the
+    // healthy screen measured anywhere from 7x to 21x its control, and the
+    // regression measures 21-25x, so no threshold separated them and the test
+    // flaked. Compiles are the work the budget exists to bound, they are what the
+    // regression moved, and counting them is deterministic: the same source is
+    // the same number on any machine under any load.
     //
-    // The threshold has to sit above the healthy ratio and below the broken one,
-    // and the gap between them is narrower than it first looks. Charging
-    // comparisons by span cut the *control's* cost without lowering the attack's
-    // budget-capped ceiling, which pushed the healthy ratio up from the 2.4x
-    // originally measured; on a 4-vCPU cloud box it now reads about 7x. 14 keeps
-    // roughly 2x of room above that while still catching a regression to the
-    // 21-25x that per-follower charging produced, and it is what stops this test
-    // flaking under the full suite — at 10 the healthy reading was close enough
-    // to the line that contention alone could cross it.
-    //
-    // The two are measured *interleaved*, and each side is taken as the
-    // *minimum* over its trials. Cancelling CPU contention was always the point
-    // of the ratio, and neither a mean nor a median does it: the full suite runs
-    // a dozen vitest instances at once, and a scheduling hiccup can land on one
-    // side of one pair and inflate it without bound. Contention can only ever
-    // *add* time, so the minimum of several trials is the sample least perturbed
-    // by it — which is what makes the ratio of two minima stable under load,
-    // where a ratio of medians still flaked.
+    // If the budget holds, 26x the branches costs barely more work (measured
+    // 1.3x). If the charge is per follower again, it tracks the branch count. 4
+    // sits with 3x of room above the healthy reading and far below the broken one.
     const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
     const shape = (count: number): string => {
       const branches = Array.from({ length: count }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
       return `^(\\.${literals}(${branches}))*$`
     }
-    const time = (source: string): number => {
-      const started = performance.now()
-      // Genuinely unsafe — the point is only that answering costs bounded work.
-      expect(hasUnsafeRegex(source)).toBe(true)
-      return performance.now() - started
-    }
 
-    const control = shape(100)
-    const attack = shape(2_643)
-    // Prime both: the first screen of each pays for JIT warm-up.
-    time(control)
-    time(attack)
+    // Genuinely unsafe — the point is only that answering costs bounded work.
+    expect(hasUnsafeRegex(shape(100))).toBe(true)
+    expect(hasUnsafeRegex(shape(2_643))).toBe(true)
 
-    let fastestControl = Number.POSITIVE_INFINITY
-    let fastestAttack = Number.POSITIVE_INFINITY
-    for (let run = 0; run < 7; run++) {
-      fastestControl = Math.min(fastestControl, time(control))
-      fastestAttack = Math.min(fastestAttack, time(attack))
-    }
-    const ratio = fastestAttack / fastestControl
-
-    expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(14)
+    const ratio = regexScreenCompiles(shape(2_643)) / regexScreenCompiles(shape(100))
+    expect(ratio, `26x the branches cost ${ratio.toFixed(2)}x the compiles`).toBeLessThan(4)
   })
 
   it('charges a class comparison for its length, not just for happening', () => {
@@ -915,5 +885,43 @@ describe('limits', () => {
     const result = validate({ type: 'array', items: { type: 'string' } }, { limits: { maxErrors: 1 } })([1, 2])
     expect(isValidationLimitError(result)).toBe(false)
     expect(result).not.toBe(true)
+  })
+
+  it('refuses a pattern that does not compile, when the validator is built', () => {
+    // This used to surface as a bare `SyntaxError` thrown out of the validator
+    // the first time a value happened to reach that node — so a schema with a
+    // broken pattern under a rarely-taken branch worked until one day it did not.
+    expect(() => validate({ type: 'string', pattern: '(' })).toThrow(/Invalid regular expression in schema "pattern"/)
+    expect(() => validateGuard({ type: 'object', properties: { a: { pattern: '[' } } })).toThrow(
+      /Invalid regular expression/,
+    )
+  })
+
+  it('checks a pattern no value would ever reach', () => {
+    // The whole point of checking at build time rather than on the node's first
+    // visit: an unused definition is exactly where a broken pattern hides.
+    expect(() => validate({ type: 'string', $defs: { unused: { pattern: '(' } } })).toThrow(
+      /Invalid regular expression/,
+    )
+  })
+
+  it('checks patternProperties keys too', () => {
+    expect(() => validate({ type: 'object', patternProperties: { '(': {} } })).toThrow(/Invalid regular expression/)
+  })
+
+  it('still refuses a broken pattern when unsafe patterns are allowed', () => {
+    // `allowUnsafePatterns` says "this schema is trusted", not "do not read it":
+    // a pattern that cannot compile can never match whoever wrote it.
+    expect(() => validate({ type: 'string', pattern: '(' }, { limits: { allowUnsafePatterns: true } })).toThrow(
+      /Invalid regular expression/,
+    )
+  })
+
+  it('builds a validator for every pattern that does compile', () => {
+    // The escapes `u` mode forbids are the reason `compilePattern` falls back to
+    // a non-Unicode compile, and a build-time check has to accept both.
+    for (const pattern of ['^a+$', '\\p{Letter}+', '\\-', 'a{1,2}', '[\\w-]+']) {
+      expect(() => validate({ type: 'string', pattern }), pattern).not.toThrow()
+    }
   })
 })

@@ -46,6 +46,9 @@ Validation:
   --log-warnings        console.warn on input keys not declared in the schema
   --unknown-keys <s>    How closed objects are proven free of undeclared keys:
                         count-keys (default, fastest on Bun) or count-enumerable (fastest on Node)
+  --formats <f>         String formats the generated validators enforce: "all", or a
+                        comma-separated list (e.g. uuid,date-time,email). Off by default,
+                        which leaves "format" an annotation as JSON Schema reads it.
 
 Reference resolution:
   --resolve-remote      Fetch http(s) $refs while resolving cross-file/remote refs (off by default)

@@ -3,6 +3,7 @@ import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/
 import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { emitFormatModule, FORMAT_FRAGMENTS, formatCheckName } from './emit-format-checks'
 import { generateValidatorFile } from './generate-files'
 
 /**
@@ -318,7 +319,14 @@ export const buildValidatorSchema = async (
   typeSuffix = '',
   schemas?: Readonly<Record<string, unknown>>,
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats?: 'all' | readonly string[],
 ): Promise<GeneratedFile[]> => {
+  // Resolved once: which names are enforced decides both what the emitters check
+  // and what `formats.ts` has to define.
+  const enforced: ReadonlySet<string> =
+    formats === 'all'
+      ? new Set(Object.keys(FORMAT_FRAGMENTS))
+      : new Set((formats ?? []).filter((name) => Object.hasOwn(FORMAT_FRAGMENTS, name)))
   const files: GeneratedFile[] = []
 
   walkRefGraph(rootSchema, rootTypeName, { typeSuffix, ...(schemas !== undefined ? { schemas } : {}) }, (node) => {
@@ -380,6 +388,7 @@ export const buildValidatorSchema = async (
       rootSchema: node.rootSchema,
       typeSuffix,
       unknownKeys,
+      formats: enforced,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })
@@ -388,6 +397,15 @@ export const buildValidatorSchema = async (
   // Emit the runtime contract for validators. ValidationResult is mjst-defined
   // (not derived from the input schema), so its content is fixed.
   files.push({ filename: 'validation-result.ts', content: VALIDATION_RESULT_CONTENT })
+
+  // The `format` checks, and only the ones some emitted file actually calls — a
+  // schema declaring one `uuid` gets one regex rather than the whole table. Asked
+  // of the emitted text for the same reason the per-file imports are.
+  const called = [...enforced].filter((format) =>
+    files.some((file) => file.content.includes(`${formatCheckName(format)}(`)),
+  )
+  const formatModule = emitFormatModule(called)
+  if (formatModule !== '') files.push({ filename: 'formats.ts', content: formatModule })
 
   files.push({ filename: 'index.ts', content: generateIndexBarrel(files) })
 

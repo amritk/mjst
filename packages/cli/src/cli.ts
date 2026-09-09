@@ -263,6 +263,7 @@ const runValidators = async (
     config.typeSuffix,
     undefined,
     config.unknownKeys,
+    config.formats,
   )
   const staged: string[] = []
 

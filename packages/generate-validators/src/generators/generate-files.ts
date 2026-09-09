@@ -3,6 +3,8 @@ import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { collectValidatorImports } from './collect-validator-imports'
+import { formatCheckName } from './emit-format-checks'
+import { NO_FORMATS } from './enforced-keywords'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -29,6 +31,13 @@ type GenerateValidatorFileOptions = {
    * {@link UnknownKeysStrategy} for the trade-off between the two.
    */
   readonly unknownKeys?: UnknownKeysStrategy
+  /**
+   * The `format` names this build enforces. Empty (the default) leaves `format`
+   * an annotation, as 2020-12 reads it; a name here makes the generated
+   * `validateX` and `isX` both check it, against a `formats.ts` emitted
+   * alongside.
+   */
+  readonly formats?: ReadonlySet<string>
 }
 
 /**
@@ -80,8 +89,16 @@ export const generateValidatorFile = (
     ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
   })
   const unknownKeys = options?.unknownKeys ?? DEFAULT_UNKNOWN_KEYS
-  const validatorFunction = generateValidatorFunction(schema, typeName, typeSuffix, options?.rootSchema, unknownKeys)
-  const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix, unknownKeys)
+  const formats = options?.formats ?? NO_FORMATS
+  const validatorFunction = generateValidatorFunction(
+    schema,
+    typeName,
+    typeSuffix,
+    options?.rootSchema,
+    unknownKeys,
+    formats,
+  )
+  const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix, unknownKeys, formats)
 
   const body = validatorFunction + booleanGuard
 
@@ -134,6 +151,17 @@ export const generateValidatorFile = (
   )
   if (runtimeHelpers.length > 0) {
     result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.js'\n`
+  }
+
+  // The `format` checks live in their own generated module, and only the ones
+  // this file calls are imported — asked of the emitted text for the same reason
+  // the runtime helpers above are.
+  const formatChecks = [...formats]
+    .map(formatCheckName)
+    .filter((name) => body.includes(`${name}(`))
+    .sort()
+  if (formatChecks.length > 0) {
+    result += `import { ${formatChecks.join(', ')} } from './formats.js'\n`
   }
 
   for (const imp of refImports) {

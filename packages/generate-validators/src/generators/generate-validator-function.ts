@@ -49,7 +49,8 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertGeneratableRefs } from './assert-generatable-refs'
 import { assertUnevaluatedGeneratable, UNPROVABLE_COVERAGE_MESSAGE } from './assert-unevaluated-generatable'
-import { declaresKeywordOutside } from './enforced-keywords'
+import { formatCheckName, formatFamily } from './emit-format-checks'
+import { declaresKeywordOutside, enforcesFormat, NO_FORMATS } from './enforced-keywords'
 import { tupleShapeOf } from './tuple-shape'
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
@@ -333,6 +334,14 @@ type NestingContext = {
    * swaps in its own IIFE-local buffer.
    */
   sink: string
+  /**
+   * The `format` names this build enforces. Empty by default, which is what
+   * keeps `format` an annotation — the 2020-12 reading, and the interpreter's
+   * when no formats are enabled. A name here turns the keyword into an assertion
+   * and makes the node route through the general emitter, so `isX` and
+   * `validateX` see the same check.
+   */
+  readonly formats: ReadonlySet<string>
 }
 
 /**
@@ -373,13 +382,17 @@ const returnError = (message: string, path: string, keyword: string, params = '{
 /** The IIFE-local buffer a match expression's checks report through. */
 const MATCH_ERROR_SINK = '_m'
 
-const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext => ({
+const createRootContext = (
+  rootSchema?: Record<string, unknown>,
+  formats: ReadonlySet<string> = NO_FORMATS,
+): NestingContext => ({
   objVar: 'obj',
   pathPrefix: '${_path}',
   depth: 0,
   hoisted: [],
   rootSchema,
   sink: ROOT_ERROR_SINK,
+  formats,
 })
 
 /**
@@ -874,6 +887,22 @@ const generateConstraintChecks = (
   // branch that is just `{ required: [...] }` or `{ minItems: 2 }`) is validated
   // against the value's runtime type, matching the interpreter.
 
+  // `format`, when the build enforces it. Emitted next to the other scalar
+  // constraints and guarded by the same runtime type test, because a format
+  // asserts about one JSON type and is silent about every other — exactly as the
+  // interpreter's string and number blocks are.
+  if (isSchemaObject(propSchema) && enforcesFormat(propSchema as Record<string, unknown>, ctx.formats)) {
+    const format = (propSchema as { format: string }).format
+    const family = formatFamily(format)
+    if (family !== undefined) {
+      lines.push(`  if (typeof ${raw} === '${family}' && !${formatCheckName(format)}(${raw})) {`)
+      lines.push(
+        `    ${pushError(ctx.sink, JSON.stringify(`must match format "${format}"`), path, 'format', JSON.stringify({ format }))}`,
+      )
+      lines.push(`  }`)
+    }
+  }
+
   // String constraints
   if (hasPattern(propSchema) || hasMinLength(propSchema) || hasMaxLength(propSchema)) {
     if (hasPattern(propSchema)) {
@@ -1269,6 +1298,7 @@ const generateValueCheckLines = (
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
+    formats: ctx.formats,
   }
 
   lines.push(...generateKeywordChecks('', raw, path, propSchema, suffix, valueCtx, presence))
@@ -1614,6 +1644,7 @@ const generateInlineObjectChecks = (
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
+    formats: ctx.formats,
   }
 
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
@@ -1670,6 +1701,7 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx:
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
+    formats: ctx.formats,
   }
   const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
@@ -1967,11 +1999,31 @@ type GuardBlock = {
  */
 type GuardContext = {
   readonly unknownKeys: UnknownKeysStrategy
+  /**
+   * The `format` names this build enforces, mirroring
+   * {@link NestingContext.formats}. The guard has to see the same set as the
+   * validator or the two would disagree, which is the one thing the flat guard
+   * may never do.
+   */
+  readonly formats: ReadonlySet<string>
   locals: number
   loops: number
 }
 
-const createGuardContext = (unknownKeys: UnknownKeysStrategy): GuardContext => ({ unknownKeys, locals: 0, loops: 0 })
+const createGuardContext = (
+  unknownKeys: UnknownKeysStrategy,
+  formats: ReadonlySet<string> = NO_FORMATS,
+): GuardContext => ({ unknownKeys, formats, locals: 0, loops: 0 })
+
+/**
+ * The guard's half of an enforced `format`: the pass condition, to be ANDed into
+ * the leaf's chain behind the `typeof` that already narrowed the accessor.
+ */
+const guardFormatPass = (schema: Exclude<JSONSchema, boolean>, acc: string, ctx: GuardContext): string | null => {
+  if (!enforcesFormat(schema as Record<string, unknown>, ctx.formats)) return null
+  const format = (schema as { format: string }).format
+  return formatFamily(format) === undefined ? null : `${formatCheckName(format)}(${acc})`
+}
 
 const emptyGuardBlock = (): GuardBlock => ({ conditions: [], nested: [], keyChecks: [] })
 
@@ -2250,11 +2302,12 @@ const generateObjectValidator = (
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
   unknownKeys: UnknownKeysStrategy,
+  formats: ReadonlySet<string>,
 ): string => {
   const vName = validatorName(typeName)
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const properties = hasProperties(schema) ? schema.properties : {}
-  const ctx = createRootContext(rootSchema)
+  const ctx = createRootContext(rootSchema, formats)
 
   const propertyLines: string[] = []
 
@@ -2329,7 +2382,7 @@ const generateObjectValidator = (
   // through to the error-collecting path, which produces the same verdict and
   // full JSON-Pointer errors. Schemas with constraints the guard can't express
   // produce no guard at all (`null`), leaving behaviour unchanged.
-  const guard = guardObjectConditions(schema, 'input', 'obj', createGuardContext(unknownKeys))
+  const guard = guardObjectConditions(schema, 'input', 'obj', createGuardContext(unknownKeys, formats))
 
   // The cold, error-collecting body. When there's a guard this is a separate
   // (unexported) function reached only on failure; the hot path never enters it
@@ -2493,7 +2546,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): st
     if (!hasEnum(schema)) return null
     // With no `type` there is no branch below to compose with, so membership has
     // to be the whole story — and it only is when nothing else constrains.
-    if (declaresKeywordOutside(schema, ['enum'])) return null
+    if (declaresKeywordOutside(schema, ['enum'], ctx.formats)) return null
     return enumMembershipExpr(schema.enum as unknown[], acc)
   }
   const t = schema.type as string
@@ -2528,6 +2581,8 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): st
     // spellings of `(obj.a as Record<string, unknown>).b`.
     case 'string': {
       const parts = [`typeof ${acc} === 'string'`]
+      const formatPass = guardFormatPass(schema, acc, ctx)
+      if (formatPass !== null) parts.push(formatPass)
       if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
       // The exact negations of the validator's length conditions, from the same
       // `string-length-check` emitter, so the guard counts code points too.
@@ -2539,6 +2594,8 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): st
     case 'integer': {
       const parts = [`typeof ${acc} === 'number'`]
       if (t === 'integer') parts.push(`Number.isInteger(${acc})`)
+      const formatPass = guardFormatPass(schema, acc, ctx)
+      if (formatPass !== null) parts.push(formatPass)
       if (hasMinimum(schema))
         parts.push(boundPassExpr(acc, 'minimum', schema.minimum, hasStrictExclusiveMinimum(schema)))
       if (hasMaximum(schema))
@@ -2801,6 +2858,7 @@ export const generateBooleanGuard = (
   typeName: string,
   _suffix = '',
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats: ReadonlySet<string> = NO_FORMATS,
 ): string => {
   const name = guardName(typeName)
   const returns = typeDescribesEveryAcceptedValue(rewriteNullable(schema) as JSONSchema)
@@ -2819,7 +2877,7 @@ export const generateBooleanGuard = (
   // which the object parts do not model. Both would make the guard disagree with
   // the validator, and a guard that disagrees is worse than no guard, so those
   // fall back to calling `validateX`.
-  const ctx = createGuardContext(unknownKeys)
+  const ctx = createGuardContext(unknownKeys, formats)
   if (declaresObjectType(rewritten)) {
     // A `$ref`, a `const`/`enum` or an `x-mjst` hint beside the object keywords
     // is something the block form refuses too, so the answer is the fallback
@@ -2857,6 +2915,7 @@ const generateScalarValidator = (
   typeName: string,
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
+  formats: ReadonlySet<string>,
 ): string => {
   const vName = validatorName(typeName)
 
@@ -2882,7 +2941,7 @@ const generateScalarValidator = (
   // `{ $ref: '#/$defs/s', minLength: 3 }` used to compile to a bare delegation
   // and accept `"q"`, contradicting this file's own note that a `$ref`'s
   // siblings still apply.
-  const generalRoot = (): string => generateGeneralRootValidator(schema, typeName, suffix, rootSchema)
+  const generalRoot = (): string => generateGeneralRootValidator(schema, typeName, suffix, rootSchema, formats)
 
   // Top-level $ref — delegate entirely
   if (hasRef(schema)) {
@@ -2965,7 +3024,7 @@ const generateScalarValidator = (
     declaresKey(schema, 'not') ||
     declaresKey(schema, 'if')
   ) {
-    const ctx = createRootContext(rootSchema)
+    const ctx = createRootContext(rootSchema, formats)
     const checks: string[] = []
     // The root path expression the shared emitters use, as a template literal body.
     const rootPath = '`${_path}`'
@@ -3029,7 +3088,7 @@ const generateScalarValidator = (
   // value is valid when it matches any listed type.
   const rootTypeArray = getTypeArray(schema)
   if (rootTypeArray) {
-    const ctx = createRootContext(rootSchema)
+    const ctx = createRootContext(rootSchema, formats)
     const rootPath = '`${_path}`'
     const checks: string[] = []
 
@@ -3095,7 +3154,7 @@ const generateScalarValidator = (
     // emitted `typeof input === 'string' && input.length < 2`, which is `TS2339`
     // on `never`. The check is inert at runtime either way (the type test in front
     // of it can never pass), but the file has to compile.
-    const rootCtx = createRootContext(rootSchema)
+    const rootCtx = createRootContext(rootSchema, formats)
     const constraintLines = generateConstraintChecks('', '_root', '`${_path}`', schema, suffix, rootCtx)
 
     if (!wrongType) {
@@ -3145,7 +3204,7 @@ const generateScalarValidator = (
   // test (`typeof x === 'string'`, `Array.isArray(x)`, the object block's own
   // shape check), which is exactly the semantics needed, so hand it the whole
   // schema and let it decide what applies.
-  const typelessCtx = createRootContext(rootSchema)
+  const typelessCtx = createRootContext(rootSchema, formats)
   const typelessChecks = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, typelessCtx)
   if (typelessChecks.length === 0) {
     return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
@@ -3184,8 +3243,9 @@ const generateGeneralRootValidator = (
   typeName: string,
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
+  formats: ReadonlySet<string>,
 ): string => {
-  const ctx = createRootContext(rootSchema)
+  const ctx = createRootContext(rootSchema, formats)
   const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
   const body = checks.join('\n')
   return withHoisted(
@@ -3316,6 +3376,7 @@ export const generateValidatorFunction = (
   suffix = '',
   rootSchema?: Record<string, unknown>,
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats: ReadonlySet<string> = NO_FORMATS,
 ): string => {
   assertGeneratableRefs(schema, typeName)
 
@@ -3327,10 +3388,15 @@ export const generateValidatorFunction = (
   // caller did not say otherwise — which is the case for a root schema generated
   // on its own, as every test and every single-file consumer does.
   const document = rootSchema ?? (schema as Record<string, unknown>)
-  assertUnevaluatedGeneratable(rewritten, typeName, document, unevaluatedMatcher(suffix, createRootContext(document)))
+  assertUnevaluatedGeneratable(
+    rewritten,
+    typeName,
+    document,
+    unevaluatedMatcher(suffix, createRootContext(document, formats)),
+  )
 
   if (carriesUnevaluated(rewritten)) {
-    return generateGeneralRootValidator(rewritten, typeName, suffix, document)
+    return generateGeneralRootValidator(rewritten, typeName, suffix, document, formats)
   }
 
   // The object emitter walks `properties` and friends and knows nothing about a
@@ -3339,8 +3405,8 @@ export const generateValidatorFunction = (
   // {@link declaresKeywordOutside} routes it on to the general emitter and every
   // keyword composes.
   if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
-    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys)
+    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys, formats)
   }
 
-  return generateScalarValidator(rewritten, typeName, suffix, document)
+  return generateScalarValidator(rewritten, typeName, suffix, document, formats)
 }

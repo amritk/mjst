@@ -30,6 +30,7 @@ type MutableConfig = {
   caseInsensitive?: boolean
   readonly?: boolean
   unknownKeys?: UnknownKeysStrategy
+  formats?: 'all' | readonly string[]
   helpers?: 'package' | 'embedded'
   typeSuffix?: string
   banner?: boolean | string
@@ -76,6 +77,7 @@ const VALUE_KEYS = new Set<keyof MutableConfig>([
   'importExt',
   'rootType',
   'unknownKeys',
+  'formats',
 ])
 
 // Recognized flags that don't map into CliConfig because they're consumed
@@ -186,6 +188,18 @@ const assignValue = (config: MutableConfig, key: string, value: string): boolean
         throw new Error(`Invalid --import-ext value "${value}". Expected one of: js, ts.`)
       }
       config.importExt = parsed
+      return true
+    }
+    case 'formats': {
+      // `all` or a comma-separated list, matching `ValidateOptions.formats` — a
+      // generated validator checks exactly the formats the interpreter would.
+      config.formats =
+        value === 'all'
+          ? 'all'
+          : value
+              .split(',')
+              .map((name) => name.trim())
+              .filter((name) => name !== '')
       return true
     }
     case 'unknownKeys': {
