@@ -105,9 +105,11 @@ describe('get-default-value', () => {
     expect(getDefaultValue(schema)).toBe('"user@example.com"')
   })
 
-  it('falls back to empty string when pattern is not recognized', () => {
+  it('builds a default that matches the pattern rather than falling back to an empty string', () => {
+    // `""` does not match `^[a-z]+$`, so it was never a usable repair — the
+    // coercing parser handed back a value its own schema rejects.
     const schema = { type: 'string' as const, pattern: '^[a-z]+$' }
-    expect(getDefaultValue(schema)).toBe('""')
+    expect(getDefaultValue(schema)).toBe('"a"')
   })
 
   it('prioritizes default over enum', () => {
@@ -237,9 +239,16 @@ describe('get-default-value', () => {
       expect(getDefaultValue({ type: 'string', minLength: 100_000 })).toBe(`"${'x'.repeat(256)}"`)
     })
 
-    it("leaves a pattern's own guess alone", () => {
-      // Padding an arbitrary regex to a length is not something we can do safely.
-      expect(getDefaultValue({ type: 'string', pattern: '^[a-z]{2}$', minLength: 2 })).toBe('""')
+    it('satisfies a pattern and a length bound together', () => {
+      // Padding a regex match afterwards is unsafe, so the bounds go *into* the
+      // pattern reader, which grows the pattern's own repeatable parts and then
+      // verifies the result. `""` satisfied neither constraint.
+      expect(getDefaultValue({ type: 'string', pattern: '^[a-z]{2}$', minLength: 2 })).toBe('"aa"')
+      expect(getDefaultValue({ type: 'string', pattern: '^[a-z]+$', minLength: 4, maxLength: 6 })).toBe('"aaaa"')
+    })
+
+    it('returns an empty string when the pattern and the length bound cannot both be met', () => {
+      expect(getDefaultValue({ type: 'string', pattern: '^[a-z]{2}$', minLength: 5 })).toBe('""')
     })
 
     it('moves a number inside its bounds', () => {

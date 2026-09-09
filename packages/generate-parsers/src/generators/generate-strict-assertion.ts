@@ -483,8 +483,28 @@ const generateItemCheck = (
   // array of anything.
   if ((hasRef(items) && context.useRefImports === true) || shapeIsDelegated(items, context)) return null
   const match = subschemaMatchExpr('_it', items, matchContext(context))
-  if (match === null || match === 'true') return null
-  return { check: match, message: 'items do not match the item schema' }
+  if (match !== null) return match === 'true' ? null : { check: match, message: 'items do not match the item schema' }
+
+  // The inline matcher refuses a union whose branch reaches a *cyclic* `$ref`:
+  // proving it inline would mean unrolling the cycle, so it returns null and —
+  // until this fallback — the elements were checked by nothing at all. The union
+  // *membership* check has no such limit, because it does not inline anything: a
+  // `$ref` branch becomes a call to that definition's generated `validate…Shape`,
+  // and a recursive definition's validator calls itself, so the recursion bottoms
+  // out on the data rather than on the schema. `canEnforceUnion` certifies that
+  // every branch check is exact in *both* directions, which is exactly the
+  // property a strict parser needs before it may throw on a false result.
+  const branches = getUnionBranches(items)
+  if (branches === null || context.stripUnknown === true) return null
+  if (!canEnforceUnion(branches, context.rootSchema)) return null
+  const union = generateUnionCheck(
+    '_it',
+    branches,
+    context.useRefImports ?? false,
+    context.suffix ?? '',
+    isExclusiveUnion(items),
+  )
+  return union === null ? null : { check: union, message: 'items do not match the item schema' }
 }
 
 /**

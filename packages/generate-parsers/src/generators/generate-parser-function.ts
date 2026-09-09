@@ -1,8 +1,9 @@
 import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { missingCheck, safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
+import { hasOwnCheck, missingCheck, safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
 import {
   hasAdditionalProperties,
   hasAllOf,
@@ -53,6 +54,7 @@ import {
   isExclusiveUnion,
   isInlineObjectArrayProperty,
   isInlineObjectProperty,
+  isUnionArrayProperty,
   shapeValidatorName,
 } from './generate-type-checks'
 import { generateUniqueItemsCheck } from './generate-unique-items-check'
@@ -581,6 +583,39 @@ const generateFallbackObject = (
  * top-level union coerces an unmatched value to. Prefers a `const`/`enum` member,
  * then a per-type empty value.
  */
+/**
+ * Constraint keywords that narrow a scalar beyond its `type`. A root parser for
+ * a schema carrying one cannot be a bare `typeof` test with a literal fallback:
+ * both halves of that form are wrong. A `"Bad Slug"` clears `typeof x ===
+ * "string"` and is handed back unrepaired though the `pattern` rejects it, and
+ * the `""` / `0` fallback is itself not an instance of a schema with
+ * `minLength: 1` or `minimum: 1`. Either way the parser returns a value its own
+ * schema forbids, which is the one thing a coercing parser promises not to do.
+ */
+const SCALAR_ROOT_CONSTRAINTS: readonly string[] = [
+  'pattern',
+  'minLength',
+  'maxLength',
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+]
+
+/**
+ * True for a `string` / `number` / `integer` root that carries at least one
+ * {@link SCALAR_ROOT_CONSTRAINTS} keyword — the case that has to go through the
+ * full constraint-aware coercion instead of the flat `typeof` form. An
+ * unconstrained scalar keeps the flat form, which is both correct and smaller.
+ */
+const isConstrainedScalarRoot = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema) || !hasType(schema)) return false
+  if (schema.type !== 'string' && schema.type !== 'number' && schema.type !== 'integer') return false
+  const record = schema as Record<string, unknown>
+  return SCALAR_ROOT_CONSTRAINTS.some((keyword) => keyword in record)
+}
+
 const scalarDefaultLiteral = (schema: JSONSchema): string => {
   // `getDefaultValue` is the one place that knows what a valid instance of a
   // node looks like — bounds, required properties, tuple positions and all — so
@@ -681,6 +716,245 @@ const generateRefUnionDispatch = (
   const backstop = strict ? generateBackstopAssertion('input', schema, `[${typeName}]`, strictContext(ctx)) : []
   const prelude = backstop.length > 0 ? `${backstop.join('\n')}\n` : ''
   return `export const ${functionName} = (input: unknown): ${typeName} => {\n${prelude}  const _disc = ${discExpr};\n  return ${expr};\n};`
+}
+
+/**
+ * Weights for {@link branchScoreExpression}. A `const` tag is near-decisive —
+ * `{ type: "folder" }` names its branch outright, and a *wrong* tag is the
+ * strongest evidence a value was not meant for this branch at all — so it
+ * outweighs any accumulation of ordinary property evidence. A required property
+ * is worth more than an optional one because its absence makes the branch
+ * invalid rather than merely unlikely.
+ */
+const SCORE_TAG_MATCH = 100
+const SCORE_TAG_MISMATCH = -100
+const SCORE_REQUIRED_PRESENT = 4
+const SCORE_REQUIRED_MISSING = -4
+const SCORE_DECLARED_PRESENT = 1
+const SCORE_DECLARED_WELL_TYPED = 2
+
+/** Resolves a `$ref` for reading, so a `$ref` branch can be scored like an inline one. */
+const resolveForScoring = (schema: JSONSchema, rootSchema: Record<string, unknown> | undefined): JSONSchema => {
+  if (!isSchemaObject(schema) || !hasRef(schema) || rootSchema === undefined) return schema
+  const target = resolveRef((schema as { $ref: string }).$ref, rootSchema)
+  return target !== undefined && isSchemaObject(target as JSONSchema) ? (target as JSONSchema) : schema
+}
+
+/** True for a property whose schema names its branch outright — a `const` or a one-member `enum`. */
+const tagValueOf = (schema: JSONSchema): unknown | undefined => {
+  if (!isSchemaObject(schema)) return undefined
+  if (hasConst(schema)) return schema.const
+  if (hasEnum(schema) && schema.enum.length === 1) return schema.enum[0]
+  return undefined
+}
+
+/**
+ * How well `input` fits one union branch, as a straight-line arithmetic
+ * expression over the value's own keys. Every term is decided at build time —
+ * which keys to read, which tag to compare, which `typeof` to apply — so the
+ * runtime cost is a handful of property reads and no schema walking.
+ */
+const branchScoreExpression = (branch: JSONSchema, ctx: UnionParserContext): string => {
+  const resolved = resolveForScoring(branch, ctx.rootSchema)
+  if (!isSchemaObject(resolved) || !hasProperties(resolved)) return '0'
+  const properties = resolved.properties as Record<string, JSONSchema>
+  const required = new Set(hasRequired(resolved) ? (resolved.required as string[]) : [])
+  const terms: string[] = []
+
+  for (const key of Object.keys(properties)) {
+    const propertySchema = resolveForScoring(properties[key] as JSONSchema, ctx.rootSchema)
+    const accessor = safeAccessor('input', key)
+    const present = hasOwnCheck('input', key)
+
+    const tag = tagValueOf(propertySchema)
+    if (tag !== undefined) {
+      // A matching tag settles it; a present-but-wrong tag rules the branch out.
+      // An absent tag is merely uninformative, so it scores nothing either way.
+      terms.push(
+        `(${accessor} === ${JSON.stringify(tag)} ? ${SCORE_TAG_MATCH} : ${present} ? ${SCORE_TAG_MISMATCH} : 0)`,
+      )
+      continue
+    }
+
+    if (required.has(key)) {
+      terms.push(`(${present} ? ${SCORE_REQUIRED_PRESENT} : ${SCORE_REQUIRED_MISSING})`)
+    } else {
+      terms.push(`(${present} ? ${SCORE_DECLARED_PRESENT} : 0)`)
+    }
+
+    // Well-typedness is weak evidence on top of presence: a property of the
+    // right shape suggests the author meant this branch, but a coercible
+    // mistype (`"5"` for a number) should not disqualify it.
+    const typeCheck = generatePropertyTypeCheck(accessor, properties[key] as JSONSchema, ctx.useRefImports, ctx.suffix)
+    if (typeCheck !== null) terms.push(`(${typeCheck} ? ${SCORE_DECLARED_WELL_TYPED} : 0)`)
+  }
+
+  return terms.length === 0 ? '0' : terms.join(' + ')
+}
+
+/**
+ * A coercing parser for a union of object branches: try each branch's shape
+ * predicate, and when none matches, score the branches and repair toward the
+ * best fit.
+ *
+ * This replaces a blind `input as T` cast. A union whose branches are not
+ * `$ref`s sharing a discriminant had no dispatch at all, so every element of a
+ * union-typed array was handed back exactly as it arrived — which for a coercing
+ * parser means returning a value its own schema rejects, the one thing the mode
+ * promises not to do.
+ *
+ * Two properties make this cheap and defensible:
+ *
+ *  - **Valid input never scores.** The predicates run first, so a value already
+ *    in one branch's shape costs a single call and takes that branch's parser.
+ *    Scoring is the cold path, reached only by input that matches nothing.
+ *  - **The choice is evidence-based, not positional.** Picking the first branch
+ *    would repair `{ name, folder }` toward a branch requiring `sidebar`,
+ *    inventing one and discarding `folder`. Scoring reads the tags and the keys
+ *    actually present, so a value is repaired toward the branch its author most
+ *    plausibly meant. Ties keep the earliest branch, which is `anyOf`'s own order.
+ */
+const generateScoredUnionParser = (
+  functionName: string,
+  typeName: string,
+  branches: readonly JSONSchema[],
+  ctx: UnionParserContext,
+  exported = true,
+): string | null => {
+  if (branches.length < 2) return null
+
+  const preamble: string[] = []
+  const dispatch: { predicate: string; result: string }[] = []
+  const reserved = new Set(ctx.reservedNames ?? [])
+
+  for (const [index, branch] of branches.entries()) {
+    if (!isSchemaObject(branch)) return null
+
+    // A `$ref` branch already has a generated parser and predicate of its own —
+    // including a recursive one, whose validator calls itself.
+    if (hasRef(branch) && ctx.useRefImports) {
+      const refName = refToName((branch as { $ref: string }).$ref, ctx.suffix)
+      if (refName === typeName) return null
+      dispatch.push({
+        predicate: `${shapeValidatorName(refName)}(input)`,
+        result: `${generateParserName(refName)}(input) as ${typeName}`,
+      })
+      continue
+    }
+    if (hasRef(branch)) return null
+    if (hasOneOf(branch) || hasAnyOf(branch) || hasAllOf(branch) || 'not' in branch) return null
+    if ('if' in branch || 'then' in branch || 'else' in branch || 'patternProperties' in branch) return null
+
+    // A scalar branch (`{ type: 'string' }`, an enum, a const) has no object to
+    // build, so it is repaired by the same coercion expression a property of
+    // that shape would get. Admitting these is what lets a union like
+    // `icon: enum | uri-string | string` be dispatched at all, rather than
+    // falling back to the blind cast because one member is not an object.
+    if (!isObjectSchema(branch) || !hasProperties(branch)) {
+      const predicate = generatePropertyTypeCheck('input', branch, ctx.useRefImports, ctx.suffix)
+      if (predicate === null) return null
+      // `knownNotUndefined` stays false: a parser's `input` really can be
+      // `undefined`, and stringifying that to `"undefined"` is a worse repair
+      // than the branch's own default.
+      const coerced = generateValidationExpression(
+        '',
+        branch,
+        scalarDefaultLiteral(branch),
+        true,
+        ctx.rootSchema,
+        undefined,
+        'input',
+        false,
+        ctx.caseInsensitive,
+      )
+      dispatch.push({ predicate, result: `(${coerced}) as ${typeName}` })
+      continue
+    }
+
+    let subName = `${typeName}_B${index}`
+    while (reserved.has(subName)) subName = `${subName}_`
+    reserved.add(subName)
+
+    const shapeValidator = generateShapeValidator(
+      branch,
+      subName,
+      ctx.useRefImports,
+      ctx.suffix,
+      false,
+      ctx.stripUnknown ?? false,
+      reserved,
+      ctx.unknownKeys ?? DEFAULT_UNKNOWN_KEYS,
+    )
+    // A stubbed predicate would send every value down the scoring path, which
+    // still repairs correctly but pays for a fast path it can never take — and
+    // worse, a `=> false` stub means the branch can never be recognized as
+    // already-valid, so a conforming value would be rebuilt. Keep the cast.
+    if (shapeValidator.includes('(_input: unknown): boolean => false')) return null
+
+    preamble.push(
+      generateTypeDefinition(branch, subName, {
+        ...(ctx.suffix ? { typeSuffix: ctx.suffix } : {}),
+        ...(ctx.rootSchema ? { rootSchema: ctx.rootSchema } : {}),
+      }).replace(/^export /, ''),
+    )
+    preamble.push(shapeValidator)
+    preamble.push(
+      generateObjectParser(
+        branch,
+        subName,
+        ctx.useRefImports,
+        ctx.suffix,
+        ctx.logWarnings,
+        // Always the coercing parser: this whole path exists to repair.
+        false,
+        false,
+        ctx.stripUnknown ?? false,
+        ctx.rootSchema,
+        reserved,
+        ctx.caseInsensitive ?? false,
+        shapeValidator,
+        ctx.unknownKeys ?? DEFAULT_UNKNOWN_KEYS,
+      ),
+    )
+    dispatch.push({
+      predicate: `${shapeValidatorName(subName)}(input)`,
+      result: `${generateParserName(subName)}(input) as ${typeName}`,
+    })
+  }
+
+  const first = dispatch[0]
+  if (first === undefined) return null
+
+  const lines: string[] = []
+  for (const { predicate, result } of dispatch) {
+    lines.push(`  if (${predicate}) return ${result};`)
+  }
+  // A non-object cannot be scored by its keys, and there is nothing in it to
+  // preserve — the first branch's parser builds a valid instance from its own
+  // defaults, which is the same answer the blind cast was reaching for.
+  lines.push(`  if (!isObject(input)) return ${first.result};`)
+
+  const scores = branches.map((branch, index) => `  const _s${index} = ${branchScoreExpression(branch, ctx)};`)
+  lines.push(...scores)
+
+  // Fold to the highest score. A branch wins when it is at least as good as
+  // every *later* branch, so the chain reaches the earliest maximum and a tie
+  // keeps the earlier branch — `anyOf`'s own order. The last branch is the
+  // fallback, which is where a value that fits nothing lands.
+  const last = dispatch[dispatch.length - 1]
+  let best = `${last?.result}`
+  for (let index = dispatch.length - 2; index >= 0; index--) {
+    const atLeastAsGood = dispatch
+      .slice(index + 1)
+      .map((_, offset) => `_s${index} >= _s${index + 1 + offset}`)
+      .join(' && ')
+    best = `${atLeastAsGood} ? ${dispatch[index]?.result} : ${best}`
+  }
+  lines.push(`  return ${best};`)
+
+  const head = preamble.length > 0 ? `${preamble.join('\n\n')}\n\n` : ''
+  const exportPrefix = exported ? 'export ' : ''
+  return `${head}${exportPrefix}const ${functionName} = (input: unknown): ${typeName} => {\n${lines.join('\n')}\n};`
 }
 
 /**
@@ -807,6 +1081,11 @@ const generateNonObjectParser = (
     // same union validation the property path uses.
     if (hasOneOf(schema) || hasAnyOf(schema)) {
       const branches = hasOneOf(schema) ? schema.oneOf : hasAnyOf(schema) ? schema.anyOf : []
+      // Object branches get a real dispatch: match a shape predicate, else score
+      // the branches and repair toward the best fit. Reached in coerce mode only
+      // — strict enforcement is emitted above and must not change.
+      const scored = unionCtx ? generateScoredUnionParser(functionName, typeName, branches, unionCtx) : null
+      if (scored !== null) return scored
       const hasRefBranch = branches.some((b) => isSchemaObject(b) && hasRef(b))
       if (branches.length > 0 && !hasRefBranch) {
         const fallback = scalarDefaultLiteral(branches[0] as JSONSchema)
@@ -999,6 +1278,27 @@ const generateNonObjectParser = (
       : `[...(input as readonly unknown[])] as ${typeName}`
     const returnExpr = !isMultiType && schema.type === 'array' ? arrayCast : `input as ${typeName}`
     return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return ${returnExpr};\n};`
+  }
+
+  // A constrained scalar definition (`$defs.slug`: a pattern-bounded string) gets
+  // the same constraint-aware coercion a *property* of that shape already got —
+  // keep the value when it clears every bound, otherwise fall back to a default
+  // built to satisfy them (`getDefaultValue` derives one from the pattern). The
+  // flat `typeof` cases below stayed correct only for an unconstrained scalar,
+  // and a `$ref` to a constrained one is how the gap reached real schemas.
+  if (isConstrainedScalarRoot(schema)) {
+    const expr = generateValidationExpression(
+      '',
+      schema,
+      getDefaultValue(schema),
+      true,
+      unionCtx?.rootSchema,
+      undefined,
+      'input',
+      true,
+      unionCtx?.caseInsensitive,
+    )
+    return `export const ${functionName} = (input: unknown): ${typeName} => (${expr}) as ${typeName};`
   }
 
   switch (schema.type) {
@@ -1202,7 +1502,7 @@ const collectInlineSubTypes = (
     if (isInlineObjectProperty(propSchema)) {
       objects ??= new Map()
       objects.set(key, claim(`${typeName}_${pascalCaseKey(key) || 'Value'}`))
-    } else if (isInlineObjectArrayProperty(propSchema)) {
+    } else if (isInlineObjectArrayProperty(propSchema) || isUnionArrayProperty(propSchema)) {
       arrayItems ??= new Map()
       arrayItems.set(key, claim(`${typeName}_${pascalCaseKey(key) || 'Value'}Item`))
     }
@@ -1660,22 +1960,47 @@ const generateObjectParser = (
     preamble.push(
       `const _every${subName} = (arr: readonly unknown[]): boolean => {\n  for (let i = 0; i < arr.length; i++) if (!${shapeValidatorName(subName)}(arr[i])) return false;\n  return true;\n};`,
     )
+    // A union `items` is dispatched, not built: the element goes to whichever
+    // branch it already matches, and otherwise to the branch it scores best
+    // against. `generateObjectParser` has no branch to build from, so it would
+    // have emitted the passthrough that left these elements unrepaired.
+    const unionBranches = strict ? null : getUnionBranches(itemSchema)
+    const scoredItemParser =
+      unionBranches === null
+        ? null
+        : generateScoredUnionParser(
+            generateParserName(subName),
+            subName,
+            unionBranches,
+            {
+              useRefImports,
+              suffix,
+              ...(rootSchema !== undefined ? { rootSchema } : {}),
+              ...(logWarnings !== undefined ? { logWarnings } : {}),
+              reservedNames,
+              stripUnknown,
+              unknownKeys,
+              caseInsensitive,
+            },
+            false,
+          )
     preamble.push(
-      generateObjectParser(
-        itemSchema,
-        subName,
-        useRefImports,
-        suffix,
-        logWarnings,
-        strict,
-        false,
-        stripUnknown,
-        rootSchema,
-        reservedNames,
-        caseInsensitive,
-        itemShapeValidator,
-        unknownKeys,
-      ),
+      scoredItemParser ??
+        generateObjectParser(
+          itemSchema,
+          subName,
+          useRefImports,
+          suffix,
+          logWarnings,
+          strict,
+          false,
+          stripUnknown,
+          rootSchema,
+          reservedNames,
+          caseInsensitive,
+          itemShapeValidator,
+          unknownKeys,
+        ),
     )
   }
 
@@ -3509,6 +3834,24 @@ export const generateShapeValidator = (
       if (check !== null) {
         return `${exportPrefix}const ${fnName} = (input: unknown): boolean => ${check};`
       }
+      return stub
+    }
+
+    // A scalar / enum / const definition — `{ type: 'string', pattern: … }`, a
+    // `$defs.slug`, an enum of icon names. These have neither `properties` nor
+    // branches, so they fell through to the stub and every validator that called
+    // them inherited it: a `$ref` to a plain `{ type: 'string' }` made its whole
+    // parent untrustworthy, which is what left a recursive union's items — the
+    // Scalar config's `guides` — enforced by nothing at all.
+    //
+    // `generatePropertyTypeCheck` emits the *whole* constraint set for these
+    // (pattern, code-point length bounds, numeric bounds, multipleOf, array
+    // bounds), so the predicate is exact in both directions: true-sound enough
+    // for a parent's fast path to return the value unparsed, and false-sound
+    // enough for a strict union to throw on it.
+    const direct = generatePropertyTypeCheck('input', schema, useRefImports, suffix)
+    if (direct !== null) {
+      return `${exportPrefix}const ${fnName} = (input: unknown): boolean => ${direct};`
     }
     return stub
   }

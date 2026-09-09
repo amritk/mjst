@@ -9,6 +9,8 @@
  *
  *   usage: bun bench/worker.ts <caseName> <libraryId>
  */
+import { isDeepStrictEqual } from 'node:util'
+
 import { measure, type Stats } from './measure.ts'
 import { buildParser, type LibraryId } from './parsers.ts'
 import { PARSE_CASES } from './schemas.ts'

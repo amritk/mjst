@@ -254,6 +254,39 @@ emitting a parser that quietly accepts what the schema forbids. Coercing
 (non-strict) parsers are documented to repair rather than reject, so they ignore
 the rejecting keywords by design.
 
+### How a coercing parser repairs a union
+
+A coercing parser's contract is that whatever it returns is a valid instance of
+the schema that produced it, and
+`src/generators/coerced-output-validity.differential.test.ts` fuzzes exactly that
+property against Ajv.
+
+A union is the hard case, because "repair this value" first has to answer "toward
+which branch?". The generated parser answers it in two steps:
+
+1. **Recognition.** Every branch's shape predicate runs first. A value already in
+   a branch's shape takes that branch's parser and comes back unchanged, so valid
+   input costs one predicate call and is never rebuilt.
+2. **Scoring.** A value matching no branch is scored against each branch and
+   repaired toward the best fit. A `const` tag is near-decisive — a matching tag
+   names the branch, a present-but-wrong one rules it out. Below that, a present
+   required property is strong evidence and a present, well-typed declared
+   property is weak evidence. Ties keep the earliest branch, which is `anyOf`'s
+   own order.
+
+Scoring is why `{ name, folder }` is repaired toward the branch that declares
+`folder`, rather than toward whichever branch happens to be written first —
+which would invent a `sidebar` and discard the `folder` the author wrote. Every
+term is decided at build time, so the emitted code is a handful of property
+reads and no schema walking, and none of it runs for input that already matches.
+
+One shape is still outside this: **a union written directly as a property value**
+(rather than as a definition or as an array's `items`) is not dispatched, and a
+value matching no branch is passed through. Ajv's `coerceTypes` rejects those
+documents rather than repairing them, so this is not a gap against Ajv — but it
+is a gap against the contract above, and it is the whole of the remaining
+difference. Use a **strict** parser when you need a verdict rather than a repair.
+
 ### Conformance, measured
 
 The coverage above is not a claim — it is checked against the corpus every
