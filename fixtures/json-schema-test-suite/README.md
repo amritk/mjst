@@ -8,6 +8,7 @@ on. Four packages in this monorepo consume schemas, and all four are held to it
 | Package | What is measured | Rate |
 | --- | --- | --- |
 | `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | **1281 / 1281 (100%)** |
+| `@amritk/runtime-validators` | `format` assertion (the optional corpus) | 786 / 861 (91.3%) |
 | `@amritk/generate-validators` | generated predicate validators | 1274 / 1281 (99.5%) |
 | `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1240 / 1281 (96.8%) |
 | `@amritk/resolve-refs` | verdict preserved after inlining (`$ref` corpus) | **170 / 170 (100%)** |
@@ -32,6 +33,23 @@ behind. The boundary cannot move silently.
 not among them, so `contentEncoding`/`contentMediaType` — annotation-only
 keywords in 2020-12 — are not measured here.
 
+`draft2020-12/optional/format/` — the suite's **optional** `format` corpus: 21
+files, 861 cases. Optional is the suite's own word for behaviour an
+implementation may decline, and treating every `format` as an annotation is
+conformant — but `@amritk/runtime-validators` opts in (`{ formats: 'all' }`), and
+a format that is checked wrongly is worse than one left unchecked, because the
+caller who asked for validation believes the answer. So it is measured.
+It passes 786 / 861; Ajv with `ajv-formats`, measured on the same corpus, passes
+729. The 75 gaps are listed with reasons in
+`packages/runtime-validators/src/interpreter/format-conformance-expected-failures.test-utils.ts`
+and are almost all IDNA2008 and RFC 5321 shapes that need a Unicode database or a
+Punycode decoder rather than a grammar.
+
+These files come from a **later upstream revision** than `draft2020-12/*.json`
+above (`f6fd52a0`, which also has 20 more required cases than the pinned set).
+They are an independent corpus, so the mismatch costs nothing; refreshing the
+required set is its own change.
+
 `remotes/` — the documents those tests reference by URI. Upstream they are served
 over HTTP at `http://localhost:1234/`, which is the protocol the suite expects an
 implementation to follow; `remotes/draft2020-12/integer.json` is
@@ -48,9 +66,10 @@ supplied separately, by `dialect-metaschema.ts`, which re-exports the published
 
 Deliberately not vendored:
 
-- **`optional/`** — the suite's own name for behavior an implementation may
-  decline: `format` assertion, arbitrary-precision numbers, ECMAScript regex
-  corner cases. The required set is the bar implementations report against.
+- **The rest of `optional/`** — arbitrary-precision numbers, ECMAScript regex
+  corner cases, `format-assertion` vocabulary declarations. The required set is
+  the bar implementations report against; `optional/format/` is vendored anyway,
+  for the reason given above.
 - **Other drafts** — the packages target 2020-12. The generators upgrade
   draft-07 input to it before anything sees it (`upgradeDraft07Schema`, via the
   shared ref-graph walk); the runtime interpreter reads the draft-07 spellings
@@ -59,6 +78,7 @@ Deliberately not vendored:
 | Path | Source | License |
 | --- | --- | --- |
 | `draft2020-12/*.json` | [`json-schema-org/JSON-Schema-Test-Suite`](https://github.com/json-schema-org/JSON-Schema-Test-Suite) — `tests/draft2020-12/*.json` | MIT (© 2012 Julian Berman) |
+| `draft2020-12/optional/format/*.json` | same repository — `tests/draft2020-12/optional/format/*.json` (rev `f6fd52a0`) | MIT (© 2012 Julian Berman) |
 | `remotes/draft2020-12/**` | same repository — `remotes/draft2020-12/**` | MIT (© 2012 Julian Berman) |
 
 To refresh, re-fetch the same files from upstream and commit the result. A case
@@ -76,6 +96,9 @@ import { compareToExpected, conformanceRate, loadSuiteCases } from '../../fixtur
 const results = new Map(loadSuiteCases().map((testCase) => [testCase.key, check(testCase)]))
 const { unexpected, stale } = compareToExpected(results, EXPECTED_FAILURES)
 ```
+
+`loadSuiteFormatCases()` is the same thing over `optional/format/`, for a package
+that opts in to validating formats.
 
 A case key is `<file>/<group description>/<test description>`. An expected-failure
 entry may use a `/`-bounded prefix of one — a whole group, or a whole file — when

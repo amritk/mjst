@@ -1,4 +1,4 @@
-import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
+import { FORMAT_CHECKS, NUMBER_FORMAT_CHECKS } from '@/interpreter/format-checks'
 import type {
   ArrayKeywords,
   BranchKeywords,
@@ -699,6 +699,29 @@ const compileType = (meta: NodeMeta): Step | null => {
 }
 
 /**
+ * The check a node's `format` compiles to, or `undefined` when the keyword is
+ * absent, unknown, or not one this validator was asked to enforce.
+ *
+ * Whether a format is checked at all is fixed for the validator, so a disabled
+ * one compiles to nothing rather than to a per-call set lookup.
+ *
+ * `Object.hasOwn`, not a bare index: the schema is runtime input, and
+ * `format: "toString"` otherwise read `Function.prototype.toString` off the
+ * prototype chain — a truthy non-check — so an unknown format that the spec says
+ * to ignore crashed the validator instead.
+ */
+const enabledFormatCheck = <Check>(
+  compiler: Compiler,
+  format: unknown,
+  checks: Readonly<Record<string, Check>>,
+): Check | undefined => {
+  if (typeof format !== 'string') return undefined
+  const formats = compiler.formats
+  if (formats !== 'all' && !formats.has(format)) return undefined
+  return Object.hasOwn(checks, format) ? checks[format] : undefined
+}
+
+/**
  * The string constraints. The length bounds and `pattern` belong to the
  * validation vocabulary; `format` is its own vocabulary and survives a dialect
  * that drops validation, so it is compiled either way — and only when the format
@@ -765,31 +788,12 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
     }
   }
 
-  const format = keywords.format
-  if (format !== undefined) {
-    const formats = compiler.formats
-    // Whether a format is checked at all is fixed for the validator, so a
-    // disabled one compiles to nothing rather than to a per-call set lookup.
-    if (formats === 'all' || formats.has(format)) {
-      const message = `must match format "${format}"`
-      if (format === 'regex') {
-        // The one format whose check is a compile, not a pattern match.
-        parts.push((ctx, value, path) => {
-          if (!isValidRegex(value as string)) fail(ctx, message, path)
-        })
-      } else {
-        // `Object.hasOwn`, not a bare index: the schema is runtime input, and
-        // `format: "toString"` otherwise read `Function.prototype.toString` off
-        // the prototype chain — truthy, with no `.test` — so an unknown format
-        // that the spec says to ignore crashed the validator instead.
-        const check = Object.hasOwn(FORMAT_CHECKS, format) ? FORMAT_CHECKS[format] : undefined
-        if (check) {
-          parts.push((ctx, value, path) => {
-            if (!check.test(value as string)) fail(ctx, message, path)
-          })
-        }
-      }
-    }
+  const check = enabledFormatCheck(compiler, keywords.format, FORMAT_CHECKS)
+  if (check !== undefined) {
+    const message = `must match format "${keywords.format as string}"`
+    parts.push((ctx, value, path) => {
+      if (!check(value as string)) fail(ctx, message, path)
+    })
   }
 
   return parts.length === 0 ? null : guaranteed ? seq(parts) : guardedSeq(isStringValue, parts)
@@ -803,95 +807,108 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
  * `type: 'number'` with no bound still accepts non-finite numbers, as Ajv does;
  * only a bound (or `multipleOf`) rejects them.
  */
-const compileNumber = (keywords: NumberKeywords, guaranteed: boolean): Step | null => {
+const compileNumber = (compiler: Compiler, keywords: NumberKeywords, guaranteed: boolean): Step | null => {
   const parts: Step[] = []
 
-  const minimum = keywords.minimum
-  const maximum = keywords.maximum
-  const plainRange =
-    minimum !== undefined && maximum !== undefined && !keywords.strictMinimum && !keywords.strictMaximum
-  if (plainRange && minimum !== undefined && maximum !== undefined) {
-    // The ordinary numeric range, fused for the same reason the string length
-    // range above is.
-    const minMessage = `must be >= ${minimum}`
-    const maxMessage = `must be <= ${maximum}`
-    parts.push((ctx, value, path) => {
-      const number = value as number
-      if (!(number >= minimum)) {
-        fail(ctx, minMessage, path)
-        if (ctx.failed) return
+  // The bounds are validation-vocabulary, so a dialect that drops it keeps
+  // them as annotations; the `format` check below is a separate vocabulary and
+  // stands either way.
+  if (compiler.asserts) {
+    const minimum = keywords.minimum
+    const maximum = keywords.maximum
+    const plainRange =
+      minimum !== undefined && maximum !== undefined && !keywords.strictMinimum && !keywords.strictMaximum
+    if (plainRange && minimum !== undefined && maximum !== undefined) {
+      // The ordinary numeric range, fused for the same reason the string length
+      // range above is.
+      const minMessage = `must be >= ${minimum}`
+      const maxMessage = `must be <= ${maximum}`
+      parts.push((ctx, value, path) => {
+        const number = value as number
+        if (!(number >= minimum)) {
+          fail(ctx, minMessage, path)
+          if (ctx.failed) return
+        }
+        if (!(number <= maximum)) fail(ctx, maxMessage, path)
+      })
+    }
+
+    if (!plainRange && minimum !== undefined) {
+      // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
+      // make the bound strict; draft-06+ replaced it with a standalone numeric
+      // keyword (below). Honour both forms.
+      const message = keywords.strictMinimum ? `must be > ${minimum}` : `must be >= ${minimum}`
+      if (keywords.strictMinimum) {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) > minimum)) fail(ctx, message, path)
+        })
+      } else {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) >= minimum)) fail(ctx, message, path)
+        })
       }
-      if (!(number <= maximum)) fail(ctx, maxMessage, path)
-    })
-  }
+    }
 
-  if (!plainRange && minimum !== undefined) {
-    // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
-    // make the bound strict; draft-06+ replaced it with a standalone numeric
-    // keyword (below). Honour both forms.
-    const message = keywords.strictMinimum ? `must be > ${minimum}` : `must be >= ${minimum}`
-    if (keywords.strictMinimum) {
+    if (!plainRange && maximum !== undefined) {
+      const message = keywords.strictMaximum ? `must be < ${maximum}` : `must be <= ${maximum}`
+      if (keywords.strictMaximum) {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) < maximum)) fail(ctx, message, path)
+        })
+      } else {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) <= maximum)) fail(ctx, message, path)
+        })
+      }
+    }
+
+    const exclusiveMinimum = keywords.exclusiveMinimum
+    if (exclusiveMinimum !== undefined) {
+      const message = `must be > ${exclusiveMinimum}`
       parts.push((ctx, value, path) => {
-        if (!((value as number) > minimum)) fail(ctx, message, path)
+        if (!((value as number) > exclusiveMinimum)) fail(ctx, message, path)
       })
-    } else {
+    }
+
+    const exclusiveMaximum = keywords.exclusiveMaximum
+    if (exclusiveMaximum !== undefined) {
+      const message = `must be < ${exclusiveMaximum}`
       parts.push((ctx, value, path) => {
-        if (!((value as number) >= minimum)) fail(ctx, message, path)
+        if (!((value as number) < exclusiveMaximum)) fail(ctx, message, path)
       })
+    }
+
+    const multipleOf = keywords.multipleOf
+    if (multipleOf !== undefined && multipleOf > 0) {
+      const message = `must be a multiple of ${multipleOf}`
+      if (Number.isInteger(multipleOf)) {
+        // For an integer divisor `%` on doubles is exact, so this accepts huge true
+        // multiples (`1e21 % 1 === 0`) that a quotient check would misjudge, and
+        // rejects `NaN`/`±Infinity`, which is Ajv's verdict for `multipleOf` on any
+        // non-finite value.
+        parts.push((ctx, value, path) => {
+          if (!(Number.isInteger(value) && (value as number) % multipleOf === 0)) fail(ctx, message, path)
+        })
+      } else {
+        // Floating-point modulo is unreliable (`0.3 % 0.1 !== 0`), so divide and
+        // measure the distance to the nearest integer. The tolerance tracks the
+        // actual representation error in `q` (~`|q|·2⁻⁵²`); a non-finite value
+        // yields a `NaN` distance, so the `<=` is `false` and it fails.
+        parts.push((ctx, value, path) => {
+          const q = (value as number) / multipleOf
+          const tolerance = 2 * Number.EPSILON * Math.max(1, Math.abs(q))
+          if (!(Math.abs(q - Math.round(q)) <= tolerance)) fail(ctx, message, path)
+        })
+      }
     }
   }
 
-  if (!plainRange && maximum !== undefined) {
-    const message = keywords.strictMaximum ? `must be < ${maximum}` : `must be <= ${maximum}`
-    if (keywords.strictMaximum) {
-      parts.push((ctx, value, path) => {
-        if (!((value as number) < maximum)) fail(ctx, message, path)
-      })
-    } else {
-      parts.push((ctx, value, path) => {
-        if (!((value as number) <= maximum)) fail(ctx, message, path)
-      })
-    }
-  }
-
-  const exclusiveMinimum = keywords.exclusiveMinimum
-  if (exclusiveMinimum !== undefined) {
-    const message = `must be > ${exclusiveMinimum}`
+  const check = enabledFormatCheck(compiler, keywords.format, NUMBER_FORMAT_CHECKS)
+  if (check !== undefined) {
+    const message = `must match format "${keywords.format as string}"`
     parts.push((ctx, value, path) => {
-      if (!((value as number) > exclusiveMinimum)) fail(ctx, message, path)
+      if (!check(value as number)) fail(ctx, message, path)
     })
-  }
-
-  const exclusiveMaximum = keywords.exclusiveMaximum
-  if (exclusiveMaximum !== undefined) {
-    const message = `must be < ${exclusiveMaximum}`
-    parts.push((ctx, value, path) => {
-      if (!((value as number) < exclusiveMaximum)) fail(ctx, message, path)
-    })
-  }
-
-  const multipleOf = keywords.multipleOf
-  if (multipleOf !== undefined && multipleOf > 0) {
-    const message = `must be a multiple of ${multipleOf}`
-    if (Number.isInteger(multipleOf)) {
-      // For an integer divisor `%` on doubles is exact, so this accepts huge true
-      // multiples (`1e21 % 1 === 0`) that a quotient check would misjudge, and
-      // rejects `NaN`/`±Infinity`, which is Ajv's verdict for `multipleOf` on any
-      // non-finite value.
-      parts.push((ctx, value, path) => {
-        if (!(Number.isInteger(value) && (value as number) % multipleOf === 0)) fail(ctx, message, path)
-      })
-    } else {
-      // Floating-point modulo is unreliable (`0.3 % 0.1 !== 0`), so divide and
-      // measure the distance to the nearest integer. The tolerance tracks the
-      // actual representation error in `q` (~`|q|·2⁻⁵²`); a non-finite value
-      // yields a `NaN` distance, so the `<=` is `false` and it fails.
-      parts.push((ctx, value, path) => {
-        const q = (value as number) / multipleOf
-        const tolerance = 2 * Number.EPSILON * Math.max(1, Math.abs(q))
-        if (!(Math.abs(q - Math.round(q)) <= tolerance)) fail(ctx, message, path)
-      })
-    }
   }
 
   return parts.length === 0 ? null : guaranteed ? seq(parts) : guardedSeq(isNumberValue, parts)
@@ -1623,13 +1640,15 @@ const compileTypeBlocks = (compiler: Compiler, meta: NodeMeta, guaranteedType: s
   const objects = meta.objects === null ? null : compileObject(compiler, meta.objects, guaranteedType === 'object')
   const arrays = meta.arrays === null ? null : compileArray(compiler, meta.arrays, guaranteedType === 'array')
   const strings = meta.strings === null ? null : compileString(compiler, meta.strings, guaranteedType === 'string')
-  // Every keyword the number block reads is validation-vocabulary, so a dialect
-  // without it compiles the block away entirely. `integer` implies `number`, so
+  // Every *bound* the number block reads is validation-vocabulary, so a dialect
+  // without it drops them — but `format` is its own vocabulary and survives, the
+  // same way it does in the string block, so the block is only skipped outright
+  // when there is nothing left for it to check. `integer` implies `number`, so
   // it settles that block's guard too.
   const numbers =
-    meta.numbers === null || !compiler.asserts
+    meta.numbers === null || (!compiler.asserts && meta.numbers.format === undefined)
       ? null
-      : compileNumber(meta.numbers, guaranteedType === 'number' || guaranteedType === 'integer')
+      : compileNumber(compiler, meta.numbers, guaranteedType === 'number' || guaranteedType === 'integer')
 
   if (objects === null && arrays === null && strings === null && numbers === null) return null
 

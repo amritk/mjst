@@ -1,3 +1,5 @@
+import { NUMBER_FORMAT_CHECKS } from '@/interpreter/format-checks'
+
 /**
  * The keywords of one schema node, read once and kept.
  *
@@ -120,6 +122,13 @@ export type NumberKeywords = {
   /** Draft-04's boolean `exclusiveMaximum: true` — see {@link NumberKeywords.strictMinimum}. */
   readonly strictMaximum: boolean
   readonly multipleOf: number | undefined
+  /**
+   * The node's `format`, when it names one of the numeric formats (`int32`,
+   * `int64`, `float`, `double`). It is carried on both the string and the number
+   * block because one keyword serves both: `format` names a check over whichever
+   * type the format is defined for, and the two sets do not overlap.
+   */
+  readonly format: string | undefined
 }
 
 /** The array keywords. */
@@ -458,6 +467,12 @@ export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Rec
     rest = itemsRaw
   }
 
+  // `format` names a check over one JSON type, and the numeric formats
+  // (`int32`, `int64`, `float`, `double`) are the ones defined over numbers.
+  // Splitting the keyword here keeps a string node from growing a number block
+  // it would only ever skip, and a numeric one from growing a string block.
+  const numberFormat = format !== undefined && Object.hasOwn(NUMBER_FORMAT_CHECKS, format) ? format : undefined
+
   const meta: NodeMeta = {
     hasId,
     nullable,
@@ -502,7 +517,8 @@ export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Rec
       maximum !== undefined ||
       exclusiveMinimum !== undefined ||
       exclusiveMaximum !== undefined ||
-      multipleOf !== undefined
+      multipleOf !== undefined ||
+      numberFormat !== undefined
         ? {
             minimum,
             maximum,
@@ -511,6 +527,7 @@ export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Rec
             strictMinimum,
             strictMaximum,
             multipleOf,
+            format: numberFormat,
           }
         : null,
     arrays:
