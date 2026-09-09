@@ -1,5 +1,6 @@
 import { assertsValidation } from '@/interpreter/asserts-validation'
 import { compileNode, newCompiler } from '@/interpreter/compile'
+import { type ResolvedFormats, resolveFormats } from '@/interpreter/formats'
 import { limitsCacheKey, type ResolvedLimits, resolveLimits, screenSchema } from '@/interpreter/limits'
 import { type InterpreterContext, NO_DYNAMIC_SCOPE, newValidatorCaches } from '@/interpreter/runtime'
 import { buildSchemaRegistry, type SchemaDocuments } from '@/interpreter/schema-registry'
@@ -31,12 +32,6 @@ const cache = new WeakMap<object, Map<string, (input: unknown) => unknown>>()
  */
 const MAX_CACHED_VARIANTS = 48
 
-const normalizeFormats = (formats: ValidateOptions['formats']): 'all' | ReadonlySet<string> => {
-  if (formats === 'all') return 'all'
-  if (formats === undefined) return new Set()
-  return new Set(formats)
-}
-
 /**
  * A stable token per caller-supplied registry object. Two different registries
  * must never share a cache entry — the schema is the same, so nothing else in
@@ -47,8 +42,19 @@ const normalizeFormats = (formats: ValidateOptions['formats']): 'all' | Readonly
  * The token is issued by *identity*, in a `WeakMap` so it is collected with the
  * registry it describes.
  */
-const registryTokens = new WeakMap<object, string>()
-let registriesSeen = 0
+const objectTokens = new WeakMap<object, string>()
+let objectsSeen = 0
+
+/** A stable per-object token, issued by identity and collected with the object. */
+const objectToken = (value: object): string => {
+  let token = objectTokens.get(value)
+  if (token === undefined) {
+    objectsSeen += 1
+    token = `o${objectsSeen}`
+    objectTokens.set(value, token)
+  }
+  return token
+}
 
 /**
  * The registry's contribution to the cache key: its identity, plus the set of
@@ -63,16 +69,16 @@ let registriesSeen = 0
  *
  * Costs nothing at all when no registry was supplied, which is the usual case.
  */
-const registryKey = (schemas: SchemaDocuments | undefined): string => {
-  if (schemas === undefined) return ''
-  let token = registryTokens.get(schemas)
-  if (token === undefined) {
-    registriesSeen += 1
-    token = `r${registriesSeen}`
-    registryTokens.set(schemas, token)
-  }
-  return `${token}:${Object.keys(schemas).sort().join(',')}`
-}
+const registryKey = (schemas: SchemaDocuments | undefined): string =>
+  schemas === undefined ? '' : `${objectToken(schemas)}:${Object.keys(schemas).sort().join(',')}`
+
+/**
+ * The custom formats' contribution to the cache key, on the same terms as the
+ * registry above: identity, plus the names it defines. Two different definitions
+ * of `phone` must never share a validator.
+ */
+const customFormatsKey = (custom: ValidateOptions['customFormats']): string =>
+  custom === undefined ? '' : `${objectToken(custom)}:${Object.keys(custom).sort().join(',')}`
 
 /**
  * Which of the three validators a cache entry holds: the boolean `guard`, the
@@ -84,14 +90,11 @@ type ValidatorMode = 'guard' | 'errors' | 'split'
 
 const MODE_KEY: Readonly<Record<ValidatorMode, string>> = { guard: 'g', errors: 'e', split: 's' }
 
-const cacheKey = (
-  mode: ValidatorMode,
-  formats: 'all' | ReadonlySet<string>,
-  limits: ResolvedLimits,
-  schemas: SchemaDocuments | undefined,
-): string => {
-  const formatsKey = formats === 'all' ? '*' : [...formats].sort().join(',')
-  return `${MODE_KEY[mode]}|${formatsKey}|${limitsCacheKey(limits)}|${registryKey(schemas)}`
+const cacheKey = (mode: ValidatorMode, options: ValidateOptions | undefined, limits: ResolvedLimits): string => {
+  const enabled = options?.formats
+  const formatsKey = enabled === 'all' ? '*' : enabled === undefined ? '' : [...enabled].sort().join(',')
+  const key = `${MODE_KEY[mode]}|${formatsKey}|${customFormatsKey(options?.customFormats)}`
+  return `${key}|${limitsCacheKey(limits)}|${registryKey(options?.schemas)}`
 }
 
 /**
@@ -104,7 +107,7 @@ const cacheKey = (
  */
 const makeValidator = (
   schema: unknown,
-  formats: 'all' | ReadonlySet<string>,
+  formats: ResolvedFormats,
   emitErrors: boolean,
   limits: ResolvedLimits,
   schemas: SchemaDocuments | undefined,
@@ -223,11 +226,17 @@ export const prepareValidator = (
   options: ValidateOptions | undefined,
   emitErrors: boolean,
 ): ((input: unknown) => unknown) => {
-  const formats = normalizeFormats(options?.formats)
   const limits = resolveLimits(options?.limits)
-  const schemas = options?.schemas
-  const key = cacheKey(emitErrors ? 'errors' : 'guard', formats, limits, schemas)
-  return cached(schema, key, () => makeValidator(schema, formats, emitErrors, limits, schemas))
+  const key = cacheKey(emitErrors ? 'errors' : 'guard', options, limits)
+  return cached(schema, key, () =>
+    makeValidator(
+      schema,
+      resolveFormats(options?.formats, options?.customFormats),
+      emitErrors,
+      limits,
+      options?.schemas,
+    ),
+  )
 }
 
 /**
@@ -259,10 +268,8 @@ export const prepareSplitValidator = (
   schema: unknown,
   options: ValidateOptions | undefined,
 ): ((input: unknown) => unknown) => {
-  const formats = normalizeFormats(options?.formats)
   const limits = resolveLimits(options?.limits)
-  const schemas = options?.schemas
-  const key = cacheKey('split', formats, limits, schemas)
+  const key = cacheKey('split', options, limits)
 
   return cached(schema, key, () => {
     const guard = prepareValidator(schema, options, false)

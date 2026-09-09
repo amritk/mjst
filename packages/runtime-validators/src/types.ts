@@ -1,3 +1,4 @@
+import type { FormatDefinition } from './interpreter/formats'
 import type { ValidateLimits } from './interpreter/limits'
 
 /**
@@ -96,6 +97,34 @@ export type ValidateOptions = {
    */
   readonly formats?: 'all' | readonly string[]
   /**
+   * Format checkers of your own, keyed by the name a schema's `format` would
+   * use. A `RegExp` or a predicate describes a **string** format; the object
+   * form (`{ type: 'number', validate }`) describes one over numbers.
+   *
+   * Registering a format is the opt-in, so unlike the built-ins these are always
+   * checked and do not additionally have to be named in {@link formats}. A
+   * definition here also *replaces* a built-in of the same name, which is how to
+   * tighten `email` or loosen `uri` without forking the package.
+   *
+   * Nothing screens a `RegExp` you supply for catastrophic backtracking the way
+   * a schema's own `pattern` is screened — you wrote it, so it is trusted the
+   * same way the rest of your code is.
+   *
+   * Treat the map as immutable once passed: like {@link schemas}, it takes part
+   * in the validator cache key by identity and by the names it defines.
+   *
+   * @example
+   * ```typescript
+   * validate(schema, {
+   *   customFormats: {
+   *     'phone-e164': /^\+[1-9]\d{6,14}$/,
+   *     port: { type: 'number', validate: (value) => Number.isInteger(value) && value > 0 && value < 65_536 },
+   *   },
+   * })
+   * ```
+   */
+  readonly customFormats?: Readonly<Record<string, FormatDefinition>>
+  /**
    * Resource ceilings that keep a validation from being turned into a
    * denial-of-service by an adversarial schema or input — recursion depth, total
    * work, and unsafe regex patterns. The defaults are generous enough that
@@ -137,4 +166,4 @@ export type ValidateOptions = {
   readonly schemas?: Readonly<Record<string, unknown>>
 }
 
-export type { ValidateLimits }
+export type { FormatDefinition, ValidateLimits }

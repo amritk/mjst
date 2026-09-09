@@ -4,6 +4,7 @@ export type { Infer } from './infer'
 export { isValidationLimitError } from './interpreter/limits'
 export type {
   Check,
+  FormatDefinition,
   Guard,
   ValidateLimits,
   ValidateOptions,

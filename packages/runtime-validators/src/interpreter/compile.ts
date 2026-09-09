@@ -1,4 +1,4 @@
-import { FORMAT_CHECKS, NUMBER_FORMAT_CHECKS } from '@/interpreter/format-checks'
+import type { ResolvedFormats } from '@/interpreter/formats'
 import type {
   ArrayKeywords,
   BranchKeywords,
@@ -131,8 +131,8 @@ export type Compiler = {
    * it turns into annotations.
    */
   readonly asserts: boolean
-  /** Enabled string formats, or `'all'`. */
-  readonly formats: 'all' | ReadonlySet<string>
+  /** The formats this validator checks, split by the JSON type each asserts about. */
+  readonly formats: ResolvedFormats
   readonly nodes: Map<object, CompiledNode>
 }
 
@@ -140,7 +140,7 @@ export const newCompiler = (
   root: unknown,
   registry: SchemaRegistry | null,
   asserts: boolean,
-  formats: 'all' | ReadonlySet<string>,
+  formats: ResolvedFormats,
 ): Compiler => ({ root, registry, asserts, formats, nodes: new Map() })
 
 const NOOP: Step = () => {}
@@ -702,24 +702,12 @@ const compileType = (meta: NodeMeta): Step | null => {
  * The check a node's `format` compiles to, or `undefined` when the keyword is
  * absent, unknown, or not one this validator was asked to enforce.
  *
- * Whether a format is checked at all is fixed for the validator, so a disabled
- * one compiles to nothing rather than to a per-call set lookup.
- *
- * `Object.hasOwn`, not a bare index: the schema is runtime input, and
- * `format: "toString"` otherwise read `Function.prototype.toString` off the
- * prototype chain — a truthy non-check — so an unknown format that the spec says
- * to ignore crashed the validator instead.
+ * Which formats are checked, and which JSON type each is about, is settled when
+ * the validator is built (see `formats.ts`), so a disabled format compiles to
+ * nothing rather than to a per-call lookup.
  */
-const enabledFormatCheck = <Check>(
-  compiler: Compiler,
-  format: unknown,
-  checks: Readonly<Record<string, Check>>,
-): Check | undefined => {
-  if (typeof format !== 'string') return undefined
-  const formats = compiler.formats
-  if (formats !== 'all' && !formats.has(format)) return undefined
-  return Object.hasOwn(checks, format) ? checks[format] : undefined
-}
+const formatCheck = <Check>(available: ReadonlyMap<string, Check>, format: unknown): Check | undefined =>
+  typeof format === 'string' ? available.get(format) : undefined
 
 /**
  * The string constraints. The length bounds and `pattern` belong to the
@@ -788,7 +776,7 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
     }
   }
 
-  const check = enabledFormatCheck(compiler, keywords.format, FORMAT_CHECKS)
+  const check = formatCheck(compiler.formats.strings, keywords.format)
   if (check !== undefined) {
     const message = `must match format "${keywords.format as string}"`
     parts.push((ctx, value, path) => {
@@ -903,7 +891,7 @@ const compileNumber = (compiler: Compiler, keywords: NumberKeywords, guaranteed:
     }
   }
 
-  const check = enabledFormatCheck(compiler, keywords.format, NUMBER_FORMAT_CHECKS)
+  const check = formatCheck(compiler.formats.numbers, keywords.format)
   if (check !== undefined) {
     const message = `must match format "${keywords.format as string}"`
     parts.push((ctx, value, path) => {
@@ -1689,7 +1677,7 @@ const compileTypeBlocks = (compiler: Compiler, meta: NodeMeta, guaranteedType: s
 const buildNode = (compiler: Compiler, schema: Record<string, unknown>): Step => {
   // Every keyword this node carries, read once — see `node-meta.ts`. Nothing
   // caches it, because from here on nobody asks the node anything again.
-  const meta = getNodeMeta(null, schema)
+  const meta = getNodeMeta(null, schema, compiler.formats.numbers)
 
   // Whether this node is nothing but a `type` and (optionally) the keywords for
   // that one type — `{ type: 'string' }`, `{ type: 'integer', minimum: 0 }`,

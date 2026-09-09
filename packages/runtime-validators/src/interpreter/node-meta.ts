@@ -1,5 +1,3 @@
-import { NUMBER_FORMAT_CHECKS } from '@/interpreter/format-checks'
-
 /**
  * The keywords of one schema node, read once and kept.
  *
@@ -228,7 +226,11 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
  * by keyword: a wrong-typed keyword (`minLength: "3"`) is not an assertion, so
  * it lands as `undefined` and the walker skips it, the same as before.
  */
-export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Record<string, unknown>): NodeMeta => {
+export const getNodeMeta = (
+  cache: WeakMap<object, NodeMeta> | null,
+  schema: Record<string, unknown>,
+  numericFormats: ReadonlyMap<string, unknown>,
+): NodeMeta => {
   if (cache !== null) {
     const cached = cache.get(schema)
     if (cached !== undefined) return cached
@@ -467,11 +469,11 @@ export const getNodeMeta = (cache: WeakMap<object, NodeMeta> | null, schema: Rec
     rest = itemsRaw
   }
 
-  // `format` names a check over one JSON type, and the numeric formats
-  // (`int32`, `int64`, `float`, `double`) are the ones defined over numbers.
-  // Splitting the keyword here keeps a string node from growing a number block
-  // it would only ever skip, and a numeric one from growing a string block.
-  const numberFormat = format !== undefined && Object.hasOwn(NUMBER_FORMAT_CHECKS, format) ? format : undefined
+  // `format` names a check over one JSON type — `int32` and its siblings are the
+  // built-ins defined over numbers, and a caller can register more. Splitting the
+  // keyword here keeps a string node from growing a number block it would only
+  // ever skip, and a numeric one from growing a string block.
+  const numberFormat = format !== undefined && numericFormats.has(format) ? format : undefined
 
   const meta: NodeMeta = {
     hasId,

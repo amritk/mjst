@@ -1,3 +1,4 @@
+import { NO_FORMATS } from '@/interpreter/formats'
 import { validationLimitError } from '@/interpreter/limits'
 import { getNodeMeta, type NodeMeta } from '@/interpreter/node-meta'
 import { resolveLocalRef } from '@/interpreter/resolve-local-ref'
@@ -153,7 +154,9 @@ export const coerceToSchema = (
   if (!isPlainObject(schema)) return value
   spend(ctx)
 
-  const meta = getNodeMeta(ctx.meta, schema)
+  // Coercion reads a node's `type` and its subschemas, never a `format`, so the
+  // format split the meta makes for the validator is irrelevant here.
+  const meta = getNodeMeta(ctx.meta, schema, NO_FORMATS.numbers)
   let current = value
 
   // `$ref` is an ordinary applicator in 2020-12: it constrains the same value
