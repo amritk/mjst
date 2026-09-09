@@ -3105,12 +3105,19 @@ describe('generate-parser-function', () => {
       expect(p({ k: 'z' })).toEqual({ k: 'a' })
     })
 
-    it('validates a top-level union and defaults a non-member', () => {
+    it('validates a top-level union and coerces a non-member toward its best branch', () => {
+      // A non-member is repaired by the branch's own coercion, exactly as a
+      // *property* of that branch's shape already was — `{ a: { type: 'string' } }`
+      // turns `true` into `"true"`. The top-level union used to discard the value
+      // and emit the branch default instead, which was the only place in the
+      // generator where a coercible scalar was thrown away rather than converted.
       const p = parse({ anyOf: [{ type: 'string' }, { type: 'number' }] })
       expect(p('s')).toBe('s')
       expect(p(5)).toBe(5)
-      expect(p(true)).toBe('')
-      expect(p({})).toBe('')
+      expect(p(true)).toBe('true')
+      expect(p({})).toBe('[object Object]')
+      // `undefined` has nothing to convert, so it still falls back to the default.
+      expect(p(undefined)).toBe('')
     })
 
     it('coerces any input to null for a null type', () => {

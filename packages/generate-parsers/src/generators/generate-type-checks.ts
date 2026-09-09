@@ -109,6 +109,26 @@ export const isInlineObjectArrayProperty = (propSchema: JSONSchema): boolean => 
 }
 
 /**
+ * Matches an array property whose `items` is a *union* of object branches — the
+ * shape a coercing parser needs a private item sub-parser for, so an element can
+ * be dispatched to (and repaired toward) a branch rather than passed through.
+ * {@link isInlineObjectArrayProperty} deliberately does not cover this: a union
+ * is not one inline object, and the trust walk reads that predicate to decide
+ * what a shape validator proves.
+ */
+export const isUnionArrayProperty = (propSchema: JSONSchema): boolean => {
+  if (!isSchemaObject(propSchema)) return false
+  if (!('type' in propSchema) || propSchema.type !== 'array') return false
+  if (!hasItems(propSchema) || Array.isArray(propSchema.items)) return false
+  const items = propSchema.items
+  if (!isSchemaObject(items)) return false
+  const branches = getUnionBranches(items)
+  if (branches === null || branches.length < 2) return false
+  // Every branch must be a shape the item parser can both test and rebuild.
+  return branches.every((branch) => isSchemaObject(branch) && (hasRef(branch) || isInlineObjectProperty(branch)))
+}
+
+/**
  * Extracts the branch list of a `oneOf`/`anyOf` union, or `null` when the
  * schema is not a union (or mixes in other composition keywords we cannot
  * turn into a membership check).
