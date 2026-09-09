@@ -1,3 +1,4 @@
+import type { SchemaIssue } from './interpreter/check-schema'
 import type { FormatDefinition } from './interpreter/formats'
 import type { ValidateLimits } from './interpreter/limits'
 
@@ -164,6 +165,27 @@ export type ValidateOptions = {
    * ```
    */
   readonly schemas?: Readonly<Record<string, unknown>>
+  /**
+   * Refuse to build a validator for a schema that does not say what its author
+   * meant — a keyword carrying the wrong kind of value, one nobody recognizes, a
+   * value that makes its keyword meaningless, or a constraint the node's own
+   * `type` has already ruled out.
+   *
+   * Off by default, because the permissive reading is the specification's: an
+   * unknown keyword is an annotation and a wrong-typed one is not an assertion.
+   * Both are also silent, which is why this exists — `{ required: 'name' }` and
+   * `{ maxlength: 5 }` enforce nothing, and nothing says so.
+   *
+   * Turn it on wherever the schema is yours to fix (a build step, a test, a
+   * config loaded at startup). Leave it off for a schema that arrives from
+   * somewhere you do not control, where an unknown keyword is somebody else's
+   * extension rather than your typo — and reach for {@link checkSchema} there
+   * instead, which reports the same findings without refusing.
+   *
+   * Building throws a `SchemaError` listing every issue found; use
+   * {@link isSchemaError} to tell it from an ordinary throw.
+   */
+  readonly strict?: boolean
 }
 
-export type { FormatDefinition, ValidateLimits }
+export type { FormatDefinition, SchemaIssue, ValidateLimits }

@@ -1,4 +1,5 @@
 import { assertsValidation } from '@/interpreter/asserts-validation'
+import { checkSchema, schemaError } from '@/interpreter/check-schema'
 import { compileNode, newCompiler } from '@/interpreter/compile'
 import { type ResolvedFormats, resolveFormats } from '@/interpreter/formats'
 import { limitsCacheKey, type ResolvedLimits, resolveLimits, screenSchema } from '@/interpreter/limits'
@@ -94,7 +95,10 @@ const cacheKey = (mode: ValidatorMode, options: ValidateOptions | undefined, lim
   const enabled = options?.formats
   const formatsKey = enabled === 'all' ? '*' : enabled === undefined ? '' : [...enabled].sort().join(',')
   const key = `${MODE_KEY[mode]}|${formatsKey}|${customFormatsKey(options?.customFormats)}`
-  return `${key}|${limitsCacheKey(limits)}|${registryKey(options?.schemas)}`
+  // `strict` is part of the key because it decides whether the validator exists
+  // at all: the same schema is a refusal under one setting and a validator under
+  // the other, and a cached one must not answer for both.
+  return `${key}|${options?.strict === true ? 's' : ''}|${limitsCacheKey(limits)}|${registryKey(options?.schemas)}`
 }
 
 /**
@@ -111,7 +115,18 @@ const makeValidator = (
   emitErrors: boolean,
   limits: ResolvedLimits,
   schemas: SchemaDocuments | undefined,
+  strict: boolean,
 ): ((input: unknown) => unknown) => {
+  // `strict` is answered here rather than at the call site so both entry points
+  // and the split validator get it from one place, and so a schema that says
+  // nothing is refused before any of the work below.
+  if (strict) {
+    // The validator's own registered names count as known on top of the
+    // built-ins, so a `customFormats` entry is not reported as a typo.
+    const issues = checkSchema(schema, { extraFormats: [...formats.strings.keys(), ...formats.numbers.keys()] })
+    if (issues.length > 0) throw schemaError(issues)
+  }
+
   // One walk of the schema, up front. It screens every
   // `pattern`/`patternProperties` source so a ReDoS-prone regex fails loudly
   // here (at build time) rather than mid-request, and it tells us whether the
@@ -235,6 +250,7 @@ export const prepareValidator = (
       emitErrors,
       limits,
       options?.schemas,
+      options?.strict === true,
     ),
   )
 }

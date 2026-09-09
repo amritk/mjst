@@ -666,28 +666,35 @@ describe('limits', () => {
     // by span later cut the *control's* cost without lowering the attack's
     // budget-capped ceiling, which doubled this ratio and halved the margin. 10
     // keeps roughly 4x of room on both sides.
+    //
+    // The two are measured *interleaved*, and the median is taken over the
+    // per-pair ratios rather than over each side separately. Cancelling
+    // contention was always the point, and it only cancels between measurements
+    // taken at the same moment: timing all the controls and then all the attacks
+    // let a scheduling hiccup land on one side alone, which is how a ratio test
+    // still managed to flake under the full suite.
     const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
     const shape = (count: number): string => {
       const branches = Array.from({ length: count }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
       return `^(\\.${literals}(${branches}))*$`
     }
-    const median = (source: string): number => {
-      const timings: number[] = []
-      for (let run = 0; run < 5; run++) {
-        const started = performance.now()
-        // Genuinely unsafe — the point is only that answering costs bounded work.
-        expect(hasUnsafeRegex(source)).toBe(true)
-        timings.push(performance.now() - started)
-      }
-      return timings.sort((a, b) => a - b)[2] as number
+    const time = (source: string): number => {
+      const started = performance.now()
+      // Genuinely unsafe — the point is only that answering costs bounded work.
+      expect(hasUnsafeRegex(source)).toBe(true)
+      return performance.now() - started
     }
 
     const control = shape(100)
     const attack = shape(2_643)
     // Prime both: the first screen of each pays for JIT warm-up.
-    median(control)
-    median(attack)
-    const ratio = median(attack) / median(control)
+    time(control)
+    time(attack)
+
+    const ratios: number[] = []
+    for (let run = 0; run < 5; run++) ratios.push(time(attack) / time(control))
+    const ratio = ratios.sort((a, b) => a - b)[2] as number
+
     expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(10)
   })
 
