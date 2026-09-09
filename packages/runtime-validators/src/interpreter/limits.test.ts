@@ -662,17 +662,24 @@ describe('limits', () => {
     // branch count (measured 21-25x, against 26.4x more branches). Contention
     // scales both measurements together and cancels out.
     //
-    // The threshold sits at 10 rather than nearer the 2.4x: charging comparisons
-    // by span later cut the *control's* cost without lowering the attack's
-    // budget-capped ceiling, which doubled this ratio and halved the margin. 10
-    // keeps roughly 4x of room on both sides.
+    // The threshold has to sit above the healthy ratio and below the broken one,
+    // and the gap between them is narrower than it first looks. Charging
+    // comparisons by span cut the *control's* cost without lowering the attack's
+    // budget-capped ceiling, which pushed the healthy ratio up from the 2.4x
+    // originally measured; on a 4-vCPU cloud box it now reads about 7x. 14 keeps
+    // roughly 2x of room above that while still catching a regression to the
+    // 21-25x that per-follower charging produced, and it is what stops this test
+    // flaking under the full suite — at 10 the healthy reading was close enough
+    // to the line that contention alone could cross it.
     //
-    // The two are measured *interleaved*, and the median is taken over the
-    // per-pair ratios rather than over each side separately. Cancelling
-    // contention was always the point, and it only cancels between measurements
-    // taken at the same moment: timing all the controls and then all the attacks
-    // let a scheduling hiccup land on one side alone, which is how a ratio test
-    // still managed to flake under the full suite.
+    // The two are measured *interleaved*, and each side is taken as the
+    // *minimum* over its trials. Cancelling CPU contention was always the point
+    // of the ratio, and neither a mean nor a median does it: the full suite runs
+    // a dozen vitest instances at once, and a scheduling hiccup can land on one
+    // side of one pair and inflate it without bound. Contention can only ever
+    // *add* time, so the minimum of several trials is the sample least perturbed
+    // by it — which is what makes the ratio of two minima stable under load,
+    // where a ratio of medians still flaked.
     const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
     const shape = (count: number): string => {
       const branches = Array.from({ length: count }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
@@ -691,11 +698,15 @@ describe('limits', () => {
     time(control)
     time(attack)
 
-    const ratios: number[] = []
-    for (let run = 0; run < 5; run++) ratios.push(time(attack) / time(control))
-    const ratio = ratios.sort((a, b) => a - b)[2] as number
+    let fastestControl = Number.POSITIVE_INFINITY
+    let fastestAttack = Number.POSITIVE_INFINITY
+    for (let run = 0; run < 7; run++) {
+      fastestControl = Math.min(fastestControl, time(control))
+      fastestAttack = Math.min(fastestAttack, time(attack))
+    }
+    const ratio = fastestAttack / fastestControl
 
-    expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(10)
+    expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(14)
   })
 
   it('charges a class comparison for its length, not just for happening', () => {
@@ -843,8 +854,8 @@ describe('limits', () => {
 
     // The errors kept are the first ones found, in order, and each is real.
     expect(capped === true ? [] : capped.errors.slice(0, 2)).toEqual([
-      { message: 'must be string', path: '/0' },
-      { message: 'must be string', path: '/1' },
+      { message: 'must be string', path: '/0', keyword: 'type', params: { type: 'string' } },
+      { message: 'must be string', path: '/1', keyword: 'type', params: { type: 'string' } },
     ])
   })
 

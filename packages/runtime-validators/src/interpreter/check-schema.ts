@@ -446,7 +446,7 @@ const descend = (
   }
 
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => walk(entry, `${path}/${index}`, issues, knownFormats))
+    for (const [index, entry] of value.entries()) walk(entry, `${path}/${index}`, issues, knownFormats)
     return
   }
 

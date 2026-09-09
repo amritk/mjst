@@ -86,7 +86,10 @@ describe('prepare', () => {
     // is still the one there.
     expect(errorHalf()).toBe(beforeAnyCall)
 
-    expect(split(42)).toEqual({ valid: false, errors: [{ message: 'must be string', path: '' }] })
+    expect(split(42)).toEqual({
+      valid: false,
+      errors: [{ message: 'must be string', path: '', keyword: 'type', params: { type: 'string' } }],
+    })
   })
 
   it('reports through the split exactly what the error-collecting half reports', () => {

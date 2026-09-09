@@ -19,12 +19,25 @@ export type GeneratedFile = {
  * can evaluate the very source that ships instead of reimplementing it.
  */
 export const VALIDATION_RESULT_CONTENT = `/**
- * A single validation error with a human-readable message and a JSON Pointer
- * path indicating where in the document the error occurred.
+ * A single validation error: what went wrong, where, and which keyword said so.
+ *
+ * The shape matches \`@amritk/runtime-validators\`, so an error from a generated
+ * validator and one from the runtime interpreter can be handled by the same
+ * code — grouped, translated, or branched on — without knowing which produced it.
  */
 export type ValidationError = {
+  /** Human-readable description of what went wrong. */
   message: string
+  /** JSON Pointer to the offending value inside the instance. */
   path: string
+  /** The JSON Schema keyword that rejected the value — \`type\`, \`required\`, \`minimum\`, … */
+  keyword: string
+  /**
+   * The keyword's own values, as far as they explain the failure: the bound that
+   * was exceeded, the property that was missing, the allowed values that were not
+   * matched. Empty for a keyword with nothing to add beyond its name.
+   */
+  params: Record<string, unknown>
 }
 
 /**

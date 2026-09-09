@@ -32,7 +32,7 @@ describe('validate', () => {
     expect(validator({ payload: { id: 'abc' } })).toBe(true)
     expect(validator({ payload: { id: 42 } })).toEqual({
       valid: false,
-      errors: [{ message: 'must be string', path: '/payload/id' }],
+      errors: [{ message: 'must be string', path: '/payload/id', keyword: 'type', params: { type: 'string' } }],
     })
   })
 
@@ -45,7 +45,14 @@ describe('validate', () => {
 
     expect(validator({})).toEqual({
       valid: false,
-      errors: [{ message: "must have required property 'name'", path: '' }],
+      errors: [
+        {
+          message: "must have required property 'name'",
+          path: '',
+          keyword: 'required',
+          params: { missingProperty: 'name' },
+        },
+      ],
     })
   })
 
@@ -62,9 +69,18 @@ describe('validate', () => {
 
   it('rejects a non-object at the root', () => {
     const validator = validate({ type: 'object' })
-    expect(validator('nope')).toEqual({ valid: false, errors: [{ message: 'must be object', path: '' }] })
-    expect(validator(null)).toEqual({ valid: false, errors: [{ message: 'must be object', path: '' }] })
-    expect(validator([])).toEqual({ valid: false, errors: [{ message: 'must be object', path: '' }] })
+    expect(validator('nope')).toEqual({
+      valid: false,
+      errors: [{ message: 'must be object', path: '', keyword: 'type', params: { type: 'object' } }],
+    })
+    expect(validator(null)).toEqual({
+      valid: false,
+      errors: [{ message: 'must be object', path: '', keyword: 'type', params: { type: 'object' } }],
+    })
+    expect(validator([])).toEqual({
+      valid: false,
+      errors: [{ message: 'must be object', path: '', keyword: 'type', params: { type: 'object' } }],
+    })
   })
 
   it('distinguishes integer from number', () => {
@@ -148,7 +164,7 @@ describe('validate', () => {
     expect(validator([1, 2, 3])).toBe(true)
     expect(validator([1, 'two', 3])).toEqual({
       valid: false,
-      errors: [{ message: 'must be number', path: '/1' }],
+      errors: [{ message: 'must be number', path: '/1', keyword: 'type', params: { type: 'number' } }],
     })
   })
 
@@ -196,7 +212,14 @@ describe('validate', () => {
     expect(validator({ a: 'x' })).toBe(true)
     expect(validator({ a: 'x', b: 1 })).toEqual({
       valid: false,
-      errors: [{ message: 'must NOT have additional properties', path: '/b' }],
+      errors: [
+        {
+          message: 'must NOT have additional properties',
+          path: '/b',
+          keyword: 'additionalProperties',
+          params: { additionalProperty: 'b' },
+        },
+      ],
     })
   })
 
@@ -252,7 +275,7 @@ describe('validate', () => {
     expect(validator({ value: 1, children: [{ value: 2 }, { value: 3, children: [{ value: 4 }] }] })).toBe(true)
     expect(validator({ value: 1, children: [{ value: 'nope' }] })).toEqual({
       valid: false,
-      errors: [{ message: 'must be number', path: '/children/0/value' }],
+      errors: [{ message: 'must be number', path: '/children/0/value', keyword: 'type', params: { type: 'number' } }],
     })
   })
 
@@ -292,7 +315,14 @@ describe('validate', () => {
     expect(validator({ foo: 1, bar: 2 })).toBe(true)
     expect(validator({ Foo: 1 })).toEqual({
       valid: false,
-      errors: [{ message: 'property name "Foo" is invalid', path: '/Foo' }],
+      errors: [
+        {
+          message: 'property name "Foo" is invalid',
+          path: '/Foo',
+          keyword: 'propertyNames',
+          params: { propertyName: 'Foo' },
+        },
+      ],
     })
   })
 
@@ -314,7 +344,14 @@ describe('validate', () => {
     expect(arrayForm({ creditCard: 1, billingAddress: 'x' })).toBe(true)
     expect(arrayForm({ creditCard: 1 })).toEqual({
       valid: false,
-      errors: [{ message: "must have property 'billingAddress' when 'creditCard' is present", path: '' }],
+      errors: [
+        {
+          message: "must have property 'billingAddress' when 'creditCard' is present",
+          path: '',
+          keyword: 'dependentRequired',
+          params: { missingProperty: 'billingAddress', property: 'creditCard', depsCount: 1 },
+        },
+      ],
     })
 
     const schemaForm = validate({ type: 'object', dependencies: { creditCard: { required: ['billingAddress'] } } })
@@ -464,7 +501,7 @@ describe('validate', () => {
     expect(validator({ name: 'root', child: { name: 'leaf' } })).toBe(true)
     expect(validator({ name: 'root', child: { name: 42 } })).toEqual({
       valid: false,
-      errors: [{ message: 'must be string', path: '/child/name' }],
+      errors: [{ message: 'must be string', path: '/child/name', keyword: 'type', params: { type: 'string' } }],
     })
   })
 
@@ -693,7 +730,14 @@ describe('validate', () => {
       expect(validator({ id: 1 })).toBe(true)
       expect(validator({ id: 1, extra: true })).toEqual({
         valid: false,
-        errors: [{ message: 'must NOT have unevaluated properties', path: '/extra' }],
+        errors: [
+          {
+            message: 'must NOT have unevaluated properties',
+            path: '/extra',
+            keyword: 'unevaluatedProperties',
+            params: { unevaluatedProperty: 'extra' },
+          },
+        ],
       })
     })
 
@@ -746,7 +790,14 @@ describe('validate', () => {
       expect(validator(['a', 1])).toBe(true)
       expect(validator(['a', 1, 'extra'])).toEqual({
         valid: false,
-        errors: [{ message: 'must NOT have unevaluated items', path: '/2' }],
+        errors: [
+          {
+            message: 'must NOT have unevaluated items',
+            path: '/2',
+            keyword: 'unevaluatedItems',
+            params: { unevaluatedItem: 2 },
+          },
+        ],
       })
     })
 
@@ -762,7 +813,14 @@ describe('validate', () => {
       // index 1 is not a number, so `contains` never evaluated it.
       expect(validator([1, 'anything'])).toEqual({
         valid: false,
-        errors: [{ message: 'must NOT have unevaluated items', path: '/1' }],
+        errors: [
+          {
+            message: 'must NOT have unevaluated items',
+            path: '/1',
+            keyword: 'unevaluatedItems',
+            params: { unevaluatedItem: 1 },
+          },
+        ],
       })
       // No number at all → contains itself fails.
       expect(validator(['x'])).not.toBe(true)
@@ -1385,5 +1443,84 @@ describe('validate', () => {
         expect(validator('anything')).toBe(true)
       })
     }
+  })
+
+  it('names the keyword that rejected the value, and its own values', () => {
+    // The two fields that make an error programmable rather than only printable:
+    // a caller can branch on `keyword`, group by it, or rebuild the message from
+    // `params` in their own language.
+    const validator = validate({
+      type: 'object',
+      properties: {
+        age: { type: 'integer', minimum: 18 },
+        tags: { type: 'array', items: { type: 'string' }, maxItems: 2 },
+        kind: { enum: ['a', 'b'] },
+      },
+      required: ['age', 'kind'],
+      additionalProperties: false,
+    })
+
+    const result = validator({ age: 5, tags: ['a', 1, 'c'], kind: 'z', extra: 1 })
+    expect(result).not.toBe(true)
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must be >= 18', path: '/age', keyword: 'minimum', params: { comparison: '>=', limit: 18 } },
+      { message: 'must have at most 2 items', path: '/tags', keyword: 'maxItems', params: { limit: 2 } },
+      { message: 'must be string', path: '/tags/1', keyword: 'type', params: { type: 'string' } },
+      { message: 'must be one of: "a", "b"', path: '/kind', keyword: 'enum', params: { allowedValues: ['a', 'b'] } },
+      {
+        message: 'must NOT have additional properties',
+        path: '/extra',
+        keyword: 'additionalProperties',
+        params: { additionalProperty: 'extra' },
+      },
+    ])
+  })
+
+  it('gives every error a keyword and a params object, so neither needs guarding', () => {
+    // A caller reading `error.params.limit` should never have to check whether
+    // `params` is there — a keyword with nothing to add carries an empty object
+    // rather than nothing at all.
+    const schemas: unknown[] = [
+      { type: 'string' },
+      { not: {} },
+      { anyOf: [{ type: 'string' }] },
+      { oneOf: [{ type: 'string' }, { type: 'number' }] },
+      { type: 'array', uniqueItems: true },
+      { type: 'object', propertyNames: { maxLength: 1 } },
+      { type: 'object', required: ['a'] },
+      { type: 'string', pattern: '^a' },
+      { type: 'number', multipleOf: 2 },
+      { const: { deep: true } },
+      false,
+    ]
+    // `true` matches neither `oneOf` branch, so the count is 0 rather than 1.
+    const values: unknown[] = [42, {}, 42, true, [1, 1], { long: 1 }, {}, 'b', 3, { deep: false }, 1]
+
+    for (const [index, schema] of schemas.entries()) {
+      const result = validate(schema)(values[index])
+      expect(result, `schema ${index}`).not.toBe(true)
+      for (const error of result === true ? [] : result.errors) {
+        expect(typeof error.keyword, `schema ${index} keyword`).toBe('string')
+        expect(error.keyword.length, `schema ${index} keyword`).toBeGreaterThan(0)
+        expect(error.params, `schema ${index} params`).toBeTypeOf('object')
+      }
+    }
+  })
+
+  it('reports a missing property under `required`, not under the property itself', () => {
+    // `params.missingProperty` is what a form library needs to attach the error
+    // to a field, since the instance path points at the object that lacks it.
+    const result = validate({ type: 'object', required: ['name'] })({})
+    expect(result).toEqual({
+      valid: false,
+      errors: [
+        {
+          message: "must have required property 'name'",
+          path: '',
+          keyword: 'required',
+          params: { missingProperty: 'name' },
+        },
+      ],
+    })
   })
 })

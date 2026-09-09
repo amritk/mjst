@@ -439,15 +439,36 @@ export const matchesType = (type: string, value: unknown): boolean => {
  * exists only to allocate objects for a report nobody reads to the end. Tripping
  * `failed` unwinds it through the checks the guard path already uses.
  */
-export const fail = (ctx: InterpreterContext, message: string, path: string): void => {
+export const fail = (ctx: InterpreterContext, error: ErrorTemplate, path: string): void => {
   if (ctx.emitErrors) {
     if (ctx.errors === null) ctx.errors = []
-    ctx.errors.push({ message, path })
+    ctx.errors.push({ message: error.message, path, keyword: error.keyword, params: error.params })
     if (ctx.errors.length >= ctx.maxErrors) ctx.failed = true
   } else {
     ctx.failed = true
   }
 }
+
+/** The params of a keyword whose name already says everything about the failure. */
+export const NO_PARAMS: Readonly<Record<string, unknown>> = Object.freeze({})
+
+/**
+ * Everything about a failure except where it happened.
+ *
+ * Built once, when a node is specialized, and closed over by the step that can
+ * report it — so a keyword whose message and params are both fixed (which is
+ * most of them) allocates nothing even on the error path, and the guard path
+ * never touches one at all. Only the handful whose params name something about
+ * the *value* — the missing property, the offending key — build one per failure.
+ */
+export type ErrorTemplate = {
+  readonly message: string
+  readonly keyword: string
+  readonly params: Readonly<Record<string, unknown>>
+}
+
+/** An {@link ErrorTemplate} for a keyword with nothing to add beyond its name. */
+export const bareError = (keyword: string, message: string): ErrorTemplate => ({ message, keyword, params: NO_PARAMS })
 
 /**
  * Builds the child instance path for a nested property or item. In guard mode

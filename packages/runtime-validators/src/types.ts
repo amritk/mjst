@@ -10,8 +10,32 @@ import type { ValidateLimits } from './interpreter/limits'
  * so code can move between the build-time and runtime validators without churn.
  */
 export type ValidationError = {
+  /** Human-readable description of what went wrong. */
   message: string
+  /** JSON Pointer to the offending value inside the instance. */
   path: string
+  /**
+   * The JSON Schema keyword that rejected the value — `type`, `required`,
+   * `minimum`, and so on.
+   *
+   * This is what makes an error *programmable* rather than only printable. A
+   * caller can branch on it (is this a missing field or a malformed one?), group
+   * by it, or use it with {@link params} to render a message of their own — a
+   * translated one, or one written in the language of their domain rather than
+   * of JSON Schema.
+   */
+  keyword: string
+  /**
+   * The keyword's own values, as far as they explain the failure: the bound that
+   * was exceeded, the property that was missing, the allowed values that were
+   * not matched. Empty for a keyword with nothing to add beyond its name.
+   *
+   * The shape depends on the keyword and is documented alongside each in the
+   * README. It exists so a caller can rebuild the message: `params.limit` with
+   * `keyword: 'maxLength'` is everything "must have at most 20 characters" says,
+   * without being in English.
+   */
+  params: Readonly<Record<string, unknown>>
 }
 
 /**

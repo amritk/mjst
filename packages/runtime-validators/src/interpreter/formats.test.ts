@@ -92,6 +92,11 @@ describe('formats', () => {
       { customFormats: { phone: /^\d+$/ } },
     )({ phone: 'nope' })
 
-    expect(result).toEqual({ valid: false, errors: [{ message: 'must match format "phone"', path: '/phone' }] })
+    expect(result).toEqual({
+      valid: false,
+      errors: [
+        { message: 'must match format "phone"', path: '/phone', keyword: 'format', params: { format: 'phone' } },
+      ],
+    })
   })
 })
