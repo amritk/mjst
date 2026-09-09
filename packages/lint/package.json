@@ -46,6 +46,10 @@
     "test": "NODE_ENV=production vitest run --root ../.. packages/lint/",
     "prebench": "bun run build && bun run --filter='@amritk/runtime-validators' --filter='@amritk/yaml' --filter='@amritk/resolve-refs' build",
     "bench": "bun run ./bench/run.ts",
+    "prebench:vacuum": "bun run build && bun run --filter='@amritk/runtime-validators' --filter='@amritk/yaml' --filter='@amritk/resolve-refs' --filter='@amritk/mjst' build",
+    "bench:vacuum": "bun run ./bench/vacuum.ts",
+    "prebench:vacuum:node": "bun run build && bun run --filter='@amritk/runtime-validators' --filter='@amritk/yaml' --filter='@amritk/resolve-refs' --filter='@amritk/mjst' build",
+    "bench:vacuum:node": "node ./bench/vacuum.ts",
     "prebench:node": "bun run build && bun run --filter='@amritk/runtime-validators' --filter='@amritk/yaml' --filter='@amritk/resolve-refs' build",
     "bench:node": "node ./bench/run.ts"
   },

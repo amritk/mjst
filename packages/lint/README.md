@@ -300,6 +300,8 @@ Structural validation runs **once per document, against the document as written*
 
 ## Benchmarks
 
+### Against Spectral, in process
+
 The `bench/` suite pits `@amritk/lint` head-to-head against **[Spectral](https://github.com/stoplightio/spectral)** — the OpenAPI linter this package is modelled on (hence the `spectral:oas` alias) — over the real-world specs the test suite lints: Swagger's petstore, the DigitalOcean API, and the OpenAI API (~17 KB to ~2.8 MB, spanning a small config and a genuinely large document). Both do the same job: **parse → dereference internal `$ref`s → run their recommended OpenAPI ruleset** (mjst dereferences in memory with [`@amritk/resolve-refs`](../resolve-refs), exactly as the CLI does; Spectral uses its own default resolver). Medians of three runs on each runtime, one machine (Linux x64, a 4-vCPU cloud box, Bun 1.4.0 and Node 26.8.1 — your hardware will differ, run `bun run bench` or `bun run bench:node` yourself):
 
 | document | size | runtime | mjst | Spectral | speedup | findings (mjst / Spectral) |
@@ -325,6 +327,67 @@ runtime-specific and may come back.
 Each `lint` figure is the mean wall time of one whole pass — **every rule, not a subset** — dominated by real work: JSONPath matching, the rule functions, and the dereference pass. A fresh document is parsed on every iteration on both sides, matching how the tools are actually called. The finding counts differ because the two rulesets are not byte-identical (different rule implementations and `$ref` resolution), so this is a **throughput** comparison rather than a correctness parity check — but on petstore both land on the same two findings.
 
 **Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms** on Bun and **~0.06 ms** on Node, versus **~0.26 ms** and **~0.24 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
+
+### Against vacuum, CLI to CLI
+
+`bench/vacuum.ts` puts the `mjst lint` **command** up against **[vacuum](https://github.com/daveshanley/vacuum)**, the Go OpenAPI linter. vacuum is a compiled binary, so there is no in-process comparison to be had: the honest measurement is the one a user actually meets — a process started fresh, linting one file with its own recommended preset, per-finding output suppressed on both sides (`--quiet` for mjst, `-x` for vacuum). Every figure below therefore includes process start, module loading, ruleset assembly, parsing, `$ref` resolution and the rules themselves.
+
+vacuum is not a dependency of this repo. Install it (`go install github.com/daveshanley/vacuum@latest`, or `brew install daveshanley/vacuum/vacuum`) and run `bun run bench:vacuum` / `bun run bench:vacuum:node`; the bench finds it on `PATH` or at `VACUUM_BIN`, and says so and exits cleanly when it is not there. Medians of three runs, one machine (Linux x64, a 4-vCPU cloud box, Bun 1.3.11 and Node 22.22.2, vacuum v0.30.3 — a different sitting from the Spectral table above, so read the two tables against themselves rather than against each other):
+
+| document | size | runtime | mjst | vacuum | ratio | findings (mjst / vacuum) |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| startup (tiny doc) | 1 KB | Bun | ~211 ms | ~40 ms | 0.19× | 0 / 0 |
+| startup (tiny doc) | 1 KB | Node | ~254 ms | ~43 ms | 0.17× | 0 / 0 |
+| petstore (Swagger) | 17 KB | Bun | ~240 ms | ~82 ms | 0.34× | 2 / 102 |
+| petstore (Swagger) | 17 KB | Node | ~276 ms | ~83 ms | 0.30× | 2 / 102 |
+| digitalocean | 105 KB | Bun | ~322 ms | ~1.10 s | **~3.7×** | 2911 / 2242 |
+| digitalocean | 105 KB | Node | ~389 ms | ~1.13 s | **~2.9×** | 2911 / 2242 |
+| openai | 2.8 MB | Bun | ~1.27 s | ~1.43 s | **~1.1×** | 585 / 5212 |
+| openai | 2.8 MB | Node | ~1.30 s | ~1.49 s | **~1.2×** | 585 / 5212 |
+
+<sub>ratio is vacuum ÷ mjst wall time; above 1× means mjst finished first.</sub>
+
+The first row is not a document worth linting — it is a clean, tiny spec that no
+rule fires on, so what it measures is the price of starting each tool up. That
+price is the whole story of the small rows: **~210 ms on Bun and ~250 ms on Node
+against vacuum's ~40 ms**, and about half of ours is spent loading dependencies
+before a byte of the document is read (`yargs` ~35 ms, `fast-glob` ~22 ms), the
+rest being the CLI's own module graph and the linter. For a pre-commit hook over
+one small file, a Go binary wins and it is not close.
+
+Take each tool's own startup off both sides and what is left is the linting:
+
+| document | size | runtime | mjst | vacuum | ratio |
+| --- | ---: | --- | ---: | ---: | ---: |
+| petstore (Swagger) | 17 KB | Bun | ~29 ms | ~41 ms | ~1.4× |
+| petstore (Swagger) | 17 KB | Node | ~22 ms | ~40 ms | ~1.8× |
+| digitalocean | 105 KB | Bun | ~111 ms | ~1.06 s | **~10×** |
+| digitalocean | 105 KB | Node | ~138 ms | ~1.09 s | **~7.8×** |
+| openai | 2.8 MB | Bun | ~1.06 s | ~1.39 s | ~1.3× |
+| openai | 2.8 MB | Node | ~1.05 s | ~1.44 s | ~1.4× |
+
+Two sanity checks on that subtraction, because it is the load-bearing step.
+vacuum's own `-t` timer reports **1.09 s** for digitalocean and **1.43 s** for
+openai — within a few percent of the figures above, arrived at from the outside.
+And the digitalocean fixture carries 129 external `$ref`s to files that are not
+vendored, which both tools fail to resolve: rewriting them so neither tool
+touches the filesystem moves neither side by more than a few percent, so that
+row is real rule work rather than failed I/O. The petstore rows are a difference
+of two much larger numbers and are correspondingly noisy — treat them as "about
+the same".
+
+The rule sets are **not** the same: mjst's `oas` preset enables 53 rules
+(Spectral's recommended set), vacuum's default enables 55 of its own, and vacuum
+ships rules this package has no equivalent for — `description-duplication` and
+`oas3-missing-example` account for nearly all of its 102 petstore findings,
+where mjst reports 2. So the counts are context for how much work each tool did,
+not a parity claim, and the same caveat as the Spectral table applies: this is a
+throughput comparison.
+
+The short version: the linting engine holds its own against a compiled Go
+linter, comfortably so on the mid-sized document, while **the CLI's startup is
+where mjst gives that back** on small ones. That is the actionable half of this
+benchmark — it is a dependency-loading problem, not a linting one.
 
 ---
 
