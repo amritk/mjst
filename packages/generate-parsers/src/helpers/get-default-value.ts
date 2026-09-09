@@ -121,13 +121,24 @@ const MAX_FALLBACK_LENGTH = 256
  * `""` is not an instance of `{ type: 'string', minLength: 1 }`, so a coercing
  * parser "repaired" a missing value into one the schema still rejects — and the
  * fallback object built around it was invalid for the same reason. A `pattern`
- * keeps its {@link generateDefaultFromPattern} guess untouched: padding an
- * arbitrary regex to a length is not something that can be done safely, and a
- * pattern that also bounds its length almost always encodes the length itself.
+ * hands its length bounds to {@link generateDefaultFromPattern} rather than
+ * padding afterwards: padding an arbitrary regex match is not safe (`"a"` grown
+ * to `"axx"` no longer matches `^[a-z]$`), but the pattern reader can satisfy
+ * both at once by repeating the pattern's own variable-length parts, and it
+ * verifies the result against the pattern before returning it.
  */
 const stringFallback = (schema: JSONSchema): string => {
+  const bounds = schema as Record<string, unknown>
   if (hasPattern(schema)) {
-    const patternDefault = generateDefaultFromPattern(schema.pattern)
+    // The length bounds go *with* the pattern rather than being applied after
+    // it: a value satisfying both is something only the pattern reader can
+    // build (growing `^[a-z]+$` to reach a `minLength`), and one satisfying the
+    // pattern alone is still an invalid repair for a schema that bounds length.
+    const patternDefault = generateDefaultFromPattern(
+      schema.pattern,
+      typeof bounds['minLength'] === 'number' ? bounds['minLength'] : undefined,
+      typeof bounds['maxLength'] === 'number' ? bounds['maxLength'] : undefined,
+    )
     if (patternDefault) return patternDefault
     return '""'
   }

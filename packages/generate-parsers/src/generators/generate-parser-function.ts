@@ -581,6 +581,39 @@ const generateFallbackObject = (
  * top-level union coerces an unmatched value to. Prefers a `const`/`enum` member,
  * then a per-type empty value.
  */
+/**
+ * Constraint keywords that narrow a scalar beyond its `type`. A root parser for
+ * a schema carrying one cannot be a bare `typeof` test with a literal fallback:
+ * both halves of that form are wrong. A `"Bad Slug"` clears `typeof x ===
+ * "string"` and is handed back unrepaired though the `pattern` rejects it, and
+ * the `""` / `0` fallback is itself not an instance of a schema with
+ * `minLength: 1` or `minimum: 1`. Either way the parser returns a value its own
+ * schema forbids, which is the one thing a coercing parser promises not to do.
+ */
+const SCALAR_ROOT_CONSTRAINTS: readonly string[] = [
+  'pattern',
+  'minLength',
+  'maxLength',
+  'minimum',
+  'maximum',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+]
+
+/**
+ * True for a `string` / `number` / `integer` root that carries at least one
+ * {@link SCALAR_ROOT_CONSTRAINTS} keyword — the case that has to go through the
+ * full constraint-aware coercion instead of the flat `typeof` form. An
+ * unconstrained scalar keeps the flat form, which is both correct and smaller.
+ */
+const isConstrainedScalarRoot = (schema: JSONSchema): boolean => {
+  if (!isSchemaObject(schema) || !hasType(schema)) return false
+  if (schema.type !== 'string' && schema.type !== 'number' && schema.type !== 'integer') return false
+  const record = schema as Record<string, unknown>
+  return SCALAR_ROOT_CONSTRAINTS.some((keyword) => keyword in record)
+}
+
 const scalarDefaultLiteral = (schema: JSONSchema): string => {
   // `getDefaultValue` is the one place that knows what a valid instance of a
   // node looks like — bounds, required properties, tuple positions and all — so
@@ -999,6 +1032,27 @@ const generateNonObjectParser = (
       : `[...(input as readonly unknown[])] as ${typeName}`
     const returnExpr = !isMultiType && schema.type === 'array' ? arrayCast : `input as ${typeName}`
     return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return ${returnExpr};\n};`
+  }
+
+  // A constrained scalar definition (`$defs.slug`: a pattern-bounded string) gets
+  // the same constraint-aware coercion a *property* of that shape already got —
+  // keep the value when it clears every bound, otherwise fall back to a default
+  // built to satisfy them (`getDefaultValue` derives one from the pattern). The
+  // flat `typeof` cases below stayed correct only for an unconstrained scalar,
+  // and a `$ref` to a constrained one is how the gap reached real schemas.
+  if (isConstrainedScalarRoot(schema)) {
+    const expr = generateValidationExpression(
+      '',
+      schema,
+      getDefaultValue(schema),
+      true,
+      unionCtx?.rootSchema,
+      undefined,
+      'input',
+      true,
+      unionCtx?.caseInsensitive,
+    )
+    return `export const ${functionName} = (input: unknown): ${typeName} => (${expr}) as ${typeName};`
   }
 
   switch (schema.type) {
@@ -3509,6 +3563,24 @@ export const generateShapeValidator = (
       if (check !== null) {
         return `${exportPrefix}const ${fnName} = (input: unknown): boolean => ${check};`
       }
+      return stub
+    }
+
+    // A scalar / enum / const definition — `{ type: 'string', pattern: … }`, a
+    // `$defs.slug`, an enum of icon names. These have neither `properties` nor
+    // branches, so they fell through to the stub and every validator that called
+    // them inherited it: a `$ref` to a plain `{ type: 'string' }` made its whole
+    // parent untrustworthy, which is what left a recursive union's items — the
+    // Scalar config's `guides` — enforced by nothing at all.
+    //
+    // `generatePropertyTypeCheck` emits the *whole* constraint set for these
+    // (pattern, code-point length bounds, numeric bounds, multipleOf, array
+    // bounds), so the predicate is exact in both directions: true-sound enough
+    // for a parent's fast path to return the value unparsed, and false-sound
+    // enough for a strict union to throw on it.
+    const direct = generatePropertyTypeCheck('input', schema, useRefImports, suffix)
+    if (direct !== null) {
+      return `${exportPrefix}const ${fnName} = (input: unknown): boolean => ${direct};`
     }
     return stub
   }

@@ -32,6 +32,11 @@ const leaf = (rng: Rng): SchemaNode => {
   if (k < 0.34) return { type: 'string', minLength: 1, maxLength: 4 }
   if (k < 0.42) return { type: 'integer', minimum: 0, maximum: 10 }
   if (k < 0.5) return { type: ['string', 'null'] }
+  // A `pattern` is the constraint a repaired string is most likely to violate:
+  // the fallback has to be *built from* the pattern rather than padded to a
+  // length, and a value of the right type is not thereby of the right shape.
+  if (k < 0.56) return { type: 'string', pattern: pick(rng, ['^[a-z]+$', '^[a-z][a-z0-9-]*$', '^\\d{3}$']) }
+  if (k < 0.6) return { type: 'string', minLength: 2, maxLength: 8, pattern: '^[a-z]+$' }
   return { type: pick(rng, ['string', 'number', 'integer', 'boolean', 'null']) }
 }
 

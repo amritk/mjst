@@ -737,7 +737,14 @@ const canTrustReferencedValidator = (
     // Pure union definition: real when the membership check is enforceable.
     if (!hasProperties(resolved)) {
       const branches = getUnionBranches(resolved)
-      if (!branches) return false
+      // No branches either: a scalar / enum / const definition. generateShapeValidator
+      // emits `generatePropertyTypeCheck` for these, so mirror that here rather than
+      // distrusting them wholesale — reading a `$ref` to `{ type: 'string' }` as
+      // untrustworthy poisoned every union that reached one.
+      if (!branches) {
+        if ('patternProperties' in resolved || 'if' in resolved) return false
+        return canTrustPropertyCheck(resolved, rootSchema, visiting)
+      }
       if ('patternProperties' in resolved || 'if' in resolved) return false
       return branches.every((branch) => {
         if (!isSchemaObject(branch)) return false

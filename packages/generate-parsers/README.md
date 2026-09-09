@@ -254,6 +254,23 @@ emitting a parser that quietly accepts what the schema forbids. Coercing
 (non-strict) parsers are documented to repair rather than reject, so they ignore
 the rejecting keywords by design.
 
+### What a coercing parser will not repair
+
+A coercing parser's contract is that whatever it returns is a valid instance of
+the schema that produced it, and
+`src/generators/coerced-output-validity.differential.test.ts` fuzzes exactly that
+property against Ajv. One shape is outside it, deliberately:
+
+- **An array element matching no branch of a union `items` schema is passed
+  through unrepaired.** Repairing it would mean picking a branch to coerce
+  *toward*, and for a non-discriminated union (`references` in the Scalar
+  configuration schema, whose branches differ only by which properties they
+  require) any choice discards information the author may have meant. Ajv's
+  `coerceTypes` does not repair these either — it rejects the document — so the
+  practical difference is which of the two you would rather handle. Use a
+  **strict** parser when you need the verdict: it enforces union items exactly,
+  including recursive ones.
+
 ### Conformance, measured
 
 The coverage above is not a claim — it is checked against the corpus every
