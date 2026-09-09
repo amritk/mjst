@@ -281,6 +281,50 @@ const numberBoundChecks = (valueExpr: string, schema: JSONSchema): string[] => {
 }
 
 /**
+ * The string spellings a boolean coercion accepts, matched against the input
+ * lowercased and trimmed. Beyond `"true"` / `"false"` they are the tokens
+ * environment variables and CLI flags are actually written with — `DEBUG=no`,
+ * `FEATURE=on`, `VERBOSE=1` — which is the shape of input a coercing parser is
+ * handed in the first place.
+ *
+ * `""` reads as false: an exported-but-empty variable is the conventional way to
+ * say "off", and a repairing parser has to answer something for it.
+ */
+const BOOLEAN_TRUE_TOKENS: readonly string[] = ['true', 'yes', 'y', 'on', '1']
+const BOOLEAN_FALSE_TOKENS: readonly string[] = ['false', 'no', 'n', 'off', '0', '']
+
+/**
+ * Coercion expression for `type: 'boolean'`.
+ *
+ * Emphatically *not* `Boolean(x)`: every non-empty string is truthy in
+ * JavaScript, so that turned `"false"`, `"no"` and `"0"` — the three most common
+ * ways a config file or environment variable says *off* — into `true`, silently
+ * enabling whatever the flag guarded. It read `2` and `{}` as `true` just as
+ * confidently.
+ *
+ * So the coercion is a table, not a truthiness test: the recognized spellings on
+ * each side, plus the numbers `1` and `0` that JSON encodings of a flag use.
+ * Anything else — `2`, `"maybe"`, an object, `null` — is not a boolean in
+ * disguise, and inventing a verdict for it is what caused the bug above, so it
+ * takes the schema's default like every other uncoercible value here does.
+ */
+const getBooleanCoercion = (accessor: string, defaultValue: string): string => {
+  // The tokens are this file's own ASCII constants, so they need no escaping;
+  // the trailing literals cover the non-string encodings of the same flag —
+  // `1` / `0`, and the boolean itself, so the expression stands on its own
+  // rather than relying on the caller having ruled one out.
+  const side = (tokens: readonly string[], literals: readonly string[]): string =>
+    [...tokens.map((token) => `"${token}"`), ...literals].map((term) => `_b === ${term}`).join(' || ')
+  // Case and surrounding whitespace fold once, on the way in, so the table
+  // itself stays a chain of strict equalities: `"FALSE"` and `" no "` reach it
+  // already spelled the way it lists them.
+  const normalized = `typeof ${accessor} === "string" ? ${accessor}.trim().toLowerCase() : ${accessor}`
+  const truthy = side(BOOLEAN_TRUE_TOKENS, ['1', 'true'])
+  const falsy = side(BOOLEAN_FALSE_TOKENS, ['0', 'false'])
+  return `((_b) => ${truthy} ? true : ${falsy} ? false : ${defaultValue})(${normalized})`
+}
+
+/**
  * Generates a type coercion expression for converting a value to the expected type.
  */
 const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: string): string | null => {
@@ -317,7 +361,7 @@ const getTypeCoercion = (accessor: string, schema: JSONSchema, defaultValue: str
       return `((_n) => ${[`${wellFormed}(_n)`, ...bounds].join(' && ')} ? _n : ${defaultValue})(${n})`
     }
     case 'boolean':
-      return `Boolean(${accessor})`
+      return getBooleanCoercion(accessor, defaultValue)
     case 'array':
       // The schema's own fallback, not a bare `[]`: that ignored `minItems` (and
       // the `prefixItems` positions below it), so the coerced value was not an

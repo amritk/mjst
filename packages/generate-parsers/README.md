@@ -254,6 +254,32 @@ emitting a parser that quietly accepts what the schema forbids. Coercing
 (non-strict) parsers are documented to repair rather than reject, so they ignore
 the rejecting keywords by design.
 
+### How a coercing parser repairs a boolean
+
+`type: 'boolean'` is repaired from a table of spellings, not from JavaScript
+truthiness. `Boolean("false")` is `true` — as is `Boolean("no")`, `Boolean("0")`
+and `Boolean(2)` — so a truthiness test read every conventional way of writing
+*off* as *on*, which is precisely the input a coercing parser gets from
+environment variables, query strings and hand-written config.
+
+The accepted spellings are matched with surrounding whitespace trimmed and case
+folded, so `FALSE` and ` No ` land with `false` and `no`:
+
+| Input | Result |
+| --- | --- |
+| `true`, `yes`, `y`, `on`, `1`, the number `1` | `true` |
+| `false`, `no`, `n`, `off`, `0`, `""`, the number `0` | `false` |
+| anything else (`2`, `"maybe"`, an object, `null`) | the schema's `default`, else `false` |
+
+The last row is the same rule the other scalars follow: a value that does not
+denote a boolean is not repaired into a guess, it falls back to the default. This
+is wider than Ajv's `coerceTypes`, which takes `"true"` / `"false"`, the numbers
+`1` / `0`, and `null` (as `false`), and rejects the rest — including `"0"`,
+`"1"` and `""`. A coercing parser has no "reject", so its choice is between a
+default and a wrong answer. `null` is the one value both answer for and answer
+differently: Ajv says `false`, a coercing parser says whatever the schema's
+`default` is.
+
 ### How a coercing parser repairs a union
 
 A coercing parser's contract is that whatever it returns is a valid instance of

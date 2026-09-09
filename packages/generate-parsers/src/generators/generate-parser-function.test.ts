@@ -470,7 +470,7 @@ describe('generate-parser-function', () => {
   };
   if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
   if (_metadata !== undefined) out.metadata = isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {};
-  if (_isActive !== undefined) out.isActive = typeof _isActive === "boolean" ? _isActive : Boolean(_isActive);
+  if (_isActive !== undefined) out.isActive = typeof _isActive === "boolean" ? _isActive : ((_b) => _b === "true" || _b === "yes" || _b === "y" || _b === "on" || _b === "1" || _b === 1 || _b === true ? true : _b === "false" || _b === "no" || _b === "n" || _b === "off" || _b === "0" || _b === "" || _b === 0 || _b === false ? false : false)(typeof _isActive === "string" ? _isActive.trim().toLowerCase() : _isActive);
   return out as unknown as Complex;
 }`,
     )
@@ -1714,7 +1714,7 @@ describe('generate-parser-function', () => {
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? ((_n) => Number.isFinite(_n) && _n >= 0 ? _n : 0)(Number(_price)) : 0),
   };
-  if (_inStock !== undefined) out.inStock = typeof _inStock === "boolean" ? _inStock : Boolean(_inStock);
+  if (_inStock !== undefined) out.inStock = typeof _inStock === "boolean" ? _inStock : ((_b) => _b === "true" || _b === "yes" || _b === "y" || _b === "on" || _b === "1" || _b === 1 || _b === true ? true : _b === "false" || _b === "no" || _b === "n" || _b === "off" || _b === "0" || _b === "" || _b === 0 || _b === false ? false : false)(typeof _inStock === "string" ? _inStock.trim().toLowerCase() : _inStock);
   if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
   return out as unknown as Product;
 }`,

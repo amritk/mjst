@@ -115,7 +115,55 @@ describe('generate-validation-expression', () => {
     const result = generateValidationExpression('isActive', schema, 'false', true)
 
     expect(result).toContain('typeof input?.isActive === "boolean"')
-    expect(result).toContain('Boolean(input?.isActive)')
+    // Not `Boolean(x)`: every non-empty string is truthy, so it read `"false"`
+    // as `true`. The coercion is a token table, applied to the trimmed and
+    // lowercased value.
+    expect(result).not.toContain('Boolean(')
+    expect(result).toContain('typeof input?.isActive === "string" ? input?.isActive.trim().toLowerCase()')
+  })
+
+  describe('boolean coercion', () => {
+    // The generated expression is the deliverable, so these run it rather than
+    // matching its text: what matters is the verdict a parser reaches for a
+    // value, not the shape of the chain that reaches it.
+    const coerce = (value: unknown, defaultValue = 'false'): unknown => {
+      const expression = generateValidationExpression('debug', { type: 'boolean' as const }, defaultValue, true)
+      return new Function('input', `return (${expression})`)({ debug: value })
+    }
+
+    it('passes an actual boolean through untouched', () => {
+      expect(coerce(true)).toBe(true)
+      expect(coerce(false)).toBe(false)
+    })
+
+    it.each(['true', 'yes', 'y', 'on', '1'])('reads the string %j as true', (token) => {
+      expect(coerce(token)).toBe(true)
+    })
+
+    // The headline bug: `Boolean("false")` is `true`, so an env-var-style config
+    // that said *off* in every conventional spelling was parsed as *on*.
+    it.each(['false', 'no', 'n', 'off', '0', ''])('reads the string %j as false', (token) => {
+      expect(coerce(token)).toBe(false)
+    })
+
+    it('ignores case and surrounding whitespace', () => {
+      expect(coerce('FALSE')).toBe(false)
+      expect(coerce('  No  ')).toBe(false)
+      expect(coerce('True')).toBe(true)
+      expect(coerce('\tON\n')).toBe(true)
+    })
+
+    it('reads the numbers 1 and 0 as true and false', () => {
+      expect(coerce(1)).toBe(true)
+      expect(coerce(0)).toBe(false)
+    })
+
+    // Nothing here denotes a boolean, so the schema's default stands rather than
+    // a guess — `Boolean` called every one of these `true`.
+    it.each([2, -1, 'maybe', 'truthy', null, {}, []])('falls back to the default for %j', (value) => {
+      expect(coerce(value)).toBe(false)
+      expect(coerce(value, 'true')).toBe(true)
+    })
   })
 
   it('generates array type validation', () => {
@@ -403,7 +451,7 @@ describe('generate-validation-expression', () => {
     const schema = { type: 'boolean' as const }
     const result = generateValidationExpression('isActive', schema, 'false', true)
 
-    expect(result).toContain('Boolean(input?.isActive)')
+    expect(result).toContain('input?.isActive !== undefined ? ((_b) =>')
   })
 
   it('includes type coercion for required array field', () => {
@@ -721,9 +769,9 @@ describe('generate-validation-expression', () => {
     )
 
     // Should not have nested undefined check
-    expect(result).not.toContain('!== undefined ? Boolean')
+    expect(result).not.toContain('!== undefined ? ((_b) =>')
     // Should have direct coercion
-    expect(result).toContain('Boolean(input?.isActive)')
+    expect(result).toContain('? input?.isActive : ((_b) =>')
   })
 
   it('removes redundant check for array coercion when knownNotUndefined is true', () => {
