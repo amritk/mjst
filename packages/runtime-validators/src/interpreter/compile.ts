@@ -33,6 +33,7 @@ import {
   matchesType,
   mergeEvaluation,
   NO_PARAMS,
+  newErrorContext,
   newEvaluation,
   probeContext,
   resolveDyn,
@@ -43,6 +44,7 @@ import {
   spend,
 } from '@/interpreter/runtime'
 import type { SchemaRegistry } from '@/interpreter/schema-registry'
+import type { ValidationError } from '@/types'
 
 /**
  * Turns a schema into a tree of closures — one per node — so that validating a
@@ -1138,6 +1140,104 @@ const dependentRequiredError = (key: string, trigger: string): ErrorTemplate => 
   params: { missingProperty: key, property: trigger, depsCount: 1 },
 })
 
+/**
+ * Whether `error` is a branch rejecting the value's *identity* rather than its
+ * contents — a `const` or `enum` mismatch on the value itself or on one of its
+ * own properties.
+ *
+ * That is what a discriminator looks like from the outside: `{ kind: { const:
+ * 'circle' } }` rejects a square at `/kind` with `const`. Depth is bounded at
+ * one property because a discriminator is conventionally a direct field, and a
+ * `const` buried deeper is far more likely to be an ordinary payload constraint.
+ */
+const isIdentityMismatch = (error: ValidationError): boolean =>
+  (error.keyword === 'const' || error.keyword === 'enum') && error.path.indexOf('/', 1) === -1
+
+/**
+ * The errors of the branch a discriminator selects, or `null` when no
+ * discriminator selects one.
+ *
+ * A failing `anyOf` / `oneOf` on its own says almost nothing: "must match a
+ * schema in anyOf" names no field and no reason, and on the shape this is most
+ * often used for — a discriminated union, where the value plainly *is* one of
+ * the variants and one field of it is wrong — that is the least useful thing a
+ * validator can say. Ajv's alternatives are as bad in the other direction:
+ * either every branch's errors, which for a 24-variant union is 48 errors
+ * describing 23 variants nobody meant, or a `discriminator` keyword the schema
+ * has to declare.
+ *
+ * So the branches are asked *why* they failed, and the answer is read for a
+ * discriminator: if every branch but one was rejected on the value's identity
+ * (a `const` or `enum` on one of its own properties) and exactly one was not,
+ * that one is the variant the author meant, and its errors are the real ones.
+ *
+ * Reading the errors rather than the schema is what makes this work through
+ * `$ref`s — the branches of a real OpenAPI union are almost always refs, whose
+ * targets a compile-time analysis could not see. It also keeps the rule from
+ * guessing: "the branch with the fewest errors" would answer here too, and
+ * answers wrongly on the shape `oneOf: [aReference, theActualThing]`, where
+ * "you did not write a $ref" is one complaint and the real mistake is two. When
+ * there is no discriminator this reports nothing extra, which is exactly as much
+ * as can be said honestly.
+ */
+const discriminatedBranchErrors = (
+  ctx: InterpreterContext,
+  nodes: readonly CompiledNode[],
+  value: unknown,
+  depth: number,
+  scope: DynamicScope,
+): readonly ValidationError[] | null => {
+  // A discriminator is a property, so there is nothing to select on otherwise.
+  if (!isObjectValue(value)) return null
+
+  let selected: ValidationError[] | null = null
+  let rejectedOnIdentity = 0
+  for (const node of nodes) {
+    const sub = newErrorContext(ctx)
+    node.run(sub, value, '', null, depth + 1, scope)
+    const errors = sub.errors
+    // A branch that reports nothing matched after all, which only happens when
+    // `oneOf` failed for having matched more than one. Nothing to explain.
+    if (errors === null) return null
+
+    if (errors.some(isIdentityMismatch)) {
+      rejectedOnIdentity++
+      continue
+    }
+    // Two branches survive the discriminator, so it did not discriminate.
+    if (selected !== null) return null
+    selected = errors
+  }
+
+  return selected !== null && rejectedOnIdentity === nodes.length - 1 ? selected : null
+}
+
+/**
+ * Appends the selected branch's errors under the combinator's own, with each
+ * path rebased onto where the combinator was applied.
+ */
+const failWithBranch = (
+  ctx: InterpreterContext,
+  error: ErrorTemplate,
+  path: string,
+  nodes: readonly CompiledNode[],
+  value: unknown,
+  depth: number,
+  scope: DynamicScope,
+): void => {
+  fail(ctx, error, path)
+  if (!ctx.emitErrors || ctx.failed) return
+
+  const selected = discriminatedBranchErrors(ctx, nodes, value, depth, scope)
+  if (selected === null) return
+  for (const inner of selected) {
+    // The branch ran with an empty base path, so its paths are relative to the
+    // value the combinator was applied to.
+    fail(ctx, { message: inner.message, keyword: inner.keyword, params: inner.params }, `${path}${inner.path}`)
+    if (ctx.failed) return
+  }
+}
+
 const ANY_OF_ERROR = bareError('anyOf', 'must match a schema in anyOf')
 const ONE_OF_ERROR = bareError('oneOf', 'must match exactly one schema in oneOf')
 const NOT_ERROR = bareError('not', 'must not match schema')
@@ -1615,7 +1715,7 @@ const compileBranches = (compiler: Compiler, branches: BranchKeywords): Step[] =
           if (evaluation === null) break
         }
       }
-      if (!ok) fail(ctx, ANY_OF_ERROR, path)
+      if (!ok) failWithBranch(ctx, ANY_OF_ERROR, path, nodes, value, depth, scope)
     })
   }
 
@@ -1627,7 +1727,10 @@ const compileBranches = (compiler: Compiler, branches: BranchKeywords): Step[] =
       for (const node of nodes) {
         if (probe(ctx, node, value, depth, scope, evaluation)) count++
       }
-      if (count !== 1) fail(ctx, ONE_OF_ERROR, path)
+      // More than one match is a different failure with nothing to explain: every
+      // branch the value matched is correct on its own terms.
+      if (count > 1) fail(ctx, ONE_OF_ERROR, path)
+      else if (count === 0) failWithBranch(ctx, ONE_OF_ERROR, path, nodes, value, depth, scope)
     })
   }
 

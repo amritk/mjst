@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { ValidationError } from './types'
 import { validate } from './validate'
+import { validateGuard } from './validate-guard'
 
 /** Pulls the error list out of a result, or `[]` when the result is `true`. */
 const errorsOf = (result: ReturnType<ReturnType<typeof validate>>): ValidationError[] =>
@@ -1522,5 +1523,124 @@ describe('validate', () => {
         },
       ],
     })
+  })
+
+  it('explains a failing anyOf with the branch a discriminator selects', () => {
+    // "must match a schema in anyOf" names no field and no reason. When a
+    // discriminator says which variant was meant, its errors are the real ones.
+    const validator = validate({
+      anyOf: [
+        { type: 'object', properties: { kind: { const: 'a' }, n: { type: 'integer' } } },
+        { type: 'object', properties: { kind: { const: 'b' }, n: { type: 'string' } } },
+      ],
+    })
+
+    const result = validator({ kind: 'b', n: 42 })
+    expect(result).not.toBe(true)
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+      { message: 'must be string', path: '/n', keyword: 'type', params: { type: 'string' } },
+    ])
+  })
+
+  it('says nothing extra when no discriminator selects a branch', () => {
+    // `oneOf: [aReference, theActualThing]` is the shape that makes "the branch
+    // with the fewest errors" the wrong rule: "you did not write a $ref" is one
+    // complaint and the real mistake is two. With nothing rejected on identity
+    // there is no discriminator, so nothing is claimed.
+    const validator = validate({
+      oneOf: [
+        { type: 'object', properties: { $ref: { type: 'string' } }, required: ['$ref'] },
+        { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      ],
+    })
+
+    const result = validator({ id: 42 })
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+    ])
+  })
+
+  it('says nothing extra when the discriminator matches no branch at all', () => {
+    // Every branch is rejected on identity, so none of them was the one meant.
+    const variant = (kind: string) => ({ type: 'object', properties: { kind: { const: kind } } })
+    const result = validate({ oneOf: [variant('a'), variant('b')] })({ kind: 'unknown' })
+
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+    ])
+  })
+
+  it('says nothing extra when the value is not an object', () => {
+    // A discriminator is a property, so there is nothing to select on.
+    const result = validate({ anyOf: [{ type: 'string' }, { type: 'number' }] })(true)
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+    ])
+  })
+
+  it('picks the branch a discriminator selects, without being told about one', () => {
+    // The shape this exists for, and the reason the rule reads the *errors*
+    // rather than the schema: the branches of a real union are `$ref`s, whose
+    // targets a compile-time analysis could not see.
+    const variant = (kind: string) => ({
+      type: 'object',
+      properties: { kind: { const: kind }, payload: { type: 'object', properties: { n: { type: 'integer' } } } },
+      required: ['kind', 'payload'],
+    })
+    const validator = validate({ oneOf: [variant('a'), variant('b'), variant('c')] })
+
+    const result = validator({ kind: 'c', payload: { n: 'not a number' } })
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+      { message: 'must be integer', path: '/payload/n', keyword: 'type', params: { type: 'integer' } },
+    ])
+  })
+
+  it('keeps the combinator error first, so matching on its keyword still works', () => {
+    // The branch detail is added under the combinator's own error, never
+    // substituted for it.
+    const result = validate({ anyOf: [{ type: 'string' }] })(42)
+    expect(result === true ? [] : result.errors[0]?.keyword).toBe('anyOf')
+  })
+
+  it('says nothing extra when a oneOf failed for matching more than one branch', () => {
+    // Every branch the value matched is correct on its own terms, so there is no
+    // "closest" one and nothing to explain.
+    const result = validate({ oneOf: [{ type: 'number' }, { type: 'integer' }] })(1)
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+    ])
+  })
+
+  it('rebases the branch errors onto where the combinator was applied', () => {
+    const result = validate({
+      type: 'object',
+      properties: {
+        field: { anyOf: [{ type: 'object', properties: { deep: { type: 'string' } }, required: ['deep'] }] },
+      },
+    })({ field: { deep: 1 } })
+
+    expect(result === true ? [] : result.errors.map((error) => error.path)).toEqual(['/field', '/field/deep'])
+  })
+
+  it('never lets the extra errors change a verdict', () => {
+    // The branch walk runs only after the combinator has already failed, so a
+    // value that matches is untouched by it.
+    const validator = validate({ anyOf: [{ type: 'string' }, { type: 'number' }] })
+    expect(validator('ok')).toBe(true)
+    expect(validator(42)).toBe(true)
+    expect(validateGuard({ anyOf: [{ type: 'string' }] })('ok')).toBe(true)
+  })
+
+  it('counts the branch errors against maxErrors like any others', () => {
+    const result = validate(
+      {
+        anyOf: [{ type: 'object', properties: { a: { type: 'string' }, b: { type: 'string' } }, required: ['a', 'b'] }],
+      },
+      { limits: { maxErrors: 2 } },
+    )({})
+
+    expect(result === true ? [] : result.errors).toHaveLength(2)
   })
 })

@@ -662,6 +662,33 @@ export const resolveRec = (ctx: InterpreterContext): unknown => {
  * the caller's pool rather than escaping into a fresh one. Only `failed` is
  * private, which is the whole point: a failing probe must not unwind the caller.
  */
+/**
+ * An error-collecting child of `ctx` with its own error list.
+ *
+ * Used on the failure path of `anyOf` / `oneOf`, to ask a branch *why* it did
+ * not match rather than only whether it did. Everything reusable is shared by
+ * reference — the ref stack so a cycle routed through the branch is still seen,
+ * the budget so asking cannot escape the caller's work ceiling — and only the
+ * error list is private, which is the whole point: these errors are collected to
+ * be compared, and most of them will be thrown away.
+ *
+ * Built where it is needed rather than kept on the context, because it is only
+ * ever needed once something has already failed.
+ */
+export const newErrorContext = (ctx: InterpreterContext): InterpreterContext => ({
+  root: ctx.root,
+  registry: ctx.registry,
+  emitErrors: true,
+  caches: ctx.caches,
+  errors: null,
+  failed: false,
+  refStack: ctx.refStack,
+  maxDepth: ctx.maxDepth,
+  maxErrors: ctx.maxErrors,
+  budget: ctx.budget,
+  branch: null,
+})
+
 export const newBranchContext = (ctx: InterpreterContext): InterpreterContext => ({
   root: ctx.root,
   registry: ctx.registry,
