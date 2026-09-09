@@ -306,12 +306,20 @@ which would invent a `sidebar` and discard the `folder` the author wrote. Every
 term is decided at build time, so the emitted code is a handful of property
 reads and no schema walking, and none of it runs for input that already matches.
 
-One shape is still outside this: **a union written directly as a property value**
-(rather than as a definition or as an array's `items`) is not dispatched, and a
-value matching no branch is passed through. Ajv's `coerceTypes` rejects those
-documents rather than repairing them, so this is not a gap against Ajv — but it
-is a gap against the contract above, and it is the whole of the remaining
-difference. Use a **strict** parser when you need a verdict rather than a repair.
+Every union position is dispatched: a definition, a `$ref`, an array's `items`
+(including a recursive one, where a branch's parser calls back into the
+dispatcher), and a union written directly as a property value. Measured over
+4000 mutated documents of the published Scalar configuration schema, **every
+coerced output is a valid instance of its own schema**, and each of the 2514
+documents Ajv rejects is repaired into one Ajv accepts.
+
+Two limits are worth stating. A union carrying its *own* keywords alongside its
+branches (`{ anyOf: […], required: […] }`) keeps the general coercion path,
+because the dispatcher expresses the branches and not the siblings. And a union
+of bare scalars in property position is left to that same path, since scoring
+reads keys: with no object branch there is nothing to discriminate on, every
+branch ties, and the first one wins — which is what the general path already
+does.
 
 ### Conformance, measured
 

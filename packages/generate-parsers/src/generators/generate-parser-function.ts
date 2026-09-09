@@ -54,6 +54,7 @@ import {
   isExclusiveUnion,
   isInlineObjectArrayProperty,
   isInlineObjectProperty,
+  isInlineUnionProperty,
   isUnionArrayProperty,
   shapeValidatorName,
 } from './generate-type-checks'
@@ -827,6 +828,23 @@ const generateScoredUnionParser = (
   const dispatch: { predicate: string; result: string }[] = []
   const reserved = new Set(ctx.reservedNames ?? [])
 
+  // A scalar branch is repaired by an inline coercion *expression* rather than a
+  // call, and that expression re-tests the value's own type. Emitted against
+  // `input` it lands inside an arm where TypeScript has already narrowed it —
+  // after `if (typeof input === "boolean") return …`, the string arm of the
+  // boolean token table reads `input.trim()` on `never`, and the generated file
+  // does not compile. Reading through an alias declared `unknown` keeps every
+  // expression typed as written, because the guards narrow `input` and never the
+  // alias. Object and `$ref` branches dispatch through calls, which no narrowing
+  // can break, so a union of those keeps the smaller output.
+  const needsUnnarrowedAlias = branches.some(
+    (branch) =>
+      isSchemaObject(branch) &&
+      !(hasRef(branch) && ctx.useRefImports) &&
+      !(isObjectSchema(branch) && hasProperties(branch)),
+  )
+  const valueRef = needsUnnarrowedAlias ? '_u' : 'input'
+
   for (const [index, branch] of branches.entries()) {
     if (!isSchemaObject(branch)) return null
 
@@ -837,7 +855,7 @@ const generateScoredUnionParser = (
       if (refName === typeName) return null
       dispatch.push({
         predicate: `${shapeValidatorName(refName)}(input)`,
-        result: `${generateParserName(refName)}(input) as ${typeName}`,
+        result: `${generateParserName(refName)}(${valueRef}) as ${typeName}`,
       })
       continue
     }
@@ -863,7 +881,7 @@ const generateScoredUnionParser = (
         true,
         ctx.rootSchema,
         undefined,
-        'input',
+        valueRef,
         false,
         ctx.caseInsensitive,
       )
@@ -918,7 +936,7 @@ const generateScoredUnionParser = (
     )
     dispatch.push({
       predicate: `${shapeValidatorName(subName)}(input)`,
-      result: `${generateParserName(subName)}(input) as ${typeName}`,
+      result: `${generateParserName(subName)}(${valueRef}) as ${typeName}`,
     })
   }
 
@@ -926,6 +944,9 @@ const generateScoredUnionParser = (
   if (first === undefined) return null
 
   const lines: string[] = []
+  // Declared `unknown` and read only by the *result* expressions: the guards
+  // test `input`, so narrowing lands there and never on the alias.
+  if (needsUnnarrowedAlias) lines.push('  const _u: unknown = input;')
   for (const { predicate, result } of dispatch) {
     lines.push(`  if (${predicate}) return ${result};`)
   }
@@ -2004,6 +2025,60 @@ const generateObjectParser = (
     )
   }
 
+  // A union written directly as a property value is the last union position the
+  // scored dispatcher did not reach: it is neither a definition, an array's
+  // `items`, nor a `$ref`, so `collectInlineSubTypes` never claimed it and the
+  // coercion below handed the value back untouched — the whole of the remaining
+  // invalid-output gap on the Scalar configuration schema, all of it at
+  // `siteConfig.logo`. Give it the same private dispatcher an array's union
+  // items get.
+  //
+  // Coerce mode only: strict enforces a union through its own assertions, and
+  // this must not change a single verdict. The map is local to the parser, so
+  // the shape validator keeps its existing inline union check and the two cannot
+  // drift — and a union the dispatcher declines simply stays unclaimed, keeping
+  // the general coercion path rather than naming a parser that was never written.
+  const unionSubNames = new Map<string, string>()
+  if (!strict) {
+    const claimedUnionNames = new Set<string>([...reservedNames, ...subTypeNames.values(), ...subItemNames.values()])
+    for (const key of Object.keys(schemaProps)) {
+      if (subTypeNames.has(key) || subItemNames.has(key)) continue
+      const propSchema = schemaProps[key] as JSONSchema
+      if (!isInlineUnionProperty(propSchema)) continue
+      const branches = getUnionBranches(propSchema)
+      if (branches === null) continue
+
+      let unionSubName = `${typeName}_${pascalCaseKey(key) || 'Value'}Union`
+      while (claimedUnionNames.has(unionSubName)) unionSubName = `${unionSubName}_`
+      claimedUnionNames.add(unionSubName)
+
+      const unionParser = generateScoredUnionParser(
+        generateParserName(unionSubName),
+        unionSubName,
+        branches,
+        {
+          useRefImports,
+          suffix,
+          ...(rootSchema !== undefined ? { rootSchema } : {}),
+          ...(logWarnings !== undefined ? { logWarnings } : {}),
+          reservedNames: claimedUnionNames,
+          stripUnknown,
+          unknownKeys,
+          caseInsensitive,
+        },
+        false,
+      )
+      if (unionParser === null) continue
+
+      // `NonNullable` on the parent for the same reason the object and array
+      // sub-aliases carry it: this generator recurses, so `typeName` is often
+      // itself the alias of an optional property and cannot be indexed.
+      preamble.push(`type ${unionSubName} = NonNullable<${typeName}>[${JSON.stringify(key)}];`)
+      preamble.push(unionParser)
+      unionSubNames.set(key, unionSubName)
+    }
+  }
+
   // additionalProperties: false — the per-key "is this undeclared" test inlines
   // `!==` comparisons for a short key list and hoists a Set only for a long one
   // (see unknownKeyCheck). The predicate form is shared by the fast path and the
@@ -2391,6 +2466,20 @@ const generateObjectParser = (
     for (const { key, varName, isRequired, propSchema } of propInfo) {
       const shouldCache = shouldCacheVariable(propSchema)
       const accessor = shouldCache ? varName : safeAccessor('input', key)
+
+      // A union property dispatches through its private scored parser: match a
+      // branch's shape predicate, else repair toward the best-scoring branch.
+      // Without this the expression below returns an object union untouched.
+      const unionSubName = unionSubNames.get(key)
+      if (unionSubName) {
+        const unionParserName = generateParserName(unionSubName)
+        if (isRequired) {
+          entries.push({ kind: 'field', key, value: `${unionParserName}(${accessor})` })
+        } else {
+          entries.push({ kind: 'optional', key, read: accessor, value: `${unionParserName}(${accessor})` })
+        }
+        continue
+      }
 
       // Handle inline nested objects via their private sub-parser, mirroring
       // how $ref properties delegate to the imported parser.

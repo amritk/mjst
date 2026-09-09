@@ -129,6 +129,36 @@ export const isUnionArrayProperty = (propSchema: JSONSchema): boolean => {
 }
 
 /**
+ * Matches a union written directly as a property value — `logo: { anyOf: [...] }`
+ * rather than a `$ref`, a definition, or an array's `items`. This is the one
+ * union position the coercing dispatcher did not reach, so a value matching no
+ * branch was passed through unrepaired.
+ *
+ * The union's *own* keywords are the reason for the exclusions: 2020-12 applies
+ * them alongside the branches, and a dispatcher expresses none of them, so a
+ * constrained union keeps the general path rather than getting a parser that
+ * quietly drops the constraint.
+ */
+export const isInlineUnionProperty = (propSchema: JSONSchema): boolean => {
+  if (!isSchemaObject(propSchema)) return false
+  if (hasRef(propSchema) || hasAllOf(propSchema) || 'not' in propSchema) return false
+  if ('if' in propSchema || 'then' in propSchema || 'else' in propSchema) return false
+  if ('patternProperties' in propSchema) return false
+  const branches = getUnionBranches(propSchema)
+  if (branches === null || branches.length < 2) return false
+  if (hasBranchSiblingConstraint(propSchema)) return false
+  // Every branch must be a shape the dispatcher can test and rebuild through a
+  // *named* parser, matching {@link isUnionArrayProperty}. Scoring reads keys, so
+  // a union of bare scalars (`number | boolean`) has nothing to discriminate on:
+  // every branch ties at zero and the first wins, which is exactly what the
+  // general coercion path already does. Routing one through a dispatcher would
+  // add no verdict and would inline each branch's coercion into an arm where
+  // TypeScript has already narrowed the value, producing output that does not
+  // compile.
+  return branches.every((branch) => isSchemaObject(branch) && (hasRef(branch) || isInlineObjectProperty(branch)))
+}
+
+/**
  * Extracts the branch list of a `oneOf`/`anyOf` union, or `null` when the
  * schema is not a union (or mixes in other composition keywords we cannot
  * turn into a membership check).
