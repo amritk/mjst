@@ -451,6 +451,15 @@ The exit code is `0` on success, `1` when compilation fails (unloadable module, 
 <td colspan="4">How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in and allocates nothing; it was the faster form on Node 22, but on Node 26 'count-keys' ties or wins there too. Keep the default unless you are pinned to an older V8 and have measured your own shapes; the generated code never detects its runtime.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
 </tr>
 <tr>
+<td>🧪 <code>formats</code></td>
+<td><code>--formats &lt;list&gt;</code></td>
+<td><code>string | array</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">String formats the generated validators enforce: "all", or a comma-separated list (e.g. uuid,date-time,email). Omitted, format stays an annotation — JSON Schema's own reading, and what @amritk/runtime-validators does when given no formats. Set it to whatever validates the same schemas at runtime (@amritk/lint and createApi({ formats }) run the interpreter with formats on) so the build-time and runtime answers agree. Both validateX and the flat isX check them, against a formats.ts emitted alongside the validators.</td>
+</tr>
+<tr>
 <td>🧰 <code>helpers</code></td>
 <td><code>--helpers &lt;mode&gt;</code></td>
 <td><code>string</code></td>

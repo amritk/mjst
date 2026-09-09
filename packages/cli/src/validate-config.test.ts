@@ -11,9 +11,9 @@ const readConfigSchema = async (): Promise<{
 
 /** Renders a schema property's type the way `validate-config` names it. */
 const typeLabel = (property: { type: string | string[]; items?: { type: string } }): string => {
-  if (Array.isArray(property.type)) return property.type.join('|')
-  if (property.type === 'array') return `${property.items?.type}[]`
-  return property.type
+  const named = (type: string): string => (type === 'array' ? `${property.items?.type}[]` : type)
+  if (Array.isArray(property.type)) return property.type.map(named).join('|')
+  return named(property.type)
 }
 
 describe('validate-config', () => {

@@ -3,9 +3,12 @@ import { UNKNOWN_KEYS_STRATEGIES } from '@amritk/helpers/unknown-keys-strategy'
 
 /**
  * The JSON type each config key accepts, mirroring `config.schema.json`.
- * `boolean|string` is `banner`'s `"type": ["boolean", "string"]`.
+ * `boolean|string` is `banner`'s `"type": ["boolean", "string"]`, and
+ * `string|string[]` is `formats`' `"type": ["string", "array"]` — a union the
+ * label spells by its element type rather than by the bare word `array`, since
+ * "expected string|array" tells a reader less than "expected string|string[]".
  */
-type ConfigValueType = 'string' | 'boolean' | 'boolean|string' | 'string[]'
+type ConfigValueType = 'string' | 'boolean' | 'boolean|string' | 'string[]' | 'string|string[]'
 
 /** One key's contract: its JSON type, plus the closed value set when it has one. */
 type ConfigKeySpec = {
@@ -44,6 +47,7 @@ export const CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   caseInsensitive: { type: 'boolean' },
   readonly: { type: 'boolean' },
   unknownKeys: { type: 'string', enum: [...UNKNOWN_KEYS_STRATEGIES] },
+  formats: { type: 'string|string[]' },
   helpers: { type: 'string', enum: ['package', 'embedded'] },
   typeSuffix: { type: 'string' },
   banner: { type: 'boolean|string' },
@@ -73,6 +77,8 @@ const matchesType = (value: unknown, type: ConfigValueType): boolean => {
       return typeof value === 'boolean' || typeof value === 'string'
     case 'string[]':
       return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+    case 'string|string[]':
+      return typeof value === 'string' || (Array.isArray(value) && value.every((e) => typeof e === 'string'))
   }
 }
 

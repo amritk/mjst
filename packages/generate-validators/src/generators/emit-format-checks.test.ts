@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 import { loadSuiteFormatCases } from '../../../../fixtures/json-schema-test-suite/load-suite'
 import { buildValidatorSchema } from './build-schema'
-import { FORMAT_FRAGMENTS, formatCheckName } from './emit-format-checks'
+import { FORMAT_FRAGMENTS } from './emit-format-checks'
 import { linkGenerated } from './link-generated.test-utils'
 
 /**

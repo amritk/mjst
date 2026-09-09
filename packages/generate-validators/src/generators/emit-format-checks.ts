@@ -14,7 +14,13 @@
  * Each entry is a source *fragment*: a `const` declaration whose name is
  * {@link formatCheckName}. Fragments may depend on shared helpers, named in
  * `needs`, which are emitted once ahead of them.
+ *
+ * Nearly every string here is code for the *generated* file, so a `${…}` in one
+ * is a template hole in the emitted source rather than an interpolation that was
+ * meant to happen here — which is what `noTemplateCurlyInString` exists to catch
+ * and what makes it a false positive throughout this file.
  */
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: these strings are emitted source, not evaluated here
 
 /** The identifier a format's check is emitted under. */
 export const formatCheckName = (format: string): string =>
