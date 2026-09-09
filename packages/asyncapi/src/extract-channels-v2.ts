@@ -2,7 +2,7 @@ import { getMjstDiscriminator } from '@amritk/helpers/mjst-extension'
 import { readKey } from '@amritk/helpers/read-key'
 
 import { mergeTraits } from './merge-traits'
-import { normalizeMessage } from './normalize-message'
+import { type NormalizeMessageOptions, normalizeMessage } from './normalize-message'
 import { resolveNode } from './resolve-pointer'
 import type { ExtractionIssue, MessageDirection, NormalizedChannel, NormalizedMessage } from './types'
 
@@ -42,6 +42,7 @@ const resolveTraits = (
 export const extractChannelsV2 = (
   document: Record<string, unknown>,
   issues: ExtractionIssue[],
+  options: NormalizeMessageOptions = {},
 ): NormalizedChannel[] => {
   const channelsMap = readKey(document, 'channels')
   if (typeof channelsMap !== 'object' || channelsMap === null) return []
@@ -110,6 +111,7 @@ export const extractChannelsV2 = (
             document,
             issues,
             itemPath,
+            options,
           ),
         )
       }

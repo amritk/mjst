@@ -168,6 +168,36 @@ describe('asyncapi ruleset', () => {
     expect(await has(doc, 'asyncapi-payload')).toBe(true)
   })
 
+  it('flags the same payload on 3.x, bare or wrapped in a Multi Format Schema Object', async () => {
+    const bare = base3()
+    at(bare, 'channels', 'user', 'messages', 'userSignedUp')['payload'] = { type: 'nope' }
+    expect(await has(bare, 'asyncapi-3-payload')).toBe(true)
+
+    // 3.0 moved `schemaFormat` onto the payload, so the schema to judge can sit
+    // one level down — the wrapper must not become a way to skip the check.
+    const wrapped = base3()
+    at(wrapped, 'channels', 'user', 'messages', 'userSignedUp')['payload'] = {
+      schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+      schema: { type: 'nope' },
+    }
+    expect(await has(wrapped, 'asyncapi-3-payload')).toBe(true)
+  })
+
+  it('reports a non-default 3.x payload schemaFormat instead of validating the payload', async () => {
+    const doc = base3()
+    at(doc, 'channels', 'user', 'messages', 'userSignedUp')['payload'] = {
+      schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+      schema: { type: 'record', name: 'P', fields: [], default: 'x', examples: ['y'] },
+    }
+    const codes = await codesWith(allRules, doc)
+    expect(codes.has('asyncapi-3-payload-unsupported-schemaFormat')).toBe(true)
+    // An Avro payload is not an AsyncAPI Schema Object, so nothing else judges it
+    // as one — the format note is the single finding about it.
+    expect(codes.has('asyncapi-3-payload')).toBe(false)
+    expect(codes.has('asyncapi-3-payload-default')).toBe(false)
+    expect(codes.has('asyncapi-3-payload-examples')).toBe(false)
+  })
+
   it('reports a non-default schemaFormat instead of validating the payload', async () => {
     const doc = base2()
     const message = at(doc, 'channels', 'user/signedup', 'subscribe', 'message')
@@ -188,12 +218,98 @@ describe('asyncapi ruleset', () => {
     expect(codes.has('asyncapi-payload-examples')).toBe(true)
   })
 
+  it('flags a 3.x payload default and examples, bare or wrapped', async () => {
+    const bare = base3()
+    at(bare, 'channels', 'user', 'messages', 'userSignedUp')['payload'] = {
+      type: 'string',
+      default: 12,
+      examples: [34],
+    }
+    const bareCodes = await codesWith(allRules, bare)
+    expect(bareCodes.has('asyncapi-3-payload-default')).toBe(true)
+    expect(bareCodes.has('asyncapi-3-payload-examples')).toBe(true)
+
+    const wrapped = base3()
+    at(wrapped, 'channels', 'user', 'messages', 'userSignedUp')['payload'] = {
+      schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+      schema: { type: 'string', default: 12, examples: [34] },
+    }
+    const wrappedCodes = await codesWith(allRules, wrapped)
+    expect(wrappedCodes.has('asyncapi-3-payload-default')).toBe(true)
+    expect(wrappedCodes.has('asyncapi-3-payload-examples')).toBe(true)
+  })
+
+  it('flags a message example that contradicts the payload schema on both majors', async () => {
+    const two = base2()
+    const message = at(two, 'channels', 'user/signedup', 'subscribe', 'message')
+    message['payload'] = { type: 'object', properties: { a: { type: 'string' } } }
+    message['examples'] = [{ payload: { a: 42 } }]
+    expect(await has(two, 'asyncapi-message-examples')).toBe(true)
+
+    const three = base3()
+    const v3Message = at(three, 'channels', 'user', 'messages', 'userSignedUp')
+    v3Message['payload'] = {
+      schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+      schema: { type: 'object', properties: { a: { type: 'string' } } },
+    }
+    v3Message['examples'] = [{ payload: { a: 42 } }]
+    expect(await has(three, 'asyncapi-3-message-examples')).toBe(true)
+  })
+
   it('flags a component schema default and examples that do not match their schema', async () => {
     const doc = base2()
     doc['components'] = { schemas: { S: { type: 'string', default: 1, examples: [2] } } }
     const codes = await codesWith(allRules, doc)
     expect(codes.has('asyncapi-schema-default')).toBe(true)
     expect(codes.has('asyncapi-schema-examples')).toBe(true)
+  })
+
+  it('flags a 3.x component schema default and examples, bare or wrapped', async () => {
+    const bare = base3()
+    bare['components'] = { schemas: { S: { type: 'string', default: 1, examples: [2] } } }
+    const bareCodes = await codesWith(allRules, bare)
+    expect(bareCodes.has('asyncapi-3-schema-default')).toBe(true)
+    expect(bareCodes.has('asyncapi-3-schema-examples')).toBe(true)
+
+    // A 3.0 `components.schemas` entry is a Multi Format Schema Object too.
+    const wrapped = base3()
+    wrapped['components'] = {
+      schemas: {
+        S: {
+          schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+          schema: { type: 'string', default: 1, examples: [2] },
+        },
+      },
+    }
+    const wrappedCodes = await codesWith(allRules, wrapped)
+    expect(wrappedCodes.has('asyncapi-3-schema-default')).toBe(true)
+    expect(wrappedCodes.has('asyncapi-3-schema-examples')).toBe(true)
+
+    // ...and one written in Avro is not JSON Schema data, so it is left alone.
+    const avro = base3()
+    avro['components'] = {
+      schemas: {
+        S: {
+          schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+          schema: { type: 'record', name: 'S', fields: [], default: 1, examples: [2] },
+        },
+      },
+    }
+    const avroCodes = await codesWith(allRules, avro)
+    expect(avroCodes.has('asyncapi-3-schema-default')).toBe(false)
+    expect(avroCodes.has('asyncapi-3-schema-examples')).toBe(false)
+  })
+
+  it('says nothing about a 3.x parameter, which carries no schema to validate', async () => {
+    // 2.x parameters wrap a Schema Object; 3.0 ones carry `enum` / `default` /
+    // `examples` as plain strings, so copying the 2.x givens across would have
+    // pointed at a `schema` field the major does not define.
+    const doc = base3()
+    at(doc, 'channels', 'user')['parameters'] = { id: { description: 'd', default: 'a', examples: ['b'] } }
+    const codes = await codesWith(allRules, doc)
+    expect(codes.has('asyncapi-3-schema-default')).toBe(false)
+    expect(codes.has('asyncapi-3-schema-examples')).toBe(false)
+    expect(codes.has('asyncapi-3-document-unresolved')).toBe(false)
   })
 
   // Structural validation ---------------------------------------------------

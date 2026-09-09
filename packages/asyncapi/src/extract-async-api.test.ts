@@ -95,7 +95,7 @@ describe('extract-async-api', () => {
     }
   })
 
-  it('skips an Avro payload with an issue and keeps the JSON Schema siblings', () => {
+  it('converts an Avro payload alongside its JSON Schema siblings', () => {
     const document = {
       asyncapi: '2.6.0',
       info: { title: 'Mixed', version: '1.0.0' },
@@ -118,14 +118,83 @@ describe('extract-async-api', () => {
     }
     const model = extractAsyncApi(document)
     const messages = model.channels[0]?.messages ?? []
-    expect(messages.find((m) => m.name === 'avroEvent')?.payload).toBeUndefined()
+    // Avro is a schema language `@amritk/adapters` reads, so it arrives as
+    // ordinary 2020-12 rather than being skipped — and nothing is reported,
+    // because nothing was lost.
+    expect(messages.find((m) => m.name === 'avroEvent')?.payload).toEqual({
+      $ref: '#/$defs/Event',
+      $defs: { Event: { title: 'Event', type: 'object', properties: {}, additionalProperties: false } },
+    })
     expect(messages.find((m) => m.name === 'jsonEvent')?.payload).toBeDefined()
-    expect(model.issues.some((issue) => issue.message.includes('avro'))).toBe(true)
+    expect(model.issues).toEqual([])
   })
 
-  it('applies a trait-contributed schemaFormat before gating the payload', () => {
+  it('records an issue instead of throwing when an Avro payload cannot be converted', () => {
+    // The adapter rejects a name it cannot write into a `$defs` key. One bad
+    // record must not take the document's other messages with it.
+    const document = {
+      asyncapi: '2.6.0',
+      info: { title: 'Broken', version: '1.0.0' },
+      channels: {
+        events: {
+          publish: {
+            message: {
+              oneOf: [
+                {
+                  name: 'brokenAvro',
+                  schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+                  payload: { type: 'record', name: 'not/a/legal/name', fields: [] },
+                },
+                { name: 'jsonEvent', payload: { type: 'object', properties: { id: { type: 'string' } } } },
+              ],
+            },
+          },
+        },
+      },
+    }
+    const model = extractAsyncApi(document)
+    const messages = model.channels[0]?.messages ?? []
+    expect(messages.find((m) => m.name === 'brokenAvro')?.payload).toBeUndefined()
+    expect(messages.find((m) => m.name === 'jsonEvent')?.payload).toBeDefined()
+    expect(model.issues[0]?.message).toMatch(/Avro payload could not be converted/)
+  })
+
+  it('describes the wire encoding when asked for it', () => {
+    // Avro's spec-defined JSON encoding wraps a union value in its branch name,
+    // which is not the object an application sees after decoding — so the two
+    // readings genuinely disagree and the caller picks.
+    const document = {
+      asyncapi: '2.6.0',
+      info: { title: 'Encoded', version: '1.0.0' },
+      channels: {
+        events: {
+          publish: {
+            message: {
+              name: 'avroEvent',
+              schemaFormat: 'application/vnd.apache.avro+json;version=1.9.0',
+              payload: {
+                type: 'record',
+                name: 'Event',
+                fields: [{ name: 'note', type: ['null', 'string'], default: null }],
+              },
+            },
+          },
+        },
+      },
+    }
+    const idiomatic = extractAsyncApi(document).channels[0]?.messages[0]?.payload
+    const wire = extractAsyncApi(document, { avroEncoding: 'avro-json' }).channels[0]?.messages[0]?.payload
+    expect(idiomatic).not.toEqual(wire)
+    // The idiomatic reading collapses `["null", T]` to a nullable T; the wire
+    // reading keeps the branch wrapper the encoding actually puts on the frame.
+    expect(JSON.stringify(idiomatic)).toContain('"type":["string","null"]')
+    expect(JSON.stringify(wire)).toContain('anyOf')
+  })
+
+  it('applies a trait-contributed schemaFormat before reading the payload', () => {
     // The format lives only on the trait; reading it pre-merge would treat the
-    // Avro payload as JSON Schema (the bug the lint preset once had).
+    // Avro payload as JSON Schema (the bug the lint preset once had) instead of
+    // handing it to the Avro converter.
     const document = {
       asyncapi: '2.6.0',
       info: { title: 'Traited', version: '1.0.0' },
@@ -142,8 +211,11 @@ describe('extract-async-api', () => {
       },
     }
     const model = extractAsyncApi(document)
-    expect(model.channels[0]?.messages[0]?.payload).toBeUndefined()
-    expect(model.issues.length).toBeGreaterThan(0)
+    expect(model.channels[0]?.messages[0]?.payload).toEqual({
+      $ref: '#/$defs/Event',
+      $defs: { Event: { title: 'Event', type: 'object', properties: {}, additionalProperties: false } },
+    })
+    expect(model.issues).toEqual([])
   })
 
   // The gemini fixture carries authored payload examples; each must satisfy

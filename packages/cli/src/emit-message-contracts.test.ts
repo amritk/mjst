@@ -168,16 +168,37 @@ describe('emit-message-contracts', () => {
   })
 
   it('reports the messages a channel could not project, and keeps the rest', async () => {
-    // Slack renames every wire tag on its way into a message key, so only the
-    // three messages whose payload agrees with their own name survive.
+    // Slack spells nearly every wire tag differently from the message name that
+    // carries it (`botAdded` tagged `bot_added`), which the projection follows.
+    // What it cannot follow is Slack's three pairs of messages sharing one tag:
+    // `message` is fine because the two travel in opposite directions, but
+    // `bot_added` and `emoji_changed` each collide inside one direction, so one
+    // of each pair is reported and dropped.
     const result = await emitMessageContracts({
       model: await modelOf('v3.0/slack-rtm.yaml'),
       writer: await createOutputWriter(await scratchDir()),
     })
 
-    expect(result.messageCount).toBe(3)
+    expect(result.messageCount).toBe(45)
     expect(result.channelCount).toBe(1)
-    expect(result.issues.length).toBeGreaterThan(40)
+    expect(result.issues.map((issue) => issue.message)).toEqual([
+      'two serverToClient messages carry the wire tag "bot_added"; keeping the first',
+      'two serverToClient messages carry the wire tag "emoji_changed"; keeping the first',
+    ])
+  })
+
+  it('names the messages whose headers a contract cannot carry', async () => {
+    // A Kafka document declares headers the socket layer has no slot for. The
+    // types are still generated next to the payload's, so the module says where
+    // they went rather than leaving the omission to be noticed.
+    const written = await readContract(
+      await emitInto(await modelOf('v3.0/streetlights-kafka.yaml')),
+      'lighting-measured.ts',
+    )
+
+    expect(written).toContain('Payloads only')
+    expect(written).toContain('`<message>-headers/`')
+    expect(written).toContain('lightMeasured')
   })
 
   it('regenerates the checked-in contracts byte for byte', async () => {
@@ -248,18 +269,24 @@ describe('emit-message-contracts', () => {
     const channel = bindMessages(rootMessages, socket)
     type Outbound = Parameters<typeof channel.send>[0]
 
-    // Three of Slack's messages survive the tag renames, so this is a real
-    // union — and it narrows only because each member carries the discriminator
-    // as a *literal*, which it does only because the emitted schemas went out
-    // with `as const` and the discriminator went out as a string literal.
-    expectTypeOf<Outbound['type']>().toEqualTypeOf<'hello' | 'goodbye' | 'message'>()
+    // Slack's 44 server-to-client wire tags, so this is a real union — and it
+    // narrows only because each member carries the discriminator as a
+    // *literal*, which it does only because the emitted schemas went out with
+    // `as const` and the discriminator went out as a string literal. Spot
+    // checks rather than the whole union: what matters is that a tag the
+    // document declares is a member and one it does not is not.
+    expectTypeOf<'hello'>().toExtend<Outbound['type']>()
+    expectTypeOf<'bot_added'>().toExtend<Outbound['type']>()
+    expectTypeOf<'file_comment_edited'>().toExtend<Outbound['type']>()
+    expectTypeOf<'no_such_slack_event'>().not.toExtend<Outbound['type']>()
 
-    const textOf = (message: Outbound): string | undefined => (message.type === 'message' ? message.text : undefined)
-    expect(textOf({ type: 'message', text: 'hi' })).toBe('hi')
-    expect(textOf({ type: 'hello' })).toBeUndefined()
+    const fileOf = (message: Outbound): string | undefined =>
+      message.type === 'file_deleted' ? message.file_id : undefined
+    expect(fileOf({ type: 'file_deleted', file_id: 'F1', event_ts: '1' })).toBe('F1')
+    expect(fileOf({ type: 'hello' })).toBeUndefined()
 
     // The payload's own fields narrow with it, straight off the emitted schema.
-    channel.send({ type: 'message', text: 'hi', channel: 'C1' })
-    expect(socket.sent).toEqual([JSON.stringify({ type: 'message', text: 'hi', channel: 'C1' })])
+    channel.send({ type: 'file_deleted', file_id: 'F1', event_ts: '1' })
+    expect(socket.sent).toEqual([JSON.stringify({ type: 'file_deleted', file_id: 'F1', event_ts: '1' })])
   })
 })

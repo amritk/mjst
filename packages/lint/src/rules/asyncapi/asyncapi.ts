@@ -409,6 +409,13 @@ const V3_MESSAGE_TRAITS = [
 ]
 const V3_ALL_MESSAGES = [...V3_MESSAGES, ...V3_MESSAGE_TRAITS]
 
+// 3.0 moved `schemaFormat` off the message and onto the payload, which is now a
+// Multi Format Schema Object — so every rule that has to know what language a
+// payload is written in matches the payload node itself, not the message. That
+// is why there is no 3.x twin of `defaultFormatOnly`: the gate is a property of
+// the node the rule already has, and the functions read it there.
+const V3_PAYLOADS = V3_ALL_MESSAGES.map((given) => `${given}.payload`)
+
 /** AsyncAPI 3.x rules. 3.0 moved operations to the top level and channels to an addressed map. */
 const v3Rules: Record<string, RuleEntry> = {
   'asyncapi-3-channel-no-empty-parameter': {
@@ -465,6 +472,16 @@ const v3Rules: Record<string, RuleEntry> = {
     severity: 'error',
     then: { function: 'asyncApiHeadersObject', functionOptions: { multiFormat: true } },
   },
+  'asyncapi-3-message-examples': {
+    description: 'Message examples must be valid against the payload and headers schemas.',
+    formats: ['aas3'],
+    // Messages only, for the same reason as the 2.x twin: the pass folds traits
+    // in and reports against whichever array the merge took, so matching each
+    // trait location as well printed the identical finding twice.
+    given: V3_MESSAGES,
+    severity: 'error',
+    then: { function: 'asyncApiMessageExamples', functionOptions: { multiFormat: true } },
+  },
   'asyncapi-3-operation-description': {
     description: 'Operation must have a description.',
     formats: ['aas3'],
@@ -479,10 +496,33 @@ const v3Rules: Record<string, RuleEntry> = {
     severity: 'error',
     then: { function: 'asyncApiSecurity', functionOptions: { objectType: 'Operation' } },
   },
+  'asyncapi-3-payload': {
+    description: 'Payloads must be valid against the AsyncAPI Schema object.',
+    formats: ['aas3'],
+    // Given the message rather than the payload, exactly as the 2.x twin is, so
+    // traits are folded in before the payload is read.
+    given: V3_ALL_MESSAGES,
+    severity: 'error',
+    then: { function: 'asyncApiPayload', functionOptions: { multiFormat: true } },
+  },
+  'asyncapi-3-payload-default': {
+    description: 'Payload default must be valid against its schema.',
+    formats: ['aas3'],
+    given: V3_PAYLOADS,
+    severity: 'error',
+    then: { function: 'asyncApiSchemaValidation', functionOptions: { type: 'default', multiFormat: true } },
+  },
+  'asyncapi-3-payload-examples': {
+    description: 'Payload examples must be valid against their schema.',
+    formats: ['aas3'],
+    given: V3_PAYLOADS,
+    severity: 'error',
+    then: { function: 'asyncApiSchemaValidation', functionOptions: { type: 'examples', multiFormat: true } },
+  },
   'asyncapi-3-payload-unsupported-schemaFormat': {
     description: 'Message payload validation is only supported with an unspecified schemaFormat.',
     formats: ['aas3'],
-    given: V3_ALL_MESSAGES.map((given) => `${given}.payload`),
+    given: V3_PAYLOADS,
     severity: 'info',
     resolved: false,
     then: {
@@ -490,6 +530,26 @@ const v3Rules: Record<string, RuleEntry> = {
       function: 'pattern',
       functionOptions: { match: '^application/vnd\\.aai\\.asyncapi([+;])' },
     },
+  },
+  'asyncapi-3-schema-default': {
+    description: 'Schema default must be valid against its schema.',
+    formats: ['aas3'],
+    // No parameter locations here: a 3.0 Channel Parameter Object has no
+    // `schema` at all — it carries `enum`, `default` and `examples` as plain
+    // strings — so `components.schemas` is the only place a reusable Schema
+    // Object is written. Each entry is a Multi Format Schema Object or a bare
+    // Schema Object, which is why this unwraps rather than reading `default`
+    // straight off the node.
+    given: '$.components.schemas[*]',
+    severity: 'error',
+    then: { function: 'asyncApiSchemaValidation', functionOptions: { type: 'default', multiFormat: true } },
+  },
+  'asyncapi-3-schema-examples': {
+    description: 'Schema examples must be valid against their schema.',
+    formats: ['aas3'],
+    given: '$.components.schemas[*]',
+    severity: 'error',
+    then: { function: 'asyncApiSchemaValidation', functionOptions: { type: 'examples', multiFormat: true } },
   },
   'asyncapi-3-server-security': {
     // 3.0 keeps `security` on the Server Object, in the same

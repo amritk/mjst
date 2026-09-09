@@ -17,6 +17,10 @@ import type { SchemaFormatFamily } from './schema-format'
  *   the generators would otherwise read as "never null".
  * - `'2020-12'` — pass through.
  *
+ * Avro never reaches here: it is a different schema language rather than a
+ * dialect of this one, so `normalize-message` hands it to `@amritk/adapters`
+ * and receives 2020-12 back already converted.
+ *
  * Keywords the AsyncAPI dialect adds beyond draft-07 (and draft-07 spellings
  * the upgrade does not rewrite, like array-form `items`) pass through
  * unchanged: `@amritk/runtime-validators` implements them directly, and an
@@ -27,7 +31,7 @@ import type { SchemaFormatFamily } from './schema-format'
  */
 export const normalizeSchema = (
   schema: Record<string, unknown>,
-  family: Exclude<SchemaFormatFamily, 'unsupported'>,
+  family: Exclude<SchemaFormatFamily, 'unsupported' | 'avro'>,
 ): Record<string, unknown> => {
   if (family === 'openapi') return foldNullable(schema)
   if (family === '2020-12') return schema

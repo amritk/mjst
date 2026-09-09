@@ -24,8 +24,19 @@ describe('schema-format', () => {
     expect(classifySchemaFormat('application/vnd.oai.openapi+json;version=3.0.0')).toBe('openapi')
   })
 
+  it('classifies every spelling of Avro, which is converted rather than refused', () => {
+    // The suffix says how the schema *document* was written; by the time a
+    // format reaches here the parser has already resolved that away, so all
+    // three name the same Avro schema.
+    expect(classifySchemaFormat('application/vnd.apache.avro;version=1.9.0')).toBe('avro')
+    expect(classifySchemaFormat('application/vnd.apache.avro+json;version=1.9.0')).toBe('avro')
+    expect(classifySchemaFormat('application/vnd.apache.avro+yaml;version=1.9.0')).toBe('avro')
+    expect(classifySchemaFormat('application/vnd.apache.avro')).toBe('avro')
+    // A lookalike prefix must not be claimed by the boundary-anchored match.
+    expect(classifySchemaFormat('application/vnd.apache.avro-ish;version=1')).toBe('unsupported')
+  })
+
   it('rejects everything else', () => {
-    expect(classifySchemaFormat('application/vnd.apache.avro;version=1.9.0')).toBe('unsupported')
     expect(classifySchemaFormat('application/vnd.google.protobuf;version=2')).toBe('unsupported')
     expect(classifySchemaFormat('application/raml+yaml;version=1.0')).toBe('unsupported')
     expect(classifySchemaFormat('application/schema+json;version=draft-04')).toBe('unsupported')

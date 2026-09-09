@@ -5,6 +5,7 @@ import { DiagnosticSeverity, type IDiagnostic, type RulesetDefinition } from '@a
 import fg from 'fast-glob'
 import yargs from 'yargs'
 
+import { buildLoadedRuleset, buildPresetRuleset, PRESET_RULESET_NAMES } from './preset-ruleset'
 import { createLintResolver } from './resolver'
 import { discoverRuleset, loadRuleset } from './ruleset-loader'
 
@@ -16,31 +17,6 @@ const SEVERITY_BY_NAME: Record<string, DiagnosticSeverity> = {
 }
 
 const SEVERITY_LABEL = ['error', 'warning', 'info', 'hint'] as const
-
-/**
- * The built-in preset names `--ruleset` resolves without a file on disk, each
- * mapping to a *built* ruleset. Built rather than a definition, deliberately: a
- * preset brings its own custom functions and format detectors, which a
- * definition cannot carry — handed over as data, every one of its rules would
- * be silently skipped (unknown functions, a `formats` gate matching nothing).
- * The names mirror what the presets' own `extends` resolution accepts,
- * including the legacy Spectral aliases.
- */
-const buildAsyncApiPreset = async (): Promise<Ruleset> =>
-  (await import('@amritk/lint/rules/asyncapi')).createAsyncApiRuleset()
-const buildOpenApiPreset = async (): Promise<Ruleset> =>
-  (await import('@amritk/lint/rules/openapi')).createOpenApiRuleset()
-
-// A Map, not a record: the key comes straight from `--ruleset`, and a record
-// lookup on `constructor` would find `Object.prototype`'s.
-const PRESET_RULESETS = new Map<string, () => Promise<Ruleset>>([
-  ['asyncapi', buildAsyncApiPreset],
-  ['loupe:asyncapi', buildAsyncApiPreset],
-  ['spectral:asyncapi', buildAsyncApiPreset],
-  ['oas', buildOpenApiPreset],
-  ['loupe:oas', buildOpenApiPreset],
-  ['spectral:oas', buildOpenApiPreset],
-])
 
 type Args = {
   documents: string[]
@@ -243,27 +219,28 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
 
   const discoverAndLoad = async (
     dir: string,
-  ): Promise<{ definition: RulesetDefinition; basePath: string } | undefined> => {
+  ): Promise<{ definition: RulesetDefinition | Ruleset; basePath: string } | undefined> => {
     const discovered = discoverRuleset(dir)
     if (!discovered) return undefined
     const definition = await loadRuleset(discovered)
     reportRulesetProblems(definition, discovered)
-    return { definition, basePath: dirname(discovered) }
+    const basePath = dirname(discovered)
+    return { definition: await buildLoadedRuleset(definition, basePath, discovered), basePath }
   }
 
   let rulesetDefinition: RulesetDefinition | Ruleset | undefined
   let rulesetBasePath: string | undefined
   if (parsed.ruleset) {
-    const preset = PRESET_RULESETS.get(parsed.ruleset)
+    const preset = PRESET_RULESET_NAMES.get(parsed.ruleset)
     if (preset) {
-      // Built presets carry their functions and formats already; there is no
+      // A bare preset name carries its functions and formats already; there is no
       // definition to validate and no base path to resolve extends from.
-      rulesetDefinition = await preset()
+      rulesetDefinition = await buildPresetRuleset(preset)
     } else {
       const definition = await loadRuleset(parsed.ruleset)
-      rulesetDefinition = definition
       rulesetBasePath = dirname(isAbsolute(parsed.ruleset) ? parsed.ruleset : resolve(process.cwd(), parsed.ruleset))
       reportRulesetProblems(definition, parsed.ruleset)
+      rulesetDefinition = await buildLoadedRuleset(definition, rulesetBasePath, parsed.ruleset)
     }
   }
 
@@ -304,7 +281,7 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
   } else {
     // Cache discovered/loaded rulesets by directory so a directory of documents
     // that share a `.lint.*` file parses it once, not once per file.
-    const rulesetCache = new Map<string, { definition: RulesetDefinition; basePath: string } | undefined>()
+    const rulesetCache = new Map<string, { definition: RulesetDefinition | Ruleset; basePath: string } | undefined>()
     const perFile = await mapWithConcurrency(targets, parsed.concurrency, async (file) => {
       const content = await readFile(file, parsed.encoding)
       let definition = rulesetDefinition

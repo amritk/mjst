@@ -100,7 +100,10 @@ describe('build-channel-contract', () => {
     expect(contract.issues[0]?.path).toBe('#/channels/lobby/messages/orphan')
   })
 
-  it('records an issue for a payload that cannot be made contract-legal', () => {
+  // Slack's RTM API names this message `botChanged` and tags the frame
+  // `bot_added`. The tag is what arrives, so it is what the contract listens
+  // for — keying on the name would wait for a frame that never comes.
+  it('keys a message on the wire tag its payload pins, not on its name', () => {
     const contract = buildChannelContract(
       channel({
         messages: [
@@ -113,8 +116,39 @@ describe('build-channel-contract', () => {
         ],
       }),
     )
+    expect(contract.serverToClient).toEqual({ bot_added: { type: 'object' } })
+    expect(contract.issues).toEqual([])
+  })
+
+  it('records an issue for a payload that cannot be made contract-legal', () => {
+    const contract = buildChannelContract(
+      channel({
+        messages: [
+          {
+            name: 'botChanged',
+            channelKey: 'lobby',
+            direction: 'send',
+            payload: { type: 'object', properties: { type: { type: 'string' } } },
+          },
+        ],
+      }),
+    )
     expect(contract.serverToClient).toEqual({})
-    expect(contract.issues[0]?.message).toMatch(/not pinned to this message's name/)
+    expect(contract.issues[0]?.message).toMatch(/without pinning it to one value/)
+  })
+
+  // A message with no payload has no tag to read, so its name stands in — and
+  // 2.x messages inside a `oneOf` are often named positionally, which is the
+  // only reason a name reaches a contract key at all.
+  it('falls back to the message name when the payload pins nothing', () => {
+    const contract = buildChannelContract(
+      channel({
+        messages: [
+          { name: 'lightMeasured', channelKey: 'lobby', direction: 'send', payload: { $ref: '#/$defs/measured' } },
+        ],
+      }),
+    )
+    expect(contract.serverToClient).toEqual({ lightMeasured: { $ref: '#/$defs/measured' } })
   })
 
   // A signal that is the tag and nothing else is a real message. Dropping it
@@ -140,7 +174,7 @@ describe('build-channel-contract', () => {
     expect(contract.issues[0]?.message).toMatch(/avro/)
   })
 
-  it('keeps the first of two messages that share a name in one direction', () => {
+  it('keeps the first of two messages that share a wire tag in one direction', () => {
     // 2.x names messages from `name`/`messageId`, which a `oneOf` list may
     // repeat — and one key cannot hold two schemas.
     const contract = buildChannelContract(
@@ -152,10 +186,46 @@ describe('build-channel-contract', () => {
       }),
     )
     expect(contract.serverToClient['turnOnOff']).toEqual({ type: 'object', title: 'first' })
-    expect(contract.issues[0]?.message).toMatch(/share the name/)
+    expect(contract.issues[0]?.message).toMatch(/carry the wire tag "turnOnOff"/)
   })
 
-  // Message names come from the document. `target[name] = schema` on a plain
+  it('collides on the tag rather than the name, so differently named messages can clash', () => {
+    // Slack declares two messages for its one `bot_added` event. They are
+    // distinct in the document and indistinguishable on the wire.
+    const payload = (title: string): Record<string, unknown> => ({
+      type: 'object',
+      title,
+      properties: { type: { const: 'bot_added' } },
+    })
+    const contract = buildChannelContract(
+      channel({
+        messages: [
+          { name: 'botAdded', channelKey: 'lobby', direction: 'send', payload: payload('first') },
+          { name: 'botChanged', channelKey: 'lobby', direction: 'send', payload: payload('second') },
+        ],
+      }),
+    )
+    expect(contract.serverToClient).toEqual({ bot_added: { type: 'object', title: 'first' } })
+    expect(contract.issues[0]?.message).toMatch(/carry the wire tag "bot_added"/)
+  })
+
+  // Each direction is its own map, so a request and its reply may share a tag.
+  it('lets the two directions use the same wire tag', () => {
+    const payload = { type: 'object', properties: { type: { const: 'ping' } } }
+    const contract = buildChannelContract(
+      channel({
+        messages: [
+          { name: 'pingOut', channelKey: 'lobby', direction: 'send', payload },
+          { name: 'pingIn', channelKey: 'lobby', direction: 'receive', payload },
+        ],
+      }),
+    )
+    expect(Object.keys(contract.serverToClient)).toEqual(['ping'])
+    expect(Object.keys(contract.clientToServer)).toEqual(['ping'])
+    expect(contract.issues).toEqual([])
+  })
+
+  // Contract keys come from the document. `target[key] = schema` on a plain
   // object routed this one to the prototype setter: the message disappeared,
   // nothing was recorded, and the returned object's prototype was replaced.
   it('refuses a message named __proto__ instead of losing it', () => {
@@ -168,6 +238,25 @@ describe('build-channel-contract', () => {
       }),
     )
     expect(Object.keys(contract.serverToClient)).toEqual(['hello'])
+    expect(contract.issues[0]?.message).toMatch(/__proto__/)
+    expect(Object.getPrototypeOf(contract.serverToClient)).toBe(Object.prototype)
+  })
+
+  // Now that the tag is the key, a payload — not just a name — can carry it.
+  it('refuses a payload that pins its tag to __proto__', () => {
+    const contract = buildChannelContract(
+      channel({
+        messages: [
+          {
+            name: 'evil',
+            channelKey: 'lobby',
+            direction: 'send',
+            payload: { type: 'object', properties: { type: { const: '__proto__' } } },
+          },
+        ],
+      }),
+    )
+    expect(contract.serverToClient).toEqual({})
     expect(contract.issues[0]?.message).toMatch(/__proto__/)
     expect(Object.getPrototypeOf(contract.serverToClient)).toBe(Object.prototype)
   })
@@ -267,15 +356,59 @@ describe('build-channel-contract', () => {
       [
         {
           "channel": "root",
-          "clientToServer": {},
+          "clientToServer": {
+            "message": "properties: id, channel, text",
+          },
           "discriminator": "type",
           "exportName": "rootMessages",
           "issues": {
-            "payload's "type" is not pinned to this message's name, so the wire tag and the contract key would disagree": "outgoingMessage, connectionError, accountsChanged, botAdded, botChanged, channelArchive, channelCreated, channelDeleted, channelHistoryChanged, channelJoined, channelLeft, channelMarked, channelRename, channelUnarchive, commandsChanged, dndUpdated, dndUpdatedUser, emailDomainChanged, emojiRemoved, emojiAdded, fileChange, fileCommentAdded, fileCommentDeleted, fileCommentEdited, fileCreated, fileDeleted, filePublic, fileShared, fileUnshared, groupArchive, groupClose, groupHistoryChanged, groupJoined, groupLeft, groupMarked, groupOpen, groupRename, groupUnarchive, imClose, imCreated, imMarked, imOpen, manualPresenceChange, memberJoinedChannel",
+            "two serverToClient messages carry the wire tag "bot_added"; keeping the first": "botChanged",
+            "two serverToClient messages carry the wire tag "emoji_changed"; keeping the first": "emojiAdded",
           },
           "serverToClient": {
+            "accounts_changed": "keywords: type",
+            "bot_added": "properties: bot",
+            "channel_archive": "properties: channel, user",
+            "channel_created": "properties: channel",
+            "channel_deleted": "properties: channel",
+            "channel_history_changed": "properties: latest, ts, event_ts",
+            "channel_joined": "properties: channel",
+            "channel_left": "properties: channel",
+            "channel_marked": "properties: channel, ts",
+            "channel_rename": "properties: channel",
+            "channel_unarchive": "properties: channel, user",
+            "commands_changed": "properties: event_ts",
+            "dnd_updated": "properties: user, dnd_status",
+            "dnd_updated_user": "properties: user, dnd_status",
+            "email_domain_changed": "properties: email_domain, event_ts",
+            "emoji_changed": "properties: subtype, names, event_ts",
+            "error": "properties: error",
+            "file_change": "properties: file_id, file",
+            "file_comment_added": "properties: comment, file_id, file",
+            "file_comment_deleted": "properties: comment, file_id, file",
+            "file_comment_edited": "properties: comment, file_id, file",
+            "file_created": "properties: file_id, file",
+            "file_deleted": "properties: file_id, event_ts",
+            "file_public": "properties: file_id, file",
+            "file_shared": "properties: file_id, file",
+            "file_unshared": "properties: file_id, file",
             "goodbye": "keywords: type",
+            "group_archive": "properties: channel",
+            "group_close": "properties: user, channel",
+            "group_history_changed": "properties: latest, ts, event_ts",
+            "group_joined": "properties: channel",
+            "group_left": "properties: channel",
+            "group_marked": "properties: channel, ts",
+            "group_open": "properties: user, channel",
+            "group_rename": "properties: channel",
+            "group_unarchive": "properties: channel, user",
             "hello": "keywords: type",
+            "im_close": "properties: channel, user",
+            "im_created": "properties: channel, user",
+            "im_marked": "properties: channel, ts",
+            "im_open": "properties: channel, user",
+            "manual_presence_change": "properties: presence",
+            "member_joined_channel": "properties: user, channel, channel_type, team, inviter",
             "message": "properties: user, channel, text, ts, attachments, edited",
           },
         },

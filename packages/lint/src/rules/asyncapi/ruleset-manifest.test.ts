@@ -25,9 +25,15 @@ const MANIFEST: Record<string, string> = {
   'asyncapi-3-channel-servers': '0 rec unresolved aas3',
   'asyncapi-3-document-unresolved': '0 rec unresolved aas3',
   'asyncapi-3-headers-schema-type-object': '0 rec resolved aas3',
+  'asyncapi-3-message-examples': '0 rec resolved aas3',
   'asyncapi-3-operation-description': '1 rec resolved aas3',
   'asyncapi-3-operation-security': '0 rec unresolved aas3',
+  'asyncapi-3-payload': '0 rec resolved aas3',
+  'asyncapi-3-payload-default': '0 rec resolved aas3',
+  'asyncapi-3-payload-examples': '0 rec resolved aas3',
   'asyncapi-3-payload-unsupported-schemaFormat': '2 rec unresolved aas3',
+  'asyncapi-3-schema-default': '0 rec resolved aas3',
+  'asyncapi-3-schema-examples': '0 rec resolved aas3',
   'asyncapi-3-server-no-empty-variable': '1 rec resolved aas3',
   'asyncapi-3-server-no-trailing-slash': '1 rec resolved aas3',
   'asyncapi-3-server-not-example-com': '1 opt resolved aas3',
@@ -101,8 +107,8 @@ describe('the shipped ruleset', () => {
   })
 
   it('ships the rule count the changeset advertises', () => {
-    expect(all.rules).toHaveLength(56)
-    expect(recommended.size).toBe(48)
+    expect(all.rules).toHaveLength(62)
+    expect(recommended.size).toBe(54)
   })
 
   it('names every 3.x-only rule with the asyncapi-3- prefix, and no other rule', () => {

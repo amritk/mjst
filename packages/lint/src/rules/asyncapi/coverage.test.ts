@@ -90,6 +90,13 @@ const V3_LOCATIONS: { name: string; plant: (message: Record<string, unknown>) =>
   },
 ]
 
+/**
+ * The subset of {@link V3_LOCATIONS} that is a message rather than a trait.
+ * `asyncapi-3-message-examples` folds traits into the message and reports there,
+ * so it deliberately does not match the trait locations.
+ */
+const V3_MESSAGE_LOCATIONS = V3_LOCATIONS.filter((location) => !/traits/i.test(location.name))
+
 describe('message-location coverage', () => {
   // The ruleset defines `V2_MESSAGES` / `V3_MESSAGES` precisely so that every
   // rule meaning "every message" reaches the same places. Nothing enforced that:
@@ -116,11 +123,50 @@ describe('message-location coverage', () => {
   }
 
   for (const location of V3_LOCATIONS) {
-    it(`checks headers and tags of a 3.x message at ${location.name}`, async () => {
+    it(`checks headers, tags and the payload of a 3.x message at ${location.name}`, async () => {
       const doc = { asyncapi: '3.0.0', info: { title: 'T', version: '1.0.0' }, ...location.plant(brokenMessage()) }
       const codes = await codesFor(doc)
       expect(codes.has('asyncapi-3-headers-schema-type-object'), 'headers').toBe(true)
       expect(codes.has('asyncapi-3-tags-uniqueness'), 'tags').toBe(true)
+      expect(codes.has('asyncapi-3-payload'), 'payload').toBe(true)
+    })
+  }
+
+  for (const location of V3_LOCATIONS) {
+    it(`reports an unsupported 3.x schemaFormat at ${location.name}`, async () => {
+      // 3.0 states the schema language on the payload rather than the message,
+      // so the gate every payload rule shares is read from a different place.
+      const message = {
+        ...brokenMessage(),
+        payload: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: { type: 'not-a-type' } },
+      }
+      const doc = { asyncapi: '3.0.0', info: { title: 'T', version: '1.0.0' }, ...location.plant(message) }
+      const codes = await codesFor(doc)
+      expect(codes.has('asyncapi-3-payload-unsupported-schemaFormat')).toBe(true)
+      expect(codes.has('asyncapi-3-payload')).toBe(false)
+    })
+  }
+
+  for (const location of V3_LOCATIONS) {
+    it(`checks a 3.x payload default and examples at ${location.name}`, async () => {
+      const message = {
+        payload: { type: 'object', properties: { a: { type: 'string' } }, default: { a: 1 }, examples: [{ a: 2 }] },
+      }
+      const doc = { asyncapi: '3.0.0', info: { title: 'T', version: '1.0.0' }, ...location.plant(message) }
+      const codes = await codesFor(doc)
+      expect(codes.has('asyncapi-3-payload-default'), 'default').toBe(true)
+      expect(codes.has('asyncapi-3-payload-examples'), 'examples').toBe(true)
+    })
+  }
+
+  for (const location of V3_MESSAGE_LOCATIONS) {
+    it(`checks the examples of a 3.x message at ${location.name}`, async () => {
+      const message = {
+        payload: { type: 'object', properties: { a: { type: 'string' } } },
+        examples: [{ payload: { a: 42 } }],
+      }
+      const doc = { asyncapi: '3.0.0', info: { title: 'T', version: '1.0.0' }, ...location.plant(message) }
+      expect((await codesFor(doc)).has('asyncapi-3-message-examples')).toBe(true)
     })
   }
 
@@ -441,6 +487,30 @@ describe('reusable channels and pointer escapes', () => {
     }
     const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules })
     expect(findings.filter((finding) => finding.code === 'asyncapi-message-examples')).toHaveLength(1)
+  })
+
+  it('reports a 3.x message-example failure once, not once per trait location', async () => {
+    const doc = {
+      asyncapi: '3.0.0',
+      info: { title: 'T', version: '1.0.0' },
+      components: {
+        messages: {
+          X: {
+            traits: [
+              {
+                headers: {
+                  schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+                  schema: { type: 'object', properties: { id: { type: 'string' } } },
+                },
+                examples: [{ headers: { id: 42 } }],
+              },
+            ],
+          },
+        },
+      },
+    }
+    const findings = await lint(JSON.stringify(doc, null, 2), { ruleset: allRules })
+    expect(findings.filter((finding) => finding.code === 'asyncapi-3-message-examples')).toHaveLength(1)
   })
 })
 

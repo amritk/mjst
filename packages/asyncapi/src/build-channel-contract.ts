@@ -10,8 +10,10 @@ export type ContractDirection = { readonly [name: string]: Record<string, unknow
  * One channel projected onto an `@amritk/api` messages contract.
  *
  * The map keys *are* the wire discriminator values — that is what
- * `defineMessages` means by a message name — so a message that cannot be given
- * a legal key or a legal payload is left out and its reason recorded in
+ * `defineMessages` means by a message name — taken from the value the payload
+ * pins the discriminator to, and falling back to the AsyncAPI message name only
+ * when the payload pins nothing. A message that cannot be given a legal key or a
+ * legal payload is left out and its reason recorded in
  * {@link ChannelContract.issues} rather than emitted broken.
  */
 export type ChannelContract = {
@@ -54,9 +56,12 @@ const toExportName = (token: string): string => {
  *   operation names has no direction at all, and a contract cannot guess one:
  *   putting it in the wrong half would validate frames flowing the wrong way
  *   and reject the ones that arrive.
- * - **The tag.** The message *name* becomes the wire key, and the payload has
- *   the tag stripped out of it (see {@link stripDiscriminator}), because the
- *   runtime removes it from the frame before validating.
+ * - **The tag.** The key is the value a frame carries on the wire, which the
+ *   payload usually states itself as `type: { const: 'bot_added' }`; that
+ *   value is taken as the key and stripped out of the payload (see
+ *   {@link stripDiscriminator}), because the runtime removes it from the frame
+ *   before validating. Only a payload that pins nothing falls back to the
+ *   message's name.
  *
  * Everything skipped comes back as an issue naming the message and the reason,
  * so the caller can warn per message instead of failing the channel. A channel
@@ -69,8 +74,8 @@ export const buildChannelContract = (
 ): ChannelContract => {
   const discriminator = resolveDiscriminator(channel, options.discriminator)
   const issues: ExtractionIssue[] = []
-  // Maps, not object literals: message names come from the document, and
-  // `target[name] = schema` on a plain object treats `__proto__` as the
+  // Maps, not object literals: the keys are wire tags read out of the document,
+  // and `target[tag] = schema` on a plain object treats `__proto__` as the
   // prototype setter — the message vanished and nothing was recorded.
   const clientToServer = new Map<string, Record<string, unknown>>()
   const serverToClient = new Map<string, Record<string, unknown>>()
@@ -93,40 +98,48 @@ export const buildChannelContract = (
       continue
     }
 
-    // The one name that survives this map but not the file written from it: in
-    // generated source `{ "__proto__": … }` sets the prototype rather than
-    // declaring a message, and no quoting escapes that — only a computed key
-    // would, which is not what the emitted literal is. A contract that has to
-    // round-trip through source cannot carry a name source cannot express.
-    if (message.name === '__proto__') {
-      skip('a message named "__proto__" cannot be written as an object key in the generated contract')
-      continue
-    }
-
     const target = message.direction === 'receive' ? clientToServer : serverToClient
-    if (target.has(message.name)) {
-      skip(`two ${message.direction === 'receive' ? 'clientToServer' : 'serverToClient'} messages share the name`)
-      continue
+    const half = message.direction === 'receive' ? 'clientToServer' : 'serverToClient'
+
+    /** Files one message under the tag a frame carries, or says why it cannot. */
+    const place = (key: string, schema: Record<string, unknown>): void => {
+      // The one key that survives this map but not the file written from it: in
+      // generated source `{ "__proto__": … }` sets the prototype rather than
+      // declaring a message, and no quoting escapes that — only a computed key
+      // would, which is not what the emitted literal is. A contract that has to
+      // round-trip through source cannot carry a key source cannot express.
+      if (key === '__proto__') {
+        skip('the wire tag "__proto__" cannot be written as an object key in the generated contract')
+        return
+      }
+      if (target.has(key)) {
+        // Two messages tagged alike travel as one frame shape, and only one of
+        // them can describe it. Real documents do this: Slack's RTM API
+        // declares two messages for its single `bot_added` event.
+        skip(`two ${half} messages carry the wire tag "${key}"; keeping the first`)
+        return
+      }
+      target.set(key, schema)
     }
 
     // No payload at all is not a problem to report: plenty of signals are the
     // tag and nothing else (`{"type":"goodbye"}`). Dropping such a message
     // would be the real damage — the contract is a closed set, so an omitted
-    // message means a legitimate frame gets closed as `unknown-type`.
+    // message means a legitimate frame gets closed as `unknown-type`. There is
+    // also nothing to read a tag off, so the message name stands in — and a
+    // fresh object each time, since these end up in a shared contract callers
+    // are free to read and one mutated literal must not reshape the rest.
     if (message.payload === undefined) {
-      // A fresh object per message: these end up in a shared contract that
-      // callers are free to read, and one accidentally mutated literal must not
-      // reshape every payload-less message in the document.
-      target.set(message.name, { type: 'object' })
+      place(message.name, { type: 'object' })
       continue
     }
 
-    const stripped = stripDiscriminator(message.payload, discriminator, message.name)
-    if (stripped.issue !== undefined) {
-      skip(stripped.issue)
+    const projected = stripDiscriminator(message.payload, discriminator)
+    if (projected.issue !== undefined) {
+      skip(projected.issue)
       continue
     }
-    target.set(message.name, stripped.schema)
+    place(projected.tag ?? message.name, projected.schema)
   }
 
   return {

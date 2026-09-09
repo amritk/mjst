@@ -217,6 +217,19 @@ config/service.yaml:2:7  error  config-schema  /port must be integer
 
 With no `-r`, mjst discovers a `.lint.{yaml,yml,json,js,mjs}` ruleset by walking up from each linted file. A ruleset maps a JSONPath (`given`) to a function (`then`) — `schema` (JSON Schema), `casing`, `pattern`, `truthy`, and more, plus your own. The [`@amritk/lint` README](../lint#ruleset-format) documents the ruleset format and built-in functions. For machine-readable output (JSON, SARIF, …), call the [`@amritk/lint`](../lint) library's `lintDocument`, which returns structured findings.
 
+Your own ruleset can build on a preset: `extends: [asyncapi]` (or `[oas]`) layers your rules on top of the preset's, with the preset's custom functions and format detection intact — through `-r <file>` and `.lint.*` discovery alike. Relative `extends` targets and custom `functions` still resolve next to your ruleset file. Extend at most one preset per ruleset: the two bring different formats and functions and neither can resolve the other, so a ruleset naming both is refused up front. Lint AsyncAPI and OpenAPI documents in separate runs.
+
+```yaml
+# .lint.yaml — the AsyncAPI preset plus a house rule
+extends:
+  - asyncapi
+rules:
+  needs-terms-of-service:
+    given: "$.info"
+    severity: error
+    then: { field: termsOfService, function: truthy }
+```
+
 | Flag | Description |
 | --- | --- |
 | `<documents..>` | Files or globs to lint (positional). |
