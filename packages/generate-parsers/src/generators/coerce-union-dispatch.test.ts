@@ -11,9 +11,9 @@ import { linkGenerated, makeRng, pick } from './differential.test-utils'
  * contract completely: with no discriminated `$ref` dispatch to fall back on,
  * the parser emitted a blind `input as T` cast, so every element of `guides`,
  * `references` and `header` in the Scalar configuration schema was handed back
- * exactly as it arrived. Over 4000 mutated documents, 2118 coerced outputs were
- * invalid against their own schema; with this dispatch, 18 are, and all 18 are
- * the one remaining shape (a union in *property* position) noted in the README.
+ * exactly as it arrived. Over 4000 mutated documents, 2418 coerced outputs were
+ * invalid against their own schema; with this dispatch, 41 are, and all 41 sit at
+ * one site — a union in *property* position, the shape noted in the README.
  *
  * The dispatch has two halves, and both are asserted here:
  *

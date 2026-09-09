@@ -9,8 +9,8 @@ schema that produced it. A union-typed value broke that promise outright: unless
 its branches were `$ref`s sharing a discriminant, the generator emitted a blind
 `input as T` cast, so every element of a union-typed array was handed back
 exactly as it arrived. Measured over 4000 mutated documents of the published
-Scalar configuration schema, **2118 coerced outputs were invalid** against their
-own schema. **18 now are**, and all 18 are the one shape called out below.
+Scalar configuration schema, **2418 coerced outputs were invalid** against their
+own schema. **41 now are**, and all 41 are the one shape called out below.
 
 A union parser is now built in two steps:
 
