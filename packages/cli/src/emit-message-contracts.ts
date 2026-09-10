@@ -47,7 +47,11 @@ const renderDirection = (name: string, direction: ContractDirection, indent: str
 }
 
 /** Renders one channel's module: the header, the import, and the `defineMessages` call. */
-const renderChannelModule = (contract: ChannelContract, channel: { key: string; address?: string }): string => {
+const renderChannelModule = (
+  contract: ChannelContract,
+  channel: { key: string; address?: string },
+  headerMessages: readonly string[],
+): string => {
   const directions = [
     Object.keys(contract.clientToServer).length > 0
       ? renderDirection('clientToServer', contract.clientToServer, '  ')
@@ -58,6 +62,20 @@ const renderChannelModule = (contract: ChannelContract, channel: { key: string; 
   ].filter((entry) => entry !== undefined)
 
   const address = channel.address !== undefined && channel.address !== channel.key ? ` (${channel.address})` : ''
+  // Headers have no home in a messages contract, and a reader holding a Kafka
+  // document would otherwise assume this file covers them. Naming the messages
+  // that declared some — and where their types landed — is cheaper than an
+  // extraction warning on an otherwise perfectly good document.
+  const headerNote =
+    headerMessages.length === 0
+      ? []
+      : [
+          ' *',
+          ' * Payloads only: a message contract describes WebSocket frames, which carry',
+          ' * no headers of their own. These messages declare a headers schema, and its',
+          ` * types were generated alongside the payload's, under \`<message>-headers/\`:`,
+          ` * ${headerMessages.join(', ')}.`,
+        ]
   return [
     '/**',
     ` * Message contract for the AsyncAPI channel \`${channel.key}\`${address}.`,
@@ -70,6 +88,7 @@ const renderChannelModule = (contract: ChannelContract, channel: { key: string; 
     ` * \`{ "${contract.discriminator}": "<key>", ... }\` selects its schema by that key, and the`,
     ' * tag is removed before the payload below is validated — which is why no',
     ' * payload here declares it.',
+    ...headerNote,
     ' */',
     `import { defineMessages } from '${CONTRACTS_PEER}'`,
     '',
@@ -96,6 +115,12 @@ const renderChannelModule = (contract: ChannelContract, channel: { key: string; 
  * no messages at all) is not written: an exported contract with no messages
  * accepts no frame in either direction, which is a trap rather than a document.
  * The reasons come back in {@link EmitMessageContractsResult.issues}.
+ *
+ * Only payloads are projected. A message's `headers` schema is generated as its
+ * own tree by the parser run, but has no slot in a messages contract — the
+ * contract describes WebSocket frames, and headers are the broker's layer. Each
+ * module says so in its header when the channel declares any, rather than
+ * leaving the omission to be discovered.
  *
  * The barrel's specifiers are always `.ts`, ignoring `--import-ext`: these
  * modules are the one part of the output `--build` leaves uncompiled (they
@@ -146,7 +171,11 @@ export const emitMessageContracts = async (
     }
 
     const filename = `${CONTRACTS_DIR}/${token}.ts`
-    await writer.stage(filename, bannerPrefix + renderChannelModule({ ...contract, exportName }, channel))
+    const headerMessages = channel.messages.filter((message) => message.headers !== undefined).map(({ name }) => name)
+    await writer.stage(
+      filename,
+      bannerPrefix + renderChannelModule({ ...contract, exportName }, channel, headerMessages),
+    )
     files.push(filename)
     barrel.push(`export { ${exportName} } from './${token}.ts'`)
   }

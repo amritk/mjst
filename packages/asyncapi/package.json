@@ -39,6 +39,7 @@
     "test": "NODE_ENV=production vitest run --root ../.. packages/asyncapi"
   },
   "dependencies": {
+    "@amritk/adapters": "workspace:*",
     "@amritk/helpers": "workspace:*"
   },
   "exports": {

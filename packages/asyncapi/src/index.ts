@@ -5,7 +5,7 @@ export {
   type ContractDirection,
 } from './build-channel-contract'
 export { type DetectedVersion, detectAsyncApiVersion } from './detect-version'
-export { extractAsyncApi } from './extract-async-api'
+export { type ExtractAsyncApiOptions, extractAsyncApi } from './extract-async-api'
 export { mergeTraits } from './merge-traits'
 export { listMessageSchemas } from './message-schemas'
 export { DEFAULT_DISCRIMINATOR, resolveDiscriminator } from './resolve-discriminator'

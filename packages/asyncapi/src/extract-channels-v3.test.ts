@@ -241,7 +241,10 @@ describe('extract-channels-v3', () => {
           events: {
             messages: {
               avro: {
-                payload: { schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: { type: 'record' } },
+                payload: {
+                  schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+                  schema: { type: 'record', name: 'Event', fields: [{ name: 'id', type: 'string' }] },
+                },
                 headers: {
                   schemaFormat: 'application/schema+json;version=draft-07',
                   schema: { type: 'object', definitions: { t: { type: 'string' } } },
@@ -254,11 +257,13 @@ describe('extract-channels-v3', () => {
       issues,
     )
     const message = channels[0]?.messages[0]
-    expect(message?.payload).toBeUndefined()
+    // Each wrapper's format gates its own schema: the payload went to the Avro
+    // converter, the headers through the draft-07 upgrade.
     expect(message?.schemaFormat).toContain('avro')
+    expect(message?.payload?.['$ref']).toBe('#/$defs/Event')
     // Headers carried their own draft-07 declaration; the upgrade renamed definitions.
     expect(message?.headers?.['$defs']).toEqual({ t: { type: 'string' } })
-    expect(issues.some((issue) => issue.message.includes('avro'))).toBe(true)
+    expect(issues).toEqual([])
   })
 
   it("keeps the message's own keys over a trait's, per 3.0 precedence", () => {

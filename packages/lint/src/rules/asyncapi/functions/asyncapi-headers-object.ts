@@ -1,5 +1,6 @@
 import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
+import { splitMultiFormatSchema } from './multi-format-schema'
 import { isAsyncApiSchemaFormat } from './schema-format'
 
 const MESSAGE = 'Headers schema type must be "object"'
@@ -40,14 +41,16 @@ export const asyncApiHeadersObject: RulesetFunction<unknown, IAsyncApiHeadersOpt
   // target is where the type lives, so there is nothing to judge.
   if (typeof headers['$ref'] === 'string') return []
 
-  if (options?.multiFormat === true && Object.hasOwn(headers, 'schema')) {
-    if (!isAsyncApiSchemaFormat(headers['schemaFormat'])) return []
-    const inner = headers['schema']
-    if (!isObject(inner)) return [{ message: MESSAGE, path: [...context.path, 'schema'] }]
-    // The wrapped schema can be a reference for the same reason the unwrapped one
-    // can; the target is where the type lives.
-    if (typeof inner['$ref'] === 'string' || inner['type'] === 'object') return []
-    return [{ message: MESSAGE, path: [...context.path, 'schema'] }]
+  if (options?.multiFormat === true) {
+    const { schemaFormat, schema: inner, path } = splitMultiFormatSchema(headers)
+    if (path.length > 0) {
+      if (!isAsyncApiSchemaFormat(schemaFormat)) return []
+      if (!isObject(inner)) return [{ message: MESSAGE, path: [...context.path, ...path] }]
+      // The wrapped schema can be a reference for the same reason the unwrapped
+      // one can; the target is where the type lives.
+      if (typeof inner['$ref'] === 'string' || inner['type'] === 'object') return []
+      return [{ message: MESSAGE, path: [...context.path, ...path] }]
+    }
   }
 
   return headers['type'] === 'object' ? [] : [{ message: MESSAGE, path: [...context.path] }]

@@ -18,12 +18,13 @@ export { asyncApiChannelParameters } from './asyncapi-channel-parameters'
 export { asyncApiChannelServers } from './asyncapi-channel-servers'
 export { asyncApiDocumentSchema } from './asyncapi-document-schema'
 export { asyncApiHeadersObject, type IAsyncApiHeadersOptions } from './asyncapi-headers-object'
-export { asyncApiMessageExamples } from './asyncapi-message-examples'
+export { asyncApiMessageExamples, type IAsyncApiMessageExamplesOptions } from './asyncapi-message-examples'
 export { asyncApiMessageIdUnique } from './asyncapi-message-id-unique'
 export { asyncApiOperationIdUnique } from './asyncapi-operation-id-unique'
-export { asyncApiPayload } from './asyncapi-payload'
+export { asyncApiPayload, type IAsyncApiPayloadOptions } from './asyncapi-payload'
 export { asyncApiSchemaValidation, type IAsyncApiSchemaValidationOptions } from './asyncapi-schema-validation'
 export { asyncApiSecurity, type IAsyncApiSecurityOptions } from './asyncapi-security'
+export { type MultiFormatSchema, splitMultiFormatSchema } from './multi-format-schema'
 
 /** The AsyncAPI-specific custom functions, keyed by name for ruleset `then` references. */
 export const aasFunctions: FunctionRegistry = {
@@ -33,10 +34,10 @@ export const aasFunctions: FunctionRegistry = {
   asyncApiChannelServers,
   asyncApiDocumentSchema: asyncApiDocumentSchema as RulesetFunction,
   asyncApiHeadersObject: asyncApiHeadersObject as RulesetFunction,
-  asyncApiMessageExamples,
+  asyncApiMessageExamples: asyncApiMessageExamples as RulesetFunction,
   asyncApiMessageIdUnique,
   asyncApiOperationIdUnique,
-  asyncApiPayload,
+  asyncApiPayload: asyncApiPayload as RulesetFunction,
   asyncApiSchemaValidation: asyncApiSchemaValidation as RulesetFunction,
   asyncApiSecurity: asyncApiSecurity as RulesetFunction,
 }

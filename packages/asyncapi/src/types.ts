@@ -50,8 +50,10 @@ export type NormalizedMessage = {
   /**
    * The payload as a self-contained JSON Schema 2020-12 document: the dialect
    * normalized, and every `#/components/schemas/...` reference rebased into a
-   * local `$defs`. Absent when the message declares none, or when its
-   * `schemaFormat` is not a JSON Schema dialect (an issue records which).
+   * local `$defs`. An Avro `schemaFormat` arrives here converted, not skipped.
+   * Absent when the message declares no payload, when its `schemaFormat` names
+   * a language this cannot read (Protobuf, say), or when an Avro conversion
+   * failed — an issue records which.
    */
   readonly payload?: Record<string, unknown>
   /** The headers schema, normalized the same way as {@link payload}. */

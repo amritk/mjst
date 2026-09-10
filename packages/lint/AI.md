@@ -30,7 +30,7 @@ import { lintDocument } from '@amritk/lint'
 import { createAsyncApiRuleset } from '@amritk/lint/rules/asyncapi'
 import { resolveRefs } from '@amritk/resolve-refs' // any resolver will do
 
-// Recommended rules only: 48 of 56. For all 56, pass the `all` modifier:
+// Recommended rules only: 54 of 62. For all 62, pass the `all` modifier:
 //   createAsyncApiRuleset({ extends: [['asyncapi', 'all']] })
 const ruleset = createAsyncApiRuleset()
 
@@ -91,7 +91,7 @@ createAsyncApiRuleset({
 7. **`createRuleset` is memoized** per `(definition object, basePath,
    restrictTo)`. Mutating a definition you already passed in will not rebuild the
    ruleset — pass a fresh object instead.
-8. **Most AsyncAPI rules are gated per major** (11 of the 56 apply to both).
+8. **Most AsyncAPI rules are gated per major** (11 of the 62 apply to both).
    The 3.x-only rules are named with an `asyncapi-3-` prefix
    (`asyncapi-3-operation-description`) and the 2.x ones are not, because 3.0
    moved operations to the top level and tags under `info`. Re-severitying
@@ -133,6 +133,6 @@ createAsyncApiRuleset({
 |---|---|
 | `@amritk/lint` | core engine, `lintDocument`/`fixDocument`, built-in functions |
 | `@amritk/lint/rules/openapi` | OpenAPI 2.0/3.0/3.1/3.2 preset — 66 rules, plus `oasFixers` |
-| `@amritk/lint/rules/asyncapi` | AsyncAPI 2.0–2.6 / 3.0 preset — 56 rules, no fixers |
+| `@amritk/lint/rules/asyncapi` | AsyncAPI 2.0–2.6 / 3.0 preset — 62 rules, no fixers |
 
 Install: `bun add @amritk/lint`.

@@ -14,6 +14,7 @@ import {
   asyncApiPayload,
   asyncApiSchemaValidation,
   asyncApiSecurity,
+  splitMultiFormatSchema,
 } from './index'
 
 /** A function context whose `document.data` is `data`, matched at `path`. */
@@ -388,6 +389,38 @@ describe('asyncApiOperationIdUnique / asyncApiMessageIdUnique', () => {
   })
 })
 
+describe('splitMultiFormatSchema', () => {
+  it('splits a wrapper into its format and its schema', () => {
+    const wrapper = { schemaFormat: 'application/vnd.apache.avro;version=1.9.0', schema: { type: 'record' } }
+    expect(splitMultiFormatSchema(wrapper)).toEqual({
+      schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+      schema: { type: 'record' },
+      path: ['schema'],
+    })
+  })
+
+  it('treats an own schema key as the wrapper, format or no format', () => {
+    // The bundled 3.0 meta-schema decides on `schema` alone (`anySchema.json`:
+    // `if: { required: ['schema'] }`), and `schemaFormat` defaults to the
+    // AsyncAPI dialect — so a bare `{ schema }` is a wrapper, not a schema.
+    expect(splitMultiFormatSchema({ schema: { type: 'object' } })).toEqual({
+      schemaFormat: undefined,
+      schema: { type: 'object' },
+      path: ['schema'],
+    })
+  })
+
+  it('passes a bare Schema Object, and a non-object, straight through', () => {
+    expect(splitMultiFormatSchema({ type: 'object' })).toEqual({
+      schemaFormat: undefined,
+      schema: { type: 'object' },
+      path: [],
+    })
+    expect(splitMultiFormatSchema(true)).toEqual({ schemaFormat: undefined, schema: true, path: [] })
+    expect(splitMultiFormatSchema(undefined)).toEqual({ schemaFormat: undefined, schema: undefined, path: [] })
+  })
+})
+
 describe('asyncApiSchemaValidation', () => {
   it('reports a default that does not match the schema it sits in', () => {
     const schema = { type: 'string', default: 12 }
@@ -411,6 +444,33 @@ describe('asyncApiSchemaValidation', () => {
       run(asyncApiSchemaValidation, { type: 'string', examples: 'no' }, { type: 'examples' }, contextFor({})),
     ).toEqual([])
     expect(run(asyncApiSchemaValidation, 'not-a-schema', { type: 'default' }, contextFor({}))).toEqual([])
+  })
+
+  it('says nothing about a schema that declares no default at all', () => {
+    // The 3.0 givens match the schema itself rather than its `default`, so a
+    // schema without one reaches this function. Judging the absent value would
+    // report `undefined` failing `type: string` on a document nobody wrote.
+    expect(run(asyncApiSchemaValidation, { type: 'string' }, { type: 'default' }, contextFor({}))).toEqual([])
+  })
+
+  it('unwraps a Multi Format Schema Object and reports inside it', () => {
+    const wrapped = {
+      schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+      schema: { type: 'string', default: 12 },
+    }
+    const found = asyncApiSchemaValidation(wrapped, { type: 'default', multiFormat: true }, contextFor({}, ['p']))
+    expect(found?.map((finding) => finding.path)).toEqual([['p', 'schema', 'default']])
+  })
+
+  it('leaves a default written in another schema language alone', () => {
+    const avro = {
+      schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+      schema: { type: 'record', name: 'P', fields: [], default: 12 },
+    }
+    expect(run(asyncApiSchemaValidation, avro, { type: 'default', multiFormat: true }, contextFor({}))).toEqual([])
+    // Without the option the wrapper is just a schema, and `schema` is not a
+    // keyword — 2.x has no Multi Format Schema Object to unwrap.
+    expect(run(asyncApiSchemaValidation, avro, { type: 'default' }, contextFor({}))).toEqual([])
   })
 })
 
@@ -475,6 +535,36 @@ describe('asyncApiMessageExamples', () => {
     expect(run(asyncApiMessageExamples, input, null, contextFor({}))).toHaveLength(1)
   })
 
+  it('gates each 3.0 half on its own schemaFormat', () => {
+    // 2.x states the language once, on the message; 3.0 wraps `payload` and
+    // `headers` separately, so a foreign payload must not switch the headers
+    // check off with it.
+    const input = {
+      payload: {
+        schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+        schema: { type: 'record', name: 'P', fields: [] },
+      },
+      headers: {
+        schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+        schema: { type: 'object', properties: { trace: { type: 'string' } }, required: ['trace'] },
+      },
+      examples: [{ payload: { id: 1 }, headers: { trace: 2 } }],
+    }
+    const found = asyncApiMessageExamples(input, { multiFormat: true }, contextFor({}, ['m'])) ?? []
+    expect(found.map((finding) => finding.path)).toEqual([['m', 'examples', 0, 'headers', 'trace']])
+  })
+
+  it('judges a 3.0 example against the schema inside the payload wrapper', () => {
+    const input = {
+      payload: {
+        schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0',
+        schema: { type: 'object', properties: { a: { type: 'string' } } },
+      },
+      examples: [{ payload: { a: 42 } }],
+    }
+    expect(run(asyncApiMessageExamples, input, { multiFormat: true }, contextFor({}))).not.toEqual([])
+  })
+
   it('says nothing without examples, and skips an example that is not an object', () => {
     expect(run(asyncApiMessageExamples, message, null, contextFor({}))).toEqual([])
     expect(run(asyncApiMessageExamples, { ...message, examples: 'no' }, null, contextFor({}))).toEqual([])
@@ -527,6 +617,21 @@ describe('asyncApiPayload', () => {
     expect(run(asyncApiPayload, avro, null, contextFor(document))).toEqual([])
     // The same payload with no such trait is still judged.
     expect(run(asyncApiPayload, message({ type: 'record' }), null, contextFor(document))).not.toEqual([])
+  })
+
+  it('unwraps a 3.0 Multi Format Schema Object and reports inside it', () => {
+    const wrapped = message({ schemaFormat: 'application/vnd.aai.asyncapi;version=3.0.0', schema: { type: 'nope' } })
+    const context = contextFor({ asyncapi: '3.0.0' }, ['components', 'messages', 'M'])
+    const found = asyncApiPayload(wrapped, { multiFormat: true }, context) ?? []
+    expect(found.length).toBeGreaterThan(0)
+    expect(found[0]?.path?.slice(0, 5)).toEqual(['components', 'messages', 'M', 'payload', 'schema'])
+    // Wrapped in a language this package cannot validate, it is left alone —
+    // `asyncapi-3-payload-unsupported-schemaFormat` is what mentions it.
+    const avro = message({
+      schemaFormat: 'application/vnd.apache.avro;version=1.9.0',
+      schema: { type: 'record', name: 'P', fields: [] },
+    })
+    expect(run(asyncApiPayload, avro, { multiFormat: true }, context)).toEqual([])
   })
 
   it('says nothing for a message with no payload', () => {

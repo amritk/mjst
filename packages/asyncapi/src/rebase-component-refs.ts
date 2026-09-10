@@ -9,6 +9,22 @@ import { classifySchemaFormat } from './schema-format'
 import type { ExtractionIssue } from './types'
 import { unwrapMultiFormat } from './unwrap-multi-format'
 
+/**
+ * Whether a component's own schema language can be copied into the JSON Schema
+ * payload that references it.
+ *
+ * Avro is convertible on its own — `normalize-message` hands a wholly-Avro
+ * payload to `@amritk/adapters` — but not *here*: the converted result carries
+ * its own `$defs` tree, which would have to be merged into the host schema's
+ * under names the host has already claimed, and a tailed `$ref` would then be
+ * pointing into Avro's naming rather than the document's. A `$ref` from a JSON
+ * Schema payload into an Avro component is not a shape real documents write, so
+ * it degrades to an unconstrained schema with an issue rather than earning that
+ * machinery.
+ */
+const isCopyableFamily = (family: SchemaFormatFamily): family is Exclude<SchemaFormatFamily, 'unsupported' | 'avro'> =>
+  family !== 'unsupported' && family !== 'avro'
+
 // A reference into the document's shared schema components, with an optional
 // deeper pointer tail that must survive the move (`#/components/schemas/X/properties/y`).
 const COMPONENT_SCHEMA_REF = /^#\/components\/schemas\/([^/]+)(\/.*)?$/
@@ -144,7 +160,7 @@ const DOC_DEF_SCOPE: RewriteScope = { kind: 'docDef' }
 export const rebaseComponentRefs = (
   root: Record<string, unknown>,
   document: unknown,
-  family: Exclude<SchemaFormatFamily, 'unsupported'>,
+  family: Exclude<SchemaFormatFamily, 'unsupported' | 'avro'>,
   issues: ExtractionIssue[],
   path: string,
 ): Record<string, unknown> => {
@@ -264,7 +280,7 @@ export const rebaseComponentRefs = (
     if (raw === undefined) return undefined
     const { schemaFormat, schema } = unwrapMultiFormat(raw)
     const componentFamily = schemaFormat === undefined ? family : classifySchemaFormat(schemaFormat)
-    if (componentFamily === 'unsupported' || typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    if (!isCopyableFamily(componentFamily) || typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
       return undefined
     }
     const names: Record<DefsBlock, Set<string>> = { definitions: new Set(), $defs: new Set() }
@@ -466,13 +482,12 @@ export const rebaseComponentRefs = (
 
     const { schemaFormat, schema } = unwrapMultiFormat(raw)
     const componentFamily = schemaFormat === undefined ? family : classifySchemaFormat(schemaFormat)
-    if (componentFamily === 'unsupported' || typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
+    if (!isCopyableFamily(componentFamily) || typeof schema !== 'object' || schema === null || Array.isArray(schema)) {
       issues.push({
         path,
-        message:
-          componentFamily === 'unsupported'
-            ? `component "${name}" uses unsupported schemaFormat ${JSON.stringify(schemaFormat)}; treated as an unconstrained schema`
-            : `component "${name}" is not an object schema; treated as an unconstrained schema`,
+        message: isCopyableFamily(componentFamily)
+          ? `component "${name}" is not an object schema; treated as an unconstrained schema`
+          : `component "${name}" uses unsupported schemaFormat ${JSON.stringify(schemaFormat)}; treated as an unconstrained schema`,
       })
       assignKey(copiedDefs, defsKey, {})
       return

@@ -23,7 +23,7 @@ What "self-contained" buys: the AsyncAPI default schema dialect (a draft-07 supe
 
 It also projects each channel onto a [`@amritk/api`](../api) **messages contract**: the two directions AsyncAPI declares become `clientToServer`/`serverToClient`, each message's name becomes its wire discriminator value, and the discriminator property is stripped out of the payload — which is exactly the shape `defineMessages` takes. That projection is what `mjst --input asyncapi --message-contracts` writes to disk.
 
-Both majors normalize into one 3.0-shaped model. Directions are named from the application's point of view (2.x `publish` → `receive`, `subscribe` → `send`), matching [`@amritk/api`](../api)'s message contracts. Non-JSON-Schema payloads (`schemaFormat`: Avro, Protobuf, …) are skipped per message with a recorded issue — one Avro payload never costs the document's other messages.
+Both majors normalize into one 3.0-shaped model. Directions are named from the application's point of view (2.x `publish` → `receive`, `subscribe` → `send`), matching [`@amritk/api`](../api)'s message contracts. An Avro `schemaFormat` is **converted**, not skipped — [`@amritk/adapters`](../adapters) already reads Avro, so those payloads reach the generators like any other. A payload in a language nothing here reads (Protobuf, RAML) is skipped per message with a recorded issue, and so is an Avro schema the converter rejects — one bad payload never costs the document's other messages.
 
 ---
 
@@ -76,8 +76,8 @@ for (const channel of model.channels) {
   const contract = buildChannelContract(channel)
   for (const issue of contract.issues) console.warn(`${issue.path}: ${issue.message}`)
 
-  // The two maps are keyed by wire discriminator value, payloads already
-  // stripped of the tag — hand them straight to defineMessages.
+  // The two maps are keyed by the value a frame carries on the wire, payloads
+  // already stripped of the tag — hand them straight to defineMessages.
   const messages = defineMessages({
     discriminator: contract.discriminator,
     clientToServer: contract.clientToServer,
@@ -88,7 +88,11 @@ for (const channel of model.channels) {
 
 The discriminator is resolved in priority order: `x-mjst: { discriminator }` on the channel, then the `discriminator` option, then `'type'` (matching `@amritk/api`'s default). The document wins over the option deliberately — one option covers a whole run, and a run may span channels that disagree.
 
-A message whose payload pins the tag to something *other* than its own name is skipped with an issue rather than rewritten: the wire tag and the contract key would disagree, so the emitted contract would listen for a frame that never arrives. Slack's RTM document renames nearly every one of its tags this way, and only three of its messages project cleanly.
+**The key is the tag, not the name.** A payload usually states its own tag — `type: { const: 'bot_added' }` is how a channel of alternatives says which message is which — and that value becomes the contract key, because it is what actually arrives on the wire. The AsyncAPI message *name* is only the fallback for a payload that pins nothing; it is a document-authoring handle, and 2.x messages inside a `oneOf` frequently have none at all. Slack's RTM document names a message `botAdded` and tags it `bot_added`; keying on the name would emit a contract listening for a frame that never comes.
+
+Two messages that pin the *same* tag in the *same* direction are one frame shape with two descriptions, so the first wins and the second is reported (Slack declares two messages for its single `bot_added` event). A payload that constrains the tag without pinning it to one string — `type: { type: 'string' }`, a multi-member `enum`, a non-string `const` — names no message the runtime could select, and is skipped with an issue.
+
+**Headers are not part of a contract.** `listMessageSchemas` emits a message's `headers` schema as its own generatable tree, but `buildChannelContract` projects payloads only: `@amritk/api` message contracts describe WebSocket frames, which carry no headers of their own. For a Kafka or MQTT document the headers types are still generated (under `<message>-headers/`) — they are simply yours to apply at the broker boundary, not something the socket runtime validates.
 
 Cross-file and remote `$ref`s are the loader's job: resolve them first (for example with [`@amritk/resolve-refs`](../resolve-refs)); a still-unresolved external reference is reported as an issue, never fetched.
 
@@ -96,14 +100,14 @@ Cross-file and remote `$ref`s are the loader's job: resolve them first (for exam
 
 ## API
 
-- **`extractAsyncApi(document)`** → `AsyncApiModel` — the normalized document: `version`, `major`, `title?`, `channels` (each with `key`, `address?`, `messages`), and collected `issues`. Throws only when the input is not an AsyncAPI document at all.
+- **`extractAsyncApi(document, options?)`** → `AsyncApiModel` — the normalized document: `version`, `major`, `title?`, `channels` (each with `key`, `address?`, `messages`), and collected `issues`. Throws only when the input is not an AsyncAPI document at all. `options.avroEncoding` picks which JSON shape an Avro payload describes: `'json'` (default) is the decoded object an application works with, `'avro-json'` is the spec's JSON encoding as it travels on the wire.
 - **`listMessageSchemas(model, issues?)`** → `ExtractedSchema[]` — one `{ subDir, rootTypeName, schema }` per generatable payload/headers, with deterministic collision-suffixed directory tokens; collision issues are appended to `model.issues` (or to the `issues` array you pass).
 - **`buildChannelContract(channel, options?)`** → `ChannelContract` — one channel as `{ exportName, discriminator, clientToServer, serverToClient, issues }`, ready for `defineMessages`.
 - **`resolveDiscriminator(channel, override?)`** / **`DEFAULT_DISCRIMINATOR`** — the priority order above, and the `'type'` fallback.
-- **`stripDiscriminator(payload, discriminator, messageName)`** → `{ schema }` or `{ issue }` — the payload with its tag removed, or why it could not be.
+- **`stripDiscriminator(payload, discriminator)`** → `{ schema, tag? }` or `{ issue }` — the payload with its tag removed plus the value it pinned the tag to, or why neither could be read.
 - **`sanitizeToken(value, fallback)`** — the filesystem- and import-safe token both output layouts name a channel or message with.
 - **`detectAsyncApiVersion(document)`** — the `asyncapi` version and its major, or `undefined`.
-- **`classifySchemaFormat(schemaFormat)`** — which JSON Schema dialect a `schemaFormat` names (`'asyncapi' | 'draft-07' | '2020-12' | 'openapi'`), or `'unsupported'`.
+- **`classifySchemaFormat(schemaFormat)`** — which schema language a `schemaFormat` names (`'asyncapi' | 'draft-07' | '2020-12' | 'openapi' | 'avro'`), or `'unsupported'`.
 - **`mergeTraits(target, traits, precedence)`** — trait application as an RFC 7386 JSON Merge Patch (recursive, so nested contributions from both sides survive); `precedence` is `'trait'` for 2.x (traits override the target) or `'target'` for 3.0 (the target wins). Applied before `schemaFormat` is read.
 
 ---

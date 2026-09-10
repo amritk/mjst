@@ -2,6 +2,7 @@ import type { IFunctionResult, RulesetFunction } from '../../../core/types'
 import { schema as schemaFunction } from '../../../functions'
 import { type AsyncApiVersion, asyncApiSchemaVersion, loadAsyncApiSchema } from '../schemas'
 import { isObject, mergeTraits } from './helpers'
+import { type MultiFormatSchema, splitMultiFormatSchema } from './multi-format-schema'
 import { isAsyncApiSchemaFormat } from './schema-format'
 
 // The AsyncAPI Schema Object is defined inside each version's own meta-schema,
@@ -42,20 +43,40 @@ const payloadSchema = (version: AsyncApiVersion): object => {
  * payload came to be judged as JSON Schema and reported at error severity.
  * `asyncapi-payload-unsupported-schemaFormat` reports those separately.
  */
-export const asyncApiPayload: RulesetFunction = (message, _options, context): IFunctionResult[] => {
+/** Options for {@link asyncApiPayload}. */
+export type IAsyncApiPayloadOptions = {
+  /**
+   * Whether the payload may be a Multi Format Schema Object (`{ schemaFormat,
+   * schema }`). That shape is 3.0 only: the format that used to sit on the
+   * message now sits on the payload, so the gate reads a different place — and
+   * the schema to judge lives one level further down.
+   */
+  multiFormat?: boolean
+}
+
+export const asyncApiPayload: RulesetFunction<unknown, IAsyncApiPayloadOptions | undefined> = (
+  message,
+  options,
+  context,
+): IFunctionResult[] => {
   if (!isObject(message)) return []
   const merged = mergeTraits(message)
-  if (!isAsyncApiSchemaFormat(merged['schemaFormat'])) return []
-  const payload = merged['payload']
-  if (payload === undefined) return []
+  const written = merged['payload']
+  if (written === undefined) return []
+
+  const payload: MultiFormatSchema =
+    options?.multiFormat === true
+      ? splitMultiFormatSchema(written)
+      : { schemaFormat: merged['schemaFormat'], schema: written, path: [] }
+  if (!isAsyncApiSchemaFormat(payload.schemaFormat)) return []
 
   const version = asyncApiSchemaVersion(isObject(context.document.data) ? context.document.data['asyncapi'] : undefined)
   if (version === undefined) return []
   return (
     schemaFunction(
-      payload,
+      payload.schema,
       { schema: payloadSchema(version), allErrors: true },
-      { ...context, path: [...context.path, 'payload'] },
+      { ...context, path: [...context.path, 'payload', ...payload.path] },
     ) ?? []
   )
 }

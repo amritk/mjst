@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -19,6 +19,20 @@ const RULESET = [
   '    severity: warn',
   '    then: { function: casing, functionOptions: { type: kebab } }',
 ].join('\n')
+
+// Valid enough to lint, sparse enough to draw preset findings — proving a
+// preset's own rules actually ran rather than an empty ruleset reporting nothing.
+const ASYNCAPI_DOC = [
+  'asyncapi: 2.6.0',
+  'info:',
+  '  title: Sparse',
+  '  version: 1.0.0',
+  'channels:',
+  '  events: {}',
+  '',
+].join('\n')
+
+const OPENAPI_DOC = ['openapi: 3.1.0', 'info:', '  title: Sparse', '  version: 1.0.0', 'paths: {}', ''].join('\n')
 
 const tmp = (prefix: string): string => mkdtempSync(join(tmpdir(), prefix))
 
@@ -202,13 +216,7 @@ describe('cli', () => {
   it('resolves --ruleset asyncapi to the built-in preset', async () => {
     const dir = tmp('lint-aas-')
     const file = join(dir, 'doc.yaml')
-    // Valid enough to lint, sparse enough to draw preset findings (no
-    // description, no channel description) — proving the preset's own rules
-    // actually ran rather than an empty ruleset reporting nothing.
-    writeFileSync(
-      file,
-      ['asyncapi: 2.6.0', 'info:', '  title: Sparse', '  version: 1.0.0', 'channels:', '  events: {}', ''].join('\n'),
-    )
+    writeFileSync(file, ASYNCAPI_DOC)
 
     const { code, stdout } = await run([file, '--ruleset', 'asyncapi'])
 
@@ -220,7 +228,7 @@ describe('cli', () => {
   it('resolves --ruleset oas to the built-in OpenAPI preset', async () => {
     const dir = tmp('lint-oas-')
     const file = join(dir, 'doc.yaml')
-    writeFileSync(file, ['openapi: 3.1.0', 'info:', '  title: Sparse', '  version: 1.0.0', 'paths: {}', ''].join('\n'))
+    writeFileSync(file, OPENAPI_DOC)
 
     const { code, stdout } = await run([file, '--ruleset', 'oas'])
 
@@ -234,5 +242,156 @@ describe('cli', () => {
     writeFileSync(file, 'name: my-service\n')
 
     await expect(run([file, '--ruleset', join(dir, 'nope.yaml')])).rejects.toThrow()
+  })
+
+  // A ruleset file that extends a preset used to die with "Cannot resolve
+  // extended ruleset" — only the bare `--ruleset asyncapi` name reached the
+  // preset builder, so a loaded definition was built with the core
+  // `createRuleset`, which knows none of the preset names.
+  it('runs a discovered ruleset that extends the asyncapi preset', async () => {
+    const dir = tmp('lint-ext-aas-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, ASYNCAPI_DOC)
+    writeFileSync(join(dir, '.lint.yaml'), 'extends:\n  - asyncapi\n')
+
+    const extended = await run([file])
+    const preset = await run([file, '--ruleset', 'asyncapi'])
+
+    // Extending the preset has to be indistinguishable from naming it.
+    expect(extended.stdout).toBe(preset.stdout)
+    expect(extended.stdout).toContain('asyncapi-')
+  })
+
+  it('runs a discovered ruleset that extends the oas preset', async () => {
+    const dir = tmp('lint-ext-oas-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, OPENAPI_DOC)
+    writeFileSync(join(dir, '.lint.yaml'), 'extends:\n  - oas\n')
+
+    const extended = await run([file])
+    const preset = await run([file, '--ruleset', 'oas'])
+
+    expect(extended.stdout).toBe(preset.stdout)
+    expect(extended.stdout).not.toContain('No problems found')
+  })
+
+  it('runs a --ruleset file that extends a preset under an alias name', async () => {
+    const dir = tmp('lint-ext-alias-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, ASYNCAPI_DOC)
+    const rs = join(dir, 'rules.yaml')
+    writeFileSync(rs, 'extends:\n  - spectral:asyncapi\n')
+
+    const { stdout } = await run([file, '-r', rs])
+
+    expect(stdout).toContain('asyncapi-')
+  })
+
+  // `[[asyncapi, all]]` is the tuple shape of `extends`; the preset name sits in
+  // the first slot rather than being the entry itself.
+  it('recognizes a preset named in an [name, level] extends tuple', async () => {
+    const dir = tmp('lint-ext-tuple-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, ASYNCAPI_DOC)
+    writeFileSync(join(dir, '.lint.yaml'), 'extends:\n  - [asyncapi, all]\n')
+
+    const { stdout } = await run([file])
+
+    expect(stdout).toContain('asyncapi-')
+  })
+
+  it('runs both the preset rules and the ruleset own rules when extending a preset', async () => {
+    const dir = tmp('lint-ext-own-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, ASYNCAPI_DOC)
+    writeFileSync(
+      join(dir, '.lint.yaml'),
+      [
+        'extends:',
+        '  - asyncapi',
+        'rules:',
+        '  needs-terms-of-service:',
+        '    given: "$.info"',
+        '    severity: error',
+        '    then: { field: termsOfService, function: truthy }',
+        '',
+      ].join('\n'),
+    )
+
+    const { stdout, code } = await run([file])
+
+    expect(stdout).toContain('asyncapi-info-contact') // a preset rule
+    expect(stdout).toContain('needs-terms-of-service') // the ruleset's own rule
+    expect(code).toBe(1)
+  })
+
+  // The preset builder loads custom functions relative to the ruleset that
+  // declared them, so `basePath` has to survive the switch to that builder.
+  it('loads a custom function next to a ruleset that extends a preset', async () => {
+    const dir = tmp('lint-ext-fn-')
+    mkdirSync(join(dir, 'functions'))
+    writeFileSync(
+      join(dir, 'functions', 'must-shout.cjs'),
+      "module.exports = (input) => (input === String(input).toUpperCase() ? undefined : [{ message: 'must be SHOUTED' }])\n",
+    )
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, ASYNCAPI_DOC)
+    writeFileSync(
+      join(dir, '.lint.yaml'),
+      [
+        'extends:',
+        '  - asyncapi',
+        'functions:',
+        '  - must-shout',
+        'rules:',
+        '  shout-title:',
+        '    given: "$.info.title"',
+        '    severity: error',
+        '    then: { function: must-shout }',
+        '',
+      ].join('\n'),
+    )
+
+    const { stdout } = await run([file])
+
+    expect(stdout).toContain('must be SHOUTED')
+    expect(stdout).toContain('asyncapi-') // the preset still ran alongside it
+  })
+
+  // Neither preset can resolve the other's name, so the deep resolver failure
+  // ("Cannot resolve extended ruleset \"oas\"") would be a riddle. Say what is
+  // wrong instead.
+  it('refuses a ruleset that extends both presets with an actionable error', async () => {
+    const dir = tmp('lint-ext-both-')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, ASYNCAPI_DOC)
+    const rs = join(dir, '.lint.yaml')
+    writeFileSync(rs, 'extends:\n  - asyncapi\n  - oas\n')
+
+    await expect(run([file])).rejects.toThrow(/extends both built-in presets/)
+    await expect(run([file])).rejects.toThrow(rs)
+  })
+
+  // Everything `extends` could name before still resolves through the core path.
+  it('keeps a discovered ruleset that extends a plain relative file working', async () => {
+    const dir = tmp('lint-ext-plain-')
+    writeFileSync(
+      join(dir, 'base.yaml'),
+      [
+        'rules:',
+        '  needs-title:',
+        '    given: "$"',
+        '    severity: error',
+        '    then: { field: title, function: truthy }',
+      ].join('\n'),
+    )
+    writeFileSync(join(dir, '.lint.yaml'), 'extends:\n  - ./base.yaml\n')
+    const file = join(dir, 'doc.yaml')
+    writeFileSync(file, 'name: my-service\n')
+
+    const { stdout, code } = await run([file])
+
+    expect(stdout).toContain('needs-title')
+    expect(code).toBe(1)
   })
 })
