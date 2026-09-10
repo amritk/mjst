@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { basename, isAbsolute, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { type LintResolver, lint } from '@amritk/lint'
 import { createOpenApiRuleset } from '@amritk/lint/rules/openapi'
@@ -60,28 +61,56 @@ const FIXTURES: Fixture[] = [
   { label: 'openai', file: 'openai.yaml' },
 ]
 
+/**
+ * Documents named on the command line, linted after the built-in ones and
+ * labelled by filename. This is how a spec too large to vendor into `fixtures/`
+ * — Cloudflare's 24 MB `openapi.json`, say — gets measured. A path that does not
+ * exist stops the run: it is the document the caller asked about, and quietly
+ * benchmarking the built-ins instead would look like success.
+ */
+const extraFixtures = (): Fixture[] =>
+  process.argv.slice(2).map((path) => {
+    const resolved = resolvePath(path)
+    if (!existsSync(resolved)) throw new Error(`No such document: ${resolved}`)
+    return { label: basename(resolved), file: resolved }
+  })
+
 /** In-memory resolver backed by `@amritk/resolve-refs` — the same dereferencing `mjst lint` does for internal refs. */
 const resolver: LintResolver = (document) => ({ resolved: resolveRefs(document.data, {}).resolved })
 
 type Timing = { meanMs: number; iterations: number }
 
+/** A pass this slow gets one warm-up and one timed run; see {@link measure}. */
+const EXPENSIVE_MS = 10_000
+
 /**
  * Warms `fn` up, times one run to size the sample, then reports the mean over
  * roughly `budgetMs` (clamped to a sane iteration count so the big document
  * still runs a few times and the small one does not run forever).
+ *
+ * The first pass doubles as a cost probe. A document cheap enough to warm up
+ * properly gets the extra passes that let the JIT settle, exactly as before; a
+ * genuinely expensive one (Spectral over a 24 MB spec takes two minutes a pass)
+ * skips them and is timed once, because three more passes there cost a quarter
+ * of an hour and tell you nothing the first did not.
  */
 const measure = async (
   fn: () => Promise<unknown> | unknown,
   budgetMs = 2000,
   maxIterations = 1000,
 ): Promise<Timing> => {
-  for (let i = 0; i < 3; i++) await fn()
+  const firstStart = performance.now()
+  await fn()
+  const expensive = performance.now() - firstStart > EXPENSIVE_MS
+
+  if (!expensive) for (let i = 0; i < 3; i++) await fn()
 
   const probeStart = performance.now()
   await fn()
   const single = performance.now() - probeStart
 
-  const iterations = Math.max(3, Math.min(maxIterations, Math.round(budgetMs / Math.max(single, 0.02))))
+  const floor = expensive ? 1 : 3
+  const iterations = Math.max(floor, Math.min(maxIterations, Math.round(budgetMs / Math.max(single, 0.02))))
   const start = performance.now()
   for (let i = 0; i < iterations; i++) await fn()
   return { meanMs: (performance.now() - start) / iterations, iterations }
@@ -133,8 +162,8 @@ const run = async (): Promise<void> => {
     `  ${pad('document', 22)}${padStart('size', 9)}${padStart('mjst', 11)}${padStart('spectral', 12)}${padStart('speedup', 10)}${padStart('findings m/s', 18)}`,
   )
 
-  for (const { label, file } of FIXTURES) {
-    const input = readFileSync(`${FIXTURE_DIR}${file}`, 'utf8')
+  for (const { label, file } of [...FIXTURES, ...extraFixtures()]) {
+    const input = readFileSync(isAbsolute(file) ? file : `${FIXTURE_DIR}${file}`, 'utf8')
     const kb = `${(Buffer.byteLength(input, 'utf8') / 1024).toFixed(0)} KB`
     const parser = file.endsWith('.json') ? SpectralJson : SpectralYaml
 
