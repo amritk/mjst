@@ -376,6 +376,27 @@ row is real rule work rather than failed I/O. The petstore rows are a difference
 of two much larger numbers and are correspondingly noisy — treat them as "about
 the same".
 
+**A much larger document.** The biggest OpenAPI spec that is easy to lay hands
+on is Cloudflare's — [`cloudflare/api-schemas`](https://github.com/cloudflare/api-schemas),
+a 24 MB `openapi.json` with 3,454 operations, roughly nine times the OpenAI
+spec. It is far too large to vendor into `fixtures/`, so the bench takes extra
+documents on the command line instead: `bun run bench:vacuum -- ~/api-schemas/openapi.json`.
+On the same box, warm cache, mjst lints it in **~5.7 s on Node** (~6.2 s on Bun)
+against vacuum's **~16 s** — and vacuum's first, cold-cache run took ~31 s.
+Peak RSS is the wider gap: **~790 MB against ~4.9 GB**, because vacuum builds a
+fully resolved model of the document and this linter walks the authored tree.
+The 18 MB YAML form of the same spec lints in ~5.8 s and produces byte-identical
+findings, which is the parser parity check that fixture is really good for.
+
+mjst reports 5,878 findings there against vacuum's 59,498 — a gap that is
+almost entirely vacuum's extra rules (`description-duplication` 20,156,
+`camel-case-properties` 11,149, `oas3-missing-example` 10,489). Where the two
+genuinely overlap they agree: both count exactly 3,460 `operation-tag-defined`
+violations. mjst's 19 `operation-description` findings are also correct — 19 of
+the 3,454 operations have no `description` key, counted straight out of the JSON
+— where vacuum's rule of that name fires 1,172 times, so it is asking a
+different question rather than catching something we miss.
+
 The rule sets are **not** the same: mjst's `oas` preset enables 53 rules
 (Spectral's recommended set), vacuum's default enables 55 of its own, and vacuum
 ships rules this package has no equivalent for — `description-duplication` and

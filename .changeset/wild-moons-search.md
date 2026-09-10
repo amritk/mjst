@@ -10,5 +10,7 @@ so the comparison is CLI to CLI: both sides are timed as whole processes, with a
 near-empty document measured first so each tool's fixed startup cost can be
 subtracted and the linting engines compared on their own. Run it with
 `bun run bench:vacuum` (or `bench:vacuum:node`); vacuum is not a dependency, and
-the bench skips cleanly when it is not installed. The README carries the
-resulting numbers.
+the bench skips cleanly when it is not installed. Paths passed on the command
+line are linted as extra documents, so a spec too large to vendor into
+`fixtures/` can still be measured. The README carries the resulting numbers,
+including a run over Cloudflare's 24 MB `openapi.json`.

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
@@ -38,7 +38,9 @@ import { fileURLToPath } from 'node:url'
  *
  * Run with `bun run bench:vacuum` (or `bun run bench:vacuum:node`) — the
  * runtime running this script is the one that runs the mjst CLI, so both
- * engines get a turn.
+ * engines get a turn. Any paths passed on the command line are linted as extra
+ * documents after the built-in ones (`bun run bench:vacuum -- ~/openapi.json`),
+ * which is how a spec too large to vendor into `fixtures/` gets measured.
  */
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
@@ -215,6 +217,16 @@ const run = (): void => {
     return
   }
 
+  // Extra documents named on the command line go last, labelled by filename.
+  // Checked before anything is created, and a missing one is worth stopping
+  // for: it is the document the caller asked about, and quietly benching the
+  // built-ins instead would look like success.
+  const extra = process.argv.slice(2).map((path): Fixture => {
+    const resolved = resolve(path)
+    if (!existsSync(resolved)) throw new Error(`No such document: ${resolved}`)
+    return { label: basename(resolved), path: resolved }
+  })
+
   const workspace = mkdtempSync(join(tmpdir(), 'mjst-vacuum-bench-'))
   const startupDocument = join(workspace, 'startup.yaml')
   const reportPath = join(workspace, 'vacuum-report.json')
@@ -226,6 +238,7 @@ const run = (): void => {
     { label: 'petstore (Swagger)', path: join(FIXTURE_DIR, 'swagger-petstore.json') },
     { label: 'digitalocean', path: join(FIXTURE_DIR, 'digitalocean.yaml') },
     { label: 'openai', path: join(FIXTURE_DIR, 'openai.yaml') },
+    ...extra,
   ]
 
   const runtime = typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : `Node ${process.version}`
