@@ -328,6 +328,23 @@ Each `lint` figure is the mean wall time of one whole pass — **every rule, not
 
 **Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms** on Bun and **~0.06 ms** on Node, versus **~0.26 ms** and **~0.24 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
 
+**The largest spec we have tried.** Cloudflare's
+[`api-schemas`](https://github.com/cloudflare/api-schemas) is a 24 MB
+`openapi.json` with 3,454 operations — roughly nine times the OpenAI spec, and
+far too large to vendor into `fixtures/`, so the bench takes documents on the
+command line instead: `bun run bench:node -- ~/api-schemas/openapi.json` (naming
+one replaces the built-in fixtures). On Node it lints in **5.4 s against
+Spectral's 106 s — ~20×**, the widest margin in this table; the gap grows with
+the document rather than closing. Peak RSS is **820 MB against 3.7 GB**. The
+finding counts converge there too — **5,878 against 5,884**, a 0.1% difference
+on a spec that produces nearly six thousand of them, where the smaller fixtures
+diverge far more. That is the strongest parity signal in the suite, and it is on
+the document where parity is hardest to get by accident.
+
+At that size the bench also stops warming up: a pass costing more than ten
+seconds is run once rather than seven times, since seven Spectral passes over
+this spec is a quarter of an hour that tells you nothing the first pass did not.
+
 ### Against vacuum, CLI to CLI
 
 `bench/vacuum.ts` puts the `mjst lint` **command** up against **[vacuum](https://github.com/daveshanley/vacuum)**, the Go OpenAPI linter. vacuum is a compiled binary, so there is no in-process comparison to be had: the honest measurement is the one a user actually meets — a process started fresh, linting one file with its own recommended preset, per-finding output suppressed on both sides (`--quiet` for mjst, `-x` for vacuum). Every figure below therefore includes process start, module loading, ruleset assembly, parsing, `$ref` resolution and the rules themselves.
@@ -376,13 +393,10 @@ row is real rule work rather than failed I/O. The petstore rows are a difference
 of two much larger numbers and are correspondingly noisy — treat them as "about
 the same".
 
-**A much larger document.** The biggest OpenAPI spec that is easy to lay hands
-on is Cloudflare's — [`cloudflare/api-schemas`](https://github.com/cloudflare/api-schemas),
-a 24 MB `openapi.json` with 3,454 operations, roughly nine times the OpenAI
-spec. It is far too large to vendor into `fixtures/`, so the bench takes extra
-documents on the command line instead: `bun run bench:vacuum -- ~/api-schemas/openapi.json`.
-On the same box, warm cache, mjst lints it in **~5.7 s on Node** (~6.2 s on Bun)
-against vacuum's **~16 s** — and vacuum's first, cold-cache run took ~31 s.
+**A much larger document.** The same 24 MB Cloudflare spec, through the two
+CLIs: `bun run bench:vacuum -- ~/api-schemas/openapi.json`. On the same box,
+warm cache, mjst lints it in **~5.7 s on Node** (~6.2 s on Bun) against vacuum's
+**~16 s** — and vacuum's first, cold-cache run took ~31 s.
 Peak RSS is the wider gap: **~790 MB against ~4.9 GB**, because vacuum builds a
 fully resolved model of the document and this linter walks the authored tree.
 The 18 MB YAML form of the same spec lints in ~5.8 s and produces byte-identical
