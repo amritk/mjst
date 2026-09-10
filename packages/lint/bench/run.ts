@@ -62,18 +62,23 @@ const FIXTURES: Fixture[] = [
 ]
 
 /**
- * Documents named on the command line, linted after the built-in ones and
- * labelled by filename. This is how a spec too large to vendor into `fixtures/`
- * — Cloudflare's 24 MB `openapi.json`, say — gets measured. A path that does not
- * exist stops the run: it is the document the caller asked about, and quietly
- * benchmarking the built-ins instead would look like success.
+ * The documents to lint: whatever was named on the command line, or the
+ * built-in fixtures when nothing was. Naming one replaces the defaults rather
+ * than adding to them — you asked about that spec, and waiting out three others
+ * first is not what you asked for. This is how a spec too large to vendor into
+ * `fixtures/` (Cloudflare's 24 MB `openapi.json`, say) gets measured. A path
+ * that does not exist stops the run: quietly benchmarking the built-ins instead
+ * would look like success.
  */
-const extraFixtures = (): Fixture[] =>
-  process.argv.slice(2).map((path) => {
+const documents = (): Fixture[] => {
+  const named = process.argv.slice(2)
+  if (named.length === 0) return FIXTURES
+  return named.map((path) => {
     const resolved = resolvePath(path)
     if (!existsSync(resolved)) throw new Error(`No such document: ${resolved}`)
     return { label: basename(resolved), file: resolved }
   })
+}
 
 /** In-memory resolver backed by `@amritk/resolve-refs` — the same dereferencing `mjst lint` does for internal refs. */
 const resolver: LintResolver = (document) => ({ resolved: resolveRefs(document.data, {}).resolved })
@@ -162,7 +167,7 @@ const run = async (): Promise<void> => {
     `  ${pad('document', 22)}${padStart('size', 9)}${padStart('mjst', 11)}${padStart('spectral', 12)}${padStart('speedup', 10)}${padStart('findings m/s', 18)}`,
   )
 
-  for (const { label, file } of [...FIXTURES, ...extraFixtures()]) {
+  for (const { label, file } of documents()) {
     const input = readFileSync(isAbsolute(file) ? file : `${FIXTURE_DIR}${file}`, 'utf8')
     const kb = `${(Buffer.byteLength(input, 'utf8') / 1024).toFixed(0)} KB`
     const parser = file.endsWith('.json') ? SpectralJson : SpectralYaml

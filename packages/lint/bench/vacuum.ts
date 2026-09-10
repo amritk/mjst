@@ -38,9 +38,10 @@ import { fileURLToPath } from 'node:url'
  *
  * Run with `bun run bench:vacuum` (or `bun run bench:vacuum:node`) — the
  * runtime running this script is the one that runs the mjst CLI, so both
- * engines get a turn. Any paths passed on the command line are linted as extra
- * documents after the built-in ones (`bun run bench:vacuum -- ~/openapi.json`),
- * which is how a spec too large to vendor into `fixtures/` gets measured.
+ * engines get a turn. Paths passed on the command line replace the built-in
+ * documents (`bun run bench:vacuum -- ~/openapi.json`), which is how a spec too
+ * large to vendor into `fixtures/` gets measured; the startup row stays either
+ * way, because the second table is nothing without it.
  */
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
@@ -217,11 +218,12 @@ const run = (): void => {
     return
   }
 
-  // Extra documents named on the command line go last, labelled by filename.
-  // Checked before anything is created, and a missing one is worth stopping
-  // for: it is the document the caller asked about, and quietly benching the
-  // built-ins instead would look like success.
-  const extra = process.argv.slice(2).map((path): Fixture => {
+  // Documents named on the command line replace the built-in ones — you asked
+  // about that spec, not about three others first. Checked before anything is
+  // created, and a missing one stops the run: quietly benching the built-ins
+  // instead would look like success. The startup row always stays, since the
+  // second table is nothing without it.
+  const named = process.argv.slice(2).map((path): Fixture => {
     const resolved = resolve(path)
     if (!existsSync(resolved)) throw new Error(`No such document: ${resolved}`)
     return { label: basename(resolved), path: resolved }
@@ -233,12 +235,15 @@ const run = (): void => {
   const capturePath = join(workspace, 'mjst-report.txt')
   writeFileSync(startupDocument, STARTUP_DOCUMENT)
 
-  const fixtures: Fixture[] = [
-    { label: 'startup (tiny doc)', path: startupDocument, startup: true },
+  const builtIn: Fixture[] = [
     { label: 'petstore (Swagger)', path: join(FIXTURE_DIR, 'swagger-petstore.json') },
     { label: 'digitalocean', path: join(FIXTURE_DIR, 'digitalocean.yaml') },
     { label: 'openai', path: join(FIXTURE_DIR, 'openai.yaml') },
-    ...extra,
+  ]
+
+  const fixtures: Fixture[] = [
+    { label: 'startup (tiny doc)', path: startupDocument, startup: true },
+    ...(named.length > 0 ? named : builtIn),
   ]
 
   const runtime = typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : `Node ${process.version}`
