@@ -1,5 +1,21 @@
 # @amritk/mjst
 
+## 0.21.0
+
+### Minor Changes
+
+- 017bc0c: Add the `mjst markdown <schema>` subcommand: renders a JSON Schema as
+  documentation with `@amritk/generate-markdown`. It writes the prose reference
+  pages by default (`--out-dir`, `--file`, `--title`, `--language`, `--layout`,
+  `--sort`, `--heading-level`), or with `--table` splices the HTML config table
+  into a markdown file between its markers (`--readme`).
+
+### Patch Changes
+
+- Updated dependencies [017bc0c]
+  - @amritk/generate-markdown@0.8.0
+  - @amritk/generate-parsers@0.23.0
+
 ## 0.20.0
 
 ### Minor Changes
