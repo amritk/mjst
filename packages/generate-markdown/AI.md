@@ -10,25 +10,37 @@ Full reference is [README.md](./README.md).
 ## The API
 
 ```ts
-import { generateDocs, generateMarkdown, generateMarkdownFiles } from '@amritk/generate-markdown'
+import {
+  generateConfigTable,
+  generateDocs,
+  generateMarkdown,
+  generateMarkdownFiles,
+} from '@amritk/generate-markdown'
 
 // 1. The README table. Takes NO arguments: reads ./config.schema.json from
 //    process.cwd() and splices the table into ./README.md between markers.
 await generateMarkdown()
 
-// 2. The prose reference, pure: parsed schema in, { filename, content }[] out.
+// 2. The same table, with the paths spelled out. Returns the path it wrote.
+await generateConfigTable({ schemaPath: './settings.schema.json', readmePath: './docs/config.md' })
+
+// 3. The prose reference, pure: parsed schema in, { filename, content }[] out.
 const files = generateMarkdownFiles(schema, { language: 'javascript' })
 
-// 3. The same against the filesystem.
+// 4. The same against the filesystem.
 await generateDocs({ schemaPath: './config.schema.json', outDir: './documentation' })
 ```
+
+Both shapes are also a CLI command — `mjst markdown <schema> --out-dir <dir>`,
+or `mjst markdown <schema> --table --readme <file>`.
 
 ## Gotchas — where agents fail
 
 1. **The two entry points behave nothing alike.** `generateMarkdown()` takes no
-   arguments, does its own I/O, and returns `void`. `generateMarkdownFiles()`
-   takes a schema and returns `GeneratedFile[]` like the other generators in
-   this repo, touching no files.
+   arguments, does its own I/O, and returns `void` — `generateConfigTable(opts)`
+   is that same flow with the paths spelled out. `generateMarkdownFiles()` takes
+   a schema and returns `GeneratedFile[]` like the other generators in this
+   repo, touching no files.
 2. **The table splices between markers.** If `README.md` exists but lacks BOTH
    `<!-- config-table-start -->` and `<!-- config-table-end -->`,
    `generateMarkdown` **throws** rather than overwrite hand-written content. The
@@ -63,7 +75,14 @@ await generateDocs({ schemaPath: './config.schema.json', outDir: './documentatio
    container's shape is read through `items`/`prefixItems`/
    `additionalProperties`/`patternProperties` — including when it sits behind a
    union. Nothing named is dropped.
-8. **Golden output is checked in.** `fixtures/expected/` is compared by
+8. **The table's columns are the schema's to extend.** A root
+   `x-extra-columns` map (`{ "x-scalar-stability": "Stability" }`) adds a column
+   per entry, read off each property under the same keyword — the way to get
+   vendor data into the table without teaching this package the keyword. Root
+   only, rendered after the built-in columns, dropped when no property fills it,
+   and scalar values only (a string, number, or boolean; anything else leaves
+   the cell empty).
+9. **Golden output is checked in.** `fixtures/expected/` is compared by
    `generate-markdown-files.test.ts`. After a deliberate renderer change run
    `bun run generate-fixtures` and read the diff — it is the review.
 

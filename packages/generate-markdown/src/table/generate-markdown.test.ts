@@ -5,6 +5,9 @@ import { generateMarkdown } from '#table/generate-markdown'
 vi.mock('node:fs/promises', () => ({
   readFile: vi.fn(),
   writeFile: vi.fn(),
+  // The write creates the target's parent directory first, so the mocked module
+  // has to answer for `mkdir` too — it is a no-op for the paths here.
+  mkdir: vi.fn(),
 }))
 
 const readFileMock = vi.mocked(readFile)
@@ -1170,7 +1173,7 @@ describe('generate-markdown', () => {
         },
       })
 
-      await expect(generateMarkdown()).rejects.toThrow(/would corrupt README\.md/)
+      await expect(generateMarkdown()).rejects.toThrow(/would corrupt .*README\.md/)
       expect(writeFileMock).not.toHaveBeenCalled()
     })
 
@@ -1185,7 +1188,7 @@ describe('generate-markdown', () => {
         },
       })
 
-      await expect(generateMarkdown()).rejects.toThrow(/would corrupt README\.md/)
+      await expect(generateMarkdown()).rejects.toThrow(/would corrupt .*README\.md/)
       expect(writeFileMock).not.toHaveBeenCalled()
     })
   })

@@ -4,8 +4,9 @@ Contributor guide for AI agents editing **this package**. Repo-wide rules:
 [`../../AGENTS.md`](../../AGENTS.md). Consuming the CLI instead? See
 [`AI.md`](./AI.md).
 
-The `mjst` binary: codegen (default), `lint`, and `compile-api` subcommands. It
-composes the `@amritk/generate-*`, `@amritk/lint`, and `@amritk/api` packages.
+The `mjst` binary: codegen (default), `lint`, `compile-api`, and `markdown`
+subcommands. It composes the `@amritk/generate-*`, `@amritk/lint`, and
+`@amritk/api` packages.
 
 ## Commands
 
@@ -25,8 +26,11 @@ bun run --filter='@amritk/mjst' generate-readme            # after editing confi
   expect them to match.
 - **Flags accept both kebab and camel case**; config-file keys are camelCase.
   CLI flags always override the config file. Keep that precedence.
-- Command dispatch lives in `src/cli.ts`; `lint` and `compile-api` delegate to
-  `src/lint/run.ts` and `src/compile-api/run.ts`.
+- Command dispatch lives in `src/cli.ts`; `lint`, `compile-api`, and `markdown`
+  delegate to `src/lint/run.ts`, `src/compile-api/run.ts`, and
+  `src/markdown/run.ts`. Each subcommand's `run` returns a `RunResult`
+  (exit code + the text it would print) instead of writing to the process
+  streams, so tests can drive it in-process — keep that shape.
 - Guard flag combinations explicitly with actionable errors (e.g.
   `--import-ext ts` + `--build` is rejected) rather than letting them fail
   downstream.

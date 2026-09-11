@@ -1,6 +1,8 @@
 import { codeSpan } from '#helpers/code-span'
 import { displayType } from '#helpers/display-type'
 import { collapseLineEndings, escapeHtml } from '#helpers/escape-html'
+import { extraColumnValue } from '#helpers/extra-column-value'
+import { type ExtraColumn, readExtraColumns } from '#helpers/extra-columns'
 import { formatList, formatValue } from '#helpers/format-value'
 import {
   asArray,
@@ -25,6 +27,12 @@ type Columns = {
   readonly type: boolean
   readonly required: boolean
   readonly default: boolean
+  /**
+   * The columns the schema declared for itself in the root's `x-extra-columns`,
+   * in declaration order, minus the ones no property fills. They render after
+   * the built-in columns.
+   */
+  readonly extra: readonly ExtraColumn[]
 }
 
 /**
@@ -94,11 +102,22 @@ const resolveColumns = (schema: ConfigSchema): Columns => ({
   type: anyProperty(schema.properties, (prop) => displayType(prop).length > 0),
   required: anyRequired(schema),
   default: anyProperty(schema.properties, (prop) => prop.default !== undefined && prop.default !== null),
+  // Declared once on the root, not per nested object: every table in the
+  // document shares one set of columns, so a nested declaration would be a
+  // column the tables above it could not show.
+  extra: readExtraColumns(schema['x-extra-columns']).filter((column) =>
+    anyProperty(schema.properties, (prop) => extraColumnValue(prop, column.key).length > 0),
+  ),
 })
 
 /** The number of rendered columns, used for the full-width detail row's colspan. */
 const columnCount = (columns: Columns): number =>
-  1 + Number(columns.cliFlag) + Number(columns.type) + Number(columns.required) + Number(columns.default)
+  1 +
+  Number(columns.cliFlag) +
+  Number(columns.type) +
+  Number(columns.required) +
+  Number(columns.default) +
+  columns.extra.length
 
 /**
  * Header row shared by the main table and every nested detail table. The
@@ -111,6 +130,9 @@ const renderTableHead = (columns: Columns): string => {
   if (columns.type) headers.push('<th>Type</th>')
   if (columns.required) headers.push('<th align="center">Required</th>')
   if (columns.default) headers.push('<th align="center">Default</th>')
+  // The header is author-supplied text like any other schema string, so it is
+  // escaped before it reaches the markup.
+  for (const column of columns.extra) headers.push(`<th>${escapeHtml(column.label)}</th>`)
   return ['<thead>', '<tr>', ...headers, '</tr>', '</thead>'].join('\n')
 }
 
@@ -200,6 +222,7 @@ const renderRow = (
   }
   if (columns.required) cells.push(`<td align="center">${required.has(name) ? '✅' : ''}</td>`)
   if (columns.default) cells.push(`<td align="center">${prop.default != null ? formatValue(prop.default) : ''}</td>`)
+  for (const column of columns.extra) cells.push(`<td>${extraColumnValue(prop, column.key)}</td>`)
 
   return [
     '<tr>',

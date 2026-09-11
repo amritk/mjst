@@ -56,6 +56,14 @@ export type SchemaProperty = {
   readonly uniqueItems?: boolean
   /** A map-like object documents its value shape here rather than in `properties`. */
   readonly additionalProperties?: SchemaProperty | boolean
+  /**
+   * Any other vendor extension. A column declared in the root's
+   * `x-extra-columns` is read from a keyword this type cannot know about, so the
+   * index signature is what lets a schema written in TypeScript carry
+   * `x-scalar-stability` (or whatever the author's extension is called) on a
+   * property without the object literal being rejected for it.
+   */
+  readonly [key: `x-${string}`]: unknown
 }
 
 /**
@@ -69,4 +77,13 @@ export type ConfigSchema = {
   readonly required?: readonly string[]
   readonly properties?: Readonly<Record<string, SchemaProperty>>
   readonly 'x-doc'?: Readonly<Record<string, unknown>>
+  /**
+   * Extra table columns the schema declares for itself, as keyword → header
+   * label (`{ "x-scalar-stability": "Stability" }`). Each property then carries
+   * that column's value under the same keyword, which is how a schema gets its
+   * own vendor data into the table without this package having to know the
+   * keyword. Declared on the root only: every table in the document — the main
+   * one and each nested detail table — shares one set of columns.
+   */
+  readonly 'x-extra-columns'?: Readonly<Record<string, string>>
 }

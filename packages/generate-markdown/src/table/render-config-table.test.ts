@@ -135,4 +135,85 @@ describe('render-config-table', () => {
     const html = renderConfigTable({ properties: { a: { type: 'object', properties: {} } } })
     expect(html).not.toContain('href="#config-a"')
   })
+
+  // The whole point of `x-extra-columns`: a schema carries its own vendor data
+  // into the table without this package having to know the keyword.
+  it('renders a column declared in x-extra-columns', () => {
+    const html = renderConfigTable({
+      'x-extra-columns': { 'x-scalar-stability': 'Stability' },
+      properties: { host: { type: 'string', 'x-scalar-stability': 'experimental' } },
+    })
+    expect(html).toContain('<th>Stability</th>')
+    expect(html).toContain('<td>experimental</td>')
+    // Property, Type, Stability.
+    expect(detailRow(html)).toContain('colspan="3"')
+  })
+
+  // The extras come last, so adding one never moves the columns a reader
+  // already knows.
+  it('puts the extra columns after the built-in ones', () => {
+    const html = renderConfigTable({
+      'x-extra-columns': { 'x-scalar-stability': 'Stability' },
+      properties: { host: { type: 'string', default: 'localhost', 'x-scalar-stability': 'stable' } },
+    })
+    expect(html.indexOf('<th align="center">Default</th>')).toBeLessThan(html.indexOf('<th>Stability</th>'))
+  })
+
+  it('renders the extra columns in declaration order', () => {
+    const html = renderConfigTable({
+      'x-extra-columns': { 'x-since': 'Since', 'x-scalar-stability': 'Stability' },
+      properties: { host: { type: 'string', 'x-since': '1.2.0', 'x-scalar-stability': 'stable' } },
+    })
+    expect(html.indexOf('<th>Since</th>')).toBeLessThan(html.indexOf('<th>Stability</th>'))
+    expect(html).toContain('<td>1.2.0</td>\n<td>stable</td>')
+  })
+
+  // Same rule as the built-in columns: a column of blanks tells the reader
+  // nothing and costs them width.
+  it('drops a declared column no property fills', () => {
+    const html = renderConfigTable({
+      'x-extra-columns': { 'x-scalar-stability': 'Stability' },
+      properties: { host: { type: 'string' } },
+    })
+    expect(html).not.toContain('Stability')
+    expect(detailRow(html)).toContain('colspan="2"')
+  })
+
+  // The scan spans the whole schema, so every table keeps the same set of
+  // columns — a nested-only value has to keep the column on the main table too,
+  // or the two tables disagree and the detail row's colspan goes with them.
+  it('keeps a column a nested property alone fills', () => {
+    const html = renderConfigTable({
+      'x-extra-columns': { 'x-scalar-stability': 'Stability' },
+      properties: {
+        server: { type: 'object', properties: { host: { type: 'string', 'x-scalar-stability': 'beta' } } },
+      },
+    })
+    // Once for the main table, once for the nested detail table.
+    expect(html.split('<th>Stability</th>')).toHaveLength(3)
+    expect(html).toContain('<td>beta</td>')
+    // The row for `server` itself has nothing to say in the column.
+    expect(html).toContain('<td></td>')
+  })
+
+  // The header is author text like any other, and a raw `<` in it is live
+  // markup.
+  it('escapes an extra column header', () => {
+    const html = renderConfigTable({
+      'x-extra-columns': { 'x-note': '<b>Note</b>' },
+      properties: { host: { type: 'string', 'x-note': 'hi' } },
+    })
+    expect(html).toContain('<th>&lt;b&gt;Note&lt;/b&gt;</th>')
+  })
+
+  // A declaration that is not a keyword to header map is parsed JSON gone
+  // wrong, not a table to render.
+  it('ignores a malformed x-extra-columns declaration', () => {
+    const html = renderConfigTable({
+      'x-extra-columns': 'x-scalar-stability' as never,
+      properties: { host: { type: 'string', 'x-scalar-stability': 'experimental' } },
+    })
+    expect(html).not.toContain('experimental')
+    expect(detailRow(html)).toContain('colspan="2"')
+  })
 })
