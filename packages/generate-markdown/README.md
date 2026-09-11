@@ -599,7 +599,7 @@ On the **root schema**:
 | `layout` | `'headings' \| 'table' \| 'none'` | Default layout for nested properties. Defaults to `headings`. |
 | `sort` | `'schema' \| 'alphabetical'` | Default property order. Defaults to `schema`. |
 | `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
-| `sections` | `{ id, title?, description?, page?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. |
+| `sections` | `{ id, title?, description?, page?, layout?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. Its `layout` takes the same `'headings' \| 'table' \| 'none'` vocabulary a property's does, and defaults to `headings` — the root `layout` is the default for a property's *children*, not for a section. |
 | `example` / `examples` | see below | Code blocks under the page title. |
 
 On a **property** (and on any `$defs` entry a property references):
@@ -662,6 +662,30 @@ constraints, notes and examples, and its own children. A row is one line, so a
 code block never goes in one: a description opening with a fenced or indented
 sample gives the row its first paragraph of prose instead, and the sample itself
 prints below the row with its indentation intact.
+
+A section takes the same `layout`, which is how a `##` grouping becomes one
+overview table instead of a heading per property:
+
+```json
+{
+  "x-doc": {
+    "sections": [{ "id": "properties", "title": "Required properties", "layout": "table" }]
+  },
+  "required": ["organization"],
+  "properties": {
+    "organization": {
+      "type": "string",
+      "description": "Identity of the organization publishing the SDKs.",
+      "x-doc": { "section": "properties", "order": 1 }
+    }
+  }
+}
+```
+
+The table follows the section's own order, so `x-doc.order` puts the required
+options at the top of it. Every property in it still gets the block a row cannot
+hold below the table — the rest of its prose, its notes, examples and children —
+and a section with `layout: 'none'` renders its prose and examples alone.
 
 ### Splitting across files
 

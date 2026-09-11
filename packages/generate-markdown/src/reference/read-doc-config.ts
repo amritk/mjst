@@ -61,6 +61,7 @@ const readSections = (value: unknown): readonly DocSection[] =>
     if (id === undefined) return []
     const title = stringExtension(entry['title'])
     const description = asText(entry['description'])
+    const layout = asOneOf(entry['layout'], LAYOUTS)
     const sort = asOneOf(entry['sort'], SORTS)
     return [
       {
@@ -68,6 +69,7 @@ const readSections = (value: unknown): readonly DocSection[] =>
         ...(title !== undefined && { title }),
         ...(description.length > 0 && { description }),
         page: stringExtension(entry['page']) ?? INDEX_PAGE_ID,
+        ...(layout !== undefined && { layout }),
         ...(sort !== undefined && { sort }),
         examples: [...asExamples(entry['example']), ...asExamples(entry['examples'])],
       },

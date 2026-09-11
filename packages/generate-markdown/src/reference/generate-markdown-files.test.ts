@@ -383,6 +383,147 @@ describe('generate-markdown-files', () => {
     expect(content.indexOf('### apple')).toBeLessThan(content.indexOf('### zebra'))
   })
 
+  it('renders a section as one table when it asks for one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Config',
+        'x-doc': { sections: [{ id: 'props', title: 'Required properties', layout: 'table' }] },
+        required: ['organization'],
+        properties: {
+          organization: {
+            type: 'string',
+            description: 'Identity of the organization publishing the SDKs.',
+            'x-doc': { section: 'props' },
+          },
+          resources: {
+            type: 'string',
+            description: 'Resource tree that drives the generated client shape.',
+            'x-doc': { section: 'props' },
+          },
+        },
+      }),
+    )
+    expect(content).toBe(
+      [
+        '# Config',
+        '',
+        '## Required properties',
+        '',
+        '| Property | Type | Required | Description |',
+        '| --- | --- | --- | --- |',
+        '| `organization` | `string` | ✅ | Identity of the organization publishing the SDKs. |',
+        '| `resources` | `string` |  | Resource tree that drives the generated client shape. |',
+        '',
+      ].join('\n'),
+    )
+  })
+
+  // Reusing `renderProperty`'s own "documented elsewhere" test here would drop
+  // every one of these blocks: it counts any property naming a section as
+  // documented somewhere else, and each of these names the section it is in.
+  it('keeps the blocks a section table cannot hold below it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { sections: [{ id: 'props', title: 'Properties', layout: 'table' }] },
+        properties: {
+          organization: {
+            type: 'object',
+            description: 'Who is publishing.\n\nThe name is what shows up in the generated README.',
+            'x-doc': { section: 'props', note: 'Renaming it renames the packages.' },
+            properties: { name: { type: 'string' } },
+          },
+          logLevel: {
+            enum: ['debug', 'info'],
+            description: 'How much to say.',
+            'x-doc': { section: 'props', example: { value: { logLevel: 'debug' } } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| `organization` | `object` | Who is publishing. |')
+    // The first paragraph is the row's; the rest of the prose, the note and the
+    // children have appeared nowhere else.
+    expect(content).toContain('### organization')
+    expect(content).toContain('The name is what shows up in the generated README.')
+    expect(content).toContain('> Renaming it renames the packages.')
+    expect(content).toContain('#### name')
+    expect(content).toContain('### logLevel')
+    expect(content).toContain('```json\n{\n  "logLevel": "debug"\n}\n```')
+  })
+
+  it('leaves a section table property with nothing more to say as a row alone', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { sections: [{ id: 'props', title: 'Properties', layout: 'table' }] },
+        properties: { name: { type: 'string', description: 'The name.', 'x-doc': { section: 'props' } } },
+      }),
+    )
+    expect(content).not.toContain('### name')
+  })
+
+  // A property cannot both name a section and name a page the section does not
+  // render on — `buildPages` refuses that outright — so a row leaves the page
+  // through a child that moved, and the table under it links across.
+  it('links a section table across pages when a child moved to one', () => {
+    const files = generateMarkdownFiles({
+      'x-doc': {
+        layout: 'table',
+        sections: [{ id: 'props', title: 'Properties', layout: 'table' }],
+        pages: [{ id: 'ts', file: 'targets/typescript.md', title: 'TypeScript' }],
+      },
+      properties: {
+        targets: {
+          type: 'object',
+          description: 'What to generate.',
+          'x-doc': { section: 'props' },
+          properties: {
+            typescript: { type: 'object', description: 'TypeScript target.', 'x-doc': { page: 'ts' } },
+          },
+        },
+      },
+    })
+    expect(files.map((file) => file.filename)).toEqual(['index.md', 'targets/typescript.md'])
+    expect(files[0]?.content).toContain('| `targets` | `object` | What to generate. |')
+    expect(files[0]?.content).toContain('| [`typescript`](targets/typescript.md) | `object` | TypeScript target. |')
+    expect(files[1]?.content).toContain('# TypeScript')
+  })
+
+  it('renders a section as headings when its layout is missing or junk', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': {
+          // A root `table` layout is the default for a *property's* children. A
+          // section takes its own layout or none at all, so neither of these
+          // groupings collapses into a table.
+          layout: 'table',
+          sections: [
+            { id: 'plain', title: 'Plain' },
+            { id: 'junk', title: 'Junk', layout: 'grid' },
+          ],
+        },
+        properties: {
+          a: { type: 'string', 'x-doc': { section: 'plain' } },
+          b: { type: 'string', 'x-doc': { section: 'junk' } },
+        },
+      }),
+    )
+    expect(content).toContain('### a')
+    expect(content).toContain('### b')
+    expect(content).not.toContain('| Property |')
+  })
+
+  it('renders only the prose of a section whose layout is none', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': {
+          sections: [{ id: 'props', title: 'Properties', description: 'Every option is a string.', layout: 'none' }],
+        },
+        properties: { a: { type: 'string', 'x-doc': { section: 'props' } } },
+      }),
+    )
+    expect(content).toBe('## Properties\n\nEvery option is a string.\n')
+  })
+
   it('splits a nested property into its own page', () => {
     const files = generateMarkdownFiles({
       title: 'Configuration',

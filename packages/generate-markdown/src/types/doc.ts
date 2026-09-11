@@ -108,6 +108,17 @@ export type DocSection = {
   readonly description?: string
   /** Page this section (and every property in it) renders on. */
   readonly page: string
+  /**
+   * How the section's properties are documented — `headings` (the default) for
+   * one heading each, `table` for a single markdown table under the section
+   * heading, `none` for the prose and examples alone.
+   *
+   * Unset means `headings` rather than the config's {@link DocConfig.layout},
+   * which is the default for a *property's* children: a schema that asks for
+   * nested option bags as tables is not asking for its `##` groupings to
+   * collapse into one.
+   */
+  readonly layout?: DocLayout
   readonly sort?: DocSort
   readonly examples: readonly DocExample[]
 }
