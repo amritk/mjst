@@ -1,5 +1,87 @@
 # @amritk/mjst
 
+## 0.20.0
+
+### Minor Changes
+
+- c12bcf3: Key channel contracts on the wire tag a payload declares, not the AsyncAPI message name.
+
+  **Breaking:** `stripDiscriminator(payload, discriminator, messageName)` is now
+  `stripDiscriminator(payload, discriminator)` and returns `{ schema, tag? }` — the
+  message name is no longer an input, because the payload's own `const` is the
+  better answer. Contract keys change for any document whose message names differ
+  from its wire tags.
+
+  A payload usually states its tag itself (`type: { const: 'bot_added' }`), and
+  that value is what arrives on the wire. Keying on the message name instead
+  emitted contracts listening for frames that never come, and skipped every
+  message whose name disagreed — the AsyncAPI _name_ is a document-authoring
+  handle that 2.x messages inside a `oneOf` often do not have at all. The name is
+  now only the fallback for a payload that pins nothing. On the vendored Slack RTM
+  document, `mjst --input asyncapi --message-contracts` goes from 0 of 47 messages
+  (2.6) and 3 of 47 (3.0) to 45 of 47 in both majors; the two dropped are genuine
+  collisions, where Slack declares two messages for one wire tag.
+
+  Also refused now, with a clear reason: a payload pinning its tag to a non-string,
+  which no frame could ever be routed by.
+
+- 15ad934: Let generated validators enforce `format`.
+
+  The generator treated `format` as an annotation with no way to say otherwise,
+  while the interpreter run as `@amritk/api` runs it enforces them — so swapping
+  build-time validators into an API built on runtime ones silently loosened it.
+  `buildValidatorSchema` and the CLI's `--formats` now take `'all'` or a list, and
+  generated code checks exactly those, in `validateX` and in the flat `isX` alike.
+  Off by default: `format` stays an annotation, which is 2020-12's own reading.
+
+  The checks are emitted into a `formats.ts` beside the validators — only the ones
+  the schema names — because generated output is dependency-free and cannot import
+  the interpreter's table. The two implementations are run against each other over
+  the official suite's whole optional/format corpus and required to agree on every
+  case.
+
+- c12bcf3: Let a ruleset file extend a built-in lint preset.
+
+  `mjst lint` only consulted its preset table for a literal `--ruleset asyncapi`.
+  A `.lint.yaml` saying `extends: [asyncapi]` — discovered automatically, or passed
+  as `--ruleset ./.lint.yaml` — failed with `Cannot resolve extended ruleset
+"asyncapi"`, so there was no way to layer project rules on top of a preset from
+  a config file.
+
+  Both presets (`asyncapi`, `oas`) and both aliases (`loupe:`, `spectral:`) now
+  resolve through either path, and the preset's own functions and format detectors
+  come with them, which a definition alone cannot carry. Relative `extends` and
+  custom `functions` still resolve next to the ruleset file. A ruleset extending
+  _both_ presets is refused with a message saying why, instead of a resolution
+  failure from inside the resolver.
+
+### Patch Changes
+
+- c12bcf3: Say in each generated channel contract that headers were not projected.
+
+  `--message-contracts` writes payloads only: an `@amritk/api` contract describes
+  WebSocket frames, which carry no headers of their own. A message's `headers`
+  schema still gets its own generated tree, so a module for a channel that
+  declares any now names those messages and points at `<message>-headers/` rather
+  than leaving the omission to be discovered.
+
+- Updated dependencies [c12bcf3]
+- Updated dependencies [c12bcf3]
+- Updated dependencies [c12bcf3]
+- Updated dependencies [15ad934]
+- Updated dependencies [15ad934]
+- Updated dependencies [c12bcf3]
+- Updated dependencies [15ad934]
+  - @amritk/asyncapi@0.3.0
+  - @amritk/generate-validators@0.17.0
+  - @amritk/generate-parsers@0.23.0
+  - @amritk/helpers@0.21.0
+  - @amritk/lint@0.6.0
+  - @amritk/api@0.16.4
+  - @amritk/adapters@0.6.2
+  - @amritk/generate-examples@0.8.4
+  - @amritk/resolve-refs@0.7.1
+
 ## 0.19.0
 
 ### Minor Changes

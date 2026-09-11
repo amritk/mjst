@@ -1,5 +1,114 @@
 # @amritk/runtime-validators
 
+## 0.14.0
+
+### Minor Changes
+
+- 15ad934: Add `maxErrors`, and cap error collection by default.
+
+  An error-collecting run recorded one object per failure with no ceiling, so a
+  200,000-element array of the wrong type produced 200,000 error objects — about
+  7.6 MB of JSON. `maxErrors` (default 1000) closes the one hole in a limit set
+  that already covered depth, work and unsafe patterns.
+
+  Unlike the other limits it does not throw: the run has reached a verdict, and the
+  cap only says how many errors are worth carrying back. Every error already
+  recorded is a real failure, so the walk stops once the list is full — the
+  200,000-element case now takes 2 ms instead of 43. Pass `Infinity` for the old
+  behaviour.
+
+- 15ad934: Refuse a `pattern` that does not compile when the validator is built.
+
+  `pattern: "("` surfaced as a bare `SyntaxError` thrown out of the validator the
+  first time a value happened to reach that node, so a broken pattern under a
+  rarely-taken branch worked until one day it did not. The build-time walk that
+  already screens every pattern for catastrophic backtracking now compiles it too,
+  covering the patterns nothing reaches and naming the problem where it can be
+  understood. A 50-pattern schema still goes from schema to first result in 0.13 ms.
+
+- 15ad934: Add `strict` and `checkSchema`, so a schema that says nothing no longer does so quietly.
+
+  `{ required: 'name' }` requires nothing, `{ maxlength: 5 }` bounds nothing, and
+  `{ properties: 'nope' }` describes nothing — each a correct reading of the
+  specification, and each silent. `checkSchema` reports six kinds of problem: a
+  keyword carrying the wrong kind of value, a keyword nobody recognizes, a `format`
+  nobody defines, a value that makes its keyword meaningless (`enum: []`,
+  `multipleOf: 0`), a constraint the node's own `type` has already ruled out, and a
+  closed object requiring a property it does not declare.
+
+  `{ strict: true }` turns those into a refusal to build, throwing a `SchemaError`
+  carrying the findings. Off by default, because the permissive reading is the
+  specification's and an unknown keyword in someone else's document is their
+  extension rather than your typo.
+
+- 15ad934: Split `validate` into a hot guard and a cold error-collecting half, and explain a failing `anyOf`/`oneOf`.
+
+  Collecting errors is not free even when there are none: the error-mode step
+  carries the path string it would need to report a failure and cannot
+  short-circuit. `validate` and `assert` now run the boolean guard first and only
+  fall through to the error-collecting half once something has actually failed —
+  the split `@amritk/generate-validators` already emits. Valid input gets 1.75-2.4x
+  on the bench schemas; invalid input pays a second walk, which is the right way
+  round.
+
+  Separately, "must match a schema in anyOf" names no field and no reason, and on a
+  discriminated union — where the value plainly is one of the variants and one field
+  of it is wrong — that is the least useful thing a validator can say. On failure
+  each branch is now asked why it did not match, and when every branch but one was
+  rejected on the value's identity (a `const` or `enum` on one of its own
+  properties) that one's errors are added under the combinator's own. A 24-variant
+  union with a bad payload now reports `must be integer at /payload/b` instead of a
+  single error pointing at the root.
+
+- 15ad934: Add `customFormats`, for format checkers of your own.
+
+  `formats` was an allow-list over the built-ins and nothing else, so a schema
+  saying `format: 'phone'` could not be enforced at all. `customFormats` takes a
+  `RegExp` or a predicate for a string format, and `{ type: 'number', validate }`
+  for one over numbers. Registering a checker is the opt-in, so a custom format
+  does not additionally have to be named in `formats`; a definition also replaces a
+  built-in of the same name, which is how to tighten `email` or loosen `uri`
+  without forking the package.
+
+- 15ad934: Give every validation error its keyword and that keyword's own values.
+
+  An error was `{ message, path }` and nothing else, which makes it printable and
+  little more: a caller could not ask whether a failure was a missing field or a
+  malformed one without matching on English text, could not translate a message,
+  and could not rebuild one in their own domain's language.
+
+  Every error now also carries `keyword` — the JSON Schema keyword that rejected
+  the value — and `params`, that keyword's own values as far as they explain the
+  failure: `{ limit }` for a bound, `{ missingProperty }` for `required`,
+  `{ additionalProperty }` for an undeclared key, `{ allowedValues }` for an
+  `enum`. Both are always present, so neither needs guarding, and the names follow
+  Ajv's so an existing error-rendering table works unchanged.
+
+  Generated validators emit the same fields, so an error from a generated validator
+  and one from the interpreter can be handled by the same code. All of it lands on
+  the cold path: the `isX` guard and the hot half of `validateX` never build an
+  error object.
+
+- 15ad934: Validate formats against their grammars, and measure it against the official suite.
+
+  `date` accepted `2020-02-30` and `1998-02-29`, `email` accepted `.test@`, `te..st@`
+  and `test.@`, `uri-reference` accepted `\\WINDOWS\fileshare`, and the OpenAPI
+  numeric formats (`int32`, `int64`, `float`, `double`) were not checked at all —
+  `format` was only ever consulted for strings. Where a pattern cannot answer the
+  question the check now does the arithmetic (the calendar day, the leap-second
+  hour); where the answer is a grammar it is assembled from the RFC's own
+  productions (RFC 3986/3987 for `uri`/`iri`, RFC 6570 for `uri-template`, RFC 3339
+  Appendix A's nested form for `duration`, which is why `P1Y2D` is not one).
+
+  New formats: `int32`, `int64`, `float`, `double`, `byte`, `binary`, `password`,
+  `url`, `iso-time`, `iso-date-time`, `json-pointer-uri-fragment`.
+
+  The suite's optional/format corpus (861 cases) is now vendored and run on every
+  build with an exact expected-failure list: 786/861 pass, against Ajv's 729/861 on
+  the same corpus. Where the suite and Ajv disagree the suite wins, which costs
+  agreement with Ajv on eight values (a hostname's trailing dot, four `time` offset
+  rules, two `duration` nestings, a non-numeric port).
+
 ## 0.13.1
 
 ### Patch Changes
