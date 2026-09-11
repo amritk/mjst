@@ -1,5 +1,63 @@
 # @amritk/asyncapi
 
+## 0.3.0
+
+### Minor Changes
+
+- c12bcf3: Key channel contracts on the wire tag a payload declares, not the AsyncAPI message name.
+
+  **Breaking:** `stripDiscriminator(payload, discriminator, messageName)` is now
+  `stripDiscriminator(payload, discriminator)` and returns `{ schema, tag? }` — the
+  message name is no longer an input, because the payload's own `const` is the
+  better answer. Contract keys change for any document whose message names differ
+  from its wire tags.
+
+  A payload usually states its tag itself (`type: { const: 'bot_added' }`), and
+  that value is what arrives on the wire. Keying on the message name instead
+  emitted contracts listening for frames that never come, and skipped every
+  message whose name disagreed — the AsyncAPI _name_ is a document-authoring
+  handle that 2.x messages inside a `oneOf` often do not have at all. The name is
+  now only the fallback for a payload that pins nothing. On the vendored Slack RTM
+  document, `mjst --input asyncapi --message-contracts` goes from 0 of 47 messages
+  (2.6) and 3 of 47 (3.0) to 45 of 47 in both majors; the two dropped are genuine
+  collisions, where Slack declares two messages for one wire tag.
+
+  Also refused now, with a clear reason: a payload pinning its tag to a non-string,
+  which no frame could ever be routed by.
+
+- c12bcf3: Convert Avro message payloads instead of skipping them.
+
+  An `application/vnd.apache.avro` `schemaFormat` (bare, `+json` or `+yaml`) is now
+  handed to `@amritk/adapters` and reaches the generators as ordinary JSON Schema
+  2020-12, so `mjst --input asyncapi` produces types and parsers for an Avro-typed
+  channel. The converter was already in the monorepo; only the wiring was missing.
+
+  `extractAsyncApi(document, { avroEncoding })` picks which JSON shape the result
+  describes: `'json'` (the default) is the decoded object an application works
+  with, `'avro-json'` is the spec's wire encoding with its branch-tagged union
+  wrappers. A schema the converter rejects becomes an issue, like every other
+  per-message problem here — it is never thrown.
+
+  `classifySchemaFormat` gains an `'avro'` family, so it no longer reports Avro as
+  `'unsupported'`. A `$ref` from a JSON Schema payload into an Avro _component_
+  still degrades to an unconstrained schema with an issue.
+
+### Patch Changes
+
+- c12bcf3: Read an AsyncAPI 3.0 Multi Format Schema Object the way the spec does.
+
+  `unwrapMultiFormat` required both `schemaFormat` and `schema` to be present, but
+  `schemaFormat` is optional on the wrapper and defaults to the AsyncAPI dialect —
+  the 3.0 meta-schema decides on `schema` alone. A payload written as
+  `{ schema: { ... } }` was therefore read as a schema whose only keyword was one
+  no dialect defines, and the message generated an empty type. A node with a
+  `schemaFormat` but no `schema` is still a plain Schema Object, so nothing that
+  worked before changes.
+
+- Updated dependencies [15ad934]
+  - @amritk/helpers@0.21.0
+  - @amritk/adapters@0.6.2
+
 ## 0.2.0
 
 ### Minor Changes

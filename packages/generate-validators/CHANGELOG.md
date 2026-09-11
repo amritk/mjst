@@ -1,5 +1,65 @@
 # @amritk/generate-validators
 
+## 0.17.0
+
+### Minor Changes
+
+- 15ad934: Let generated validators enforce `format`.
+
+  The generator treated `format` as an annotation with no way to say otherwise,
+  while the interpreter run as `@amritk/api` runs it enforces them — so swapping
+  build-time validators into an API built on runtime ones silently loosened it.
+  `buildValidatorSchema` and the CLI's `--formats` now take `'all'` or a list, and
+  generated code checks exactly those, in `validateX` and in the flat `isX` alike.
+  Off by default: `format` stays an annotation, which is 2020-12's own reading.
+
+  The checks are emitted into a `formats.ts` beside the validators — only the ones
+  the schema names — because generated output is dependency-free and cannot import
+  the interpreter's table. The two implementations are run against each other over
+  the official suite's whole optional/format corpus and required to agree on every
+  case.
+
+- 15ad934: Name a generated file after every part of its ref that names something.
+
+  A `$ref` was named after its last segment alone, so two definitions in different
+  parents — `#/$defs/user/$defs/meta` and `#/$defs/order/$defs/meta`, or a `stuff`
+  in each of two embedded resources — both wanted `meta.ts`, and generation refused
+  rather than emit a silently wrong type. An ordinary shape in a real document
+  stopped the build with an instruction to go and rename one of them.
+
+  The name now includes the base URI a relative ref points at and the pointer's own
+  definition names: `user-meta`, `second-stuff`. Only genuinely nested definitions
+  qualify — a segment counts when a container key (`$defs`, `definitions`,
+  `properties`) introduced it — so `#/components/schemas/UserProfile` is still
+  `user-profile` and the refs almost every document writes are unchanged.
+
+  Conformance improves as a result: `generate-validators` 1274 -> 1276 / 1281,
+  `generate-parsers` 1240 -> 1242 / 1281.
+
+- 15ad934: Give every validation error its keyword and that keyword's own values.
+
+  An error was `{ message, path }` and nothing else, which makes it printable and
+  little more: a caller could not ask whether a failure was a missing field or a
+  malformed one without matching on English text, could not translate a message,
+  and could not rebuild one in their own domain's language.
+
+  Every error now also carries `keyword` — the JSON Schema keyword that rejected
+  the value — and `params`, that keyword's own values as far as they explain the
+  failure: `{ limit }` for a bound, `{ missingProperty }` for `required`,
+  `{ additionalProperty }` for an undeclared key, `{ allowedValues }` for an
+  `enum`. Both are always present, so neither needs guarding, and the names follow
+  Ajv's so an existing error-rendering table works unchanged.
+
+  Generated validators emit the same fields, so an error from a generated validator
+  and one from the interpreter can be handled by the same code. All of it lands on
+  the cold path: the `isX` guard and the hot half of `validateX` never build an
+  error object.
+
+### Patch Changes
+
+- Updated dependencies [15ad934]
+  - @amritk/helpers@0.21.0
+
 ## 0.16.1
 
 ### Patch Changes
