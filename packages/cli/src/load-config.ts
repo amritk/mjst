@@ -26,6 +26,10 @@ const isStringArray = (value: unknown): value is string[] =>
  * guards below are only here to narrow the types for TypeScript — by the time we
  * reach them, nothing can fail them.
  */
+/** `formats` from a config file: `'all'`, or an array of format names. */
+const isFormatsOption = (value: unknown): value is 'all' | readonly string[] =>
+  value === 'all' || (Array.isArray(value) && value.every((name) => typeof name === 'string'))
+
 export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>> => {
   const absolutePath = resolve(configPath)
   const raw = await readFile(absolutePath, 'utf-8').catch((error: NodeJS.ErrnoException) => {
@@ -63,6 +67,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['caseInsensitive'] === 'boolean' && { caseInsensitive: obj['caseInsensitive'] }),
     ...(typeof obj['readonly'] === 'boolean' && { readonly: obj['readonly'] }),
     ...(isUnknownKeysStrategy(obj['unknownKeys']) && { unknownKeys: obj['unknownKeys'] }),
+    ...(isFormatsOption(obj['formats']) && { formats: obj['formats'] }),
     ...(isHelpersMode(obj['helpers']) && { helpers: obj['helpers'] }),
     ...(isImportExt(obj['importExt']) && { importExt: obj['importExt'] }),
     ...(typeof obj['rootType'] === 'string' && { rootType: obj['rootType'] }),

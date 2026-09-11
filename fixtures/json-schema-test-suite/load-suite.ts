@@ -77,8 +77,22 @@ type SuiteGroup = {
  * See `README.md` for what is vendored and why. Files are read from disk on each
  * call rather than imported, so a refreshed fixture needs no code change.
  */
-export const loadSuiteCases = (draft = 'draft2020-12'): SuiteCase[] => {
-  const dir = join(SUITE_DIR, draft)
+export const loadSuiteCases = (draft = 'draft2020-12'): SuiteCase[] => readSuiteDir(join(SUITE_DIR, draft))
+
+/**
+ * Loads the suite's **optional** `format` cases — the corpus that decides
+ * whether a `format` is validated correctly rather than merely recognized.
+ *
+ * They are separate from {@link loadSuiteCases} because the suite files them
+ * that way: `format` assertion is optional behaviour, and an implementation that
+ * treats every format as an annotation is still conformant. `@amritk/runtime-validators`
+ * opts in (`{ formats: 'all' }`), so it is held to them.
+ */
+export const loadSuiteFormatCases = (draft = 'draft2020-12'): SuiteCase[] =>
+  readSuiteDir(join(SUITE_DIR, draft, 'optional', 'format'))
+
+/** Flattens every `.json` group file directly under `dir` into individual cases. */
+const readSuiteDir = (dir: string): SuiteCase[] => {
   const cases: SuiteCase[] = []
   for (const file of readdirSync(dir).sort()) {
     if (!file.endsWith('.json')) continue

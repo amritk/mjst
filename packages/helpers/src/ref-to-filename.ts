@@ -121,11 +121,56 @@ const uriRefToFilename = (uri: string): string => {
 }
 
 /**
+ * Keys that hold definitions rather than being one. A segment is dropped from a
+ * derived name when it is one of these, and a segment that *follows* one is a
+ * definition's own name.
+ */
+const CONTAINER_SEGMENTS = new Set(['$defs', 'definitions', 'properties'])
+
+/**
+ * The parts of a JSON Pointer that name something, outermost first.
+ *
+ * The last one is always kept — it is what the ref is about. An earlier one is
+ * kept only when a container key introduced it, which is what separates a
+ * genuinely nested definition (`#/$defs/user/$defs/meta`, where `user` names one)
+ * from a path that merely runs through some object keys on its way in
+ * (`#/components/schemas/UserProfile`, where `components` and `schemas` name
+ * nothing and the ref is simply about `UserProfile`).
+ */
+const pointerNameParts = (pointer: string): string[] => {
+  const segments = pointer.split('/').filter((segment) => segment !== '')
+  const named = segments
+    .map((segment, index) => ({ segment, nested: index > 0 && CONTAINER_SEGMENTS.has(segments[index - 1] as string) }))
+    .filter(({ segment }) => !CONTAINER_SEGMENTS.has(segment))
+
+  return named.filter((part, index) => part.nested || index === named.length - 1).map(({ segment }) => segment)
+}
+
+/**
  * Converts a JSON Schema $ref to a filename.
  *
- * Handles three ref forms:
+ * The name is built from every part of the ref that names something: the base
+ * URI a relative ref points at, then the pointer's own definition names. For the
+ * refs almost every document writes — `#/$defs/contact`,
+ * `#/components/schemas/UserProfile`, `#named` — there is exactly one, and the
+ * name is what it has always been.
+ *
+ * Deriving it from the whole ref is what makes the name a *pure function of the
+ * ref*, and that is load-bearing rather than tidy. Two definitions in different
+ * parents (`#/$defs/user/$defs/meta` and `#/$defs/order/$defs/meta`) or in
+ * different embedded resources (`first#/$defs/stuff` and `second#/$defs/stuff`)
+ * are an ordinary shape in a real document, and naming both after their last
+ * segment made them one file — so generation refused rather than emit a silently
+ * wrong type. Resolving that by *renaming* whichever was reached second would
+ * need every emitter to agree on the walk order, since each turns a `$ref` into
+ * an import name on its own; deriving a distinct name from the ref itself means
+ * they agree without having to coordinate at all.
+ *
+ * Handles these ref forms:
  * - Internal `#/$defs/contact` → `contact`
  * - Internal `#/definitions/ServerVariable` → `server-variable`
+ * - Nested `#/$defs/user/$defs/meta` → `user-meta`
+ * - Relative-base `second#/$defs/stuff` → `second-stuff`
  * - URI `http://example.com/definitions/3.1.0/channel.json` → `channel`
  * - URI with fragment `http://example.com/channel.json#/definitions/queue` → `channel-queue`
  *
@@ -136,8 +181,10 @@ const uriRefToFilename = (uri: string): string => {
  * ```ts
  * refToFilename('#/$defs/contact') // 'contact'
  * refToFilename('#/$defs/server-variable') // 'server-variable'
- * refToFilename('#/definitions/ServerVariable') // 'server-variable'
  * refToFilename('#/definitions/APIKeySecurityScheme') // 'api-key-security-scheme'
+ * refToFilename('#/components/schemas/UserProfile') // 'user-profile'
+ * refToFilename('#/$defs/user/$defs/meta') // 'user-meta'
+ * refToFilename('second#/$defs/stuff') // 'second-stuff'
  * refToFilename('http://asyncapi.com/definitions/3.1.0/channel.json') // 'channel'
  * refToFilename('#named') // 'named' — a plain `$anchor` ref
  * ```
@@ -148,15 +195,18 @@ export const refToFilename = (ref: string): string => {
     return normalizeFilename(uriRefToFilename(ref), ref)
   }
 
-  // Internal ref — extract the last segment after the last /
-  const segments = ref.split('/')
-  // Non-null assertion is safe here: split always returns at least one element
-  let filename = segments[segments.length - 1] as string
+  const hashIndex = ref.indexOf('#')
+  const base = hashIndex === -1 ? '' : ref.slice(0, hashIndex)
+  const pointer = hashIndex === -1 ? ref : ref.slice(hashIndex + 1)
+
+  // A relative base names a document, so it loses its extension the same way a
+  // URI ref's does — `a.json#/$defs/t` is `a-t`, not `a.json-t`.
+  const baseParts = base
+    .replace(/\.json$/, '')
+    .split('/')
+    .filter((segment) => segment !== '')
+  const parts = [...baseParts, ...pointerNameParts(pointer)]
 
   // Normalise PascalCase/camelCase keys (e.g. from draft-07 "definitions") to kebab-case
-  if (/[A-Z]/.test(filename)) {
-    filename = toKebabCase(filename)
-  }
-
-  return normalizeFilename(filename, ref)
+  return normalizeFilename(parts.map((part) => (/[A-Z]/.test(part) ? toKebabCase(part) : part)).join('-'), ref)
 }

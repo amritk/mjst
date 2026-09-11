@@ -83,7 +83,7 @@ describe('generate-validator-function', () => {
     expect(validate({ s: 'abcde' })).toBe(true)
     expect(validate({ s: 'ab' })).toEqual({
       valid: false,
-      errors: [{ message: 'must have at least 5 characters', path: '/s' }],
+      errors: [{ message: 'must have at least 5 characters', path: '/s', keyword: 'minLength', params: { limit: 5 } }],
     })
   })
 
@@ -101,8 +101,8 @@ describe('generate-validator-function', () => {
     expect(validate({ 'a`b': 1, 'p${x}z': 2 })).toEqual({
       valid: false,
       errors: [
-        { message: 'must be string', path: '/a`b' },
-        { message: 'must be string', path: '/p${x}z' },
+        { message: 'must be string', path: '/a`b', keyword: 'type', params: { type: 'string' } },
+        { message: 'must be string', path: '/p${x}z', keyword: 'type', params: { type: 'string' } },
       ],
     })
   })
@@ -123,9 +123,9 @@ describe('generate-validator-function', () => {
     expect(validate(JSON.parse('{"foo\\rbar":"x","foo\\nbar":"x","tab\\tx":"x"}'))).toEqual({
       valid: false,
       errors: [
-        { message: 'must be number', path: '/foo\rbar' },
-        { message: 'must be number', path: '/foo\nbar' },
-        { message: 'must be number', path: '/tab\tx' },
+        { message: 'must be number', path: '/foo\rbar', keyword: 'type', params: { type: 'number' } },
+        { message: 'must be number', path: '/foo\nbar', keyword: 'type', params: { type: 'number' } },
+        { message: 'must be number', path: '/tab\tx', keyword: 'type', params: { type: 'number' } },
       ],
     })
   })
@@ -138,7 +138,7 @@ describe('generate-validator-function', () => {
     const validate = evalValidator(generateValidatorFunction(schema, 'Ptr'))
     expect(validate({ 'a/b~c': 1 })).toEqual({
       valid: false,
-      errors: [{ message: 'must be string', path: '/a~1b~0c' }],
+      errors: [{ message: 'must be string', path: '/a~1b~0c', keyword: 'type', params: { type: 'string' } }],
     })
   })
 
@@ -475,7 +475,7 @@ describe('generate-validator-function', () => {
     expect(validate({ profile: { name: 'Ada', age: 36 } })).toBe(true)
     expect(validate({ profile: { name: 42 } })).toEqual({
       valid: false,
-      errors: [{ message: 'must be string', path: '/profile/name' }],
+      errors: [{ message: 'must be string', path: '/profile/name', keyword: 'type', params: { type: 'string' } }],
     })
   })
 
@@ -495,7 +495,14 @@ describe('generate-validator-function', () => {
 
     expect(validate({ profile: {} })).toEqual({
       valid: false,
-      errors: [{ message: "must have required property 'name'", path: '/profile' }],
+      errors: [
+        {
+          message: "must have required property 'name'",
+          path: '/profile',
+          keyword: 'required',
+          params: { missingProperty: 'name' },
+        },
+      ],
     })
   })
 
@@ -522,7 +529,7 @@ describe('generate-validator-function', () => {
     expect(validate({ outer: { inner: { leaf: true } } })).toBe(true)
     expect(validate({ outer: { inner: { leaf: 'no' } } })).toEqual({
       valid: false,
-      errors: [{ message: 'must be boolean', path: '/outer/inner/leaf' }],
+      errors: [{ message: 'must be boolean', path: '/outer/inner/leaf', keyword: 'type', params: { type: 'boolean' } }],
     })
   })
 
@@ -538,7 +545,14 @@ describe('generate-validator-function', () => {
     expect(validate({ id: 1 })).toBe(true)
     expect(validate({ id: 1, extra: 'nope' })).toEqual({
       valid: false,
-      errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+      errors: [
+        {
+          message: 'must NOT have additional properties',
+          path: '/extra',
+          keyword: 'additionalProperties',
+          params: { additionalProperty: 'extra' },
+        },
+      ],
     })
   })
 
@@ -573,7 +587,14 @@ describe('generate-validator-function', () => {
     expect(validate({})).toBe(true)
     expect(validate({ extra: 1 })).toEqual({
       valid: false,
-      errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+      errors: [
+        {
+          message: 'must NOT have additional properties',
+          path: '/extra',
+          keyword: 'additionalProperties',
+          params: { additionalProperty: 'extra' },
+        },
+      ],
     })
   })
 
@@ -594,7 +615,14 @@ describe('generate-validator-function', () => {
     expect(validate({ nested: { a: 'ok' } })).toBe(true)
     expect(validate({ nested: { a: 'ok', b: 'extra' } })).toEqual({
       valid: false,
-      errors: [{ message: 'must NOT have additional properties', path: '/nested/b' }],
+      errors: [
+        {
+          message: 'must NOT have additional properties',
+          path: '/nested/b',
+          keyword: 'additionalProperties',
+          params: { additionalProperty: 'b' },
+        },
+      ],
     })
   })
 
@@ -626,7 +654,14 @@ describe('generate-validator-function', () => {
     expect(validate({ id: 1, 'x-foo': 'ok', 'x-bar': 'also ok' })).toBe(true)
     expect(validate({ id: 1, nope: 'bad' })).toEqual({
       valid: false,
-      errors: [{ message: 'must NOT have additional properties', path: '/nope' }],
+      errors: [
+        {
+          message: 'must NOT have additional properties',
+          path: '/nope',
+          keyword: 'additionalProperties',
+          params: { additionalProperty: 'nope' },
+        },
+      ],
     })
   })
 
@@ -645,7 +680,14 @@ describe('generate-validator-function', () => {
     expect(validate({ id: 1, 'x-foo': 'ok', item_count: 3 })).toBe(true)
     expect(validate({ id: 1, stray: true })).toEqual({
       valid: false,
-      errors: [{ message: 'must NOT have additional properties', path: '/stray' }],
+      errors: [
+        {
+          message: 'must NOT have additional properties',
+          path: '/stray',
+          keyword: 'additionalProperties',
+          params: { additionalProperty: 'stray' },
+        },
+      ],
     })
   })
 
@@ -667,7 +709,14 @@ describe('generate-validator-function', () => {
     expect(validate({ nested: { a: 'ok', 'x-meta': 'fine' } })).toBe(true)
     expect(validate({ nested: { a: 'ok', b: 'extra' } })).toEqual({
       valid: false,
-      errors: [{ message: 'must NOT have additional properties', path: '/nested/b' }],
+      errors: [
+        {
+          message: 'must NOT have additional properties',
+          path: '/nested/b',
+          keyword: 'additionalProperties',
+          params: { additionalProperty: 'b' },
+        },
+      ],
     })
   })
 
@@ -684,7 +733,7 @@ describe('generate-validator-function', () => {
     const validate = evalValidator(code)
     expect(validate({ tags: ['a', 42] })).toEqual({
       valid: false,
-      errors: [{ message: 'must be string', path: '/tags/1' }],
+      errors: [{ message: 'must be string', path: '/tags/1', keyword: 'type', params: { type: 'string' } }],
     })
   })
 
@@ -830,7 +879,7 @@ describe('generate-validator-function', () => {
       // The guard must reject an array even though `[].length` is a number.
       expect(evalValidator(code)([])).toEqual({
         valid: false,
-        errors: [{ message: 'must be object', path: '' }],
+        errors: [{ message: 'must be object', path: '', keyword: 'type', params: { type: 'object' } }],
       })
     })
 
@@ -846,17 +895,24 @@ describe('generate-validator-function', () => {
       // A bad property type falls through the guard to the slow, error-collecting path.
       expect(validate({ name: 'Ada', age: 'old' })).toEqual({
         valid: false,
-        errors: [{ message: 'must be number', path: '/age' }],
+        errors: [{ message: 'must be number', path: '/age', keyword: 'type', params: { type: 'number' } }],
       })
       // A missing required property likewise falls through to the slow path.
       expect(validate({ name: 'Ada' })).toEqual({
         valid: false,
-        errors: [{ message: "must have required property 'age'", path: '' }],
+        errors: [
+          {
+            message: "must have required property 'age'",
+            path: '',
+            keyword: 'required',
+            params: { missingProperty: 'age' },
+          },
+        ],
       })
       // Non-object input is rejected by the slow path's object guard, not the fast one.
       expect(validate(null)).toEqual({
         valid: false,
-        errors: [{ message: 'must be object', path: '' }],
+        errors: [{ message: 'must be object', path: '', keyword: 'type', params: { type: 'object' } }],
       })
     })
 
@@ -895,7 +951,14 @@ describe('generate-validator-function', () => {
         // path reports the additional property.
         expect(validate({ id: 1, extra: 'x' })).toEqual({
           valid: false,
-          errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+          errors: [
+            {
+              message: 'must NOT have additional properties',
+              path: '/extra',
+              keyword: 'additionalProperties',
+              params: { additionalProperty: 'extra' },
+            },
+          ],
         })
         // The count matches (1 key) but the declared key is missing — the typed
         // check ahead of the count is what keeps the count form sound, and the
@@ -903,8 +966,18 @@ describe('generate-validator-function', () => {
         expect(validate({ extra: 'x' })).toEqual({
           valid: false,
           errors: [
-            { message: "must have required property 'id'", path: '' },
-            { message: 'must NOT have additional properties', path: '/extra' },
+            {
+              message: "must have required property 'id'",
+              path: '',
+              keyword: 'required',
+              params: { missingProperty: 'id' },
+            },
+            {
+              message: 'must NOT have additional properties',
+              path: '/extra',
+              keyword: 'additionalProperties',
+              params: { additionalProperty: 'extra' },
+            },
           ],
         })
       }
@@ -979,7 +1052,14 @@ describe('generate-validator-function', () => {
       expect(guard({ meta: { a: 1, b: 2 }, extra: true })).toBe(true)
       expect(validate({ meta: { a: 1, b: 2, extra: true } })).toEqual({
         valid: false,
-        errors: [{ message: 'must NOT have additional properties', path: '/meta/extra' }],
+        errors: [
+          {
+            message: 'must NOT have additional properties',
+            path: '/meta/extra',
+            keyword: 'additionalProperties',
+            params: { additionalProperty: 'extra' },
+          },
+        ],
       })
       expect(guard({ meta: { a: 1, b: 2, extra: true } })).toBe(false)
     })
@@ -1003,7 +1083,14 @@ describe('generate-validator-function', () => {
       expect(guard({})).toBe(true)
       expect(validate({ a: 1 })).toEqual({
         valid: false,
-        errors: [{ message: 'must NOT have additional properties', path: '/a' }],
+        errors: [
+          {
+            message: 'must NOT have additional properties',
+            path: '/a',
+            keyword: 'additionalProperties',
+            params: { additionalProperty: 'a' },
+          },
+        ],
       })
       expect(guard({ a: 1 })).toBe(false)
       expect(guard([])).toBe(false)
@@ -1039,7 +1126,14 @@ describe('generate-validator-function', () => {
       const enumerable = built('count-enumerable')
       expect(enumerable.validate(inheritedExtra)).toEqual({
         valid: false,
-        errors: [{ message: 'must NOT have additional properties', path: '/extra' }],
+        errors: [
+          {
+            message: 'must NOT have additional properties',
+            path: '/extra',
+            keyword: 'additionalProperties',
+            params: { additionalProperty: 'extra' },
+          },
+        ],
       })
       expect(enumerable.guard(inheritedExtra)).toBe(false)
       expect(enumerable.validate(inheritedDeclared)).toBe(true)
@@ -1096,16 +1190,16 @@ describe('generate-validator-function', () => {
       // The local is guarded before its first member read, so a `null` never throws.
       expect(validate({ p: null })).toEqual({
         valid: false,
-        errors: [{ message: 'must be object', path: '/p' }],
+        errors: [{ message: 'must be object', path: '/p', keyword: 'type', params: { type: 'object' } }],
       })
       // A non-object (array) at `p` still falls through to the slow path.
       expect(validate({ p: [] })).toEqual({
         valid: false,
-        errors: [{ message: 'must be object', path: '/p' }],
+        errors: [{ message: 'must be object', path: '/p', keyword: 'type', params: { type: 'object' } }],
       })
       expect(validate({ p: { n: 7 } })).toEqual({
         valid: false,
-        errors: [{ message: 'must be string', path: '/p/n' }],
+        errors: [{ message: 'must be string', path: '/p/n', keyword: 'type', params: { type: 'string' } }],
       })
     })
 
@@ -1164,7 +1258,14 @@ describe('generate-validator-function', () => {
       ] as const) {
         expect(validate(value)).toEqual({
           valid: false,
-          errors: [{ message: 'must NOT have additional properties', path }],
+          errors: [
+            {
+              message: 'must NOT have additional properties',
+              path,
+              keyword: 'additionalProperties',
+              params: { additionalProperty: 'x' },
+            },
+          ],
         })
         expect(guard(value)).toBe(false)
       }
@@ -1173,7 +1274,7 @@ describe('generate-validator-function', () => {
       expect(guard({ id: 1, outer: { tag: 't', inner: null } })).toBe(false)
       expect(validate({ id: 1, outer: { tag: 't', inner: null } })).toEqual({
         valid: false,
-        errors: [{ message: 'must be object', path: '/outer/inner' }],
+        errors: [{ message: 'must be object', path: '/outer/inner', keyword: 'type', params: { type: 'object' } }],
       })
     })
 
@@ -1276,7 +1377,10 @@ describe('generate-validator-function', () => {
       // A non-integral number is rejected, and the guard agrees with the slow path.
       expect(validate({ count: 1.5 })).toEqual({
         valid: false,
-        errors: [{ message: 'must be number', path: '/count' }],
+        // The message says `number` (the runtime test the generator emits) while
+        // `params.type` says `integer` (what the schema declared) — the interpreter
+        // and Ajv both report the declared type, which is the useful one.
+        errors: [{ message: 'must be number', path: '/count', keyword: 'type', params: { type: 'integer' } }],
       })
     })
 
@@ -2052,7 +2156,9 @@ describe('generate-validator-function', () => {
       expect(validate({ tags: ['abc'] })).toBe(true)
       expect(validate({ tags: ['abc', 'de'] })).toEqual({
         valid: false,
-        errors: [{ message: 'must have at least 3 characters', path: '/tags/1' }],
+        errors: [
+          { message: 'must have at least 3 characters', path: '/tags/1', keyword: 'minLength', params: { limit: 3 } },
+        ],
       })
     })
 
@@ -2066,7 +2172,7 @@ describe('generate-validator-function', () => {
       expect(validate([[1, 2], [3]])).toBe(true)
       expect(validate([[1, 'x']])).toEqual({
         valid: false,
-        errors: [{ message: 'must be number', path: '/0/1' }],
+        errors: [{ message: 'must be number', path: '/0/1', keyword: 'type', params: { type: 'number' } }],
       })
     })
 

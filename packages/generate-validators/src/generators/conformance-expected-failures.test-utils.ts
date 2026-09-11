@@ -6,7 +6,7 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  *
  * The generator is a build-time subset by design — it trades keyword coverage for
  * flat, readable, dependency-free output — but the subset is no longer where the
- * gap is: 7 of 1281 cases are left. What used to dominate this list was the
+ * gap is: 5 of 1281 cases are left. What used to dominate this list was the
  * cross-document `$ref`, and that is gone: documents handed to the generator
  * through its `schemas` registry are folded into the one being generated, so a
  * ref into `integer.json`, `tree.json` or the 2020-12 metaschema resolves, gets a
@@ -20,9 +20,14 @@ import type { ExpectedFailures } from '../../../../fixtures/json-schema-test-sui
  * flag wherever the pattern admits it, which is what the interpreter and Ajv
  * both do.
  *
- * What is left is `$dynamicRef` resolved through the dynamic scope (which a
- * generator that emits one function per definition cannot follow), one filename
- * collision, and `$vocabulary`.
+ * The filename collision is gone too, and by the same move: a name is now a pure
+ * function of the ref (`#/$defs/user/$defs/meta` is `user-meta`, not `meta`), so
+ * two definitions that used to want one file get one each without any emitter
+ * having to be told.
+ *
+ * What is left is `$dynamicRef` resolved through the dynamic scope — which a
+ * generator that emits one function per definition cannot follow — and
+ * `$vocabulary`.
  *
  * Keys are case ids — `<file>/<group description>/<test description>` — or a
  * `/`-bounded prefix of one when a whole group or file falls to a single cause.
@@ -53,18 +58,6 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     '`$dynamicRef`: the anchor that is no longer in scope is still the one generation resolved to',
   'dynamicRef.json/after leaving a dynamic scope, it is not used by a $dynamicRef//then/$defs/thingy is the final stop for the $dynamicRef':
     '`$dynamicRef`: the anchor that is no longer in scope is still the one generation resolved to',
-
-  // ---------------------------------------------------------------------------
-  // one file per definition: two definitions, one filename
-  //
-  // Every `$ref` target becomes its own generated file, named after the last
-  // segment of the ref. Two definitions called `stuff` in different parents want
-  // the same `stuff.ts`, and emitting one of them would make every reference to
-  // the other resolve to the wrong schema — so generation stops instead. This is
-  // a property of the file layout, not of the schema language.
-  // ---------------------------------------------------------------------------
-  'dynamicRef.json/$dynamicRef avoids the root of each schema, but scopes are still registered':
-    'one file per definition: "#/$defs/first/$defs/stuff" and "#/$defs/second/$defs/stuff" both want the file "stuff.ts"',
 
   // ---------------------------------------------------------------------------
   // vocabulary: `$vocabulary` in a custom metaschema

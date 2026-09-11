@@ -826,8 +826,10 @@ running a fetch handler (including a compiled module's `fetch` export) on
   automatically; declaring an explicit `options` route overrides it. CORS
   preflights are answered earlier by the `createCors` gate when configured.
 - Validation failures answer `400` with `{ error: 'validation_failed', source,
-  errors }` where `errors` carries the same `{ message, path }` shape as
-  `@amritk/runtime-validators` and `source` is `params`, `query`, `headers`,
+  errors }` where `errors` carries the same `{ message, path, keyword, params }`
+  shape as `@amritk/runtime-validators` — `keyword` and `params` being what let a
+  client render or translate a failure rather than only print it — and `source`
+  is `params`, `query`, `headers`,
   `cookies`, or `body`. The `errors` option reshapes this (and the other built-in
   bodies) when deployed clients already parse a different envelope.
 

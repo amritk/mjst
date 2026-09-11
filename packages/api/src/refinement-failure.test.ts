@@ -15,8 +15,8 @@ describe('refinement-failure', () => {
 
   it('maps issues onto the standard validation error shape', () => {
     expect(refinementFailure([{ path: '/end', message: 'end before start' }, { message: 'no path' }]).errors).toEqual([
-      { message: 'end before start', path: '/end' },
-      { message: 'no path', path: '' },
+      { message: 'end before start', path: '/end', keyword: 'refine', params: {} },
+      { message: 'no path', path: '', keyword: 'refine', params: {} },
     ])
   })
 })

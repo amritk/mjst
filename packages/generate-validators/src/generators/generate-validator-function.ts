@@ -49,7 +49,8 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assertGeneratableRefs } from './assert-generatable-refs'
 import { assertUnevaluatedGeneratable, UNPROVABLE_COVERAGE_MESSAGE } from './assert-unevaluated-generatable'
-import { declaresKeywordOutside } from './enforced-keywords'
+import { formatCheckName, formatFamily } from './emit-format-checks'
+import { declaresKeywordOutside, enforcesFormat, NO_FORMATS } from './enforced-keywords'
 import { tupleShapeOf } from './tuple-shape'
 import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExpr } from './unevaluated-match'
 
@@ -333,6 +334,14 @@ type NestingContext = {
    * swaps in its own IIFE-local buffer.
    */
   sink: string
+  /**
+   * The `format` names this build enforces. Empty by default, which is what
+   * keeps `format` an annotation — the 2020-12 reading, and the interpreter's
+   * when no formats are enabled. A name here turns the keyword into an assertion
+   * and makes the node route through the general emitter, so `isX` and
+   * `validateX` see the same check.
+   */
+  readonly formats: ReadonlySet<string>
 }
 
 /**
@@ -342,16 +351,48 @@ type NestingContext = {
  */
 const ROOT_ERROR_SINK = '(errors ??= [])'
 
+/**
+ * Emits one `errors.push(...)`.
+ *
+ * Every generated error carries the keyword that rejected the value and that
+ * keyword's own values, matching `@amritk/runtime-validators` — so an error from
+ * a generated validator and one from the interpreter can be handled by the same
+ * code, translated by the same table, and branched on the same way.
+ *
+ * All of it lands on the cold path: the exported `isX` guard and the hot half of
+ * `validateX` never build an error object, so this only grows the function that
+ * runs once something is already wrong.
+ *
+ * `message`, `path` and `params` are all *emitted source*, not values — each is
+ * whatever expression the call site wants evaluated at runtime.
+ */
+const pushError = (sink: string, message: string, path: string, keyword: string, params = '{}'): string =>
+  `${sink}.push({ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} })`
+
+/**
+ * The same error, as the whole result of an early return.
+ *
+ * A validator whose very first check settles the verdict — a root `type` that
+ * does not match, a `false` schema — returns the failure outright rather than
+ * accumulating into a list, so it needs the object without the sink.
+ */
+const returnError = (message: string, path: string, keyword: string, params = '{}'): string =>
+  `return { valid: false, errors: [{ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} }] }`
+
 /** The IIFE-local buffer a match expression's checks report through. */
 const MATCH_ERROR_SINK = '_m'
 
-const createRootContext = (rootSchema?: Record<string, unknown>): NestingContext => ({
+const createRootContext = (
+  rootSchema?: Record<string, unknown>,
+  formats: ReadonlySet<string> = NO_FORMATS,
+): NestingContext => ({
   objVar: 'obj',
   pathPrefix: '${_path}',
   depth: 0,
   hoisted: [],
   rootSchema,
   sink: ROOT_ERROR_SINK,
+  formats,
 })
 
 /**
@@ -522,7 +563,7 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   return [
     `  for (const _key${d} in ${ctx.objVar}) {`,
     `    if (${unknownTest}${patternGuard}) {`,
-    `      ${ctx.sink}.push({ message: 'must NOT have additional properties', path: \`${ctx.pathPrefix}/\${escapePointer(_key${d})}\` })`,
+    `      ${pushError(ctx.sink, "'must NOT have additional properties'", `\`${ctx.pathPrefix}/\${escapePointer(_key${d})}\``, 'additionalProperties', `{ additionalProperty: _key${d} }`)}`,
     `    }`,
     `  }`,
   ]
@@ -544,7 +585,7 @@ const generateMissingRequiredChecks = (schema: JSONSchema, ctx: NestingContext):
     if (Object.hasOwn(props, key)) continue
     lines.push(`  if (${missingCheck(ctx.objVar, key)}) {`)
     lines.push(
-      `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+      `    ${pushError(ctx.sink, JSON.stringify(`must have required property '${key}'`), parentPath, 'required', JSON.stringify({ missingProperty: key }))}`,
     )
     lines.push(`  }`)
   }
@@ -579,15 +620,15 @@ const generatePropertyChecks = (
     if (isRequired) {
       return [
         `  if (${missingCheck(ctx.objVar, key)}) {`,
-        `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+        `    ${pushError(ctx.sink, JSON.stringify(`must have required property '${key}'`), parentPath, 'required', JSON.stringify({ missingProperty: key }))}`,
         `  } else {`,
-        `    ${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+        `    ${pushError(ctx.sink, JSON.stringify(FALSE_SCHEMA_MESSAGE), path, 'false schema')}`,
         `  }`,
       ]
     }
     return [
       `  if (${hasOwnCheck(ctx.objVar, key)}) {`,
-      `    ${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`,
+      `    ${pushError(ctx.sink, JSON.stringify(FALSE_SCHEMA_MESSAGE), path, 'false schema')}`,
       `  }`,
     ]
   }
@@ -678,7 +719,9 @@ const generateKeywordChecks = (
   const instanceOf = getMjstInstanceOf(schema)
   if (instanceOf) {
     lines.push(`  if (${presence}!(${raw} instanceof ${instanceOf})) {`)
-    lines.push(`    ${ctx.sink}.push({ message: 'must be ${instanceOf}', path: ${path} })`)
+    lines.push(
+      `    ${pushError(ctx.sink, `'must be ${instanceOf}'`, path, 'type', JSON.stringify({ type: instanceOf }))}`,
+    )
     lines.push(`  }`)
   }
 
@@ -686,7 +729,9 @@ const generateKeywordChecks = (
   const primitive = getMjstPrimitive(schema)
   if (primitive) {
     lines.push(`  if (${presence}typeof ${raw} !== "${primitive}") {`)
-    lines.push(`    ${ctx.sink}.push({ message: 'must be ${primitive}', path: ${path} })`)
+    lines.push(
+      `    ${pushError(ctx.sink, `'must be ${primitive}'`, path, 'type', JSON.stringify({ type: primitive }))}`,
+    )
     lines.push(`  }`)
   }
 
@@ -695,7 +740,7 @@ const generateKeywordChecks = (
     const mismatch = constMismatchCondition(raw, schema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
     lines.push(`  if (${presence}${mismatch}) {`)
-    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${path} })`)
+    lines.push(`    ${pushError(ctx.sink, msg, path, 'const', JSON.stringify({ allowedValue: schema.const }))}`)
     lines.push(`  }`)
   }
 
@@ -703,7 +748,9 @@ const generateKeywordChecks = (
   if (hasEnum(schema)) {
     const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
     lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], raw)}) {`)
-    lines.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be one of: ${label}`)}, path: ${path} })`)
+    lines.push(
+      `    ${pushError(ctx.sink, JSON.stringify(`must be one of: ${label}`), path, 'enum', JSON.stringify({ allowedValues: schema.enum }))}`,
+    )
     lines.push(`  }`)
   }
 
@@ -718,7 +765,9 @@ const generateKeywordChecks = (
       const wrongType = wrongTypeCondition(raw, t)
       if (wrongType) {
         lines.push(`  if (${presence === '' ? wrongType : `${presence}(${wrongType})`}) {`)
-        lines.push(`    ${ctx.sink}.push({ message: 'must be ${typeofString(t)}', path: ${path} })`)
+        lines.push(
+          `    ${pushError(ctx.sink, `'must be ${typeofString(t)}'`, path, 'type', JSON.stringify({ type: t }))}`,
+        )
         lines.push(`  }`)
       }
     }
@@ -739,7 +788,9 @@ const generateKeywordChecks = (
       if (allWrong) {
         const label = typeArray.map((t) => typeofString(t)).join(' or ')
         lines.push(`  if (${presence === '' ? allWrong : `${presence}(${allWrong})`}) {`)
-        lines.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${path} })`)
+        lines.push(
+          `    ${pushError(ctx.sink, JSON.stringify(`must be ${label}`), path, 'type', JSON.stringify({ type: schema.type }))}`,
+        )
         lines.push(`  }`)
       }
     }
@@ -780,7 +831,7 @@ const generatePropertyCheckLines = (
   const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
   const missing = [
     `  if (${missingCheck(ctx.objVar, key)}) {`,
-    `    ${ctx.sink}.push({ message: ${JSON.stringify(`must have required property '${key}'`)}, path: ${parentPath} })`,
+    `    ${pushError(ctx.sink, JSON.stringify(`must have required property '${key}'`), parentPath, 'required', JSON.stringify({ missingProperty: key }))}`,
   ]
 
   if (!isSchemaObject(propSchema)) {
@@ -836,13 +887,29 @@ const generateConstraintChecks = (
   // branch that is just `{ required: [...] }` or `{ minItems: 2 }`) is validated
   // against the value's runtime type, matching the interpreter.
 
+  // `format`, when the build enforces it. Emitted next to the other scalar
+  // constraints and guarded by the same runtime type test, because a format
+  // asserts about one JSON type and is silent about every other — exactly as the
+  // interpreter's string and number blocks are.
+  if (isSchemaObject(propSchema) && enforcesFormat(propSchema as Record<string, unknown>, ctx.formats)) {
+    const format = (propSchema as { format: string }).format
+    const family = formatFamily(format)
+    if (family !== undefined) {
+      lines.push(`  if (typeof ${raw} === '${family}' && !${formatCheckName(format)}(${raw})) {`)
+      lines.push(
+        `    ${pushError(ctx.sink, JSON.stringify(`must match format "${format}"`), path, 'format', JSON.stringify({ format }))}`,
+      )
+      lines.push(`  }`)
+    }
+  }
+
   // String constraints
   if (hasPattern(propSchema) || hasMinLength(propSchema) || hasMaxLength(propSchema)) {
     if (hasPattern(propSchema)) {
       const re = regexLiteral(propSchema.pattern)
       const msg = JSON.stringify(`must match pattern ${propSchema.pattern}`)
       lines.push(`  if (typeof ${raw} === 'string' && !${re}.test(${raw})) {`)
-      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${path} })`)
+      lines.push(`    ${pushError(ctx.sink, msg, path, 'pattern', JSON.stringify({ pattern: propSchema.pattern }))}`)
       lines.push(`  }`)
     }
     // Lengths are Unicode *code point* counts, not UTF-16 code units, so both
@@ -859,14 +926,14 @@ const generateConstraintChecks = (
     if (hasMinLength(propSchema) && propSchema.minLength > 0) {
       lines.push(`  if (typeof ${raw} === 'string' && ${minLengthFailExpr(raw, propSchema.minLength)}) {`)
       lines.push(
-        `    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minLength} characters', path: ${path} })`,
+        `    ${pushError(ctx.sink, `'must have at least ${propSchema.minLength} characters'`, path, 'minLength', JSON.stringify({ limit: propSchema.minLength }))}`,
       )
       lines.push(`  }`)
     }
     if (hasMaxLength(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'string' && ${maxLengthFailExpr(raw, propSchema.maxLength)}) {`)
       lines.push(
-        `    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxLength} characters', path: ${path} })`,
+        `    ${pushError(ctx.sink, `'must have at most ${propSchema.maxLength} characters'`, path, 'maxLength', JSON.stringify({ limit: propSchema.maxLength }))}`,
       )
       lines.push(`  }`)
     }
@@ -891,7 +958,7 @@ const generateConstraintChecks = (
       const strict = hasStrictExclusiveMinimum(propSchema)
       lines.push(`  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'minimum', propSchema.minimum, strict)}) {`)
       lines.push(
-        `    ${ctx.sink}.push({ message: 'must be ${boundOperator('minimum', strict)} ${propSchema.minimum}', path: ${path} })`,
+        `    ${pushError(ctx.sink, `'must be ${boundOperator('minimum', strict)} ${propSchema.minimum}'`, path, strict ? 'exclusiveMinimum' : 'minimum', JSON.stringify({ comparison: boundOperator('minimum', strict), limit: propSchema.minimum }))}`,
       )
       lines.push(`  }`)
     }
@@ -899,7 +966,7 @@ const generateConstraintChecks = (
       const strict = hasStrictExclusiveMaximum(propSchema)
       lines.push(`  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'maximum', propSchema.maximum, strict)}) {`)
       lines.push(
-        `    ${ctx.sink}.push({ message: 'must be ${boundOperator('maximum', strict)} ${propSchema.maximum}', path: ${path} })`,
+        `    ${pushError(ctx.sink, `'must be ${boundOperator('maximum', strict)} ${propSchema.maximum}'`, path, strict ? 'exclusiveMaximum' : 'maximum', JSON.stringify({ comparison: boundOperator('maximum', strict), limit: propSchema.maximum }))}`,
       )
       lines.push(`  }`)
     }
@@ -907,19 +974,25 @@ const generateConstraintChecks = (
       lines.push(
         `  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'minimum', propSchema.exclusiveMinimum, true)}) {`,
       )
-      lines.push(`    ${ctx.sink}.push({ message: 'must be > ${propSchema.exclusiveMinimum}', path: ${path} })`)
+      lines.push(
+        `    ${pushError(ctx.sink, `'must be > ${propSchema.exclusiveMinimum}'`, path, 'exclusiveMinimum', JSON.stringify({ comparison: '>', limit: propSchema.exclusiveMinimum }))}`,
+      )
       lines.push(`  }`)
     }
     if (hasExclusiveMaximum(propSchema)) {
       lines.push(
         `  if (typeof ${raw} === 'number' && ${boundFailExpr(raw, 'maximum', propSchema.exclusiveMaximum, true)}) {`,
       )
-      lines.push(`    ${ctx.sink}.push({ message: 'must be < ${propSchema.exclusiveMaximum}', path: ${path} })`)
+      lines.push(
+        `    ${pushError(ctx.sink, `'must be < ${propSchema.exclusiveMaximum}'`, path, 'exclusiveMaximum', JSON.stringify({ comparison: '<', limit: propSchema.exclusiveMaximum }))}`,
+      )
       lines.push(`  }`)
     }
     if (hasMultipleOf(propSchema)) {
       lines.push(`  if (typeof ${raw} === 'number' && ${multipleOfFailExpr(raw, propSchema.multipleOf)}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must be a multiple of ${propSchema.multipleOf}', path: ${path} })`)
+      lines.push(
+        `    ${pushError(ctx.sink, `'must be a multiple of ${propSchema.multipleOf}'`, path, 'multipleOf', JSON.stringify({ multipleOf: propSchema.multipleOf }))}`,
+      )
       lines.push(`  }`)
     }
   }
@@ -1004,17 +1077,21 @@ const generateConstraintChecks = (
     // instead.) Without this the constraint was silently ignored.
     if (tail === false && tuple === undefined) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > 0) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must NOT have more than 0 items', path: ${path} })`)
+      lines.push(`    ${pushError(ctx.sink, `'must NOT have more than 0 items'`, path, 'items', '{ limit: 0 }')}`)
       lines.push(`  }`)
     }
     if (hasMinItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length < ${propSchema.minItems}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must have at least ${propSchema.minItems} items', path: ${path} })`)
+      lines.push(
+        `    ${pushError(ctx.sink, `'must have at least ${propSchema.minItems} items'`, path, 'minItems', JSON.stringify({ limit: propSchema.minItems }))}`,
+      )
       lines.push(`  }`)
     }
     if (hasMaxItems(propSchema)) {
       lines.push(`  if (Array.isArray(${raw}) && ${raw}.length > ${propSchema.maxItems}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must have at most ${propSchema.maxItems} items', path: ${path} })`)
+      lines.push(
+        `    ${pushError(ctx.sink, `'must have at most ${propSchema.maxItems} items'`, path, 'maxItems', JSON.stringify({ limit: propSchema.maxItems }))}`,
+      )
       lines.push(`  }`)
     }
     if (hasUniqueItems(propSchema) && propSchema.uniqueItems === true) {
@@ -1022,7 +1099,7 @@ const generateConstraintChecks = (
         ? `new Set(${raw} as unknown[]).size !== ${raw}.length`
         : `!allUnique(${raw} as unknown[])`
       lines.push(`  if (Array.isArray(${raw}) && ${dupCond}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must NOT have duplicate items', path: ${path} })`)
+      lines.push(`    ${pushError(ctx.sink, `'must NOT have duplicate items'`, path, 'uniqueItems')}`)
       lines.push(`  }`)
     }
 
@@ -1050,7 +1127,7 @@ const generateConstraintChecks = (
       // count can fail, paid for on every call.
       if (min > 0 || max !== undefined) {
         const matchExpr = generateMatchesExpr('_c', readKey(sp, 'contains') as JSONSchema, suffix, ctx, true)
-        const report = `${ctx.sink}.push({ message: 'array does not contain the required matching items', path: ${path} })`
+        const report = pushError(ctx.sink, `'array does not contain the required matching items'`, path, 'contains')
         // A `contains` whose match is decidable needs no loop, and emitting one
         // anyway left `const _c` read by nothing — `TS6133` in the generated file
         // for any consumer with `noUnusedLocals`. `contains: true` matches every
@@ -1125,7 +1202,7 @@ const generateConstraintChecks = (
       if (tailIsClosed) {
         lines.push(`    if (${raw}.length > ${tuple.length}) {`)
         lines.push(
-          `      ${ctx.sink}.push({ message: 'must NOT have more than ${tuple.length} items', path: ${path} })`,
+          `      ${pushError(ctx.sink, `'must NOT have more than ${tuple.length} items'`, path, 'items', JSON.stringify({ limit: tuple.length }))}`,
         )
         lines.push(`    }`)
       }
@@ -1190,7 +1267,7 @@ const generateValueCheckLines = (
   // all and the branch that should have failed the instance passed it. `true`
   // (and a bare `{}`) accepts everything and falls through to the `[]` below.
   if (propSchema === false) {
-    const report = `${ctx.sink}.push({ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: ${path} })`
+    const report = pushError(ctx.sink, JSON.stringify(FALSE_SCHEMA_MESSAGE), path, 'false schema')
     // Wrapped in a block, never emitted bare. The report starts with `(` — the
     // sink is `(errors ??= [])` — and the emitted code carries no semicolons, so
     // after a line ending in an expression ASI does not break the two apart: a
@@ -1221,6 +1298,7 @@ const generateValueCheckLines = (
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
+    formats: ctx.formats,
   }
 
   lines.push(...generateKeywordChecks('', raw, path, propSchema, suffix, valueCtx, presence))
@@ -1333,7 +1411,7 @@ const generateUnevaluatedChecks = (
     lines.push(`  if (typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})) {`)
     for (const statement of properties.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${properties.expr})) {`)
-    lines.push(`      ${ctx.sink}.push({ message: 'must NOT have unevaluated properties', path: ${path} })`)
+    lines.push(`      ${pushError(ctx.sink, `'must NOT have unevaluated properties'`, path, 'unevaluatedProperties')}`)
     lines.push(`    }`)
     lines.push(`  }`)
   }
@@ -1344,7 +1422,7 @@ const generateUnevaluatedChecks = (
     lines.push(`  if (Array.isArray(${raw})) {`)
     for (const statement of items.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${items.expr})) {`)
-    lines.push(`      ${ctx.sink}.push({ message: 'must NOT have unevaluated items', path: ${path} })`)
+    lines.push(`      ${pushError(ctx.sink, `'must NOT have unevaluated items'`, path, 'unevaluatedItems')}`)
     lines.push(`    }`)
     lines.push(`  }`)
   }
@@ -1390,7 +1468,7 @@ const generateCombinatorChecks = (
     // `allowUnreachableCode: false`.
     if (!conds.includes('true')) {
       lines.push(`  if (!(${conds.join(' || ')})) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must match a schema in anyOf', path: ${path} })`)
+      lines.push(`    ${pushError(ctx.sink, `'must match a schema in anyOf'`, path, 'anyOf')}`)
       lines.push(`  }`)
     }
   }
@@ -1398,7 +1476,7 @@ const generateCombinatorChecks = (
   if (hasOneOf(schema) && schema.oneOf.length > 0) {
     const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx, true)} ? 1 : 0)`)
     lines.push(`  if ((${conds.join(' + ')}) !== 1) {`)
-    lines.push(`    ${ctx.sink}.push({ message: 'must match exactly one schema in oneOf', path: ${path} })`)
+    lines.push(`    ${pushError(ctx.sink, `'must match exactly one schema in oneOf'`, path, 'oneOf')}`)
     lines.push(`  }`)
   }
 
@@ -1416,7 +1494,7 @@ const generateCombinatorChecks = (
     // accepting an instance the schema forbids.
     if (cond !== 'false') {
       lines.push(`  if (${cond}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: 'must NOT match the schema in not', path: ${path} })`)
+      lines.push(`    ${pushError(ctx.sink, `'must NOT match the schema in not'`, path, 'not')}`)
       lines.push(`  }`)
     }
   }
@@ -1566,6 +1644,7 @@ const generateInlineObjectChecks = (
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
+    formats: ctx.formats,
   }
 
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
@@ -1622,6 +1701,7 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx:
     hoisted: ctx.hoisted,
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
+    formats: ctx.formats,
   }
   const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
@@ -1643,7 +1723,9 @@ const generateDependentRequiredChecks = (schema: JSONSchema, ctx: NestingContext
     for (const dep of deps) {
       const msg = JSON.stringify(`must have property '${dep}' when '${trigger}' is present`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, dep)}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
+      lines.push(
+        `    ${pushError(ctx.sink, msg, at, 'dependentRequired', JSON.stringify({ missingProperty: dep, property: trigger, depsCount: 1 }))}`,
+      )
       lines.push(`  }`)
     }
   }
@@ -1688,7 +1770,7 @@ const generateDependentSchemasChecks = (schema: JSONSchema, suffix: string, ctx:
     if (sub === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${pushError(ctx.sink, msg, at, 'dependentSchemas', JSON.stringify({ property: trigger }))}`)
       lines.push(`  }`)
       continue
     }
@@ -1731,7 +1813,9 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
         if (typeof key !== 'string') continue
         const msg = JSON.stringify(`must have property '${key}' when '${trigger}' is present`)
         lines.push(`  if (${hasOwnCheck(obj, trigger)} && ${missingCheck(obj, key)}) {`)
-        lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
+        lines.push(
+          `    ${pushError(ctx.sink, msg, at, 'dependencies', JSON.stringify({ missingProperty: key, property: trigger, depsCount: 1 }))}`,
+        )
         lines.push(`  }`)
       }
       continue
@@ -1741,7 +1825,7 @@ const generateDependenciesChecks = (schema: JSONSchema, suffix: string, ctx: Nes
     if (value === false) {
       const msg = JSON.stringify(`must NOT have property '${trigger}'`)
       lines.push(`  if (${hasOwnCheck(obj, trigger)}) {`)
-      lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
+      lines.push(`    ${pushError(ctx.sink, msg, at, 'dependencies', JSON.stringify({ property: trigger }))}`)
       lines.push(`  }`)
       continue
     }
@@ -1777,13 +1861,13 @@ const generateMinMaxPropertiesChecks = (schema: JSONSchema, ctx: NestingContext)
   if (hasMin) {
     const msg = JSON.stringify(`must have at least ${schema.minProperties} properties`)
     lines.push(`  if (${count} < ${schema.minProperties}) {`)
-    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
+    lines.push(`    ${pushError(ctx.sink, msg, at, 'minProperties', JSON.stringify({ limit: schema.minProperties }))}`)
     lines.push(`  }`)
   }
   if (hasMax) {
     const msg = JSON.stringify(`must have at most ${schema.maxProperties} properties`)
     lines.push(`  if (${count} > ${schema.maxProperties}) {`)
-    lines.push(`    ${ctx.sink}.push({ message: ${msg}, path: ${at} })`)
+    lines.push(`    ${pushError(ctx.sink, msg, at, 'maxProperties', JSON.stringify({ limit: schema.maxProperties }))}`)
     lines.push(`  }`)
   }
   return lines
@@ -1915,11 +1999,31 @@ type GuardBlock = {
  */
 type GuardContext = {
   readonly unknownKeys: UnknownKeysStrategy
+  /**
+   * The `format` names this build enforces, mirroring
+   * {@link NestingContext.formats}. The guard has to see the same set as the
+   * validator or the two would disagree, which is the one thing the flat guard
+   * may never do.
+   */
+  readonly formats: ReadonlySet<string>
   locals: number
   loops: number
 }
 
-const createGuardContext = (unknownKeys: UnknownKeysStrategy): GuardContext => ({ unknownKeys, locals: 0, loops: 0 })
+const createGuardContext = (
+  unknownKeys: UnknownKeysStrategy,
+  formats: ReadonlySet<string> = NO_FORMATS,
+): GuardContext => ({ unknownKeys, formats, locals: 0, loops: 0 })
+
+/**
+ * The guard's half of an enforced `format`: the pass condition, to be ANDed into
+ * the leaf's chain behind the `typeof` that already narrowed the accessor.
+ */
+const guardFormatPass = (schema: Exclude<JSONSchema, boolean>, acc: string, ctx: GuardContext): string | null => {
+  if (!enforcesFormat(schema as Record<string, unknown>, ctx.formats)) return null
+  const format = (schema as { format: string }).format
+  return formatFamily(format) === undefined ? null : `${formatCheckName(format)}(${acc})`
+}
 
 const emptyGuardBlock = (): GuardBlock => ({ conditions: [], nested: [], keyChecks: [] })
 
@@ -2198,11 +2302,12 @@ const generateObjectValidator = (
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
   unknownKeys: UnknownKeysStrategy,
+  formats: ReadonlySet<string>,
 ): string => {
   const vName = validatorName(typeName)
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const properties = hasProperties(schema) ? schema.properties : {}
-  const ctx = createRootContext(rootSchema)
+  const ctx = createRootContext(rootSchema, formats)
 
   const propertyLines: string[] = []
 
@@ -2277,7 +2382,7 @@ const generateObjectValidator = (
   // through to the error-collecting path, which produces the same verdict and
   // full JSON-Pointer errors. Schemas with constraints the guard can't express
   // produce no guard at all (`null`), leaving behaviour unchanged.
-  const guard = guardObjectConditions(schema, 'input', 'obj', createGuardContext(unknownKeys))
+  const guard = guardObjectConditions(schema, 'input', 'obj', createGuardContext(unknownKeys, formats))
 
   // The cold, error-collecting body. When there's a guard this is a separate
   // (unexported) function reached only on failure; the hot path never enters it
@@ -2295,7 +2400,7 @@ const generateObjectValidator = (
       `${exported ? 'export ' : ''}const ${name} = (input: unknown, _path = ''): ValidationResult => {`,
       ...objBinding,
       `  if (typeof input !== 'object' || input === null || Array.isArray(input)) {`,
-      `    return { valid: false, errors: [{ message: 'must be object', path: _path }] }`,
+      `    ${returnError(`'must be object'`, '_path', 'type', JSON.stringify({ type: 'object' }))}`,
       `  }`,
       ``,
       `  let errors: ValidationError[] | undefined`,
@@ -2441,7 +2546,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): st
     if (!hasEnum(schema)) return null
     // With no `type` there is no branch below to compose with, so membership has
     // to be the whole story — and it only is when nothing else constrains.
-    if (declaresKeywordOutside(schema, ['enum'])) return null
+    if (declaresKeywordOutside(schema, ['enum'], ctx.formats)) return null
     return enumMembershipExpr(schema.enum as unknown[], acc)
   }
   const t = schema.type as string
@@ -2476,6 +2581,8 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): st
     // spellings of `(obj.a as Record<string, unknown>).b`.
     case 'string': {
       const parts = [`typeof ${acc} === 'string'`]
+      const formatPass = guardFormatPass(schema, acc, ctx)
+      if (formatPass !== null) parts.push(formatPass)
       if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
       // The exact negations of the validator's length conditions, from the same
       // `string-length-check` emitter, so the guard counts code points too.
@@ -2487,6 +2594,8 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): st
     case 'integer': {
       const parts = [`typeof ${acc} === 'number'`]
       if (t === 'integer') parts.push(`Number.isInteger(${acc})`)
+      const formatPass = guardFormatPass(schema, acc, ctx)
+      if (formatPass !== null) parts.push(formatPass)
       if (hasMinimum(schema))
         parts.push(boundPassExpr(acc, 'minimum', schema.minimum, hasStrictExclusiveMinimum(schema)))
       if (hasMaximum(schema))
@@ -2749,6 +2858,7 @@ export const generateBooleanGuard = (
   typeName: string,
   _suffix = '',
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats: ReadonlySet<string> = NO_FORMATS,
 ): string => {
   const name = guardName(typeName)
   const returns = typeDescribesEveryAcceptedValue(rewriteNullable(schema) as JSONSchema)
@@ -2767,7 +2877,7 @@ export const generateBooleanGuard = (
   // which the object parts do not model. Both would make the guard disagree with
   // the validator, and a guard that disagrees is worse than no guard, so those
   // fall back to calling `validateX`.
-  const ctx = createGuardContext(unknownKeys)
+  const ctx = createGuardContext(unknownKeys, formats)
   if (declaresObjectType(rewritten)) {
     // A `$ref`, a `const`/`enum` or an `x-mjst` hint beside the object keywords
     // is something the block form refuses too, so the answer is the fallback
@@ -2805,6 +2915,7 @@ const generateScalarValidator = (
   typeName: string,
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
+  formats: ReadonlySet<string>,
 ): string => {
   const vName = validatorName(typeName)
 
@@ -2815,7 +2926,7 @@ const generateScalarValidator = (
     if (schema === false) {
       return [
         `export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`,
-        `  return { valid: false, errors: [{ message: ${JSON.stringify(FALSE_SCHEMA_MESSAGE)}, path: _path }] }`,
+        `  ${returnError(JSON.stringify(FALSE_SCHEMA_MESSAGE), '_path', 'false schema')}`,
         `}`,
       ].join('\n')
     }
@@ -2830,7 +2941,7 @@ const generateScalarValidator = (
   // `{ $ref: '#/$defs/s', minLength: 3 }` used to compile to a bare delegation
   // and accept `"q"`, contradicting this file's own note that a `$ref`'s
   // siblings still apply.
-  const generalRoot = (): string => generateGeneralRootValidator(schema, typeName, suffix, rootSchema)
+  const generalRoot = (): string => generateGeneralRootValidator(schema, typeName, suffix, rootSchema, formats)
 
   // Top-level $ref — delegate entirely
   if (hasRef(schema)) {
@@ -2852,7 +2963,7 @@ const generateScalarValidator = (
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (!(input instanceof ${instanceOf})) {`,
-      `    return { valid: false, errors: [{ message: 'must be ${instanceOf}', path: _path }] }`,
+      `    ${returnError(`'must be ${instanceOf}'`, '_path', 'type', JSON.stringify({ type: instanceOf }))}`,
       `  }`,
       `  return true`,
       `}`,
@@ -2866,7 +2977,7 @@ const generateScalarValidator = (
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (typeof input !== "${primitive}") {`,
-      `    return { valid: false, errors: [{ message: 'must be ${primitive}', path: _path }] }`,
+      `    ${returnError(`'must be ${primitive}'`, '_path', 'type', JSON.stringify({ type: primitive }))}`,
       `  }`,
       `  return true`,
       `}`,
@@ -2881,7 +2992,7 @@ const generateScalarValidator = (
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (${mismatch}) {`,
-      `    return { valid: false, errors: [{ message: ${msg}, path: _path }] }`,
+      `    ${returnError(msg, '_path', 'const', JSON.stringify({ allowedValue: schema.const }))}`,
       `  }`,
       `  return true`,
       `}`,
@@ -2895,7 +3006,7 @@ const generateScalarValidator = (
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  if (!${enumMembershipExpr(schema.enum as unknown[], 'input')}) {`,
-      `    return { valid: false, errors: [{ message: ${JSON.stringify(`must be one of: ${label}`)}, path: _path }] }`,
+      `    ${returnError(JSON.stringify(`must be one of: ${label}`), '_path', 'enum', JSON.stringify({ allowedValues: schema.enum }))}`,
       `  }`,
       `  return true`,
       `}`,
@@ -2913,7 +3024,7 @@ const generateScalarValidator = (
     declaresKey(schema, 'not') ||
     declaresKey(schema, 'if')
   ) {
-    const ctx = createRootContext(rootSchema)
+    const ctx = createRootContext(rootSchema, formats)
     const checks: string[] = []
     // The root path expression the shared emitters use, as a template literal body.
     const rootPath = '`${_path}`'
@@ -2933,7 +3044,9 @@ const generateScalarValidator = (
       if (allWrong) {
         const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
         checks.push(`  if (${allWrong}) {`)
-        checks.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+        checks.push(
+          `    ${pushError(ctx.sink, JSON.stringify(`must be ${label}`), rootPath, 'type', JSON.stringify({ type: schema.type }))}`,
+        )
         checks.push(`  }`)
       }
     } else if (hasType(schema)) {
@@ -2941,7 +3054,9 @@ const generateScalarValidator = (
       const wrongType = wrongTypeCondition('input', t)
       if (wrongType) {
         checks.push(`  if (${wrongType}) {`)
-        checks.push(`    ${ctx.sink}.push({ message: 'must be ${typeofString(t)}', path: ${rootPath} })`)
+        checks.push(
+          `    ${pushError(ctx.sink, `'must be ${typeofString(t)}'`, rootPath, 'type', JSON.stringify({ type: t }))}`,
+        )
         checks.push(`  }`)
       }
     }
@@ -2973,7 +3088,7 @@ const generateScalarValidator = (
   // value is valid when it matches any listed type.
   const rootTypeArray = getTypeArray(schema)
   if (rootTypeArray) {
-    const ctx = createRootContext(rootSchema)
+    const ctx = createRootContext(rootSchema, formats)
     const rootPath = '`${_path}`'
     const checks: string[] = []
 
@@ -2985,7 +3100,9 @@ const generateScalarValidator = (
     if (allWrong) {
       const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
       checks.push(`  if (${allWrong}) {`)
-      checks.push(`    ${ctx.sink}.push({ message: ${JSON.stringify(`must be ${label}`)}, path: ${rootPath} })`)
+      checks.push(
+        `    ${pushError(ctx.sink, JSON.stringify(`must be ${label}`), rootPath, 'type', JSON.stringify({ type: schema.type }))}`,
+      )
       checks.push(`  }`)
     }
 
@@ -3037,7 +3154,7 @@ const generateScalarValidator = (
     // emitted `typeof input === 'string' && input.length < 2`, which is `TS2339`
     // on `never`. The check is inert at runtime either way (the type test in front
     // of it can never pass), but the file has to compile.
-    const rootCtx = createRootContext(rootSchema)
+    const rootCtx = createRootContext(rootSchema, formats)
     const constraintLines = generateConstraintChecks('', '_root', '`${_path}`', schema, suffix, rootCtx)
 
     if (!wrongType) {
@@ -3052,7 +3169,7 @@ const generateScalarValidator = (
       return [
         `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
         `  if (${wrongType}) {`,
-        `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
+        `    ${returnError(`'must be ${typLabel}'`, '_path', 'type', JSON.stringify({ type: schema.type }))}`,
         `  }`,
         `  return true`,
         `}`,
@@ -3066,7 +3183,7 @@ const generateScalarValidator = (
       [
         `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
         `  if (${wrongType}) {`,
-        `    return { valid: false, errors: [{ message: 'must be ${typLabel}', path: _path }] }`,
+        `    ${returnError(`'must be ${typLabel}'`, '_path', 'type', JSON.stringify({ type: schema.type }))}`,
         `  }`,
         ...(readsBinding('_root', constraintLines.join('\n')) ? [`  const _root: unknown = input`] : []),
         `  let errors: ValidationError[] | undefined`,
@@ -3087,7 +3204,7 @@ const generateScalarValidator = (
   // test (`typeof x === 'string'`, `Array.isArray(x)`, the object block's own
   // shape check), which is exactly the semantics needed, so hand it the whole
   // schema and let it decide what applies.
-  const typelessCtx = createRootContext(rootSchema)
+  const typelessCtx = createRootContext(rootSchema, formats)
   const typelessChecks = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, typelessCtx)
   if (typelessChecks.length === 0) {
     return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
@@ -3126,8 +3243,9 @@ const generateGeneralRootValidator = (
   typeName: string,
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
+  formats: ReadonlySet<string>,
 ): string => {
-  const ctx = createRootContext(rootSchema)
+  const ctx = createRootContext(rootSchema, formats)
   const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
   const body = checks.join('\n')
   return withHoisted(
@@ -3258,6 +3376,7 @@ export const generateValidatorFunction = (
   suffix = '',
   rootSchema?: Record<string, unknown>,
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats: ReadonlySet<string> = NO_FORMATS,
 ): string => {
   assertGeneratableRefs(schema, typeName)
 
@@ -3269,10 +3388,15 @@ export const generateValidatorFunction = (
   // caller did not say otherwise — which is the case for a root schema generated
   // on its own, as every test and every single-file consumer does.
   const document = rootSchema ?? (schema as Record<string, unknown>)
-  assertUnevaluatedGeneratable(rewritten, typeName, document, unevaluatedMatcher(suffix, createRootContext(document)))
+  assertUnevaluatedGeneratable(
+    rewritten,
+    typeName,
+    document,
+    unevaluatedMatcher(suffix, createRootContext(document, formats)),
+  )
 
   if (carriesUnevaluated(rewritten)) {
-    return generateGeneralRootValidator(rewritten, typeName, suffix, document)
+    return generateGeneralRootValidator(rewritten, typeName, suffix, document, formats)
   }
 
   // The object emitter walks `properties` and friends and knows nothing about a
@@ -3281,8 +3405,8 @@ export const generateValidatorFunction = (
   // {@link declaresKeywordOutside} routes it on to the general emitter and every
   // keyword composes.
   if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
-    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys)
+    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys, formats)
   }
 
-  return generateScalarValidator(rewritten, typeName, suffix, document)
+  return generateScalarValidator(rewritten, typeName, suffix, document, formats)
 }

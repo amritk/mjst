@@ -1,4 +1,4 @@
-import { FORMAT_CHECKS, isValidRegex } from '@/interpreter/format-checks'
+import type { ResolvedFormats } from '@/interpreter/formats'
 import type {
   ArrayKeywords,
   BranchKeywords,
@@ -12,6 +12,7 @@ import { getNodeMeta } from '@/interpreter/node-meta'
 import { resolveScopedDynamicRef } from '@/interpreter/resolve-scoped-ref'
 import {
   allUnique,
+  bareError,
   childPath,
   codePointLength,
   compilePattern,
@@ -19,6 +20,7 @@ import {
   deepEqual,
   depthLimitError,
   dynamicFallbackTarget,
+  type ErrorTemplate,
   type Evaluation,
   enterResource,
   escapePointer,
@@ -30,6 +32,8 @@ import {
   isPrimitiveEnumValue,
   matchesType,
   mergeEvaluation,
+  NO_PARAMS,
+  newErrorContext,
   newEvaluation,
   probeContext,
   resolveDyn,
@@ -40,6 +44,7 @@ import {
   spend,
 } from '@/interpreter/runtime'
 import type { SchemaRegistry } from '@/interpreter/schema-registry'
+import type { ValidationError } from '@/types'
 
 /**
  * Turns a schema into a tree of closures — one per node — so that validating a
@@ -131,8 +136,8 @@ export type Compiler = {
    * it turns into annotations.
    */
   readonly asserts: boolean
-  /** Enabled string formats, or `'all'`. */
-  readonly formats: 'all' | ReadonlySet<string>
+  /** The formats this validator checks, split by the JSON type each asserts about. */
+  readonly formats: ResolvedFormats
   readonly nodes: Map<object, CompiledNode>
 }
 
@@ -140,7 +145,7 @@ export const newCompiler = (
   root: unknown,
   registry: SchemaRegistry | null,
   asserts: boolean,
-  formats: 'all' | ReadonlySet<string>,
+  formats: ResolvedFormats,
 ): Compiler => ({ root, registry, asserts, formats, nodes: new Map() })
 
 const NOOP: Step = () => {}
@@ -162,9 +167,11 @@ const acceptStep: Step = (ctx, _value, _path, _evaluation, depth) => {
   openNode(ctx, depth)
 }
 
+const FALSE_SCHEMA_ERROR = bareError('false schema', 'must not be valid')
+
 /** `false`: rejects everything. */
 const rejectStep: Step = (ctx, _value, path, _evaluation, depth) => {
-  if (openNode(ctx, depth)) fail(ctx, 'must not be valid', path)
+  if (openNode(ctx, depth)) fail(ctx, FALSE_SCHEMA_ERROR, path)
 }
 
 const ACCEPT_NODE: CompiledNode = { run: acceptStep }
@@ -570,14 +577,19 @@ const compileRefs = (compiler: Compiler, refs: NonNullable<NodeMeta['refs']>): S
 
 /** `const` — a primitive compares by identity, anything else structurally. */
 const compileConst = (expected: unknown): Step => {
+  const deepConstError = bareError('const', 'must be equal to the expected constant')
   if (isPrimitiveEnumValue(expected)) {
-    const message = `must be equal to ${JSON.stringify(expected)}`
+    const message = {
+      message: `must be equal to ${JSON.stringify(expected)}`,
+      keyword: 'const',
+      params: { allowedValue: expected },
+    }
     return (ctx, value, path) => {
       if (value !== expected) fail(ctx, message, path)
     }
   }
   return (ctx, value, path) => {
-    if (!deepEqual(value, expected)) fail(ctx, 'must be equal to the expected constant', path)
+    if (!deepEqual(value, expected)) fail(ctx, deepConstError, path)
   }
 }
 
@@ -593,7 +605,7 @@ const compileConst = (expected: unknown): Step => {
  */
 const compileEnum = (schema: object, values: readonly unknown[]): Step => {
   const primitiveSet = getEnumSet(schema, values)
-  let message: string | null = null
+  let message: ErrorTemplate | null = null
   return (ctx, value, path) => {
     let found: boolean
     if (primitiveSet !== null) {
@@ -612,7 +624,13 @@ const compileEnum = (schema: object, values: readonly unknown[]): Step => {
       ctx.failed = true
       return
     }
-    if (message === null) message = `must be one of: ${values.map((v) => JSON.stringify(v)).join(', ')}`
+    if (message === null) {
+      message = {
+        message: `must be one of: ${values.map((v) => JSON.stringify(v)).join(', ')}`,
+        keyword: 'enum',
+        params: { allowedValues: values },
+      }
+    }
     fail(ctx, message, path)
   }
 }
@@ -651,12 +669,15 @@ const typeTest = (type: string): ((value: unknown) => boolean) | null => {
  */
 const typeOnlySteps = new Map<string, Step>()
 
+/** `type`'s error, whose params name the type that was expected — as Ajv's do. */
+const typeError = (type: string): ErrorTemplate => ({ message: `must be ${type}`, keyword: 'type', params: { type } })
+
 const typeOnlyStep = (type: string): Step | null => {
   const cached = typeOnlySteps.get(type)
   if (cached !== undefined) return cached
   const test = typeTest(type)
   if (test === null) return null
-  const message = `must be ${type}`
+  const message = typeError(type)
   const step: Step = (ctx, value, path, _evaluation, depth) => {
     if (!openNode(ctx, depth)) return
     if (!test(value)) fail(ctx, message, path)
@@ -678,7 +699,7 @@ const compileType = (meta: NodeMeta): Step | null => {
         matchesType(single, value)
       }
     }
-    const message = `must be ${single}`
+    const message = typeError(single)
     return (ctx, value, path) => {
       if (!test(value)) fail(ctx, message, path)
     }
@@ -686,7 +707,7 @@ const compileType = (meta: NodeMeta): Step | null => {
 
   const types = meta.types
   if (types === undefined) return null
-  const message = `must be one of type: ${types.join(', ')}`
+  const message = { message: `must be one of type: ${types.join(', ')}`, keyword: 'type', params: { type: types } }
   // Left as a `matchesType` loop rather than an array of predicates so an
   // unknown name late in the list still throws only when the earlier ones did
   // not already match, exactly as before.
@@ -697,6 +718,31 @@ const compileType = (meta: NodeMeta): Step | null => {
     fail(ctx, message, path)
   }
 }
+
+/** A string length bound's error, whose params name the bound — as Ajv's do. */
+const lengthError = (keyword: 'minLength' | 'maxLength', limit: number): ErrorTemplate => ({
+  message: `must have at ${keyword === 'minLength' ? 'least' : 'most'} ${limit} characters`,
+  keyword,
+  params: { limit },
+})
+
+/** `format`'s error, whose params name the format that was not matched. */
+const formatError = (format: string): ErrorTemplate => ({
+  message: `must match format "${format}"`,
+  keyword: 'format',
+  params: { format },
+})
+
+/**
+ * The check a node's `format` compiles to, or `undefined` when the keyword is
+ * absent, unknown, or not one this validator was asked to enforce.
+ *
+ * Which formats are checked, and which JSON type each is about, is settled when
+ * the validator is built (see `formats.ts`), so a disabled format compiles to
+ * nothing rather than to a per-call lookup.
+ */
+const formatCheck = <Check>(available: ReadonlyMap<string, Check>, format: unknown): Check | undefined =>
+  typeof format === 'string' ? available.get(format) : undefined
 
 /**
  * The string constraints. The length bounds and `pattern` belong to the
@@ -716,8 +762,8 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
     // three — which the one-shot path, where every closure is built and used
     // once, feels directly.
     if (minLength !== undefined && maxLength !== undefined) {
-      const minMessage = `must have at least ${minLength} characters`
-      const maxMessage = `must have at most ${maxLength} characters`
+      const minMessage = lengthError('minLength', minLength)
+      const maxMessage = lengthError('maxLength', maxLength)
       const band = 2 * minLength
       parts.push((ctx, value, path) => {
         const units = (value as string).length
@@ -728,7 +774,7 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
         if (units > maxLength && codePointLength(value as string) > maxLength) fail(ctx, maxMessage, path)
       })
     } else if (minLength !== undefined) {
-      const message = `must have at least ${minLength} characters`
+      const message = lengthError('minLength', minLength)
       // Length is measured in code points per spec, but `value.length` (UTF-16
       // code units) is an upper bound on it — and equal unless the string holds a
       // surrogate pair. So the cheap unit count is authoritative except in the
@@ -741,7 +787,7 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
         }
       })
     } else if (maxLength !== undefined) {
-      const message = `must have at most ${maxLength} characters`
+      const message = lengthError('maxLength', maxLength)
       parts.push((ctx, value, path) => {
         // units <= max ⇒ code points <= max (pass); only an over-long unit count
         // needs the exact scan, where surrogate pairs may still bring it within.
@@ -753,7 +799,7 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
 
     const pattern = keywords.pattern
     if (pattern !== undefined) {
-      const message = `must match pattern ${pattern}`
+      const message = { message: `must match pattern ${pattern}`, keyword: 'pattern', params: { pattern } }
       // Compiled once here rather than fetched from a per-validator cache on
       // every visit. `screenSchema` has already rejected a ReDoS-prone source by
       // this point, and a source that is not a valid regex at all still throws on
@@ -765,34 +811,28 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
     }
   }
 
-  const format = keywords.format
-  if (format !== undefined) {
-    const formats = compiler.formats
-    // Whether a format is checked at all is fixed for the validator, so a
-    // disabled one compiles to nothing rather than to a per-call set lookup.
-    if (formats === 'all' || formats.has(format)) {
-      const message = `must match format "${format}"`
-      if (format === 'regex') {
-        // The one format whose check is a compile, not a pattern match.
-        parts.push((ctx, value, path) => {
-          if (!isValidRegex(value as string)) fail(ctx, message, path)
-        })
-      } else {
-        // `Object.hasOwn`, not a bare index: the schema is runtime input, and
-        // `format: "toString"` otherwise read `Function.prototype.toString` off
-        // the prototype chain — truthy, with no `.test` — so an unknown format
-        // that the spec says to ignore crashed the validator instead.
-        const check = Object.hasOwn(FORMAT_CHECKS, format) ? FORMAT_CHECKS[format] : undefined
-        if (check) {
-          parts.push((ctx, value, path) => {
-            if (!check.test(value as string)) fail(ctx, message, path)
-          })
-        }
-      }
-    }
+  const check = formatCheck(compiler.formats.strings, keywords.format)
+  if (check !== undefined) {
+    const message = formatError(keywords.format as string)
+    parts.push((ctx, value, path) => {
+      if (!check(value as string)) fail(ctx, message, path)
+    })
   }
 
   return parts.length === 0 ? null : guaranteed ? seq(parts) : guardedSeq(isStringValue, parts)
+}
+
+/**
+ * A numeric bound's error. `comparison` and `limit` are the two things a caller
+ * needs to rewrite the message themselves, and are the params Ajv reports too.
+ */
+const boundError = (
+  keyword: 'minimum' | 'maximum' | 'exclusiveMinimum' | 'exclusiveMaximum',
+  limit: number,
+  strict: boolean,
+): ErrorTemplate => {
+  const comparison = keyword.endsWith('inimum') ? (strict ? '>' : '>=') : strict ? '<' : '<='
+  return { message: `must be ${comparison} ${limit}`, keyword, params: { comparison, limit } }
 }
 
 /**
@@ -803,99 +843,143 @@ const compileString = (compiler: Compiler, keywords: StringKeywords, guaranteed:
  * `type: 'number'` with no bound still accepts non-finite numbers, as Ajv does;
  * only a bound (or `multipleOf`) rejects them.
  */
-const compileNumber = (keywords: NumberKeywords, guaranteed: boolean): Step | null => {
+const compileNumber = (compiler: Compiler, keywords: NumberKeywords, guaranteed: boolean): Step | null => {
   const parts: Step[] = []
 
-  const minimum = keywords.minimum
-  const maximum = keywords.maximum
-  const plainRange =
-    minimum !== undefined && maximum !== undefined && !keywords.strictMinimum && !keywords.strictMaximum
-  if (plainRange && minimum !== undefined && maximum !== undefined) {
-    // The ordinary numeric range, fused for the same reason the string length
-    // range above is.
-    const minMessage = `must be >= ${minimum}`
-    const maxMessage = `must be <= ${maximum}`
-    parts.push((ctx, value, path) => {
-      const number = value as number
-      if (!(number >= minimum)) {
-        fail(ctx, minMessage, path)
-        if (ctx.failed) return
+  // The bounds are validation-vocabulary, so a dialect that drops it keeps
+  // them as annotations; the `format` check below is a separate vocabulary and
+  // stands either way.
+  if (compiler.asserts) {
+    const minimum = keywords.minimum
+    const maximum = keywords.maximum
+    const plainRange =
+      minimum !== undefined && maximum !== undefined && !keywords.strictMinimum && !keywords.strictMaximum
+    if (plainRange && minimum !== undefined && maximum !== undefined) {
+      // The ordinary numeric range, fused for the same reason the string length
+      // range above is.
+      const minMessage = boundError('minimum', minimum, false)
+      const maxMessage = boundError('maximum', maximum, false)
+      parts.push((ctx, value, path) => {
+        const number = value as number
+        if (!(number >= minimum)) {
+          fail(ctx, minMessage, path)
+          if (ctx.failed) return
+        }
+        if (!(number <= maximum)) fail(ctx, maxMessage, path)
+      })
+    }
+
+    if (!plainRange && minimum !== undefined) {
+      // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
+      // make the bound strict; draft-06+ replaced it with a standalone numeric
+      // keyword (below). Honour both forms.
+      const message = boundError('minimum', minimum, keywords.strictMinimum)
+      if (keywords.strictMinimum) {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) > minimum)) fail(ctx, message, path)
+        })
+      } else {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) >= minimum)) fail(ctx, message, path)
+        })
       }
-      if (!(number <= maximum)) fail(ctx, maxMessage, path)
-    })
-  }
+    }
 
-  if (!plainRange && minimum !== undefined) {
-    // Draft-04 used a boolean `exclusiveMinimum: true` alongside `minimum` to
-    // make the bound strict; draft-06+ replaced it with a standalone numeric
-    // keyword (below). Honour both forms.
-    const message = keywords.strictMinimum ? `must be > ${minimum}` : `must be >= ${minimum}`
-    if (keywords.strictMinimum) {
+    if (!plainRange && maximum !== undefined) {
+      const message = boundError('maximum', maximum, keywords.strictMaximum)
+      if (keywords.strictMaximum) {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) < maximum)) fail(ctx, message, path)
+        })
+      } else {
+        parts.push((ctx, value, path) => {
+          if (!((value as number) <= maximum)) fail(ctx, message, path)
+        })
+      }
+    }
+
+    const exclusiveMinimum = keywords.exclusiveMinimum
+    if (exclusiveMinimum !== undefined) {
+      const message = boundError('exclusiveMinimum', exclusiveMinimum, true)
       parts.push((ctx, value, path) => {
-        if (!((value as number) > minimum)) fail(ctx, message, path)
+        if (!((value as number) > exclusiveMinimum)) fail(ctx, message, path)
       })
-    } else {
+    }
+
+    const exclusiveMaximum = keywords.exclusiveMaximum
+    if (exclusiveMaximum !== undefined) {
+      const message = boundError('exclusiveMaximum', exclusiveMaximum, true)
       parts.push((ctx, value, path) => {
-        if (!((value as number) >= minimum)) fail(ctx, message, path)
+        if (!((value as number) < exclusiveMaximum)) fail(ctx, message, path)
       })
+    }
+
+    const multipleOf = keywords.multipleOf
+    if (multipleOf !== undefined && multipleOf > 0) {
+      const message = { message: `must be a multiple of ${multipleOf}`, keyword: 'multipleOf', params: { multipleOf } }
+      if (Number.isInteger(multipleOf)) {
+        // For an integer divisor `%` on doubles is exact, so this accepts huge true
+        // multiples (`1e21 % 1 === 0`) that a quotient check would misjudge, and
+        // rejects `NaN`/`±Infinity`, which is Ajv's verdict for `multipleOf` on any
+        // non-finite value.
+        parts.push((ctx, value, path) => {
+          if (!(Number.isInteger(value) && (value as number) % multipleOf === 0)) fail(ctx, message, path)
+        })
+      } else {
+        // Floating-point modulo is unreliable (`0.3 % 0.1 !== 0`), so divide and
+        // measure the distance to the nearest integer. The tolerance tracks the
+        // actual representation error in `q` (~`|q|·2⁻⁵²`); a non-finite value
+        // yields a `NaN` distance, so the `<=` is `false` and it fails.
+        parts.push((ctx, value, path) => {
+          const q = (value as number) / multipleOf
+          const tolerance = 2 * Number.EPSILON * Math.max(1, Math.abs(q))
+          if (!(Math.abs(q - Math.round(q)) <= tolerance)) fail(ctx, message, path)
+        })
+      }
     }
   }
 
-  if (!plainRange && maximum !== undefined) {
-    const message = keywords.strictMaximum ? `must be < ${maximum}` : `must be <= ${maximum}`
-    if (keywords.strictMaximum) {
-      parts.push((ctx, value, path) => {
-        if (!((value as number) < maximum)) fail(ctx, message, path)
-      })
-    } else {
-      parts.push((ctx, value, path) => {
-        if (!((value as number) <= maximum)) fail(ctx, message, path)
-      })
-    }
-  }
-
-  const exclusiveMinimum = keywords.exclusiveMinimum
-  if (exclusiveMinimum !== undefined) {
-    const message = `must be > ${exclusiveMinimum}`
+  const check = formatCheck(compiler.formats.numbers, keywords.format)
+  if (check !== undefined) {
+    const message = formatError(keywords.format as string)
     parts.push((ctx, value, path) => {
-      if (!((value as number) > exclusiveMinimum)) fail(ctx, message, path)
+      if (!check(value as number)) fail(ctx, message, path)
     })
-  }
-
-  const exclusiveMaximum = keywords.exclusiveMaximum
-  if (exclusiveMaximum !== undefined) {
-    const message = `must be < ${exclusiveMaximum}`
-    parts.push((ctx, value, path) => {
-      if (!((value as number) < exclusiveMaximum)) fail(ctx, message, path)
-    })
-  }
-
-  const multipleOf = keywords.multipleOf
-  if (multipleOf !== undefined && multipleOf > 0) {
-    const message = `must be a multiple of ${multipleOf}`
-    if (Number.isInteger(multipleOf)) {
-      // For an integer divisor `%` on doubles is exact, so this accepts huge true
-      // multiples (`1e21 % 1 === 0`) that a quotient check would misjudge, and
-      // rejects `NaN`/`±Infinity`, which is Ajv's verdict for `multipleOf` on any
-      // non-finite value.
-      parts.push((ctx, value, path) => {
-        if (!(Number.isInteger(value) && (value as number) % multipleOf === 0)) fail(ctx, message, path)
-      })
-    } else {
-      // Floating-point modulo is unreliable (`0.3 % 0.1 !== 0`), so divide and
-      // measure the distance to the nearest integer. The tolerance tracks the
-      // actual representation error in `q` (~`|q|·2⁻⁵²`); a non-finite value
-      // yields a `NaN` distance, so the `<=` is `false` and it fails.
-      parts.push((ctx, value, path) => {
-        const q = (value as number) / multipleOf
-        const tolerance = 2 * Number.EPSILON * Math.max(1, Math.abs(q))
-        if (!(Math.abs(q - Math.round(q)) <= tolerance)) fail(ctx, message, path)
-      })
-    }
   }
 
   return parts.length === 0 ? null : guaranteed ? seq(parts) : guardedSeq(isNumberValue, parts)
 }
+
+const UNIQUE_ITEMS_ERROR = bareError('uniqueItems', 'must have unique items')
+
+/**
+ * A placeholder for the half of a fused min/max pair that is not declared. The
+ * step guards on the bound being present before it can be read, so this is never
+ * reported — it exists so the pair can be two constants rather than two nullable
+ * ones re-checked per call.
+ */
+const EMPTY_ERROR: ErrorTemplate = { message: '', keyword: '', params: NO_PARAMS }
+
+/** An item-count bound's error. */
+const countError = (keyword: 'minItems' | 'maxItems', limit: number): ErrorTemplate => ({
+  message: `must have at ${keyword === 'minItems' ? 'least' : 'most'} ${limit} items`,
+  keyword,
+  params: { limit },
+})
+
+/** A `contains` count bound's error. */
+const containsError = (keyword: 'minContains' | 'maxContains', limit: number): ErrorTemplate => ({
+  message: `must contain at ${keyword === 'minContains' ? 'least' : 'most'} ${limit} matching items`,
+  keyword,
+  params: { limit },
+})
+
+/** A property-count bound's error. */
+const propertyCountError = (keyword: 'minProperties' | 'maxProperties', limit: number): ErrorTemplate => ({
+  message: `must have at ${keyword === 'minProperties' ? 'least' : 'most'} ${limit} properties`,
+  keyword,
+  params: { limit },
+})
 
 /**
  * The array keywords. The count bounds and `uniqueItems` are
@@ -910,7 +994,7 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
 
   const minItems = asserts ? keywords.minItems : undefined
   if (minItems !== undefined) {
-    const message = `must have at least ${minItems} items`
+    const message = countError('minItems', minItems)
     parts.push((ctx, value, path) => {
       if ((value as unknown[]).length < minItems) fail(ctx, message, path)
     })
@@ -918,7 +1002,7 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
 
   const maxItems = asserts ? keywords.maxItems : undefined
   if (maxItems !== undefined) {
-    const message = `must have at most ${maxItems} items`
+    const message = countError('maxItems', maxItems)
     parts.push((ctx, value, path) => {
       if ((value as unknown[]).length > maxItems) fail(ctx, message, path)
     })
@@ -948,7 +1032,7 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
 
   const rest = keywords.rest
   if (rest === false) {
-    const message = `must NOT have more than ${start} items`
+    const message = { message: `must NOT have more than ${start} items`, keyword: 'items', params: { limit: start } }
     parts.push((ctx, value, path) => {
       if ((value as unknown[]).length > start) fail(ctx, message, path)
     })
@@ -979,7 +1063,7 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
 
   if (asserts && keywords.uniqueItems) {
     parts.push((ctx, value, path) => {
-      if (!allUnique(ctx, value as unknown[])) fail(ctx, 'must have unique items', path)
+      if (!allUnique(ctx, value as unknown[])) fail(ctx, UNIQUE_ITEMS_ERROR, path)
     })
   }
 
@@ -993,8 +1077,8 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
     const node = compileNode(compiler, keywords.contains)
     const min = asserts ? (keywords.minContains ?? 1) : 1
     const max = asserts ? keywords.maxContains : undefined
-    const minMessage = `must contain at least ${min} matching items`
-    const maxMessage = max === undefined ? '' : `must contain at most ${max} matching items`
+    const minMessage = containsError('minContains', min)
+    const maxMessage = max === undefined ? EMPTY_ERROR : containsError('maxContains', max)
     parts.push((ctx, value, path, evaluation, depth, scope) => {
       const arr = value as unknown[]
       // `maxContains` needs the exact total (it is an upper bound), and an active
@@ -1030,6 +1114,147 @@ const compileArray = (compiler: Compiler, keywords: ArrayKeywords, guaranteed: b
 
   return guaranteed ? seq(parts) : guardedSeq(isArrayValue, parts)
 }
+
+/**
+ * `required`'s error. Built on the failure rather than per declared key up
+ * front: a missing property is the failure path, and a one-shot validation of a
+ * 40-property schema should not pay for 40 of these it will never read.
+ */
+const requiredError = (key: string): ErrorTemplate => ({
+  message: `must have required property '${key}'`,
+  keyword: 'required',
+  params: { missingProperty: key },
+})
+
+/** `additionalProperties: false`'s error, naming the key that was not declared. */
+const additionalPropertyError = (key: string): ErrorTemplate => ({
+  message: 'must NOT have additional properties',
+  keyword: 'additionalProperties',
+  params: { additionalProperty: key },
+})
+
+/** `dependentRequired`'s error, naming both the missing key and what triggered it. */
+const dependentRequiredError = (key: string, trigger: string): ErrorTemplate => ({
+  message: `must have property '${key}' when '${trigger}' is present`,
+  keyword: 'dependentRequired',
+  params: { missingProperty: key, property: trigger, depsCount: 1 },
+})
+
+/**
+ * Whether `error` is a branch rejecting the value's *identity* rather than its
+ * contents — a `const` or `enum` mismatch on the value itself or on one of its
+ * own properties.
+ *
+ * That is what a discriminator looks like from the outside: `{ kind: { const:
+ * 'circle' } }` rejects a square at `/kind` with `const`. Depth is bounded at
+ * one property because a discriminator is conventionally a direct field, and a
+ * `const` buried deeper is far more likely to be an ordinary payload constraint.
+ */
+const isIdentityMismatch = (error: ValidationError): boolean =>
+  (error.keyword === 'const' || error.keyword === 'enum') && error.path.indexOf('/', 1) === -1
+
+/**
+ * The errors of the branch a discriminator selects, or `null` when no
+ * discriminator selects one.
+ *
+ * A failing `anyOf` / `oneOf` on its own says almost nothing: "must match a
+ * schema in anyOf" names no field and no reason, and on the shape this is most
+ * often used for — a discriminated union, where the value plainly *is* one of
+ * the variants and one field of it is wrong — that is the least useful thing a
+ * validator can say. Ajv's alternatives are as bad in the other direction:
+ * either every branch's errors, which for a 24-variant union is 48 errors
+ * describing 23 variants nobody meant, or a `discriminator` keyword the schema
+ * has to declare.
+ *
+ * So the branches are asked *why* they failed, and the answer is read for a
+ * discriminator: if every branch but one was rejected on the value's identity
+ * (a `const` or `enum` on one of its own properties) and exactly one was not,
+ * that one is the variant the author meant, and its errors are the real ones.
+ *
+ * Reading the errors rather than the schema is what makes this work through
+ * `$ref`s — the branches of a real OpenAPI union are almost always refs, whose
+ * targets a compile-time analysis could not see. It also keeps the rule from
+ * guessing: "the branch with the fewest errors" would answer here too, and
+ * answers wrongly on the shape `oneOf: [aReference, theActualThing]`, where
+ * "you did not write a $ref" is one complaint and the real mistake is two. When
+ * there is no discriminator this reports nothing extra, which is exactly as much
+ * as can be said honestly.
+ */
+const discriminatedBranchErrors = (
+  ctx: InterpreterContext,
+  nodes: readonly CompiledNode[],
+  value: unknown,
+  depth: number,
+  scope: DynamicScope,
+): readonly ValidationError[] | null => {
+  // A discriminator is a property, so there is nothing to select on otherwise.
+  if (!isObjectValue(value)) return null
+
+  let selected: ValidationError[] | null = null
+  let rejectedOnIdentity = 0
+  for (const node of nodes) {
+    const sub = newErrorContext(ctx)
+    node.run(sub, value, '', null, depth + 1, scope)
+    const errors = sub.errors
+    // A branch that reports nothing matched after all, which only happens when
+    // `oneOf` failed for having matched more than one. Nothing to explain.
+    if (errors === null) return null
+
+    if (errors.some(isIdentityMismatch)) {
+      rejectedOnIdentity++
+      continue
+    }
+    // Two branches survive the discriminator, so it did not discriminate.
+    if (selected !== null) return null
+    selected = errors
+  }
+
+  return selected !== null && rejectedOnIdentity === nodes.length - 1 ? selected : null
+}
+
+/**
+ * Appends the selected branch's errors under the combinator's own, with each
+ * path rebased onto where the combinator was applied.
+ */
+const failWithBranch = (
+  ctx: InterpreterContext,
+  error: ErrorTemplate,
+  path: string,
+  nodes: readonly CompiledNode[],
+  value: unknown,
+  depth: number,
+  scope: DynamicScope,
+): void => {
+  fail(ctx, error, path)
+  if (!ctx.emitErrors || ctx.failed) return
+
+  const selected = discriminatedBranchErrors(ctx, nodes, value, depth, scope)
+  if (selected === null) return
+  for (const inner of selected) {
+    // The branch ran with an empty base path, so its paths are relative to the
+    // value the combinator was applied to.
+    fail(ctx, { message: inner.message, keyword: inner.keyword, params: inner.params }, `${path}${inner.path}`)
+    if (ctx.failed) return
+  }
+}
+
+const ANY_OF_ERROR = bareError('anyOf', 'must match a schema in anyOf')
+const ONE_OF_ERROR = bareError('oneOf', 'must match exactly one schema in oneOf')
+const NOT_ERROR = bareError('not', 'must not match schema')
+
+/** `unevaluatedProperties: false`'s error, naming the key nothing evaluated. */
+const unevaluatedPropertyError = (key: string): ErrorTemplate => ({
+  message: 'must NOT have unevaluated properties',
+  keyword: 'unevaluatedProperties',
+  params: { unevaluatedProperty: key },
+})
+
+/** `unevaluatedItems: false`'s error, naming the index nothing evaluated. */
+const unevaluatedItemError = (index: number): ErrorTemplate => ({
+  message: 'must NOT have unevaluated items',
+  keyword: 'unevaluatedItems',
+  params: { unevaluatedItem: index },
+})
 
 /**
  * The `properties` loop: the single hottest thing this package does, so
@@ -1086,7 +1311,7 @@ const compileProperties = (
         // Built here, not per declared key up front: a missing required property
         // is the failure path, and a one-shot validation of a 40-property schema
         // should not pay for 40 strings it will never read.
-        fail(ctx, `must have required property '${key}'`, path)
+        fail(ctx, requiredError(key), path)
       }
       if (ctx.failed) return
     }
@@ -1150,7 +1375,7 @@ const compileClosedProperties = (
         // Built here, not per declared key up front: a missing required property
         // is the failure path, and a one-shot validation of a 40-property schema
         // should not pay for 40 strings it will never read.
-        fail(ctx, `must have required property '${key}'`, path)
+        fail(ctx, requiredError(key), path)
       }
       if (ctx.failed) return
     }
@@ -1163,7 +1388,7 @@ const compileClosedProperties = (
     for (const key of Object.keys(obj)) {
       if (Object.hasOwn(properties, key)) continue
       if (evaluation !== null) evaluation.props.add(key)
-      fail(ctx, 'must NOT have additional properties', childPath(ctx, path, key))
+      fail(ctx, additionalPropertyError(key), childPath(ctx, path, key))
       if (ctx.failed) return
     }
   }
@@ -1224,7 +1449,7 @@ const compileKeySweep = (
       if (inProperties || matched || !hasAdditional) continue
       if (rejectsAdditional) {
         if (evaluation !== null) evaluation.props.add(key)
-        fail(ctx, 'must NOT have additional properties', childPath(ctx, path, key))
+        fail(ctx, additionalPropertyError(key), childPath(ctx, path, key))
         if (ctx.failed) return
       } else if (hasAdditionalSchema) {
         if (evaluation !== null) evaluation.props.add(key)
@@ -1282,12 +1507,12 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
     ? requiredList.filter((key) => !(properties !== undefined && Object.hasOwn(properties, key)))
     : []
   if (requiredElsewhere.length > 0) {
-    const messages = requiredElsewhere.map((key) => `must have required property '${key}'`)
+    const messages = requiredElsewhere.map(requiredError)
     parts.push((ctx, value, path) => {
       const obj = value as Record<string, unknown>
       for (let i = 0; i < requiredElsewhere.length; i++) {
         if (!hasProperty(obj, requiredElsewhere[i] as string)) {
-          fail(ctx, messages[i] as string, path)
+          fail(ctx, messages[i] as ErrorTemplate, path)
           if (ctx.failed) return
         }
       }
@@ -1300,11 +1525,11 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
       .filter(([, deps]) => Array.isArray(deps))
       .map(
         ([trigger, deps]) =>
-          [
-            trigger,
-            deps as string[],
-            (deps as string[]).map((dep) => `must have property '${dep}' when '${trigger}' is present`),
-          ] satisfies [string, string[], string[]],
+          [trigger, deps as string[], (deps as string[]).map((dep) => dependentRequiredError(dep, trigger))] satisfies [
+            string,
+            string[],
+            ErrorTemplate[],
+          ],
       )
     if (entries.length > 0) {
       parts.push((ctx, value, path) => {
@@ -1313,7 +1538,7 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
           if (!hasProperty(obj, trigger)) continue
           for (let i = 0; i < deps.length; i++) {
             if (!hasProperty(obj, deps[i] as string)) {
-              fail(ctx, messages[i] as string, path)
+              fail(ctx, messages[i] as ErrorTemplate, path)
               if (ctx.failed) return
             }
           }
@@ -1352,7 +1577,7 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
         return {
           trigger,
           keys,
-          messages: keys.map((key) => `must have property '${key}' when '${trigger}' is present`),
+          messages: keys.map((key) => dependentRequiredError(key, trigger)),
           node: null,
         }
       }
@@ -1367,10 +1592,10 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
           if (!hasProperty(obj, entry.trigger)) continue
           const keys = entry.keys
           if (keys !== null) {
-            const messages = entry.messages as string[]
+            const messages = entry.messages as ErrorTemplate[]
             for (let i = 0; i < keys.length; i++) {
               if (!hasProperty(obj, keys[i] as string)) {
-                fail(ctx, messages[i] as string, path)
+                fail(ctx, messages[i] as ErrorTemplate, path)
                 if (ctx.failed) return
               }
             }
@@ -1410,8 +1635,8 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
   const minProperties = asserts ? keywords.minProperties : undefined
   const maxProperties = asserts ? keywords.maxProperties : undefined
   if (minProperties !== undefined || maxProperties !== undefined) {
-    const minMessage = minProperties === undefined ? '' : `must have at least ${minProperties} properties`
-    const maxMessage = maxProperties === undefined ? '' : `must have at most ${maxProperties} properties`
+    const minMessage = minProperties === undefined ? EMPTY_ERROR : propertyCountError('minProperties', minProperties)
+    const maxMessage = maxProperties === undefined ? EMPTY_ERROR : propertyCountError('maxProperties', maxProperties)
     parts.push((ctx, value, path) => {
       // Own properties only, as the spec requires. `Object.keys().length` looks
       // like the allocating option but measured the fastest of the three forms by
@@ -1442,7 +1667,11 @@ const compileObject = (compiler: Compiler, keywords: ObjectKeywords, guaranteed:
         node.run(scratch, key, '', null, depth + 1, scope)
         if (scratch.failed) {
           scratch.failed = false
-          fail(ctx, `property name "${key}" is invalid`, childPath(ctx, path, key))
+          fail(
+            ctx,
+            { message: `property name "${key}" is invalid`, keyword: 'propertyNames', params: { propertyName: key } },
+            childPath(ctx, path, key),
+          )
           if (ctx.failed) return
         }
       }
@@ -1486,7 +1715,7 @@ const compileBranches = (compiler: Compiler, branches: BranchKeywords): Step[] =
           if (evaluation === null) break
         }
       }
-      if (!ok) fail(ctx, 'must match a schema in anyOf', path)
+      if (!ok) failWithBranch(ctx, ANY_OF_ERROR, path, nodes, value, depth, scope)
     })
   }
 
@@ -1498,7 +1727,10 @@ const compileBranches = (compiler: Compiler, branches: BranchKeywords): Step[] =
       for (const node of nodes) {
         if (probe(ctx, node, value, depth, scope, evaluation)) count++
       }
-      if (count !== 1) fail(ctx, 'must match exactly one schema in oneOf', path)
+      // More than one match is a different failure with nothing to explain: every
+      // branch the value matched is correct on its own terms.
+      if (count > 1) fail(ctx, ONE_OF_ERROR, path)
+      else if (count === 0) failWithBranch(ctx, ONE_OF_ERROR, path, nodes, value, depth, scope)
     })
   }
 
@@ -1506,7 +1738,7 @@ const compileBranches = (compiler: Compiler, branches: BranchKeywords): Step[] =
     const node = compileNode(compiler, branches.not)
     parts.push((ctx, value, path, _evaluation, depth, scope) => {
       // `not` produces no annotations — a passing inner schema means failure.
-      if (probe(ctx, node, value, depth, scope, null)) fail(ctx, 'must not match schema', path)
+      if (probe(ctx, node, value, depth, scope, null)) fail(ctx, NOT_ERROR, path)
     })
   }
 
@@ -1564,7 +1796,7 @@ const compileUnevaluated = (compiler: Compiler, keywords: UnevaluatedKeywords): 
       for (const key of Object.keys(obj)) {
         if (evaluated.props.has(key)) continue
         if (rejects) {
-          fail(ctx, 'must NOT have unevaluated properties', childPath(ctx, path, key))
+          fail(ctx, unevaluatedPropertyError(key), childPath(ctx, path, key))
         } else if (node !== null) {
           node.run(ctx, obj[key], childPath(ctx, path, key), null, depth + 1, scope)
         }
@@ -1587,7 +1819,7 @@ const compileUnevaluated = (compiler: Compiler, keywords: UnevaluatedKeywords): 
       for (let i = 0; i < arr.length; i++) {
         if (evaluated.items.has(i)) continue
         if (rejects) {
-          fail(ctx, 'must NOT have unevaluated items', childPath(ctx, path, i))
+          fail(ctx, unevaluatedItemError(i), childPath(ctx, path, i))
         } else if (node !== null) {
           node.run(ctx, arr[i], childPath(ctx, path, i), null, depth + 1, scope)
         }
@@ -1623,13 +1855,15 @@ const compileTypeBlocks = (compiler: Compiler, meta: NodeMeta, guaranteedType: s
   const objects = meta.objects === null ? null : compileObject(compiler, meta.objects, guaranteedType === 'object')
   const arrays = meta.arrays === null ? null : compileArray(compiler, meta.arrays, guaranteedType === 'array')
   const strings = meta.strings === null ? null : compileString(compiler, meta.strings, guaranteedType === 'string')
-  // Every keyword the number block reads is validation-vocabulary, so a dialect
-  // without it compiles the block away entirely. `integer` implies `number`, so
+  // Every *bound* the number block reads is validation-vocabulary, so a dialect
+  // without it drops them — but `format` is its own vocabulary and survives, the
+  // same way it does in the string block, so the block is only skipped outright
+  // when there is nothing left for it to check. `integer` implies `number`, so
   // it settles that block's guard too.
   const numbers =
-    meta.numbers === null || !compiler.asserts
+    meta.numbers === null || (!compiler.asserts && meta.numbers.format === undefined)
       ? null
-      : compileNumber(meta.numbers, guaranteedType === 'number' || guaranteedType === 'integer')
+      : compileNumber(compiler, meta.numbers, guaranteedType === 'number' || guaranteedType === 'integer')
 
   if (objects === null && arrays === null && strings === null && numbers === null) return null
 
@@ -1670,7 +1904,7 @@ const compileTypeBlocks = (compiler: Compiler, meta: NodeMeta, guaranteedType: s
 const buildNode = (compiler: Compiler, schema: Record<string, unknown>): Step => {
   // Every keyword this node carries, read once — see `node-meta.ts`. Nothing
   // caches it, because from here on nobody asks the node anything again.
-  const meta = getNodeMeta(null, schema)
+  const meta = getNodeMeta(null, schema, compiler.formats.numbers)
 
   // Whether this node is nothing but a `type` and (optionally) the keywords for
   // that one type — `{ type: 'string' }`, `{ type: 'integer', minimum: 0 }`,
@@ -1696,7 +1930,7 @@ const buildNode = (compiler: Compiler, schema: Record<string, unknown>): Step =>
     // the right type ever turns up.
     if (!declaresTypeBlock(compiler, meta)) return typeOnlyStep(singleType) as Step
 
-    const message = `must be ${singleType}`
+    const message = typeError(singleType)
     // The block is built on the first value that actually gets past the type
     // check, not when the node is built. A `{ type: 'object', properties: … }`
     // node meeting a string, a number, or `null` — which is most of what a union

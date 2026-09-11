@@ -22,7 +22,11 @@
 Each generated file exports:
 
 - A TypeScript `type` definition for the schema
-- A `validateFoo(input: unknown, _path?: string): ValidationResult` function
+- A `validateFoo(input: unknown, _path?: string): ValidationResult` function, whose
+  errors carry the keyword that rejected the value and that keyword's own values
+  (`{ message, path, keyword, params }`) — the shape
+  [`@amritk/runtime-validators`](../runtime-validators) reports, so an error from
+  either can be rendered, translated or branched on by the same code
 - An `isFoo(input: unknown): input is Foo` boolean type guard — a single flat
   predicate (no error array, no cold-path call) reaching the same verdict as
   `validateFoo`, for the common "is this valid?" question
@@ -84,7 +88,7 @@ if (!result.valid) {
 
 ## API
 
-### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?)`
+### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?)`
 
 | Parameter | Type | Default | Description |
 |:---|:---|:---|:---|
@@ -93,6 +97,7 @@ if (!result.valid) {
 | `typeSuffix` | `string` | `''` | Suffix appended to every `$ref`-derived type name (`'Object'` turns `Contact` into `ContactObject`). The root type name is unaffected. |
 | `schemas` | `Record<string, unknown>` | — | Documents you have **already loaded**, keyed by the absolute URI a `$ref` names them by. See below. |
 | `unknownKeys` | `'count-keys' \| 'count-enumerable'` | `'count-keys'` | How the fast paths prove a closed object (`additionalProperties: false`) has no undeclared key: `Object.keys(obj).length` (fastest on Bun) or a `for…in` count (fastest on Node). See [Choosing how keys are counted](#choosing-how-keys-are-counted). |
+| `formats` | `'all' \| string[]` | — | String `format`s the generated validators enforce. Unset leaves `format` an annotation, as JSON Schema reads it. See [Semantics](#semantics). |
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
 
@@ -169,12 +174,26 @@ is not. And a self-referential object reaches a verdict — the structural
 comparison stops at 512 levels — where it used to throw a `RangeError` out of a
 function whose signature promises a `ValidationResult`.
 
-**`format` emits no check.** JSON Schema treats `format` as an annotation, and so
-does this generator: `{ type: 'string', format: 'uuid' }` produces the `typeof`
-check and nothing more. That matches the interpreter's default, but *not* the
-interpreter run with `{ formats: 'all' }` — as `@amritk/lint` and
-`createApi({ formats })` do — so a generated validator accepts strings those
-reject.
+**`format` is enforced when you ask for it.** JSON Schema treats `format` as an
+annotation, and so does this generator by default: `{ type: 'string', format:
+'uuid' }` produces the `typeof` check and nothing more, which matches the
+interpreter given no formats.
+
+Pass `formats` (`'all'`, or the names to check) and both `validateX` and the flat
+`isX` check them — the guard has to see the same set as the validator, or the two
+would disagree, which is the one thing it may never do. The checks are emitted
+into a `formats.ts` beside the validators, holding only the formats the schema
+names, because generated output is dependency-free and cannot import
+`@amritk/runtime-validators`' table.
+
+Two implementations of one rule is what drifts, so they are not merely assumed to
+agree: `emit-format-checks.test.ts` runs both over the official suite's whole
+optional/format corpus and requires the same verdict on every case.
+
+Set it to whatever validates the same schemas at runtime — `@amritk/lint` and
+`createApi({ formats })` run the interpreter with formats on — and the build-time
+and runtime answers agree. Leave it unset and they agree too, on the annotation
+reading.
 
 **`unevaluatedProperties` / `unevaluatedItems` are generated**, not refused. Each
 emits a flat expression computing what the interpreter computes as annotations: per
@@ -212,7 +231,7 @@ official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema
 (the required Draft 2020-12 tests — 1281 cases), compiles and links the emitted
 files in memory, and runs the suite's instances through the real generated code:
 
-**1274 / 1281 cases pass (99.5%).**
+**1276 / 1281 cases pass (99.6%).**
 
 The suite's `remotes/` documents and the 2020-12 dialect metaschema are supplied
 through the `schemas` option, which is how the suite intends a validator that does
@@ -220,10 +239,9 @@ no I/O to answer the retrieval step. Everything else — applying the base URIs,
 walking anchors across documents, naming and emitting a file per definition — the
 generator still has to do.
 
-Of the 7 that do not pass: four `$dynamicRef`s whose binding depends on the
+Of the 5 that do not pass: four `$dynamicRef`s whose binding depends on the
 evaluation path (a generator emits one function per definition, shared by every
-path that reaches it, so it cannot bind per path), two definitions in different
-embedded resources that reduce to one filename, and `$vocabulary`. Nothing on the
+path that reaches it, so it cannot bind per path), and `$vocabulary`. Nothing on the
 list is a keyword that silently returns the wrong answer.
 
 Every case is named in
@@ -322,10 +340,12 @@ are within a whisker of each other on both engines. Every library agrees on
 every verdict; parity is asserted before timing.
 
 One caveat on the first two rows: their schemas declare `format` (`uuid`,
-`email`), and Ajv, typia, zod, and TypeBox all check it, while mjst's generated
-validators treat it as an annotation (see [Semantics](#semantics)). So on `small`
-and `order`, mjst is doing slightly less work than the columns beside it — the
-parity samples fail other constraints too, which is why the verdicts still agree.
+`email`), and Ajv, typia, zod, and TypeBox all check it, while the benchmark
+generates mjst's validators without `formats` — the default, where `format` is an
+annotation (see [Semantics](#semantics)). So on `small` and `order`, mjst is
+doing slightly less work than the columns beside it; pass `formats` and it does
+the same work. The parity samples fail other constraints too, which is why the
+verdicts still agree either way.
 The `assert-loose` / `assert-strict` rows carry no `format` and are the
 constraint-for-constraint comparison. Each library is
 timed in an isolated process over a pool of distinct inputs, reporting the median

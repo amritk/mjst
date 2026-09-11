@@ -134,17 +134,6 @@ export const EXPECTED_FAILURES: ExpectedFailures = {
     'refused: the ref now resolves, but the resulting cycle leaves the root’s sibling `const` unprovable inline, so generation stops rather than drop it',
 
   // ---------------------------------------------------------------------------
-  // name collision: two embedded resources, one definition name
-  //
-  // Each resource carries its own `$defs/stuff`, and both reduce to the file
-  // `stuff.ts`. Emitting one would silently give every reference to the other the
-  // wrong type, so the walker stops and says which two definitions clash. Renaming
-  // has to be the caller's call — the name is what every emitted import is keyed on.
-  // ---------------------------------------------------------------------------
-  'dynamicRef.json/$dynamicRef avoids the root of each schema, but scopes are still registered':
-    'name collision: `first`, `second`, and `third` each declare `$defs/stuff`, which all reduce to one filename',
-
-  // ---------------------------------------------------------------------------
   // vocabulary: `$vocabulary` in a custom metaschema
   //
   // Switching the validation vocabulary off means fetching the metaschema named by

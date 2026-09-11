@@ -851,7 +851,7 @@ describe('create-api', () => {
     expect(rejected.body).toEqual({
       error: 'validation_failed',
       source: 'body',
-      errors: [{ message: 'end must be after start', path: '/end' }],
+      errors: [{ message: 'end must be after start', path: '/end', keyword: 'refine', params: {} }],
     })
   })
 
@@ -913,7 +913,7 @@ describe('create-api', () => {
     expect(rejected.body).toEqual({
       error: 'validation_failed',
       source: 'body',
-      errors: [{ message: 'end must be after start', path: '/end' }],
+      errors: [{ message: 'end must be after start', path: '/end', keyword: 'refine', params: {} }],
     })
   })
 

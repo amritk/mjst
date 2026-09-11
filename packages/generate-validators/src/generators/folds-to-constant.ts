@@ -1,15 +1,19 @@
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { enforcesFormat, NO_FORMATS } from './enforced-keywords'
+
 /**
  * Keywords that describe a schema without constraining an instance. A node
  * carrying only these accepts everything, so the emitter's match expression for
  * it collapses to `true`.
  *
  * Membership is decided by what this emitter does, not by which vocabulary a
- * keyword belongs to. `format` and the `content*` family are annotations here —
- * the 2020-12 default, and what the interpreter does; `format` is pinned by
- * `format-annotation.test.ts`. `$defs` / `definitions` hold subschemas split
+ * keyword belongs to. The `content*` family are annotations here, the 2020-12
+ * default and what the interpreter does. So is `format`, unless the caller asked
+ * for formats to be enforced — which is why this predicate takes the enforced
+ * set rather than reading membership off the constant alone.
+ * `$defs` / `definitions` hold subschemas split
  * into their own files rather than applied here. `$id` / `$schema` / `$anchor` /
  * `$dynamicAnchor` / `$vocabulary` identify and scope, none of which this
  * generator acts on. `nullable`, `example`, `discriminator`, `xml` and
@@ -62,12 +66,14 @@ const ANNOTATION_KEYWORDS: ReadonlySet<string> = new Set([
  * Hence the conservative `undefined`: this recognises the spellings that are
  * decidable from the node alone and declines everything else.
  */
-export const foldsToConstant = (schema: unknown): boolean | undefined => {
+export const foldsToConstant = (schema: unknown, formats: ReadonlySet<string> = NO_FORMATS): boolean | undefined => {
   if (schema === true) return true
   if (schema === false) return false
   // A number, a string, a null: not a schema, so there is no verdict to give.
   // What the emitter does with one is a separate question, and the caller's —
   // it skips the keyword outright rather than folding it either way.
   if (!isSchemaObject(schema as JSONSchema)) return undefined
-  return Object.keys(schema as Record<string, unknown>).every((key) => ANNOTATION_KEYWORDS.has(key)) ? true : undefined
+  const record = schema as Record<string, unknown>
+  if (enforcesFormat(record, formats)) return undefined
+  return Object.keys(record).every((key) => ANNOTATION_KEYWORDS.has(key)) ? true : undefined
 }

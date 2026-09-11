@@ -4,9 +4,14 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /**
  * Every keyword this generator turns into a runtime check. Annotations
- * (`title`, `description`, `default`, `$defs`, `format`, …) are deliberately
- * absent: they change no verdict, so a node carrying only those is still "just"
- * whatever its one validation keyword says.
+ * (`title`, `description`, `default`, `$defs`, …) are deliberately absent: they
+ * change no verdict, so a node carrying only those is still "just" whatever its
+ * one validation keyword says.
+ *
+ * `format` is the one keyword whose membership is not fixed. It is an annotation
+ * by default — the 2020-12 reading, and the interpreter's — and an assertion
+ * when the caller asks for formats to be enforced, so every predicate here takes
+ * the enforced set rather than reading a constant.
  */
 export const ENFORCED_KEYWORDS = new Set([
   '$ref',
@@ -64,11 +69,29 @@ export const ENFORCED_KEYWORDS = new Set([
  * lets each of them keep its tight output for the node it really does describe,
  * and hand anything richer to the general path.
  */
-export const declaresKeywordOutside = (schema: JSONSchema, owned: readonly string[]): boolean => {
+export const declaresKeywordOutside = (
+  schema: JSONSchema,
+  owned: readonly string[],
+  formats: ReadonlySet<string> = NO_FORMATS,
+): boolean => {
   if (!isSchemaObject(schema)) return false
-  for (const keyword of Object.keys(schema as Record<string, unknown>)) {
+  const record = schema as Record<string, unknown>
+  for (const keyword of Object.keys(record)) {
     if (owned.includes(keyword)) continue
     if (ENFORCED_KEYWORDS.has(keyword)) return true
+    if (keyword === 'format' && enforcesFormat(record, formats)) return true
   }
   return false
+}
+
+/** No formats enforced — the default, and what makes `format` an annotation. */
+export const NO_FORMATS: ReadonlySet<string> = new Set()
+
+/**
+ * Whether this node's `format` is one the caller asked to enforce, making it an
+ * assertion rather than an annotation.
+ */
+export const enforcesFormat = (schema: Record<string, unknown>, formats: ReadonlySet<string>): boolean => {
+  const format = schema['format']
+  return typeof format === 'string' && formats.has(format)
 }

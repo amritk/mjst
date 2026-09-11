@@ -1,4 +1,4 @@
-import { prepareValidator } from '@/interpreter/prepare'
+import { prepareSplitValidator } from '@/interpreter/prepare'
 
 import type { FromSchema } from './from-schema'
 import type { ValidateOptions, Validator } from './types'
@@ -52,5 +52,5 @@ import type { ValidateOptions, Validator } from './types'
  * ```
  */
 export const validate = <const S = unknown>(schema: S, options?: ValidateOptions): Validator<FromSchema<S>> => {
-  return prepareValidator(schema, options, true) as Validator<FromSchema<S>>
+  return prepareSplitValidator(schema, options) as Validator<FromSchema<S>>
 }

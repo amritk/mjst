@@ -541,20 +541,27 @@ const files = await buildValidatorSchema(schema, 'Document')
    `validateFoo` returns `true | { valid: false; errors: ValidationError[] }`.
    Check `if (result !== true)` for the failure path — `if (result.valid)` is
    wrong.
-2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?)`
+2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?)`
    — async, no `strict`/`typesOnly`/options object. Returns `GeneratedFile[]` in
    memory (you write them). `unknownKeys` (`'count-keys'` by default,
    `'count-enumerable'` for Node-only output) picks how a closed object's guard
    counts keys; nothing in the generated code detects its runtime.
 3. **Output includes a shared `validation-result.ts`** (`ValidationError`,
-   `ValidationResult`, helpers) plus the `index.ts` barrel.
+   `ValidationResult`, helpers) plus the `index.ts` barrel — and a `formats.ts`
+   when `formats` is passed. Each error is
+   `{ message, path, keyword, params }`, the shape
+   `@amritk/runtime-validators` reports, so branch on `keyword` rather than
+   matching message text.
 4. **`NaN` fails a *constrained* number** (`minimum`/`maximum`/`multipleOf` all
    reject it) and satisfies a bare `{ "type": "number" }`, which is Ajv's answer
    too. Draft-07 schemas are auto-upgraded to 2020-12.
-5. **`format` emits no check.** It stays an annotation, like the interpreter's
-   default — but *not* like the interpreter run with `{ formats: 'all' }`
-   (`@amritk/lint`, `createApi({ formats })`), which rejects strings a generated
-   validator accepts. `unevaluatedProperties`/`unevaluatedItems` *are* generated;
+5. **`format` emits no check unless you pass `formats`.** By default it stays an
+   annotation, like the interpreter given no formats — but *not* like the
+   interpreter run with `{ formats: 'all' }` (`@amritk/lint`,
+   `createApi({ formats })`), which rejects strings such a validator accepts.
+   Pass `formats` (`'all'` or a list, or `--formats` on the CLI) and both
+   `validateX` and `isX` check them, against a `formats.ts` emitted alongside.
+   Set it to whatever validates the same schemas at runtime. `unevaluatedProperties`/`unevaluatedItems` *are* generated;
    four shapes still refuse (coverage through a `$dynamicRef`, an unresolvable or
    cyclic `$ref` at the same instance location, a walk deeper than eight
    applicators, a node under an *inert* `additionalItems` — one with no array
@@ -746,19 +753,35 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    Remote / cross-file refs are NOT fetched — bundle first with
    `@amritk/resolve-refs`, then validate the dereferenced document.
 4. **`format` is opt-in.** Unlisted formats are treated as annotations (like
-   Ajv); pass `{ formats: 'all' }` or a list to enforce.
+   Ajv); pass `{ formats: 'all' }` or a list to enforce. `customFormats` adds
+   checkers of your own (`{ customFormats: { phone: /^\d+$/ } }`), and those are
+   enforced by registering them — they need no second mention in `formats`.
 5. **Write the schema `as const`** for type inference. Wrong regime: this is a
    cold/few-values interpreter; for one schema × millions of values, use Ajv (or
    `@amritk/generate-validators` for generated straight-line code).
-6. **`FromSchema` honours the `x-mjst` brand.** A schema with
+6. **A bad *schema* is silent unless you ask.** `{ required: 'name' }` requires
+   nothing and `{ maxlength: 5 }` bounds nothing — both are legal JSON Schema and
+   both enforce nothing. Pass `{ strict: true }` to refuse such a schema
+   (throwing a `SchemaError`), or call `checkSchema(schema)` to get the findings
+   without refusing. Use `strict` where the schema is yours; use `checkSchema`
+   where it is not.
+7. **Errors carry `keyword` and `params`, not just `message` and `path`.** Branch
+   on `error.keyword` rather than matching message text, and rebuild a message
+   from `error.params` (`{ limit }`, `{ missingProperty }`, `{ allowedValues }`)
+   rather than parsing one. The names follow Ajv's.
+8. **Errors are capped at 1000 per validation** (`limits.maxErrors`). Pass
+   `Infinity` if you genuinely need every error from a huge invalid document.
+9. **`FromSchema` honours the `x-mjst` brand.** A schema with
    `'x-mjst': { brand: 'UserId' }` infers `Base & { readonly __brand: 'UserId' }`
    (e.g. `string & …`), matching the code generators' `.d.ts` output. The brand
    is type-level only — runtime validation still checks the plain base type — so
    it's the way to give `@amritk/api` route `params`/`query`/`body` nominal ids.
 
-Exports: `validate`, `validateGuard`, `assert`, and the types `Validator`,
-`Guard`, `ValidationError`, `ValidationResult`, `FromSchema`, `Infer`,
-`ValidateOptions`. Only the `.` entry. Install: `bun add @amritk/runtime-validators`.
+Exports: `validate`, `validateGuard`, `assert`, `checkSchema`, `isSchemaError`,
+`isValidationLimitError`, and the types `Validator`, `Guard`, `ValidationError`,
+`ValidationResult`, `FromSchema`, `Infer`, `ValidateOptions`, `SchemaIssue`,
+`FormatDefinition`. Subpaths: `/parse` (coercing parser) and `/metaschema` (the
+2020-12 dialect documents). Install: `bun add @amritk/runtime-validators`.
 
 ---
 

@@ -126,8 +126,18 @@ export type InterpreterContext = {
   readonly caches: ValidatorCaches
   /** Collected errors, lazily allocated so valid input never allocates. */
   errors: ValidationError[] | null
-  /** Set in guard mode on the first failure so the walk can unwind. */
+  /**
+   * Set on the first failure in guard mode, and in error mode once the error
+   * list has reached {@link maxErrors}. Either way it means "stop walking": the
+   * verdict is settled and nothing further will be recorded.
+   */
   failed: boolean
+  /**
+   * Ceiling on collected errors (see {@link ValidateLimits.maxErrors}). Read
+   * only in error mode; a branch context never records an error, so its value
+   * there is irrelevant.
+   */
+  readonly maxErrors: number
   /**
    * The active `$ref`/`$dynamicRef` recursion path as flattened `schema, value`
    * pairs. Shared by reference with nested branch contexts so a cycle routed
@@ -422,15 +432,43 @@ export const matchesType = (type: string, value: unknown): boolean => {
  * Records a failure. In error mode it appends `{ message, path }` (allocating
  * the array on first use); in guard mode it just trips the `failed` flag so the
  * walk unwinds without building any error objects.
+ *
+ * Error mode trips the same flag once the list is full. Every error already
+ * recorded is a real failure — probes run in a boolean child and never reach
+ * here — so the verdict cannot change, and past the cap the rest of the walk
+ * exists only to allocate objects for a report nobody reads to the end. Tripping
+ * `failed` unwinds it through the checks the guard path already uses.
  */
-export const fail = (ctx: InterpreterContext, message: string, path: string): void => {
+export const fail = (ctx: InterpreterContext, error: ErrorTemplate, path: string): void => {
   if (ctx.emitErrors) {
     if (ctx.errors === null) ctx.errors = []
-    ctx.errors.push({ message, path })
+    ctx.errors.push({ message: error.message, path, keyword: error.keyword, params: error.params })
+    if (ctx.errors.length >= ctx.maxErrors) ctx.failed = true
   } else {
     ctx.failed = true
   }
 }
+
+/** The params of a keyword whose name already says everything about the failure. */
+export const NO_PARAMS: Readonly<Record<string, unknown>> = Object.freeze({})
+
+/**
+ * Everything about a failure except where it happened.
+ *
+ * Built once, when a node is specialized, and closed over by the step that can
+ * report it — so a keyword whose message and params are both fixed (which is
+ * most of them) allocates nothing even on the error path, and the guard path
+ * never touches one at all. Only the handful whose params name something about
+ * the *value* — the missing property, the offending key — build one per failure.
+ */
+export type ErrorTemplate = {
+  readonly message: string
+  readonly keyword: string
+  readonly params: Readonly<Record<string, unknown>>
+}
+
+/** An {@link ErrorTemplate} for a keyword with nothing to add beyond its name. */
+export const bareError = (keyword: string, message: string): ErrorTemplate => ({ message, keyword, params: NO_PARAMS })
 
 /**
  * Builds the child instance path for a nested property or item. In guard mode
@@ -624,6 +662,33 @@ export const resolveRec = (ctx: InterpreterContext): unknown => {
  * the caller's pool rather than escaping into a fresh one. Only `failed` is
  * private, which is the whole point: a failing probe must not unwind the caller.
  */
+/**
+ * An error-collecting child of `ctx` with its own error list.
+ *
+ * Used on the failure path of `anyOf` / `oneOf`, to ask a branch *why* it did
+ * not match rather than only whether it did. Everything reusable is shared by
+ * reference — the ref stack so a cycle routed through the branch is still seen,
+ * the budget so asking cannot escape the caller's work ceiling — and only the
+ * error list is private, which is the whole point: these errors are collected to
+ * be compared, and most of them will be thrown away.
+ *
+ * Built where it is needed rather than kept on the context, because it is only
+ * ever needed once something has already failed.
+ */
+export const newErrorContext = (ctx: InterpreterContext): InterpreterContext => ({
+  root: ctx.root,
+  registry: ctx.registry,
+  emitErrors: true,
+  caches: ctx.caches,
+  errors: null,
+  failed: false,
+  refStack: ctx.refStack,
+  maxDepth: ctx.maxDepth,
+  maxErrors: ctx.maxErrors,
+  budget: ctx.budget,
+  branch: null,
+})
+
 export const newBranchContext = (ctx: InterpreterContext): InterpreterContext => ({
   root: ctx.root,
   registry: ctx.registry,
@@ -633,6 +698,7 @@ export const newBranchContext = (ctx: InterpreterContext): InterpreterContext =>
   failed: false,
   refStack: ctx.refStack,
   maxDepth: ctx.maxDepth,
+  maxErrors: ctx.maxErrors,
   budget: ctx.budget,
   branch: null,
 })

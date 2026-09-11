@@ -238,9 +238,13 @@ describe('collect-imports', () => {
 
     const result = collectImports(schema)
 
+    // A definition nested under another is named for both, so two parents can
+    // each hold a `type-apikey`.
     expect(result).toEqual([
-      "import { type TypeApikey, parseTypeApikey, validateTypeApikeyShape } from './type-apikey.js';",
-      "import { type TypeHttp, parseTypeHttp, validateTypeHttpShape } from './type-http.js';",
+      'import { type SecuritySchemeTypeApikey, parseSecuritySchemeTypeApikey, ' +
+        "validateSecuritySchemeTypeApikeyShape } from './security-scheme-type-apikey.js';",
+      'import { type SecuritySchemeTypeHttp, parseSecuritySchemeTypeHttp, ' +
+        "validateSecuritySchemeTypeHttpShape } from './security-scheme-type-http.js';",
     ])
   })
 

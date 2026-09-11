@@ -46,7 +46,9 @@ describe('assert', () => {
       const failure = error as ValidationFailedError
       expect(failure).toBeInstanceOf(Error)
       expect(failure.name).toBe('ValidationFailedError')
-      expect(failure.errors).toEqual([{ message: 'must be integer', path: '' }])
+      expect(failure.errors).toEqual([
+        { message: 'must be integer', path: '', keyword: 'type', params: { type: 'integer' } },
+      ])
     }
   })
 
@@ -66,7 +68,9 @@ describe('assert', () => {
       assert({ type: 'array', items: { type: 'number' } }, [1, 'two', 3])
       expect.unreachable('assert should have thrown')
     } catch (error) {
-      expect((error as ValidationFailedError).errors).toEqual([{ message: 'must be number', path: '/1' }])
+      expect((error as ValidationFailedError).errors).toEqual([
+        { message: 'must be number', path: '/1', keyword: 'type', params: { type: 'number' } },
+      ])
     }
   })
 })

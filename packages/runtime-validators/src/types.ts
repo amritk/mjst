@@ -1,3 +1,5 @@
+import type { SchemaIssue } from './interpreter/check-schema'
+import type { FormatDefinition } from './interpreter/formats'
 import type { ValidateLimits } from './interpreter/limits'
 
 /**
@@ -8,8 +10,32 @@ import type { ValidateLimits } from './interpreter/limits'
  * so code can move between the build-time and runtime validators without churn.
  */
 export type ValidationError = {
+  /** Human-readable description of what went wrong. */
   message: string
+  /** JSON Pointer to the offending value inside the instance. */
   path: string
+  /**
+   * The JSON Schema keyword that rejected the value — `type`, `required`,
+   * `minimum`, and so on.
+   *
+   * This is what makes an error *programmable* rather than only printable. A
+   * caller can branch on it (is this a missing field or a malformed one?), group
+   * by it, or use it with {@link params} to render a message of their own — a
+   * translated one, or one written in the language of their domain rather than
+   * of JSON Schema.
+   */
+  keyword: string
+  /**
+   * The keyword's own values, as far as they explain the failure: the bound that
+   * was exceeded, the property that was missing, the allowed values that were
+   * not matched. Empty for a keyword with nothing to add beyond its name.
+   *
+   * The shape depends on the keyword and is documented alongside each in the
+   * README. It exists so a caller can rebuild the message: `params.limit` with
+   * `keyword: 'maxLength'` is everything "must have at most 20 characters" says,
+   * without being in English.
+   */
+  params: Readonly<Record<string, unknown>>
 }
 
 /**
@@ -96,6 +122,34 @@ export type ValidateOptions = {
    */
   readonly formats?: 'all' | readonly string[]
   /**
+   * Format checkers of your own, keyed by the name a schema's `format` would
+   * use. A `RegExp` or a predicate describes a **string** format; the object
+   * form (`{ type: 'number', validate }`) describes one over numbers.
+   *
+   * Registering a format is the opt-in, so unlike the built-ins these are always
+   * checked and do not additionally have to be named in {@link formats}. A
+   * definition here also *replaces* a built-in of the same name, which is how to
+   * tighten `email` or loosen `uri` without forking the package.
+   *
+   * Nothing screens a `RegExp` you supply for catastrophic backtracking the way
+   * a schema's own `pattern` is screened — you wrote it, so it is trusted the
+   * same way the rest of your code is.
+   *
+   * Treat the map as immutable once passed: like {@link schemas}, it takes part
+   * in the validator cache key by identity and by the names it defines.
+   *
+   * @example
+   * ```typescript
+   * validate(schema, {
+   *   customFormats: {
+   *     'phone-e164': /^\+[1-9]\d{6,14}$/,
+   *     port: { type: 'number', validate: (value) => Number.isInteger(value) && value > 0 && value < 65_536 },
+   *   },
+   * })
+   * ```
+   */
+  readonly customFormats?: Readonly<Record<string, FormatDefinition>>
+  /**
    * Resource ceilings that keep a validation from being turned into a
    * denial-of-service by an adversarial schema or input — recursion depth, total
    * work, and unsafe regex patterns. The defaults are generous enough that
@@ -135,6 +189,27 @@ export type ValidateOptions = {
    * ```
    */
   readonly schemas?: Readonly<Record<string, unknown>>
+  /**
+   * Refuse to build a validator for a schema that does not say what its author
+   * meant — a keyword carrying the wrong kind of value, one nobody recognizes, a
+   * value that makes its keyword meaningless, or a constraint the node's own
+   * `type` has already ruled out.
+   *
+   * Off by default, because the permissive reading is the specification's: an
+   * unknown keyword is an annotation and a wrong-typed one is not an assertion.
+   * Both are also silent, which is why this exists — `{ required: 'name' }` and
+   * `{ maxlength: 5 }` enforce nothing, and nothing says so.
+   *
+   * Turn it on wherever the schema is yours to fix (a build step, a test, a
+   * config loaded at startup). Leave it off for a schema that arrives from
+   * somewhere you do not control, where an unknown keyword is somebody else's
+   * extension rather than your typo — and reach for {@link checkSchema} there
+   * instead, which reports the same findings without refusing.
+   *
+   * Building throws a `SchemaError` listing every issue found; use
+   * {@link isSchemaError} to tell it from an ordinary throw.
+   */
+  readonly strict?: boolean
 }
 
-export type { ValidateLimits }
+export type { FormatDefinition, SchemaIssue, ValidateLimits }

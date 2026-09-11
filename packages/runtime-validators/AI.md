@@ -36,16 +36,32 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    Remote / cross-file refs are NOT fetched — bundle first with
    `@amritk/resolve-refs`, then validate the dereferenced document.
 4. **`format` is opt-in.** Unlisted formats are treated as annotations (like
-   Ajv); pass `{ formats: 'all' }` or a list to enforce.
+   Ajv); pass `{ formats: 'all' }` or a list to enforce. `customFormats` adds
+   checkers of your own (`{ customFormats: { phone: /^\d+$/ } }`), and those are
+   enforced by registering them — they need no second mention in `formats`.
 5. **Write the schema `as const`** for type inference. Wrong regime: this is a
    cold/few-values interpreter; for one schema × millions of values, use Ajv (or
    `@amritk/generate-validators` for generated straight-line code).
-6. **`FromSchema` honours the `x-mjst` brand.** A schema with
+6. **A bad *schema* is silent unless you ask.** `{ required: 'name' }` requires
+   nothing and `{ maxlength: 5 }` bounds nothing — both are legal JSON Schema and
+   both enforce nothing. Pass `{ strict: true }` to refuse such a schema
+   (throwing a `SchemaError`), or call `checkSchema(schema)` to get the findings
+   without refusing. Use `strict` where the schema is yours; use `checkSchema`
+   where it is not.
+7. **Errors carry `keyword` and `params`, not just `message` and `path`.** Branch
+   on `error.keyword` rather than matching message text, and rebuild a message
+   from `error.params` (`{ limit }`, `{ missingProperty }`, `{ allowedValues }`)
+   rather than parsing one. The names follow Ajv's.
+8. **Errors are capped at 1000 per validation** (`limits.maxErrors`). Pass
+   `Infinity` if you genuinely need every error from a huge invalid document.
+9. **`FromSchema` honours the `x-mjst` brand.** A schema with
    `'x-mjst': { brand: 'UserId' }` infers `Base & { readonly __brand: 'UserId' }`
    (e.g. `string & …`), matching the code generators' `.d.ts` output. The brand
    is type-level only — runtime validation still checks the plain base type — so
    it's the way to give `@amritk/api` route `params`/`query`/`body` nominal ids.
 
-Exports: `validate`, `validateGuard`, `assert`, and the types `Validator`,
-`Guard`, `ValidationError`, `ValidationResult`, `FromSchema`, `Infer`,
-`ValidateOptions`. Only the `.` entry. Install: `bun add @amritk/runtime-validators`.
+Exports: `validate`, `validateGuard`, `assert`, `checkSchema`, `isSchemaError`,
+`isValidationLimitError`, and the types `Validator`, `Guard`, `ValidationError`,
+`ValidationResult`, `FromSchema`, `Infer`, `ValidateOptions`, `SchemaIssue`,
+`FormatDefinition`. Subpaths: `/parse` (coercing parser) and `/metaschema` (the
+2020-12 dialect documents). Install: `bun add @amritk/runtime-validators`.

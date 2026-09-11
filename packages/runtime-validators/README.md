@@ -26,7 +26,7 @@ The trade is steady-state throughput: a JIT-compiled validator (like Ajv after i
 Three entry points, for three different jobs:
 
 - **`validateGuard(schema)`** → `(input) => input is T`. A boolean type guard that short-circuits on the first failure and never builds an error object. Reach for this when you only need yes/no.
-- **`validate(schema)`** → `(input) => true | { valid: false, errors }`. Collects every error with a JSON Pointer path, so you can tell a caller exactly what went wrong.
+- **`validate(schema)`** → `(input) => true | { valid: false, errors }`. Collects every error with a JSON Pointer path, the keyword that rejected the value and that keyword's own values, so you can tell a caller exactly what went wrong — or say it in your own words. It runs the guard first and only pays for error collection once something has actually failed, so asking for the detail costs nothing when there is none.
 - **`assert(schema, value)`** → `T`. The one-shot "valid or bust" path: returns the value typed to the schema, or throws a `ValidationFailedError` (carrying the same `errors` array) when it does not match. Reach for this when invalid input is exceptional and you want a parse step, not a result to branch on.
 
 ---
@@ -65,7 +65,7 @@ const schema = {
 const validator = validate(schema)
 const result = validator({ id: 1, name: 'Ada', tags: ['a', 'b'] })
 if (result !== true) {
-  console.error(result.errors) // [{ message, path }, ...]
+  console.error(result.errors) // [{ message, path, keyword, params }, ...]
 }
 
 // Fast boolean guard — the guarded type is inferred from the schema
@@ -133,33 +133,48 @@ const isTree = validateGuard({
 
 Pick the right tool for the shape of your workload. There are two regimes, and they have opposite winners.
 
-**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Numbers from `bun run bench` and `bun run bench:node`, medians of three runs on one machine (Linux x64, a 4-vCPU cloud box, Bun 1.4.0 and Node 26.8.1 — the same machine and runtimes as every table in this repo; your hardware will differ, run it yourself):
+**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Numbers from `bun run bench` and `bun run bench:node` on one machine (Linux x64, a 4-vCPU cloud box, Bun 1.3.11 and Node 22.22.2); your hardware will differ, run it yourself:
 
 | schema | `validate` (cold) | Ajv (compile + run) | speedup |
 |:---|---:|---:|---:|
-| **Bun 1.4.0 / JavaScriptCore** | | | |
-| small | ~0.016 ms | ~11 ms | **~728×** |
-| wide (40 props) | ~0.11 ms | ~15 ms | **~139×** |
-| deep (`$ref` + arrays) | ~0.14 ms | ~15 ms | **~102×** |
-| assert (7 scalars + nested) | ~0.017 ms | ~11 ms | **~646×** |
-| **Node 26.8.1 / V8** | | | |
-| small | ~0.013 ms | ~5.0 ms | **~399×** |
-| wide (40 props) | ~0.063 ms | ~7.2 ms | **~115×** |
-| deep (`$ref` + arrays) | ~0.092 ms | ~7.4 ms | **~81×** |
-| assert (7 scalars + nested) | ~0.014 ms | ~5.2 ms | **~358×** |
+| **Bun 1.3.11 / JavaScriptCore** | | | |
+| small | ~0.017 ms | ~8.6 ms | **~448×** |
+| wide (40 props) | ~0.15 ms | ~12 ms | **~126×** |
+| deep (`$ref` + arrays) | ~0.15 ms | ~12 ms | **~64×** |
+| assert (7 scalars + nested) | ~0.010 ms | ~9.1 ms | **~593×** |
+| **Node 22.22.2 / V8** | | | |
+| small | ~0.012 ms | ~5.3 ms | **~459×** |
+| wide (40 props) | ~0.12 ms | ~8.1 ms | **~65×** |
+| deep (`$ref` + arrays) | ~0.12 ms | ~7.5 ms | **~62×** |
+| assert (7 scalars + nested) | ~0.022 ms | ~5.9 ms | **~266×** |
 
 The win is smaller on V8 for a reason worth knowing: Ajv's compile costs about
-half as much there (~5–7 ms against ~11–15 ms), while this interpreter's cold
-walk is only a little faster. So the advantage is ~80–400× on Node and
-~100–730× on Bun — the same shape of answer, a different size.
+half as much there, while this interpreter's cold walk is only a little faster.
+Same shape of answer, different size.
 
-**Steady state — one schema, many values.** Here Ajv still wins on Bun: once compiled, its JIT'd function outruns this one by roughly **3.6–8.9×** per call (`validate`; the guard path is closer, at **2.4–6.8×**). On Node the gap is wider on three cases (**5.4–11×** for `validate`) and inverts on one: the 40-property `wide` schema, where the interpreter's guard runs **1.2×** *faster* than Ajv's compiled function and `validate` reaches 0.8× of it. If you validate the same schema against a high-throughput stream, compile it once with Ajv (or use this repo's build-time [`@amritk/generate-validators`](../generate-validators)) — nothing that stops short of emitting a function will match generated straight-line code, and this package does not pretend otherwise.
+**Steady state — one schema, many values.** Here Ajv's JIT'd function generally
+wins: on Bun it runs `validate` about **2.3–6.7×** faster per call, on Node
+**2.4–7.1×** — with one case going the other way on V8, the 40-property `wide`
+schema, where this interpreter is about **1.2×** *faster* than Ajv's compiled
+function. If you validate the same schema against a high-throughput stream,
+compile it once with Ajv (or use this repo's build-time
+[`@amritk/generate-validators`](../generate-validators)) — nothing that stops
+short of emitting a function will match generated straight-line code, and this
+package does not pretend otherwise.
 
-So the rule of thumb: **few values per schema → interpret** (no compile cost to amortize, and it runs eval-free anywhere); **many values per schema → generate ahead of time**.
+`validate` and `validateGuard` now cost within a few percent of each other,
+because `validate` *is* the guard until something fails — see the hot/cold split
+below. Reach for the guard when you only need yes/no; reach for `validate` when
+you might need to say why, and pay nothing extra for the option.
+
+So the rule of thumb: **few values per schema → interpret** (no compile cost to
+amortize, and it runs eval-free anywhere); **many values per schema → generate
+ahead of time**.
 
 What keeps the interpreter lean:
 
-- **No compile step up front.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up. A node is specialized the first time a validation reaches it, so a one-shot check never pays for the `$defs` it does not touch, and an unresolvable `$ref` still surfaces on use rather than on construction.
+- **A hot/cold split.** Collecting errors is not free even when there are none: the error-mode step carries the path string it would need to report a failure and cannot short-circuit, because a later failure is another error to name. So `validate` and `assert` run the boolean guard first and only fall through to the error-collecting half once something has actually failed — the same split [`@amritk/generate-validators`](../generate-validators) emits. Valid input is 1.75–2.4× faster than collecting outright; invalid input pays a second walk, which is the right way round for a validator that says "yes" far more often than "no". The error-collecting half is built on first use, so a validator never handed anything invalid never builds one.
+- **No compile step up front.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up. A node is specialized the first time a validation reaches it, so a one-shot check never pays for the `$defs` it does not touch. A `pattern` is the exception: every one in the document is compiled and screened when the validator is built, so `pattern: "("` is named there rather than thrown out of a validation months later.
 - **Every per-node question answered once.** Which keywords a node carries, its property key list, its `required` set, its compiled `pattern`s, which type-specific checks can possibly apply — all of it is settled when the node is specialized and closed over by its step, instead of being rediscovered on every value.
 - **Lazy, reused caches.** The one thing a node cannot settle is where a `$ref` points when the document declares `$id`s, because that depends on the base URI in scope at call time. Those targets are memoized the first time they are followed and reused on later calls.
 - **Nothing built for errors that never happen.** The error array and every failure message are created only when a failure is actually recorded and will actually be read, so valid input — and the whole guard path — never builds one. That is not the same as zero allocation: `unevaluatedProperties`/`unevaluatedItems` allocate an annotation tracker, and `uniqueItems` builds a `Set` past eight primitive elements. A branch probe (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) runs in the guard's own context, or in the one boolean-mode child an error-collecting validator keeps for its lifetime, and the run context itself is reused across calls — so a validator that has been called once allocates nothing more for valid input. Everything genuinely reusable — property keys, the `required` set, compiled `patternProperties`, dependency entry lists — is memoized per schema node instead of rebuilt per call.
@@ -180,9 +195,46 @@ Builds an error-collecting validator that interprets the schema on the fly.
 | `schema` | `unknown` | A JSON Schema (object, or a boolean schema). Same-document `$ref`s resolve — pointers, `$anchor`s, and refs written against an `$id` as a base URI — including recursion. |
 | `options.schemas` | `Record<string, unknown>` | Documents you have already loaded, keyed by the absolute URI a `$ref` names them by — see [Referencing other documents](#referencing-other-documents). |
 | `options.formats` | `'all' \| string[]` | String formats to enforce. Unlisted formats are treated as annotations (not validated), matching Ajv's opt-in behavior. |
+| `options.customFormats` | `Record<string, FormatDefinition>` | Format checkers of your own — see [Custom formats](#custom-formats). |
+| `options.strict` | `boolean` | Refuse to build a validator for a schema that does not say what its author meant — see [Strict schemas](#strict-schemas). |
 | `options.limits` | `ValidateLimits` | Per-validation resource ceilings — see [Resource limits](#resource-limits). |
 
 Returns a `Validator`: `(input: unknown) => true | { valid: false; errors: ValidationError[] }`. When the schema is written `as const`, the validator carries the inferred output type — recover it with `Infer`.
+
+Each `ValidationError` carries four things:
+
+```ts
+{
+  message: "must be >= 18",        // human-readable
+  path: '/age',                    // JSON Pointer into the instance
+  keyword: 'minimum',              // the keyword that rejected it
+  params: { comparison: '>=', limit: 18 },  // that keyword's own values
+}
+```
+
+`keyword` and `params` are what make an error *programmable* rather than only
+printable: branch on `keyword` to tell a missing field from a malformed one,
+group by it, or rebuild the message from `params` in your own language rather
+than in JSON Schema's. Both are always present — a keyword with nothing to add
+carries an empty `params` — and the names follow Ajv's, so an error-rendering or
+translation table written for Ajv works unchanged. `@amritk/generate-validators`
+emits the identical shape.
+
+A failing `anyOf` / `oneOf` says more than the combinator's own error when it
+can. If every branch but one was rejected on the value's *identity* — a `const`
+or `enum` on one of its own properties, which is what a discriminated union looks
+like from the outside — that branch's errors are added under the combinator's:
+
+```ts
+[
+  { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+  { message: 'must be integer', path: '/payload/b', keyword: 'type', params: { type: 'integer' } },
+]
+```
+
+That works through `$ref`s, which is what a compile-time `discriminator` analysis
+could not do. With no discriminator, nothing extra is reported — a guess would be
+worse than the silence.
 
 ### `validateGuard<T>(schema, options?)`
 
@@ -245,6 +297,80 @@ Options are `validate`'s, plus those two switches.
 
 Validates `value` against the schema in a single call and returns it typed to the schema, or throws a `ValidationFailedError` when it does not match — a plain `Error` (so `instanceof Error` and logging work) whose message lists each failure and whose `errors` property carries the same `ValidationError[]` that `validate` collects. Same `options` as `validate`. Reach for it when invalid input is exceptional and you would rather parse-or-throw than branch on a result. When the schema is written `as const` (or inferred via the `const` parameter), the return type is inferred from it.
 
+### Custom formats
+
+`formats` says which built-ins to enforce; `customFormats` adds checkers of your
+own, for the names the built-ins do not cover — or to replace one that they do.
+
+```typescript
+const isValid = validate(schema, {
+  customFormats: {
+    'phone-e164': /^\+[1-9]\d{6,14}$/,
+    slug: (value) => value === value.toLowerCase(),
+    port: { type: 'number', validate: (value) => Number.isInteger(value) && value > 0 && value < 65_536 },
+  },
+})
+```
+
+A `RegExp` or a predicate describes a **string** format, since almost every
+format does; the object form says otherwise, because a format asserts about one
+JSON type and is silent about every other.
+
+Registering a checker is the opt-in — there is no reading of "here is a checker
+for `phone`" that also means "do not use it" — so unlike the built-ins these do
+not additionally have to be named in `formats`. A definition here also *replaces*
+a built-in of the same name, which is how to tighten `email` or loosen `uri`
+without forking the package.
+
+Nothing screens a `RegExp` you supply for catastrophic backtracking the way a
+schema's own `pattern` is screened: you wrote it, so it is trusted the way the
+rest of your code is.
+
+### Strict schemas
+
+`{ required: 'name' }` requires nothing. `{ maxlength: 5 }` bounds nothing.
+`{ properties: 'nope' }` describes nothing. Every one of those is a correct
+reading of the specification — an unknown keyword is an annotation, a wrong-typed
+one is not an assertion — and every one of them is silent, which in a package for
+validating schemas you did not write is the worst failure mode available.
+
+`checkSchema` reports what a schema fails to say:
+
+```typescript
+import { checkSchema } from '@amritk/runtime-validators'
+
+checkSchema({ type: 'object', requred: ['name'], properties: { age: { type: 'string', minimum: 3 } } })
+// [
+//   { path: '/requred', keyword: 'requred', message: 'Unknown keyword "requred". …' },
+//   { path: '/properties/age/minimum', keyword: 'minimum', message: '"minimum" constrains numbers, but …' },
+// ]
+```
+
+Six kinds of problem: a keyword carrying the wrong kind of value, a keyword
+nobody recognizes, a `format` nobody defines, a value that makes its keyword
+meaningless (`enum: []`, `multipleOf: 0`), a constraint the node's own `type` has
+already ruled out, and a closed object requiring a property it does not declare.
+Anything beginning `x-` is left alone — that is the extension convention, and
+flagging it would make the check unusable on an OpenAPI document.
+
+`{ strict: true }` turns those into a refusal to build, throwing a `SchemaError`
+whose `issues` carry the same findings:
+
+```typescript
+validate({ type: 'object', requred: ['name'] }, { strict: true }) // throws SchemaError
+```
+
+Off by default, because the permissive reading is the specification's. Turn it on
+wherever the schema is yours to fix — a build step, a test, a config loaded at
+startup — and leave it off for a schema that arrives from somewhere you do not
+control, where an unknown keyword is somebody else's extension rather than your
+typo. `checkSchema` is the tool there: same findings, no refusal.
+
+Measured against Ajv's strict mode over the malformed schemas that motivated
+this, 20 of 21 are caught by both. The one Ajv catches and this does not is
+`exclusiveMaximum: true`, which this interpreter genuinely supports as the
+draft-04 spelling, so reporting it would be a false positive.
+
 ### Resource limits
 
 The interpreter walks arbitrary — and possibly untrusted — schemas over
@@ -257,6 +383,7 @@ is tunable per call via `options.limits`:
 | `maxDepth` | `512` | Deeply-nested data against a recursive schema (`{ items: { $ref: '#' } }`) overflowing the native stack as an uncatchable `RangeError`. |
 | `maxSteps` | `10_000_000` | Exponential combinator blow-up (nested `anyOf`/`oneOf` re-evaluating every branch) and quadratic `uniqueItems`. |
 | `allowUnsafePatterns` | `false` | ReDoS: a `pattern` prone to catastrophic backtracking is screened out before a validator is built. Set `true` only when every schema is trusted. |
+| `maxErrors` | `1000` | A large document that is wrong throughout costing memory proportional to its own size — 200,000 wrong array elements used to produce 200,000 error objects, about 7.6 MB. |
 
 > **The ReDoS screen is a filter, not a guarantee.** It rejects two recognizable
 > shapes — nested unbounded quantifiers (`(a+)+$`) and a provably ambiguous
@@ -272,10 +399,17 @@ is tunable per call via `options.limits`:
 > direction and flag a benign pattern; `allowUnsafePatterns: true` is the escape
 > hatch when you have reviewed it yourself.
 
-Exceeding a runtime ceiling **throws** rather than silently returning a verdict —
-the same fail-loud contract as an unresolvable `$ref` or an unknown `type`. The
-thrown value is a plain `Error` with a recognizable `name`; use
+Exceeding `maxDepth` or `maxSteps` **throws** rather than silently returning a
+verdict — the same fail-loud contract as an unresolvable `$ref` or an unknown
+`type`. The thrown value is a plain `Error` with a recognizable `name`; use
 `isValidationLimitError(error)` to tell it apart from an ordinary throw.
+
+`maxErrors` is the one that does not throw, because nothing is wrong: the run has
+reached a verdict — a value with more errors than the cap is invalid however many
+more there are — and the cap only says how many are worth carrying back. Every
+error already recorded is a real failure, so the walk stops once the list is
+full, which is why the 200,000-element case above now takes 2 ms instead of 43.
+Pass `Infinity` to collect every error however many there are.
 
 ```ts
 import { isValidationLimitError, validate } from '@amritk/runtime-validators'
@@ -301,7 +435,7 @@ Type-level helpers. `FromSchema<typeof schema>` infers the type a schema (writte
 
 > The interpreter never fetches anything, but it is not limited to one document. Same-document `$ref`s resolve on their own — JSON-Pointer fragments (`#/$defs/user`), `$anchor` names (`#user`), and refs written against an `$id` as a base URI (relative, absolute, or a URN), including recursion. For a `$ref` into *another* document you have two options: hand the document over with `options.schemas`, or bundle everything into one with [`@amritk/resolve-refs`](../resolve-refs) first. See [Referencing other documents](#referencing-other-documents).
 
-> **Built-in `format`s** (opt-in via `options.formats`): `email`, `idn-email`, `date-time`, `date`, `time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `uri-template`, `json-pointer`, `relative-json-pointer`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `regex` (compiled, not pattern-matched). Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior.
+> **Built-in `format`s** (opt-in via `options.formats`) — over strings: `email`, `idn-email`, `date`, `date-time`, `time`, `iso-time`, `iso-date-time`, `duration`, `uuid`, `uri`, `iri`, `uri-reference`, `iri-reference`, `url`, `uri-template`, `json-pointer`, `json-pointer-uri-fragment`, `relative-json-pointer`, `hostname`, `idn-hostname`, `ipv4`, `ipv6`, `regex` (compiled, not pattern-matched), `byte`, `binary`, `password`; over numbers: `int32`, `int64`, `float`, `double`. Unlisted or disabled formats are treated as annotations, matching Ajv's default opt-in behavior, and [`customFormats`](#custom-formats) adds your own.
 
 > **OpenAPI `nullable`.** When a subschema sets `nullable: true`, a `null` value is accepted regardless of its declared `type` (and short-circuits every other keyword), matching how Ajv is configured to treat OpenAPI 3.0 schemas. Without this, a single nullable field produced a flood of spurious `must be …` errors.
 
@@ -311,7 +445,7 @@ This is a **pragmatic subset** of JSON Schema — sized for validating data agai
 
 - **Fetching.** No `fetch`, no filesystem, no cache — that is what keeps `validate` synchronous and safe to run under a strict CSP. It is not a limit on *which* documents can be referenced, only on who loads them: pass what you have to `options.schemas` and refs into it resolve like any other, or bundle first with [`@amritk/resolve-refs`](../resolve-refs), which owns the network and its policy. A URI you did not supply throws, naming it. See [Referencing other documents](#referencing-other-documents).
 - **`contentEncoding` / `contentMediaType` / `contentSchema`** — treated as annotations (ignored), as they are by default in 2020-12.
-- **Spec-exact `format` coverage.** Formats are opt-in and validated by pragmatic regexes that reject obviously-bad input rather than being RFC-perfect. (The `regex` format is the exception — it compiles the string to confirm it is a valid pattern.)
+- **IDNA-exact `format` coverage.** Formats are validated against their RFC grammars, not approximated (see [Formats, measured](#formats-measured)), but the internationalized ones stop short of the Unicode database they would need to be exact: deciding an `xn--` A-label means decoding Punycode and re-running the IDNA2008 rules, and deciding a U-label means the derived-property table, the Bidi rule, and the contextual rules that make MIDDLE DOT legal between two `l`s and illegal elsewhere. The label shape and length are checked; membership is not. The `email` formats likewise take the dot-separated-atom shape rather than RFC 5321's quoted-string local parts and address literals.
 - **Draft-2020 exotica** beyond the keywords listed above.
 
 > **Want one of these?** None of these are off the table — "by design" means *not yet*, not *never*. If something here is blocking a real use case, [open an issue](https://github.com/amritk/mjst/issues) describing the schema you need to validate.
@@ -331,6 +465,28 @@ empty: the test fails if any case starts failing, so the build names the first
 regression instead of letting a percentage tick down. The corpus is vendored under
 [`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite) and
 never imported by `src/index.ts`, so none of it reaches the published bundle.
+
+### Formats, measured
+
+The suite files `format` assertion as *optional*: an implementation may treat
+every format as an annotation and still conform. This one opts in, so it is held
+to that corpus too — a format that is checked and checked wrongly is worse than
+one left alone, because the caller who asked for validation believes the answer.
+
+**786 / 861 cases pass. Ajv with `ajv-formats`, on the same corpus, passes 729.**
+
+The 75 that do not are listed with reasons in
+`src/interpreter/format-conformance-expected-failures.test-utils.ts`, and are
+almost all the IDNA2008 and RFC 5321 shapes described above — the places where
+deciding a value needs a Unicode database or a Punycode decoder rather than a
+grammar.
+
+Where the suite and Ajv disagree, the suite wins: it is the specification's own
+corpus and Ajv is one implementation of it. That costs agreement with Ajv on
+eight values — a hostname's trailing dot, four `time` offset rules, two
+`duration` nestings, and a non-numeric port — each pinned in
+`format-checks.test.ts` so the divergence stays a decision on the record rather
+than something to rediscover.
 
 The cases that reference other documents — all of `refRemote.json`, the
 `dynamicRef` groups reaching for `tree.json`, the refs at the dialect metaschema —

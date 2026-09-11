@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { assert } from '@/assert'
-import { hasUnsafeRegex, isValidationLimitError } from '@/interpreter/limits'
+import { DEFAULT_MAX_ERRORS, hasUnsafeRegex, isValidationLimitError, regexScreenCompiles } from '@/interpreter/limits'
 import { validate } from '@/validate'
 import { validateGuard } from '@/validate-guard'
 
@@ -643,52 +643,40 @@ describe('limits', () => {
     expect(admitted).toBeGreaterThan(100)
   })
 
-  it('screens an anchored body against a wide alternation in bounded time', () => {
+  it('screens an anchored body against a wide alternation in bounded work', () => {
     // Rule 1's exemption compares each repeated atom against the first character
     // of every branch that follows it, and each comparison can compile a
     // `RegExp`. Charging the shared budget once per *follower* rather than once
     // per *comparison* undercounted that by the branch count: distinct literals
     // in front of a 2,600-branch alternation forced ~300,000 compiles for 20,000
     // budget, and screening this one pattern took 294 ms — against 0.27 ms
-    // before the exemption existed. Now the budget stops it, at about 15 ms.
+    // before the exemption existed.
     //
-    // Measured as a *ratio* against the same shape with 26x fewer branches, not
-    // as a wall-clock bound. A bound has to sit below the bug to guard anything
-    // — an initial 2,000 ms left the exact 294 ms regression green — but once it
-    // is that tight it starts failing under the CPU contention of the full suite,
-    // which runs a dozen vitest instances at once. The ratio has neither problem:
-    // if the budget holds, cost is capped and barely moves with branch count
-    // (measured 2.4x); if the charge is per follower again, cost tracks the
-    // branch count (measured 21-25x, against 26.4x more branches). Contention
-    // scales both measurements together and cancels out.
+    // Measured as *compiles*, not milliseconds, and not budget consumption
+    // either. Budget consumption cannot see this bug: undercharging was the bug,
+    // so the budget reads a tidy 20,000 in both directions. A stopwatch could see
+    // it and could not be trusted to — under the contention of the full suite the
+    // healthy screen measured anywhere from 7x to 21x its control, and the
+    // regression measures 21-25x, so no threshold separated them and the test
+    // flaked. Compiles are the work the budget exists to bound, they are what the
+    // regression moved, and counting them is deterministic: the same source is
+    // the same number on any machine under any load.
     //
-    // The threshold sits at 10 rather than nearer the 2.4x: charging comparisons
-    // by span later cut the *control's* cost without lowering the attack's
-    // budget-capped ceiling, which doubled this ratio and halved the margin. 10
-    // keeps roughly 4x of room on both sides.
+    // If the budget holds, 26x the branches costs barely more work (measured
+    // 1.3x). If the charge is per follower again, it tracks the branch count. 4
+    // sits with 3x of room above the healthy reading and far below the broken one.
     const literals = Array.from({ length: 120 }, (_, i) => `${String.fromCharCode(0x100 + i)}*`).join('')
     const shape = (count: number): string => {
       const branches = Array.from({ length: count }, (_, i) => `[${String.fromCharCode(0x3000 + i)}]`).join('|')
       return `^(\\.${literals}(${branches}))*$`
     }
-    const median = (source: string): number => {
-      const timings: number[] = []
-      for (let run = 0; run < 5; run++) {
-        const started = performance.now()
-        // Genuinely unsafe — the point is only that answering costs bounded work.
-        expect(hasUnsafeRegex(source)).toBe(true)
-        timings.push(performance.now() - started)
-      }
-      return timings.sort((a, b) => a - b)[2] as number
-    }
 
-    const control = shape(100)
-    const attack = shape(2_643)
-    // Prime both: the first screen of each pays for JIT warm-up.
-    median(control)
-    median(attack)
-    const ratio = median(attack) / median(control)
-    expect(ratio, `26x the branches cost ${ratio.toFixed(1)}x the screening`).toBeLessThan(10)
+    // Genuinely unsafe — the point is only that answering costs bounded work.
+    expect(hasUnsafeRegex(shape(100))).toBe(true)
+    expect(hasUnsafeRegex(shape(2_643))).toBe(true)
+
+    const ratio = regexScreenCompiles(shape(2_643)) / regexScreenCompiles(shape(100))
+    expect(ratio, `26x the branches cost ${ratio.toFixed(2)}x the compiles`).toBeLessThan(4)
   })
 
   it('charges a class comparison for its length, not just for happening', () => {
@@ -821,5 +809,119 @@ describe('limits', () => {
 
   it('surfaces a limit breach through assert as a throw', () => {
     expect(() => assert(nestedAnyOf(40), 123, { limits: { maxSteps: 50_000 } })).toThrow(/step budget/i)
+  })
+
+  it('caps collected errors at maxErrors and stops walking once it is full', () => {
+    // A large, uniformly-wrong document used to cost one error object per
+    // element: 200,000 of them for a 200,000-element array. The verdict is
+    // settled long before that, so the run stops at the cap.
+    const schema = { type: 'array', items: { type: 'string' } }
+    const wrongThroughout = Array.from({ length: 5_000 }, (_, i) => i)
+
+    const capped = validate(schema, { limits: { maxErrors: 10 } })(wrongThroughout)
+    expect(capped).not.toBe(true)
+    expect(capped === true ? [] : capped.errors).toHaveLength(10)
+
+    // The errors kept are the first ones found, in order, and each is real.
+    expect(capped === true ? [] : capped.errors.slice(0, 2)).toEqual([
+      { message: 'must be string', path: '/0', keyword: 'type', params: { type: 'string' } },
+      { message: 'must be string', path: '/1', keyword: 'type', params: { type: 'string' } },
+    ])
+  })
+
+  it('defaults maxErrors to a bound a report can still be read at', () => {
+    const schema = { type: 'array', items: { type: 'string' } }
+    const result = validate(schema)(Array.from({ length: 5_000 }, (_, i) => i))
+    expect(result === true ? [] : result.errors).toHaveLength(DEFAULT_MAX_ERRORS)
+  })
+
+  it('collects every error when maxErrors is Infinity', () => {
+    const schema = { type: 'array', items: { type: 'string' } }
+    const result = validate(schema, { limits: { maxErrors: Number.POSITIVE_INFINITY } })(
+      Array.from({ length: 2_500 }, (_, i) => i),
+    )
+    expect(result === true ? [] : result.errors).toHaveLength(2_500)
+  })
+
+  it('does not let the cap change the verdict for valid input', () => {
+    // The cap only ever stops a run that has already failed, so a valid value is
+    // untouched by it however low it is set.
+    const schema = { type: 'array', items: { type: 'string' } }
+    expect(validate(schema, { limits: { maxErrors: 1 } })(['a', 'b', 'c'])).toBe(true)
+    expect(validateGuard(schema, { limits: { maxErrors: 1 } })(['a', 'b', 'c'])).toBe(true)
+  })
+
+  it('reaches the same verdict at any cap, and reports the same first errors', () => {
+    // Truncation must never turn an invalid value into a valid one, nor reorder
+    // what it does report.
+    const schema = {
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'string' }, c: { type: 'string' } },
+      required: ['a', 'b', 'c'],
+    }
+    const bad = { a: 1, b: 2, c: 3 }
+
+    const all = validate(schema, { limits: { maxErrors: Number.POSITIVE_INFINITY } })(bad)
+    const two = validate(schema, { limits: { maxErrors: 2 } })(bad)
+    expect(all).not.toBe(true)
+    expect(two).not.toBe(true)
+    expect(two === true ? [] : two.errors).toEqual(all === true ? [] : all.errors.slice(0, 2))
+  })
+
+  it('caps errors reached through assert too', () => {
+    // `assert` formats every collected error into its message, so an uncapped
+    // run there builds a megabyte-long string as well as the array.
+    try {
+      assert({ type: 'array', items: { type: 'string' } }, [1, 2, 3, 4, 5], { limits: { maxErrors: 2 } })
+      expect.unreachable('assert should have thrown')
+    } catch (error) {
+      expect((error as { errors: unknown[] }).errors).toHaveLength(2)
+    }
+  })
+
+  it('does not throw when the error cap is reached', () => {
+    // Unlike maxDepth/maxSteps, a full error list is not a breach: the run
+    // reached a verdict and the cap only says how much of it to carry back.
+    const result = validate({ type: 'array', items: { type: 'string' } }, { limits: { maxErrors: 1 } })([1, 2])
+    expect(isValidationLimitError(result)).toBe(false)
+    expect(result).not.toBe(true)
+  })
+
+  it('refuses a pattern that does not compile, when the validator is built', () => {
+    // This used to surface as a bare `SyntaxError` thrown out of the validator
+    // the first time a value happened to reach that node — so a schema with a
+    // broken pattern under a rarely-taken branch worked until one day it did not.
+    expect(() => validate({ type: 'string', pattern: '(' })).toThrow(/Invalid regular expression in schema "pattern"/)
+    expect(() => validateGuard({ type: 'object', properties: { a: { pattern: '[' } } })).toThrow(
+      /Invalid regular expression/,
+    )
+  })
+
+  it('checks a pattern no value would ever reach', () => {
+    // The whole point of checking at build time rather than on the node's first
+    // visit: an unused definition is exactly where a broken pattern hides.
+    expect(() => validate({ type: 'string', $defs: { unused: { pattern: '(' } } })).toThrow(
+      /Invalid regular expression/,
+    )
+  })
+
+  it('checks patternProperties keys too', () => {
+    expect(() => validate({ type: 'object', patternProperties: { '(': {} } })).toThrow(/Invalid regular expression/)
+  })
+
+  it('still refuses a broken pattern when unsafe patterns are allowed', () => {
+    // `allowUnsafePatterns` says "this schema is trusted", not "do not read it":
+    // a pattern that cannot compile can never match whoever wrote it.
+    expect(() => validate({ type: 'string', pattern: '(' }, { limits: { allowUnsafePatterns: true } })).toThrow(
+      /Invalid regular expression/,
+    )
+  })
+
+  it('builds a validator for every pattern that does compile', () => {
+    // The escapes `u` mode forbids are the reason `compilePattern` falls back to
+    // a non-Unicode compile, and a build-time check has to accept both.
+    for (const pattern of ['^a+$', '\\p{Letter}+', '\\-', 'a{1,2}', '[\\w-]+']) {
+      expect(() => validate({ type: 'string', pattern }), pattern).not.toThrow()
+    }
   })
 })

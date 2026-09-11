@@ -131,6 +131,15 @@ export type CliConfig = {
    */
   readonly unknownKeys?: UnknownKeysStrategy
   /**
+   * String `format`s the generated validators enforce — `'all'`, or the names to
+   * check. Left unset, `format` stays an annotation, which is 2020-12's own
+   * reading and what `@amritk/runtime-validators` does when given no formats.
+   *
+   * Set it to whatever the code validating the same schemas at runtime uses, so
+   * the build-time and runtime answers agree.
+   */
+  readonly formats?: 'all' | readonly string[]
+  /**
    * Controls how generated parsers reference their runtime helpers.
    * - `'package'`: emit `import ... from '@amritk/helpers/...'`.
    * - `'embedded'`: ship the helper source under `outDir/_helpers/` and emit
