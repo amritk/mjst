@@ -102,6 +102,21 @@ describe('read-doc-config', () => {
     ])
   })
 
+  it('reads a section layout, ignoring one outside the vocabulary', () => {
+    const config = readDocConfig({
+      'x-doc': {
+        sections: [
+          { id: 'req', title: 'Required', layout: 'table' },
+          { id: 'rest', title: 'Rest', layout: 'grid' },
+        ],
+      },
+    })
+    expect(config.sections).toEqual([
+      { id: 'req', title: 'Required', page: INDEX_PAGE_ID, layout: 'table', examples: [] },
+      { id: 'rest', title: 'Rest', page: INDEX_PAGE_ID, examples: [] },
+    ])
+  })
+
   it('skips a section with no id to reference it by', () => {
     expect(readDocConfig({ 'x-doc': { sections: [{ title: 'Nameless' }] } }).sections).toEqual([])
   })

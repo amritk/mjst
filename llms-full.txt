@@ -688,6 +688,11 @@ await generateDocs({ schemaPath: './config.schema.json', outDir: './documentatio
    extension (`page`, `section`, `type`, `title`, `heading`, `layout`, `sort`,
    `order`, `hidden`, `example`/`examples`, `note`/`notes`, `footer`). Do not
    post-process the generated markdown; edit the schema and regenerate.
+   `layout` (`'headings' | 'table' | 'none'`) is read on a property, where it
+   lays out that property's children, and on a root `x-doc.sections` entry,
+   where it lays out the section: `table` renders the whole grouping as one
+   markdown table. A section defaults to `headings` whatever the root `layout`
+   says, that one being the default for a property's children.
 4. **Placement mistakes throw; they are never silently dropped.** Declare pages
    and sections in the root `x-doc.pages` / `x-doc.sections` before a property
    can reference them. Generation also refuses two pages sharing an id or a
