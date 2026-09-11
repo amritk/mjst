@@ -21,7 +21,7 @@
 
 Options can be supplied via CLI flags or a JSON config file. **CLI flags always take precedence over config file values.**
 
-It also carries a `lint` subcommand — `mjst lint <files>` — a format-agnostic JSON/YAML style-guide linter powered by [`@amritk/lint`](../lint) (see [Linting](#linting)), and a `compile-api` subcommand — `mjst compile-api <routes-module> --out <file>` — that compiles [`@amritk/api`](../api) route contracts into a production fetch-handler module (see [Compiling an API](#compiling-an-api)).
+It also carries a `lint` subcommand — `mjst lint <files>` — a format-agnostic JSON/YAML style-guide linter powered by [`@amritk/lint`](../lint) (see [Linting](#linting)), a `compile-api` subcommand — `mjst compile-api <routes-module> --out <file>` — that compiles [`@amritk/api`](../api) route contracts into a production fetch-handler module (see [Compiling an API](#compiling-an-api)), and a `markdown` subcommand — `mjst markdown <schema>` — that renders a schema as documentation with [`@amritk/generate-markdown`](../generate-markdown) (see [Generating markdown docs](#generating-markdown-docs)).
 
 ---
 
@@ -276,6 +276,330 @@ Every *named* export of the routes module that looks like a route contract (`met
 | `--max-body-bytes` | Reject request bodies larger than this many bytes with a 413 (default `1048576`; `Infinity` disables the cap). |
 
 The exit code is `0` on success, `1` when compilation fails (unloadable module, no contracts found, invalid options JSON), and `2` on a usage error. Run `mjst compile-api --help` for details.
+
+---
+
+## Generating markdown docs
+
+`mjst markdown` renders a JSON Schema as documentation with
+[`@amritk/generate-markdown`](../generate-markdown), so a config's docs cannot
+drift from the schema that validates it. Like `lint` and `compile-api`, it has
+its own flags (and its own `--help`), independent of the generation flags above.
+
+```bash
+# The prose reference: a heading, a type, the description and an example per
+# property, across as many pages as the schema's x-doc keyword declares
+npx mjst markdown ./config.schema.json --out-dir ./docs
+
+# The other shape: one HTML table, spliced into an existing markdown file
+npx mjst markdown ./config.schema.json --table --readme ./README.md
+```
+
+| Flag | Description |
+| --- | --- |
+| `<schema>` | The JSON Schema to document (positional, required). |
+| `--out-dir` | Directory the prose reference pages are written to (default: the current directory). |
+| `--file` | Output path of the index page (default: the schema's `x-doc.file`, then `index.md`). |
+| `--title` | Page title (default: the schema's `title`). |
+| `--language` | Fence language for derived examples and literals (default: `json`). |
+| `--layout` | Default layout for nested properties: `headings` (default), `table`, or `none`. |
+| `--sort` | Property order: `schema` (default) or `alphabetical`. |
+| `--heading-level` | Heading level of the page title, 1-6 (default: `1`). |
+| `--table` | Render the HTML config table instead of the prose pages. |
+| `--readme` | Markdown file the table is spliced into (default: `README.md`). Requires `--table`. |
+
+Under `--table` only the content between `<!-- config-table-start -->
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>CLI Flag</th>
+<th>Type</th>
+<th align="center">Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>📄 <code>schema</code></td>
+<td><code>--schema &lt;path&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Path to the schema to process. With the default 'json' input this is a JSON Schema file that is read and parsed. With any other input format it is a JS/TS module that exports a schema, which is loaded and converted to JSON Schema via the matching adapter. Either 'schema' or 'schemaDir' is required.<br><strong>Examples:</strong> <code>"./schema.json"</code></td>
+</tr>
+<tr>
+<td>🗂️ <code>schemaDir</code></td>
+<td><code>--schema-dir &lt;dir&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Path to a directory of JSON Schema files. When set, the CLI walks the directory recursively, generates parsers for every '*.json' schema it finds, and mirrors the directory layout under outDir (each schema lands in its own subdirectory). The runtime helpers are emitted once into a shared outDir/_helpers/ that every nested parser imports from. Mutually exclusive with 'schema'; when both are present 'schemaDir' wins. Only JSON Schema input is supported in this mode.<br><strong>Examples:</strong> <code>"./schemas"</code></td>
+</tr>
+<tr>
+<td>🔌 <code>input</code></td>
+<td><code>--input &lt;format&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"json"</code></td>
+</tr>
+<tr>
+<td colspan="4">Source format of the schema. 'json' (default) reads a JSON Schema file directly. 'avro' reads an Apache Avro '.avsc' JSON document and converts it, needing no extra library. 'asyncapi' reads an AsyncAPI 2.x/3.0 document (JSON or YAML) and generates from every message payload/headers schema it declares. Any other format loads 'schema' as a module and converts it to JSON Schema with the matching adapter. Supported: 'typebox', 'zod' (zod v4+), 'valibot' (with @valibot/to-json-schema), and 'effect' — each requires the corresponding library installed in your project.<br><strong>Allowed:</strong> <code>"json"</code>, <code>"typebox"</code>, <code>"zod"</code>, <code>"valibot"</code>, <code>"effect"</code>, <code>"avro"</code>, <code>"asyncapi"</code></td>
+</tr>
+<tr>
+<td>📦 <code>export</code></td>
+<td><code>--export &lt;name&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Which export of the schema module to use when 'input' names a module format (anything but 'json', 'avro', and 'asyncapi', which are read as data). Defaults to the default export, or the sole named export when the module has exactly one.</td>
+</tr>
+<tr>
+<td>📁 <code>outDir</code></td>
+<td><code>--out-dir &lt;dir&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Output directory for generated TypeScript files. The directory is created automatically if it does not exist. Subdirectories are created as needed when a generated file includes a nested path. Mutually exclusive with 'outFile'.<br><strong>Examples:</strong> <code>"./generated"</code></td>
+</tr>
+<tr>
+<td>📄 <code>outFile</code></td>
+<td><code>--out-file &lt;file&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Output everything to a single TypeScript file instead of a directory. Every generated definition is concatenated into one self-contained file and the cross-file imports are dropped. Mutually exclusive with 'outDir'. Currently supported only together with 'typesOnly'.<br><strong>Examples:</strong> <code>"./generated/schema.ts"</code></td>
+</tr>
+<tr>
+<td>🏷️ <code>typesOnly</code></td>
+<td><code>--types-only</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Generate only TypeScript type definitions without parser functions. Useful when you only need the type shapes and do not need runtime validation.</td>
+</tr>
+<tr>
+<td>✅ <code>validators</code></td>
+<td><code>--validators</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
+</tr>
+<tr>
+<td>🎲 <code>examples</code></td>
+<td><code>--examples</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit test-data files for every schema into an examples/ subdirectory of the output destination: a fast-check arbitrary (FooArbitrary) that produces schema-valid values and a concrete fooExample value. Under schemaDir the examples mirror the schema layout so they never collide with the parser output. The generated arbitraries import fast-check, which consumers must install as a (dev) dependency; the static example values have no runtime dependencies.</td>
+</tr>
+<tr>
+<td>🔌 <code>messageContracts</code></td>
+<td><code>--message-contracts</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit a @amritk/api channel contract per AsyncAPI channel into a contracts/ subdirectory: one defineMessages({ ... }) module naming every message that channel carries — keyed by the value its discriminator property carries on the wire, with that property stripped out of each payload because the runtime removes it before validating — plus a barrel re-exporting them. Requires input 'asyncapi', which is the only input that has channels and operations to project from. Incompatible with typesOnly: a contract is a runtime value, not a type. The generated modules import @amritk/api, which the consuming project must install; it is not a dependency of the generated parsers.</td>
+</tr>
+<tr>
+<td>🏷️ <code>discriminator</code></td>
+<td><code>--discriminator &lt;prop&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"type"</code></td>
+</tr>
+<tr>
+<td colspan="4">Property name that says which message a frame is, for the contracts messageContracts emits. Defaults to 'type', matching @amritk/api. A channel that declares its own with 'x-mjst': { 'discriminator': '...' } keeps it — one flag covers a whole run, and a run may span channels that disagree. Only meaningful together with messageContracts.<br><strong>Examples:</strong> <code>"event"</code></td>
+</tr>
+<tr>
+<td>🔨 <code>build</code></td>
+<td><code>--build</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Compile the generated TypeScript files to .js and .d.ts output. A temporary tsconfig is written to the output directory, tsc is invoked, and the intermediate .ts source files are removed when compilation succeeds.</td>
+</tr>
+<tr>
+<td>💥 <code>force</code></td>
+<td><code>--force</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Deprecated and ignored. Generated files always replace whatever is at their path, so this flag no longer does anything; it is still accepted so existing scripts and config files keep running. Reverting an unwanted replacement is version control's job. Compilation under build still only removes the intermediate sources the run itself generated.</td>
+</tr>
+<tr>
+<td>⚠️ <code>logWarnings</code></td>
+<td><code>--log-warnings</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime.</td>
+</tr>
+<tr>
+<td>🚫 <code>strict</code></td>
+<td><code>--strict</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. When a schema sets additionalProperties: false, undeclared keys throw too; otherwise they are still allowed.</td>
+</tr>
+<tr>
+<td>🧹 <code>stripUnknown</code></td>
+<td><code>--strip-unknown</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Build each parser's result from the schema's declared properties only, silently dropping undeclared input keys at every nesting level (zod's .strip()). Extras are never a validation error, so this composes with strict (which still throws on wrong types and missing required properties) and yields to additionalProperties: false, which rejects rather than strips in strict mode.</td>
+</tr>
+<tr>
+<td>🔡 <code>caseInsensitive</code></td>
+<td><code>--case-insensitive</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Normalize a mis-cased string to the exact casing of a declared enum/const member it matches case-insensitively (e.g. hElLo → hello) instead of coercing to the default. Coerce mode only — strict parsers still reject a casing mismatch. Correctly-cased input keeps the exact-match fast path, so the hot path is unaffected.</td>
+</tr>
+<tr>
+<td>🔒 <code>readonly</code></td>
+<td><code>--readonly</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Emit every property, array, and record in the generated type definitions as readonly, producing deeply immutable types. Affects type definitions only; the generated parsers still build and return plain objects.</td>
+</tr>
+<tr>
+<td>🔢 <code>unknownKeys</code></td>
+<td><code>--unknown-keys &lt;strategy&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"count-keys"</code></td>
+</tr>
+<tr>
+<td colspan="4">How generated fast paths (parsers and validators alike) prove a closed object — additionalProperties: false, or a stripUnknown build — carries no undeclared key. 'count-keys' compares Object.keys(obj).length and is the faster form on JavaScriptCore (Bun), where a for…in over a non-extensible object takes the engine's slow path and halves strict-parse throughput. 'count-enumerable' counts with for…in and allocates nothing; it was the faster form on Node 22, but on Node 26 'count-keys' ties or wins there too. Keep the default unless you are pinned to an older V8 and have measured your own shapes; the generated code never detects its runtime.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
+</tr>
+<tr>
+<td>🧪 <code>formats</code></td>
+<td><code>--formats &lt;list&gt;</code></td>
+<td><code>string | array</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">String formats the generated validators enforce: "all", or a comma-separated list (e.g. uuid,date-time,email). Omitted, format stays an annotation — JSON Schema's own reading, and what @amritk/runtime-validators does when given no formats. Set it to whatever validates the same schemas at runtime (@amritk/lint and createApi({ formats }) run the interpreter with formats on) so the build-time and runtime answers agree. Both validateX and the flat isX check them, against a formats.ts emitted alongside the validators.</td>
+</tr>
+<tr>
+<td>🧰 <code>helpers</code></td>
+<td><code>--helpers &lt;mode&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Controls how generated parsers reference their runtime helpers. 'package' emits imports from @amritk/helpers (requires it to be installed in the consumer project). 'embedded' ships the helper source under outDir/_helpers/ so the output is self-contained. When omitted, the CLI auto-detects: it picks 'package' only when @amritk/helpers is a declared dependency (dependencies/devDependencies) of the nearest package.json above outDir, otherwise 'embedded'. Requiring a declaration (rather than mere resolvability) keeps auto-detected 'package' output portable across pnpm/isolated installs, where an undeclared transitive @amritk/helpers is not reachable at runtime.<br><strong>Allowed:</strong> <code>"package"</code>, <code>"embedded"</code></td>
+</tr>
+<tr>
+<td>🏷️ <code>typeSuffix</code></td>
+<td><code>--type-suffix &lt;suffix&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>""</code></td>
+</tr>
+<tr>
+<td colspan="4">Suffix appended to every generated type name derived from a $ref (e.g. 'Object' turns Contact into ContactObject). Defaults to no suffix. The root type name is used verbatim and is unaffected.</td>
+</tr>
+<tr>
+<td>🪧 <code>banner</code></td>
+<td><code>--banner [text]</code></td>
+<td><code>boolean | string</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Prepend a comment header to every generated file (excluding _helpers/). true uses the default message ('This file was auto-generated by @amritk/mjst…'); a string uses that text as the message body, wrapped in a JSDoc block; false or omitted emits no header. On the CLI, --banner alone enables the default message and --banner &lt;text&gt; sets a custom one.</td>
+</tr>
+<tr>
+<td>🔗 <code>importExt</code></td>
+<td><code>--import-ext &lt;ext&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"><code>"ts"</code></td>
+</tr>
+<tr>
+<td colspan="4">Extension emitted on every relative import specifier in the generated output (cross-file $ref imports, the index barrel, and embedded-helper imports). 'ts' (default) emits the literal on-disk paths so the generated .ts sources load directly under Bun, Node's type stripping (Node 22.6+ with --experimental-strip-types, unflagged from 22.18/23), and tsc when the consumer sets allowImportingTsExtensions — no build step required. 'js' is the standard TS NodeNext form ('./x.js' resolving to a sibling x.ts) for output you compile; it is selected automatically under 'build' since tsc refuses to emit from .ts specifiers. Passing --import-ext ts together with --build is an error.<br><strong>Allowed:</strong> <code>"js"</code>, <code>"ts"</code></td>
+</tr>
+<tr>
+<td>🌱 <code>rootType</code></td>
+<td><code>--root-type &lt;name&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Name for the root type of a single --schema run (e.g. 'Program' yields parseProgram / validateProgram). When omitted, the name is derived from the schema's title, falling back to the schema filename in PascalCase (spec-plan.json → SpecPlan) and then to 'Document'. Not supported with --schema-dir, where each schema derives its own root type from its filename.<br><strong>Examples:</strong> <code>"Program"</code></td>
+</tr>
+<tr>
+<td>🌐 <code>resolveRemote</code></td>
+<td><code>--resolve-remote</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Allow fetching http(s) $refs while dereferencing a schema that contains cross-file or remote references. Off by default, so generation stays offline unless asked: a schema with a remote $ref fails rather than making a network call. Local cross-file $refs are always resolved and do not need this flag. A non-empty allowedHosts implies this.</td>
+</tr>
+<tr>
+<td>🛡️ <code>allowedHosts</code></td>
+<td><code>--allowed-hosts &lt;hosts&gt;</code></td>
+<td><code>array</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Restrict remote $ref fetches to these hosts (e.g. api.example.com). Accepts a comma-separated list or the flag repeated. Providing an allow-list is itself an opt-in to remote fetching (it implies resolveRemote), and each listed host bypasses the private-host guard.<br><strong>Examples:</strong> <code>["schemas.example.com"]</code></td>
+</tr>
+<tr>
+<td>🔓 <code>allowPrivateHosts</code></td>
+<td><code>--allow-private-hosts</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Permit remote $refs to private, loopback, and link-local hosts. Off by default: such targets are refused as a best-effort SSRF guard (notably the 169.254.169.254 cloud-metadata endpoint). An explicit allowedHosts entry always bypasses this guard.</td>
+</tr>
+<tr>
+<td>📂 <code>allowedRoots</code></td>
+<td><code>--allowed-roots &lt;dirs&gt;</code></td>
+<td><code>array</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Extra directories a local (cross-file) $ref may resolve into. By default a local $ref is confined to the schema's own directory, so '{"$ref": "../../../secrets.env"}' (or an absolute path) reads nothing. List a root here for the ordinary split-spec layout where v1/api.json refers to a shared common/user.json one level up. The schema's own directory is always allowed, so these roots widen the default rather than replacing it, and a $ref that still lands outside every root is refused. Accepts a comma-separated list or the flag repeated; relative entries resolve against the current working directory, from a config file as well as from the flag.<br><strong>Examples:</strong> <code>["./specs"]</code></td>
+</tr>
+<tr>
+<td>⚙️ <code>config</code></td>
+<td><code>--config &lt;path&gt;</code></td>
+<td><code>string</code></td>
+<td align="center"></td>
+</tr>
+<tr>
+<td colspan="4">Path to a JSON config file. Keys match the option names in this schema (schema, schemaDir, input, export, outDir, outFile, typesOnly, validators, examples, build, force, logWarnings, strict, stripUnknown, caseInsensitive, readonly, unknownKeys, helpers, typeSuffix, banner, importExt, rootType, resolveRemote, allowedHosts, allowPrivateHosts, allowedRoots) and are validated: an unknown key or a wrong value type fails the run instead of being ignored. CLI flags take precedence over config file values.<br><strong>Examples:</strong> <code>"./mjst.config.json"</code></td>
+</tr>
+</tbody>
+</table>
+<!-- config-table-end -->` is replaced; a file that exists without both markers
+is left untouched and the run fails, rather than clobbering hand-written prose.
+The prose pages have no such deal — the generator owns them and overwrites them
+wholesale. The table and page flags are mutually exclusive: passing a page flag
+with `--table` is a usage error rather than a silently ignored option.
+
+The exit code is `0` on success, `1` when generation fails (malformed schema, a
+readme without markers, a page declaration the schema contradicts), and `2` on a
+usage error. Run `mjst markdown --help` for details.
 
 ---
 

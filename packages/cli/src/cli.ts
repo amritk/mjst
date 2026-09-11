@@ -694,6 +694,18 @@ const run = async (): Promise<void> => {
     process.exit(result.code)
   }
 
+  // `mjst markdown <schema>` renders a schema as documentation — the prose
+  // reference pages, or the HTML config table spliced into a markdown file.
+  // Like the other subcommands it owns its own flags and `--help`, so it must
+  // dispatch before the shared version/help checks.
+  if (args[0] === 'markdown') {
+    const { run: markdownRun } = await import('./markdown/run')
+    const result = await markdownRun(args.slice(1))
+    if (result.stdout) process.stdout.write(result.stdout)
+    if (result.stderr) process.stderr.write(result.stderr)
+    process.exit(result.code)
+  }
+
   const metaRequest = parseMetaRequest(args)
 
   if (metaRequest === 'version') {

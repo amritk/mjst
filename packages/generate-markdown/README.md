@@ -53,10 +53,11 @@ When a property describes its type through `enum`,
 `const`, or `anyOf`/`oneOf`/`allOf` rather than a plain `type`, the **Type**
 column shows an inferred label (e.g. `string` or `number | string`).
 
-…plus two non-standard keywords for richer output:
+…plus three non-standard keywords for richer output:
 
 - `x-cli-flag` — the matching CLI flag (e.g. `--schema <path>`), shown in the **CLI Flag** column
 - `x-icon` — an emoji shown next to the property name
+- `x-extra-columns` — columns of the schema's own, described below
 
 Columns and icons are only rendered when the schema actually uses them. The
 **CLI Flag**, **Required**, and **Default** columns are each dropped entirely
@@ -64,6 +65,43 @@ when no property anywhere in the schema fills them, and a property with no
 `x-icon` simply shows no icon. There are no `—` placeholders: a cell with
 nothing to say is left empty. The check spans the whole schema (including
 nested objects), so every table keeps the same set of columns.
+
+#### Columns of your own
+
+A schema often carries vendor data this package has never heard of — a stability
+label, the version a property landed in — and `x-extra-columns` is how that data
+reaches the table. Declare it on the **root** of the schema as a keyword → header
+map; each property then carries the value under the same keyword:
+
+```json
+{
+  "x-extra-columns": { "x-scalar-stability": "Stability", "x-since": "Since" },
+  "properties": {
+    "host": {
+      "type": "string",
+      "description": "Hostname to bind.",
+      "x-scalar-stability": "experimental",
+      "x-since": "1.2.0"
+    }
+  }
+}
+```
+
+| Property | Type | Stability | Since |
+| --- | --- | --- | --- |
+| `host` | `string` | experimental | 1.2.0 |
+
+The extra columns render after the built-in ones, in the order they are
+declared, and they play by the same rules as the rest of the table: the header
+and every value are escaped, a column no property anywhere in the schema fills is
+dropped entirely, and the set is shared by the main table and every nested detail
+table. Values are scalars — a string, a number, or a boolean; anything else (an
+object, an array) leaves the cell empty, since there is no layout this package
+could pick for it that would not surprise you.
+
+The declaration belongs on the root and nowhere else: every table in the
+document shares one set of columns, so a declaration on a nested object would be
+a column the tables above it could not show.
 
 Object properties with their own `properties` are linked to a nested detail table rendered below the main one.
 
@@ -91,6 +129,23 @@ import { generateMarkdown } from '@amritk/generate-markdown'
 await generateMarkdown()
 // Reads ./config.schema.json from process.cwd()
 // Writes ./README.md
+```
+
+`generateMarkdown()` takes no arguments — it is the form a package's
+`generate-readme` script runs from its own directory. When the files are
+somewhere else, or named something else, `generateConfigTable` is the same flow
+with the paths spelled out, returning the path it wrote:
+
+```ts
+import { generateConfigTable } from '@amritk/generate-markdown'
+
+await generateConfigTable({ schemaPath: './settings.schema.json', readmePath: './docs/config.md' })
+```
+
+Or from the command line, without writing a script at all:
+
+```bash
+npx mjst markdown ./config.schema.json --table --readme ./README.md
 ```
 
 If `README.md` already exists and contains the marker comments below, only the content between them is replaced — everything else in the file is preserved:

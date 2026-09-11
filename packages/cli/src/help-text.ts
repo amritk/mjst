@@ -14,6 +14,7 @@ Usage:
 Subcommands (each with its own flags and --help):
   mjst lint <files>                       Lint JSON/YAML documents against a ruleset
   mjst compile-api <module> --out <file>  Compile @amritk/api route contracts into a fetch-handler module
+  mjst markdown <schema> --out-dir <dir>  Generate markdown documentation from a JSON Schema
 
 Input:
   --schema <path>       Schema to process: a JSON Schema file, or a module when --input is set

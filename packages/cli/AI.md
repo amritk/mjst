@@ -1,7 +1,8 @@
 # @amritk/mjst (the `mjst` CLI) — notes for AI coding agents
 
 The command-line entry point to mjst: generate TypeScript parsers, validators,
-and types from JSON Schema, plus `lint` and `compile-api` subcommands. Full
+and types from JSON Schema, plus `lint`, `compile-api`, and `markdown`
+subcommands. Full
 reference is [README.md](./README.md); config options are in
 [config.schema.json](./config.schema.json).
 
@@ -9,7 +10,7 @@ reference is [README.md](./README.md); config options are in
 > package ships **only a `mjst` binary** — there are no JS exports. For the
 > programmatic API import `@amritk/generate-parsers` etc. instead.
 
-## The three commands
+## The four commands
 
 ```bash
 # 1. Codegen (default command)
@@ -20,6 +21,10 @@ mjst lint "**/*.{yaml,json}" -r .lint.yaml
 
 # 3. Compile an @amritk/api routes module to a fused, eval-free handler
 mjst compile-api ./routes.ts --out ./dist/handler.ts
+
+# 4. Render a schema as documentation (pages by default, --table for one table)
+mjst markdown ./config.schema.json --out-dir ./docs
+mjst markdown ./config.schema.json --table --readme ./README.md
 ```
 
 ## Codegen gotchas
