@@ -39,6 +39,21 @@ same inlining, and both decide each binding by what the emitted code actually
 spells, reading past comments and string literals so a `description` mentioning
 a definition is not mistaken for a use of it.
 
+**Extension keys are no longer swallowed by an index signature.** Wherever the
+schema composes the specification-extensions record, the generated type has to
+leave the `x-` key space free for it — and keyed on `string`, an index signature
+covers `x-foo` too and forces it to the mapped value type, so intersecting
+`Record<`x-${string}`, unknown>` on top changed nothing. Three things follow:
+a map-shaped type keeps the `allOf` members and sibling `$ref` it composes
+(returning the map alone dropped them, which is why the Paths Object imported a
+name it never used); a `patternProperties` key is narrowed to the prefixes the
+pattern can start with (`` `/${string}` `` for Paths, `` `1${string}` `` …
+`` `5${string}` `` for Responses) rather than collapsing to `string`; and each
+pattern gets its own index signature instead of the block collapsing onto one
+key with every pattern's value type unioned. All 75 types across the three
+schemas that the spec lets carry an `x-` key now accept one — previously the
+Paths and Responses Objects of every version did not.
+
 **A `patternProperties` that only re-lists declared property names contributes
 no index signature.** OpenAPI's Components Object enumerates all ten of its own
 keys as an alternation so `unevaluatedProperties` can work; as an index

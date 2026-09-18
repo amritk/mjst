@@ -712,7 +712,9 @@ describe('generateTypeDefinition', () => {
     )
   })
 
-  it('unions the value types of multiple patternProperties', () => {
+  it('gives each patternProperties pattern its own index signature', () => {
+    // Collapsing the two onto one `string` key had to union their value types,
+    // which put `number` on every `a…` key and `string` on every `b…` one.
     const schema: JSONSchema.Object = {
       type: 'object',
       patternProperties: {
@@ -721,7 +723,20 @@ describe('generateTypeDefinition', () => {
       },
     }
     const result = generateTypeDefinition(schema, 'Multi')
-    expect(result).toContain('Record<string, string | number>')
+    expect(result).toBe('export type Multi = {\n  [key: `a${string}`]: string;\n  [key: `b${string}`]: number;\n};')
+  })
+
+  it("unions the value types when a pattern's key space cannot be narrowed", () => {
+    // Two signatures TypeScript cannot tell apart are worse than one honest wide
+    // one, so an unnarrowable pattern takes the whole block back to `string`.
+    const schema: JSONSchema.Object = {
+      type: 'object',
+      patternProperties: {
+        '^a': { type: 'string' },
+        '.+': { type: 'number' },
+      },
+    }
+    expect(generateTypeDefinition(schema, 'Multi')).toContain('Record<string, string | number>')
   })
 
   it('generates type for object with patternProperties as Record type', () => {
@@ -743,8 +758,105 @@ describe('generateTypeDefinition', () => {
         '*\n' +
         '* https://spec.openapis.org/oas/v3.1#paths-object\n' +
         '*/\n' +
-        'export type Paths = Record<string, PathItem>;',
+        'export type Paths = Record<`/${string}`, PathItem>;',
     )
+  })
+
+  describe('a patternProperties key pattern', () => {
+    // A key type of `string` covers `x-foo` too, so intersecting the
+    // specification-extensions record onto it changed nothing and the Paths
+    // Object went on rejecting the extensions the schema allows. Keyed on the
+    // prefix the pattern actually matches, the two key spaces are disjoint.
+    it('narrows to the literal prefix it anchors on', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        patternProperties: { '^/': { type: 'string' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = Record<`/${string}`, string>;')
+    })
+
+    // A superset of the pattern's key set, not an exact reading of it: the point
+    // is only that the keys stop being all of `string`, so an extension record
+    // composed alongside is no longer swallowed by the index signature.
+    it('narrows to the first characters a bounded class admits', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        patternProperties: { '^[1-5][0-9]{2}$': { type: 'string' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe(
+        'export type Doc = Record<`1${string}` | `2${string}` | `3${string}` | `4${string}` | `5${string}`, string>;',
+      )
+    })
+
+    it('stays `string` for a pattern that bounds nothing at the start', () => {
+      const unanchored: JSONSchema = { type: 'object', patternProperties: { 'x-': { type: 'string' } } }
+      const wildcard: JSONSchema = { type: 'object', patternProperties: { '^.+': { type: 'string' } } }
+      const optional: JSONSchema = { type: 'object', patternProperties: { '^a?b': { type: 'string' } } }
+
+      expect(generateTypeDefinition(unanchored, 'Doc')).toBe('export type Doc = Record<string, string>;')
+      expect(generateTypeDefinition(wildcard, 'Doc')).toBe('export type Doc = Record<string, string>;')
+      expect(generateTypeDefinition(optional, 'Doc')).toBe('export type Doc = Record<string, string>;')
+    })
+
+    it('reads an escaped punctuation character as the literal it spells', () => {
+      // `^\\/` is how OpenAPI 3.0 writes the Paths Object's pattern.
+      const schema: JSONSchema = {
+        type: 'object',
+        patternProperties: { '^\\/': { type: 'string' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = Record<`/${string}`, string>;')
+    })
+
+    it('keeps each of several narrowable patterns apart', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        patternProperties: { '^/': { type: 'string' }, '^x-': { type: 'number' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe(
+        'export type Doc = {\n  [key: `/${string}`]: string;\n  [key: `x-${string}`]: number;\n};',
+      )
+    })
+  })
+
+  describe('a map shape that also composes', () => {
+    // The Paths Object: a pattern-keyed map plus a sibling `$ref` to the
+    // specification-extensions record. Returning the map alone dropped the ref
+    // entirely — the file imported a name it then never used, and the type
+    // rejected every `x-` key.
+    const rootSchema = {
+      $defs: {
+        extensions: { patternProperties: { '^x-': true } },
+        'path-item': { type: 'object' },
+      },
+    }
+
+    it('keeps a sibling $ref alongside a patternProperties map', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        patternProperties: { '^/': { $ref: '#/$defs/path-item' } },
+        $ref: '#/$defs/extensions',
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Paths', { rootSchema })).toBe(
+        'export type Paths = Record<`/${string}`, PathItem> & Extensions;',
+      )
+    })
+
+    it('keeps a sibling $ref alongside an additionalProperties map', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        additionalProperties: { $ref: '#/$defs/path-item' },
+        $ref: '#/$defs/extensions',
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Callbacks', { rootSchema })).toBe(
+        'export type Callbacks = {\n  [key: string]: PathItem;\n} & Extensions;',
+      )
+    })
   })
 
   it('quotes hyphenated property names in type definitions', () => {
@@ -1948,7 +2060,7 @@ describe('generateTypeDefinition', () => {
         patternProperties: { '^schemas.*$': { type: 'string' } },
       }
 
-      expect(generateTypeDefinition(schema, 'Doc')).toContain('[key: string]:')
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('[key: `schemas${string}`]:')
     })
 
     it('keeps the vendor-extension pattern, which declares no property at all', () => {
