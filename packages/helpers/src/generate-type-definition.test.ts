@@ -2149,6 +2149,82 @@ describe('generateTypeDefinition', () => {
     })
   })
 
+  describe('second review pass', () => {
+    it('widens rather than emitting index signatures whose key spaces overlap', () => {
+      // `` `x-a${string}` `` admits only keys `` `x-${string}` `` admits too, and
+      // TypeScript holds the narrower signature to the wider one's value type
+      // (`TS2413`), so the generated file did not compile.
+      const schema: JSONSchema = {
+        type: 'object',
+        patternProperties: { '^x-': { type: 'string' }, '^x-a': { type: 'number' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = Record<string, string | number>;')
+    })
+
+    it('keeps disjoint key spaces apart', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        patternProperties: { '^/': { type: 'string' }, '^x-': { type: 'number' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe(
+        'export type Doc = {\n  [key: `/${string}`]: string;\n  [key: `x-${string}`]: number;\n};',
+      )
+    })
+
+    it('reads declared properties before a boolean additionalProperties', () => {
+      // `additionalProperties` says what to do with the keys *not* declared, so
+      // answering from it first erased the ones that were — reachable once a
+      // pattern that only re-lists the declared names started being dropped.
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: {
+          inner: {
+            properties: { a: { type: 'string' } },
+            patternProperties: { '^(?:a)$': { type: 'string' } },
+            additionalProperties: false,
+          },
+        },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = {\n  inner?: { a?: string };\n};')
+    })
+
+    it('brackets a union when an earlier literal spells a comment opener', () => {
+      // A `const` of `x/*y` renders as a quoted literal whose characters open a
+      // comment, and stripping comments in a pass before the quote-aware scan
+      // paired it with the *next* property's JSDoc terminator — blanking the bar
+      // between them and dropping the brackets.
+      const schema: JSONSchema = {
+        type: ['object', 'boolean'],
+        properties: { a: { enum: ['x/*y'] }, b: { type: 'string', description: 'plain doc' } },
+        allOf: [{ $ref: '#/$defs/extra' }],
+        $defs: { extra: { type: 'object' } },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('} | boolean) & Extra;')
+    })
+
+    it('names a conditional it is already inlining instead of inlining it again', () => {
+      // The import collectors got this guard; the type emitter did not, so the
+      // same schema recursed until the depth cap refused the whole document.
+      const schema: JSONSchema = {
+        type: 'object',
+        allOf: [{ $ref: '#/$defs/b' }],
+        $defs: {
+          b: {
+            if: { properties: { t: { const: 'x' } } },
+            then: { allOf: [{ $ref: '#/$defs/b' }], properties: { z: { $ref: '#/$defs/c' } } },
+          },
+          c: { type: 'object' },
+        },
+      } as JSONSchema
+
+      expect(() => generateTypeDefinition(schema, 'A')).not.toThrow()
+    })
+  })
+
   describe('JSDoc escaping', () => {
     it('escapes a comment terminator in a property description', () => {
       const schema: JSONSchema = {

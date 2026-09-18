@@ -1305,6 +1305,21 @@ describe('generate-parser-function', () => {
     expect(result).not.toContain("if (typeof input === 'boolean')")
   })
 
+  it('omits the meta-schema boolean branch for a Schema def that delegates its type', () => {
+    // `export type Schema = A | B` has no boolean in it, so the branch's cast is
+    // `TS2352`. What the rendered type spells is the question, and a composition
+    // keyword means this node does not decide it.
+    for (const schema of [
+      { allOf: [{ $ref: '#/$defs/base' }] },
+      { oneOf: [{ $ref: '#/$defs/a' }, { $ref: '#/$defs/b' }] },
+      { $ref: '#/$defs/base' },
+    ] as JSONSchema[]) {
+      const result = generateParserFunction(schema, 'Schema', { useRefImports: true })
+
+      expect(result).not.toContain("if (typeof input === 'boolean')")
+    }
+  })
+
   it('keeps the meta-schema boolean branch when the schema admits the boolean shorthand', () => {
     // How OpenAPI 3.1 and 3.2 declare their schema object: a JSON Schema is
     // either an object or a boolean, and the emitted type says so.

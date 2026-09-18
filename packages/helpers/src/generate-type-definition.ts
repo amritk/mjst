@@ -90,6 +90,12 @@ export type TypeOptions = {
    * type and the import agree.
    */
   readonly rootSchema?: Record<string, unknown>
+  /**
+   * Conditional definitions this render is already inlining, so a cycle through
+   * one terminates. Internal: callers never set it, `allOfMember` grows it as it
+   * descends.
+   */
+  readonly inliningRefs?: ReadonlySet<string>
 }
 
 /**
@@ -360,21 +366,31 @@ const allOfMember = (
   options: TypeOptions,
   depth: number,
 ): string => {
-  const source = isSchemaObject(entry)
-    ? declares(entry, 'if')
-      ? entry
-      : referencedConditionalOf(entry, options)
-    : undefined
+  // A definition already being inlined further up is not inlined again: OpenAPI's
+  // security scheme composes conditionals that never cycle, but a conditional
+  // whose own `then` composes it does, and the render recursed until the depth
+  // cap refused the whole document. Naming the type instead is less precise and
+  // terminates — the same answer this reaches for any member it cannot read.
+  const ref = isSchemaObject(entry) ? keywordOf(entry, '$ref') : undefined
+  const inlining = typeof ref === 'string' && options.inliningRefs?.has(ref) === true
+  const source =
+    isSchemaObject(entry) && !inlining
+      ? declares(entry, 'if')
+        ? entry
+        : referencedConditionalOf(entry, options)
+      : undefined
   if (source === undefined) return wrapUnion(getTypeScriptType(entry, options, depth + 1))
+  const inner: TypeOptions =
+    typeof ref === 'string' ? { ...options, inliningRefs: new Set([...(options.inliningRefs ?? []), ref]) } : options
   const own = keywordMap(source, 'properties')
   const merged: Record<string, JSONSchema> = {}
   for (const block of [domain, own]) {
     if (block === undefined) continue
     for (const key of Object.keys(block)) assignKey(merged, key, readKey(block, key))
   }
-  const conditional = conditionalMember(source, merged, options, depth + 1)
+  const conditional = conditionalMember(source, merged, inner, depth + 1)
   const rest = source === entry ? withoutConditional(entry) : entry
-  const remainder = wrapUnion(getTypeScriptType(rest, options, depth + 1))
+  const remainder = wrapUnion(getTypeScriptType(rest, inner, depth + 1))
   // Each member is already parenthesized where it is a union, so the result is
   // safe as one factor of the composing intersection as it stands.
   return intersectionOf([remainder, ...(conditional === undefined ? [] : [wrapUnion(conditional)])])
@@ -471,24 +487,29 @@ const isNullableSchema = (schema: JSONSchema): boolean =>
  * direction, where a wrong answer is a wrong type, so it gets the exact test.
  */
 const isTopLevelUnion = (type: string): boolean => {
-  // A rendered member carries the schema's own prose: `objectTypeToTs` puts each
-  // property's `description` in a JSDoc block inside the object literal. An
-  // apostrophe there ("the operation's name") opened a quoted run that swallowed
-  // the rest of the type, hiding the top-level bar and putting back the very
-  // precedence defect the bracketing exists to prevent. In a *type* there is no
-  // regex literal and no division, so a comment is the only thing `/` can start.
-  const type_ = type.replace(/\/\*[\s\S]*?\*\//g, ' ')
   let depth = 0
   // A rendered type carries author data verbatim — a `const` or `enum` member is
   // emitted as a JSON string literal, and `enum: ['a | b']` puts a bar inside
   // quotes that means nothing to the parser. Quoted runs are skipped whole so
   // the scan only ever sees syntax.
   let quote: string | undefined
-  for (let i = 0; i < type_.length; i++) {
-    const char = type_[i]
+  for (let i = 0; i < type.length; i++) {
+    const char = type[i]
     if (quote !== undefined) {
       if (char === '\\') i++
       else if (char === quote) quote = undefined
+      continue
+    }
+    // Comments belong to the same scan as quotes, not to a pass before it. A
+    // `const` of `x/*y` renders as a quoted literal whose characters open a
+    // comment, and a regex pre-pass paired that with the *next* property's JSDoc
+    // terminator and blanked everything between — hiding the top-level bar and
+    // putting back the precedence defect the bracketing exists to prevent.
+    if (char === '/' && type[i + 1] === '*') {
+      const end = type.indexOf('*/', i + 2)
+      // Nothing closes it, so nothing after it is syntax either.
+      if (end === -1) return false
+      i = end + 1
       continue
     }
     if (char === '"' || char === "'" || char === '`') quote = char
@@ -717,14 +738,21 @@ const patternIndexSignatures = (
     key: patternKeyType(pattern),
     value: typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options, depth + 1),
   }))
-  if (signatures.length === 1 || signatures.every((signature) => signature.key !== 'string')) {
-    // Two patterns can still name one key space (`^x-` twice over is not a
-    // document anyone writes, but a duplicate key is a compile error).
-    const byKey = new Map<string, string[]>()
-    for (const { key, value } of signatures) byKey.set(key, [...(byKey.get(key) ?? []), value])
-    return [...byKey].map(([key, values]) => ({ key, value: unionOf(values) }))
-  }
-  return [{ key: 'string', value: unionOf(signatures.map((signature) => signature.value)) }]
+  const widened = [{ key: 'string', value: unionOf(signatures.map((signature) => signature.value)) }]
+  if (signatures.length === 1) return signatures
+  if (signatures.some((signature) => signature.key === 'string')) return widened
+
+  // Two patterns can still name one key space, and then only one signature may
+  // carry it: `^x-` twice over is a duplicate key.
+  const byKey = new Map<string, string[]>()
+  for (const { key, value } of signatures) byKey.set(key, [...(byKey.get(key) ?? []), value])
+  const grouped = [...byKey].map(([key, values]) => ({ key, value: unionOf(values) }))
+
+  // Distinct keys are not yet disjoint ones: `^x-` and `^x-a` narrow to
+  // `` `x-${string}` `` and `` `x-a${string}` ``, and TypeScript holds the second
+  // to the first's value type (`TS2413`) because every key it admits the first
+  // admits too. Only patterns that cannot collide keep their own signature.
+  return overlappingKeys(grouped.map((signature) => signature.key)) ? widened : grouped
 }
 
 /**
@@ -889,6 +917,16 @@ const declaresOpenKeys = (schema: SchemaNode): boolean => {
  * counts: `true` is the JSON Schema default, so emitting `[key: string]:
  * unknown` for it would widen nearly every generated type into uselessness, and
  * `false` is a closed object.
+ *
+ * A schema-valued `additionalProperties` wins outright, and that costs
+ * something TypeScript cannot give back. Where both are declared, JSON Schema
+ * reads `additionalProperties` as covering only the keys `patternProperties`
+ * did not — so OpenAPI 3.0's Callback Object, `{ additionalProperties: PathItem,
+ * patternProperties: { '^x-': {} } }`, accepts `x-anything`. Writing that needs
+ * `[key: string]: PathItem` beside `[key: `x-${string}`]: unknown`, and a
+ * `string` index has to be a supertype of every other, so the pair is `TS2411`.
+ * Between a type that takes every ordinary key and one that takes only the
+ * extensions, the first is the object's purpose.
  */
 const getIndexSignatures = (
   schema: SchemaNode,
@@ -946,11 +984,39 @@ const buildIndexSignatureLine = (
  * template literals.
  */
 const matchesKeyType = (key: string, name: string): boolean => {
-  if (key === 'string') return true
-  return key.split(' | ').some((member) => {
+  const prefixes = keyTypePrefixes(key)
+  return prefixes === undefined || prefixes.some((prefix) => name.startsWith(prefix))
+}
+
+/**
+ * The prefixes a rendered key type admits, or undefined for `string` — which
+ * admits everything and so has no prefix list.
+ */
+const keyTypePrefixes = (key: string): readonly string[] | undefined => {
+  if (key === 'string') return undefined
+  const prefixes: string[] = []
+  for (const member of key.split(' | ')) {
     const prefix = /^`(.*)\$\{string\}`$/.exec(member)?.[1]
-    return prefix !== undefined && name.startsWith(prefix)
-  })
+    if (prefix === undefined) return undefined
+    prefixes.push(prefix)
+  }
+  return prefixes
+}
+
+/** True when two of these key types admit a key in common. */
+const overlappingKeys = (keys: readonly string[]): boolean => {
+  const prefixLists = keys.map((key) => keyTypePrefixes(key))
+  if (prefixLists.some((prefixes) => prefixes === undefined)) return true
+  for (let i = 0; i < prefixLists.length; i++) {
+    for (let j = i + 1; j < prefixLists.length; j++) {
+      const left = prefixLists[i] as readonly string[]
+      const right = prefixLists[j] as readonly string[]
+      // One prefix extending another means every key the longer admits the
+      // shorter admits as well.
+      if (left.some((a) => right.some((b) => a.startsWith(b) || b.startsWith(a)))) return true
+    }
+  }
+  return false
 }
 
 /** The description (or `$comment` fallback) to emit as JSDoc above a property. */
@@ -1042,13 +1108,18 @@ const getLocalShapeType = (schema: SchemaNode, options: TypeOptions, depth: numb
     // whole recursive walk.
     if (declaresOpenKeys(schema)) return objectTypeToTs(schema, options, depth)
 
+    // Declared properties first. A boolean `additionalProperties` says what to do
+    // with the keys *not* declared, so reading it ahead of them answered
+    // `Record<string, never>` for a schema that names properties — reachable
+    // once `openPatternProperties` started dropping a pattern that only re-lists
+    // those same names, which is what left nothing for `declaresOpenKeys` above.
+    const properties = keywordOf(schema, 'properties')
+    if (properties && Object.keys(properties).length > 0) return objectTypeToTs(schema, options, depth)
+
     const additionalProperties = keywordOf(schema, 'additionalProperties')
     if (typeof additionalProperties === 'boolean') {
       return recordType('string', getBooleanSubSchemaType(additionalProperties), options)
     }
-
-    const properties = keywordOf(schema, 'properties')
-    if (properties && Object.keys(properties).length > 0) return objectTypeToTs(schema, options, depth)
 
     // Last resort for a schema that says nothing else: guess the type from the
     // shape of its `default`. A `default` is an annotation, not a constraint, so
@@ -1347,7 +1418,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       [body, ...getCompositionMembers(schema, options, 0)].filter((member) => member !== 'unknown').join(' & ')
 
     // An object whose keys all come from `patternProperties` / `additionalProperties`.
-    // Both are asked for together, through `getIndexSignatures`: checking
+    // `getIndexSignatures` decides between them rather than this branch: reading
     // `patternProperties` first and returning meant OpenAPI 3.0's Callback Object
     // — `{ additionalProperties: PathItem, patternProperties: { '^x-': {} } }` —
     // rendered as the extension record alone, dropping the Path Item map and

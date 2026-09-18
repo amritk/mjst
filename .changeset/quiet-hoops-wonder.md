@@ -50,9 +50,14 @@ name it never used); a `patternProperties` key is narrowed to the prefixes the
 pattern can start with (`` `/${string}` `` for Paths, `` `1${string}` `` …
 `` `5${string}` `` for Responses) rather than collapsing to `string`; and each
 pattern gets its own index signature instead of the block collapsing onto one
-key with every pattern's value type unioned. All 75 types across the three
-schemas that the spec lets carry an `x-` key now accept one — previously the
-Paths and Responses Objects of every version did not.
+key with every pattern's value type unioned, unless two of those key spaces
+overlap. 75 of the 76 types across the three schemas that the spec lets carry an
+`x-` key now accept one, where before the Paths and Responses Objects of every
+version did not. The holdout is OpenAPI 3.0's Callback Object, whose
+`additionalProperties` covers every key its adjacent `^x-` pattern does not:
+writing that needs a `string` index beside a narrower one carrying a different
+value type, which TypeScript rejects outright, so the map every
+callback-expression key needs wins over the extensions.
 
 **A `patternProperties` that only re-lists declared property names contributes
 no index signature.** OpenAPI's Components Object enumerates all ten of its own
@@ -73,7 +78,17 @@ something; a pattern prefix that is template-literal syntax, or one arm of a
 top-level alternation, takes the key back to `string`; a template-literal index
 that covers a declared property widens like a `string` one; and the meta-schema
 boolean branch asks what the rendered type spells rather than what JSON Schema
-admits.
+admits — including where a `$ref`, `allOf` or `oneOf` hands the type elsewhere.
+
+A second review pass found five more, each reproduced before being fixed: two
+narrowed key spaces that overlap (`^x-` beside `^x-a`) widen back to one
+signature rather than emitting the `TS2413` pair; declared properties are read
+before a boolean `additionalProperties`, which had started erasing them once a
+self-listing pattern was dropped; the scan deciding whether a member needs
+bracketing handles comments in the same pass as quotes, since a `const` of
+`x/*y` renders as a literal whose characters open one; and the type emitter
+gained the cycle guard the import collectors already had, so a conditional
+definition composing itself no longer takes the depth cap down with it.
 
 Two smaller fixes fall out of the above: the meta-schema pass-through parser
 emits its `typeof input === 'boolean'` branch only where the schema admits the

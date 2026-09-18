@@ -3609,6 +3609,14 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
  */
 const OBJECT_SHAPE_KEYWORDS = ['properties', 'patternProperties', 'additionalProperties', 'required'] as const
 
+/**
+ * Keywords that hand the rendered type to another schema. Whatever they resolve
+ * to is what the cast has to land in, and this function cannot see it — a
+ * `Schema` def written `{ oneOf: [{ $ref: a }, { $ref: b }] }` renders
+ * `export type Schema = A | B`, with no boolean anywhere in it.
+ */
+const DELEGATING_KEYWORDS = ['$ref', '$dynamicRef', 'allOf', 'anyOf', 'oneOf', 'if', 'not'] as const
+
 const admitsBooleanSchema = (schema: JSONSchema): boolean => {
   if (typeof schema === 'boolean') return true
   if (!isSchemaObject(schema)) return false
@@ -3617,8 +3625,10 @@ const admitsBooleanSchema = (schema: JSONSchema): boolean => {
   // inherited `Object.prototype.type` would otherwise answer for a keyword the
   // document never declared.
   const type = readKey(record, 'type')
+  // An explicit `type` is the local shape, and the union it renders keeps its
+  // boolean member through whatever is intersected onto it.
   if (type !== undefined) return Array.isArray(type) ? type.includes('boolean') : type === 'boolean'
-  return !OBJECT_SHAPE_KEYWORDS.some((keyword) => declaresKey(record, keyword))
+  return ![...OBJECT_SHAPE_KEYWORDS, ...DELEGATING_KEYWORDS].some((keyword) => declaresKey(record, keyword))
 }
 
 /**
