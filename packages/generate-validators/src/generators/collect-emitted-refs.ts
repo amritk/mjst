@@ -63,11 +63,17 @@ export const collectEmittedRefs = (
   refs: string[] = [],
   rootSchema?: Record<string, unknown>,
   includeTypeOnly = false,
+  // Conditional definitions already inlined below. Resolving a `$ref` and walking
+  // into it is what makes this walk able to cycle — a conditional whose own
+  // `then` composes it again recursed until the stack ran out — and the walk
+  // itself cannot notice, because it never resolves a ref otherwise. Each
+  // definition is inlined once; a second reach adds no ref the first did not.
+  inlinedRefs: Set<string> = new Set(),
 ): string[] => {
   if (typeof value !== 'object' || value === null) return refs
 
   if (Array.isArray(value)) {
-    for (const item of value) collectEmittedRefs(item, refs, rootSchema, includeTypeOnly)
+    for (const item of value) collectEmittedRefs(item, refs, rootSchema, includeTypeOnly, inlinedRefs)
     return refs
   }
 
@@ -101,7 +107,7 @@ export const collectEmittedRefs = (
   for (const mapKey of ['properties', 'patternProperties', 'dependentSchemas', 'dependencies']) {
     const map = readKey(schema, mapKey)
     if (typeof map === 'object' && map !== null && !Array.isArray(map)) {
-      for (const sub of Object.values(map)) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+      for (const sub of Object.values(map)) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly, inlinedRefs)
     }
   }
 
@@ -117,7 +123,7 @@ export const collectEmittedRefs = (
 
   // `tail` stands where `items` used to, and `tuple` where `prefixItems` did, so
   // the traversal order every emitted import list is built from is unchanged.
-  if (tail !== undefined) collectEmittedRefs(tail, refs, rootSchema, includeTypeOnly)
+  if (tail !== undefined) collectEmittedRefs(tail, refs, rootSchema, includeTypeOnly, inlinedRefs)
 
   // The one position the *type* reads and the validator does not: a tuple's rest.
   // `renderTuple` in `generate-type-definition` takes it from `additionalItems`
@@ -140,7 +146,7 @@ export const collectEmittedRefs = (
   if (includeTypeOnly && Array.isArray(readKey(schema, 'items'))) {
     const additional = readKey(schema, 'additionalItems')
     if (additional !== undefined && additional !== tail) {
-      collectEmittedRefs(additional, refs, rootSchema, includeTypeOnly)
+      collectEmittedRefs(additional, refs, rootSchema, includeTypeOnly, inlinedRefs)
     }
   }
 
@@ -164,14 +170,14 @@ export const collectEmittedRefs = (
     'unevaluatedProperties',
     'unevaluatedItems',
   ]) {
-    if (declaresKey(schema, key)) collectEmittedRefs(schema[key], refs, rootSchema, includeTypeOnly)
+    if (declaresKey(schema, key)) collectEmittedRefs(schema[key], refs, rootSchema, includeTypeOnly, inlinedRefs)
   }
 
   for (const key of ['oneOf', 'anyOf', 'allOf']) {
     const list = readKey(schema, key)
     if (!Array.isArray(list)) continue
     for (const sub of list) {
-      collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+      collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly, inlinedRefs)
       // An `allOf` member that refs a conditional definition is one the *type*
       // generator inlines through rather than merely names: it reads the
       // definition and renders its arms into this file, so a `$ref` inside them
@@ -179,15 +185,20 @@ export const collectEmittedRefs = (
       // type generator's reach sits behind — the emitter itself delegates to the
       // member's own `validateX`, so this adds nothing it calls.
       if (key !== 'allOf' || !includeTypeOnly) continue
+      const memberRef = isSchemaObject(sub as JSONSchema) ? readKey(sub as Record<string, unknown>, '$ref') : undefined
+      if (typeof memberRef === 'string' && inlinedRefs.has(memberRef)) continue
       const inlined = referencedConditional(sub as JSONSchema, rootSchema)
       if (inlined === undefined) continue
+      if (typeof memberRef === 'string') inlinedRefs.add(memberRef)
       for (const arm of ['if', 'then', 'else']) {
-        if (declaresKey(inlined, arm)) collectEmittedRefs(readKey(inlined, arm), refs, rootSchema, includeTypeOnly)
+        if (declaresKey(inlined, arm))
+          collectEmittedRefs(readKey(inlined, arm), refs, rootSchema, includeTypeOnly, inlinedRefs)
       }
     }
   }
 
-  if (tuple !== undefined) for (const sub of tuple) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+  if (tuple !== undefined)
+    for (const sub of tuple) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly, inlinedRefs)
 
   return refs
 }

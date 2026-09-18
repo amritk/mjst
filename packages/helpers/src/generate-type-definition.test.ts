@@ -2074,6 +2074,81 @@ describe('generateTypeDefinition', () => {
     })
   })
 
+  describe('review regressions', () => {
+    it('brackets a multi-type union even when a description carries an apostrophe', () => {
+      // `objectTypeToTs` puts each property's `description` in a JSDoc block
+      // inside the literal, and the scan that decides whether a member needs
+      // bracketing read the apostrophe as a quote — swallowing the rest of the
+      // type, hiding the top-level bar, and putting back the precedence defect
+      // the bracketing exists to prevent.
+      const schema: JSONSchema = {
+        type: ['object', 'boolean'],
+        properties: { a: { type: 'string', description: "the operation's name" } },
+        allOf: [{ $ref: '#/$defs/extra' }],
+        $defs: { extra: { type: 'object' } },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('} | boolean) & Extra;')
+    })
+
+    it('collapses a union that carries an unknown member', () => {
+      // OpenAPI 3.0's `SchemaXORContent`. `X | unknown` *is* `unknown`, and
+      // emitting both read as though the `schema` branch still constrained
+      // something.
+      const schema: JSONSchema = {
+        oneOf: [{ required: ['schema'] }, { required: ['content'], allOf: [{ not: { required: ['x'] } }] }],
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = unknown;')
+    })
+
+    it('keeps a pattern whose prefix is not spellable in a template literal', () => {
+      // The prefix goes in verbatim: a backslash reads as an escape and a
+      // backtick closes the literal, either way emitting a file that does not parse.
+      const backslash: JSONSchema = { type: 'object', patternProperties: { '^\\\\x': { type: 'string' } } }
+      const backtick: JSONSchema = { type: 'object', patternProperties: { '^[`a]': { type: 'string' } } }
+
+      expect(generateTypeDefinition(backslash, 'Doc')).toBe('export type Doc = Record<string, string>;')
+      expect(generateTypeDefinition(backtick, 'Doc')).toBe('export type Doc = Record<string, string>;')
+    })
+
+    it('does not narrow a pattern to one arm of a top-level alternation', () => {
+      // `^/|^x-` matches two key spaces. Answering `/` alone is a subset, and the
+      // whole contract of the answer is that it is a superset.
+      const schema: JSONSchema = { type: 'object', patternProperties: { '^/|^x-': { type: 'string' } } }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = Record<string, string>;')
+    })
+
+    it('widens a template-literal index that covers a declared property', () => {
+      // `[key: `x-${string}`]` beside a declared `x-internal` is `TS2411` unless
+      // the signature admits that property's type too.
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { 'x-internal': { type: 'string' } },
+        patternProperties: { '^x-': { type: 'number' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('[key: `x-${string}`]: number | string | undefined')
+    })
+
+    it('keeps the additionalProperties map when patternProperties is declared too', () => {
+      // OpenAPI 3.0's Callback Object. Checking `patternProperties` first and
+      // returning rendered the extension record alone, dropping the Path Item map
+      // and with it every callback-expression key the object exists to carry.
+      const schema: JSONSchema = {
+        type: 'object',
+        additionalProperties: { $ref: '#/$defs/path-item' },
+        patternProperties: { '^x-': {} },
+        $defs: { 'path-item': { type: 'object' } },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Callback')).toBe(
+        'export type Callback = {\n  [key: string]: PathItem;\n};',
+      )
+    })
+  })
+
   describe('JSDoc escaping', () => {
     it('escapes a comment terminator in a property description', () => {
       const schema: JSONSchema = {

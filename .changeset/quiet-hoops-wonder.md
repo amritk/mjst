@@ -61,6 +61,20 @@ signature that had to widen to cover every declared property, landing
 `[key: string]: unknown | …` on the type and disabling excess-property checking
 for the whole object.
 
+Review follow-ups, each verified against a case the vendored corpus does not
+reach: the two import collectors no longer recurse forever on a conditional
+definition that composes itself; the scan deciding whether a rendered member
+needs bracketing skips JSDoc, so an apostrophe in a `description` cannot hide a
+top-level union; `identifierMentions` reads comments, strings and regex literals
+in one pass, so an emitted `pattern` whose first characters spell a comment
+opener no longer blanks the imports below it; a union carrying an `unknown`
+member collapses rather than reading as though its other branches still said
+something; a pattern prefix that is template-literal syntax, or one arm of a
+top-level alternation, takes the key back to `string`; a template-literal index
+that covers a declared property widens like a `string` one; and the meta-schema
+boolean branch asks what the rendered type spells rather than what JSON Schema
+admits.
+
 Two smaller fixes fall out of the above: the meta-schema pass-through parser
 emits its `typeof input === 'boolean'` branch only where the schema admits the
 boolean shorthand (3.1 and 3.2 do, 3.0 does not), and a coercing parser's

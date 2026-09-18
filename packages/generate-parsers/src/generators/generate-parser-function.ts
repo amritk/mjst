@@ -1,6 +1,7 @@
 import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
+import { declaresKey, readKey } from '@amritk/helpers/read-key'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { hasOwnCheck, missingCheck, safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
@@ -3596,15 +3597,28 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
 }
 
 /**
- * True when a schema admits the boolean shorthand — no `type` at all, or a
- * `type` list containing `'boolean'`.
+ * True when the *rendered type* for a schema admits a boolean.
+ *
+ * The question is not what JSON Schema accepts but what the emitted type spells,
+ * because the boolean branch casts to that type: a definition with `properties`
+ * and no `type` is accepted by the schema as a boolean and still renders as an
+ * object literal, so the cast is `TS2352` and the pass-through parser this
+ * heuristic exists to produce does not compile. `getLocalShapeType` decides the
+ * shape the same way — a `type` when there is one, otherwise whatever object
+ * keyword the node declares.
  */
+const OBJECT_SHAPE_KEYWORDS = ['properties', 'patternProperties', 'additionalProperties', 'required'] as const
+
 const admitsBooleanSchema = (schema: JSONSchema): boolean => {
   if (typeof schema === 'boolean') return true
   if (!isSchemaObject(schema)) return false
-  const type = (schema as Record<string, unknown>)['type']
-  if (type === undefined) return true
-  return Array.isArray(type) ? type.includes('boolean') : type === 'boolean'
+  const record = schema as Record<string, unknown>
+  // `readKey`, not a plain index: these schemas come from the caller, and an
+  // inherited `Object.prototype.type` would otherwise answer for a keyword the
+  // document never declared.
+  const type = readKey(record, 'type')
+  if (type !== undefined) return Array.isArray(type) ? type.includes('boolean') : type === 'boolean'
+  return !OBJECT_SHAPE_KEYWORDS.some((keyword) => declaresKey(record, keyword))
 }
 
 /**

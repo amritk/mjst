@@ -471,14 +471,21 @@ const isNullableSchema = (schema: JSONSchema): boolean =>
  * direction, where a wrong answer is a wrong type, so it gets the exact test.
  */
 const isTopLevelUnion = (type: string): boolean => {
+  // A rendered member carries the schema's own prose: `objectTypeToTs` puts each
+  // property's `description` in a JSDoc block inside the object literal. An
+  // apostrophe there ("the operation's name") opened a quoted run that swallowed
+  // the rest of the type, hiding the top-level bar and putting back the very
+  // precedence defect the bracketing exists to prevent. In a *type* there is no
+  // regex literal and no division, so a comment is the only thing `/` can start.
+  const type_ = type.replace(/\/\*[\s\S]*?\*\//g, ' ')
   let depth = 0
   // A rendered type carries author data verbatim — a `const` or `enum` member is
   // emitted as a JSON string literal, and `enum: ['a | b']` puts a bar inside
   // quotes that means nothing to the parser. Quoted runs are skipped whole so
   // the scan only ever sees syntax.
   let quote: string | undefined
-  for (let i = 0; i < type.length; i++) {
-    const char = type[i]
+  for (let i = 0; i < type_.length; i++) {
+    const char = type_[i]
     if (quote !== undefined) {
       if (char === '\\') i++
       else if (char === quote) quote = undefined
@@ -505,8 +512,18 @@ const wrapIntersection = (type: string): string => (type.includes(' & ') ? `(${t
 /** Appends `| null` unless the rendered type already admits null. */
 const withNull = (type: string): string => (type.split(' | ').includes('null') ? type : `${type} | null`)
 
-/** Joins members with ` | `, dropping duplicates while preserving order. */
-const unionOf = (members: readonly string[]): string => [...new Set(members)].join(' | ')
+/**
+ * Joins members with ` | `, dropping duplicates while preserving order.
+ *
+ * A single `unknown` member takes the whole union: `X | unknown` *is* `unknown`,
+ * and emitting both reads as though `X` still constrained something. OpenAPI
+ * 3.0's `SchemaXORContent` rendered `{ schema: unknown } | unknown`, which says
+ * nothing while looking like it says the `schema` branch survived.
+ */
+const unionOf = (members: readonly string[]): string => {
+  const unique = [...new Set(members)]
+  return unique.includes('unknown') ? 'unknown' : unique.join(' | ')
+}
 
 /**
  * Joins members with ` & `, dropping duplicates and any `unknown` member —
@@ -593,6 +610,19 @@ const characterClassMembers = (body: string): readonly string[] | undefined => {
   return members.length > 0 && members.length <= 64 ? members : undefined
 }
 
+/** True for a `|` that splits the whole pattern rather than sitting inside a group or class. */
+const hasTopLevelAlternation = (pattern: string): boolean => {
+  let depth = 0
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i]
+    if (char === '\\') i++
+    else if (char === '(' || char === '[') depth++
+    else if (char === ')' || char === ']') depth--
+    else if (char === '|' && depth <= 0) return true
+  }
+  return false
+}
+
 /**
  * The prefixes every key a pattern matches must start with, or undefined when
  * the pattern puts no bound on its first characters.
@@ -607,6 +637,11 @@ const characterClassMembers = (body: string): readonly string[] | undefined => {
 const leadingPrefixes = (pattern: string): readonly string[] | undefined => {
   if (!pattern.startsWith('^')) return undefined
   const rest = pattern.slice(1)
+  // A top-level alternation has a second key space this scan never reaches:
+  // reading `^/|^x-` as the prefix `/` answers with a *subset*, and the whole
+  // point of the answer is that it is a superset. Only a bar inside a group or a
+  // class belongs to an atom rather than to the pattern.
+  if (hasTopLevelAlternation(rest)) return undefined
 
   let run = ''
   let cursor = 0
@@ -649,7 +684,12 @@ const leadingPrefixes = (pattern: string): readonly string[] | undefined => {
  */
 const patternKeyType = (pattern: string): string => {
   const prefixes = leadingPrefixes(pattern)
-  if (prefixes === undefined) return 'string'
+  // A prefix goes into a template literal type verbatim, so anything that is
+  // syntax there has to take the pattern back to `string` rather than emit a
+  // file that does not parse: a backslash (`^\\x` renders `\x`, read as a
+  // hex escape), a backtick (which closes the literal), and `$` (which starts
+  // an interpolation).
+  if (prefixes === undefined || prefixes.some((prefix) => /[`\\$]/.test(prefix))) return 'string'
   return prefixes.map((prefix) => `\`${prefix}\${string}\``).join(' | ')
 }
 
@@ -688,23 +728,23 @@ const patternIndexSignatures = (
 }
 
 /**
- * The type for a schema whose only keys come from `patternProperties`: a
- * `Record<…>` for a single pattern, or an object body carrying one index
- * signature per pattern when they name disjoint key spaces.
+ * The type for a schema whose keys all come from index signatures.
  *
- * Returns `undefined` when there are no usable patterns.
+ * `asBlock` keeps the two spellings these have always had: `additionalProperties`
+ * renders as a property block and a lone `patternProperties` pattern as a
+ * `Record<…>`. They mean the same type, and swapping either would churn every
+ * consumer's generated output for nothing. Several signatures need the block
+ * either way, since `Record<…>` holds only one key type.
  */
-const patternPropertiesRecordType = (
-  patternProperties: Record<string, JSONSchema | boolean>,
+const indexSignaturesType = (
+  indexes: readonly { key: string; value: string }[],
   options: TypeOptions,
-  depth: number,
-): string | undefined => {
-  const signatures = patternIndexSignatures(patternProperties, options, depth)
-  if (signatures.length === 0) return undefined
-  const only = signatures[0] as { key: string; value: string }
-  if (signatures.length === 1) return recordType(only.key, only.value, options)
+  asBlock: boolean,
+): string => {
+  const only = indexes[0] as { key: string; value: string }
+  if (!asBlock && indexes.length === 1) return recordType(only.key, only.value, options)
   const readonlyPrefix = options.readonly ? 'readonly ' : ''
-  return `{\n${signatures.map(({ key, value }) => `  ${readonlyPrefix}[key: ${key}]: ${value};`).join('\n')}\n}`
+  return `{\n${indexes.map(({ key, value }) => `  ${readonlyPrefix}[key: ${key}]: ${value};`).join('\n')}\n}`
 }
 
 /**
@@ -831,6 +871,18 @@ const openPatternProperties = (
 }
 
 /**
+ * Whether a schema declares open-ended keys at all — the cheap question, asked
+ * where only the yes/no matters. {@link getIndexSignatures} answers it by
+ * rendering every value type, which is the whole recursive walk again.
+ */
+const declaresOpenKeys = (schema: SchemaNode): boolean => {
+  const additionalProperties = keywordOf(schema, 'additionalProperties')
+  if (additionalProperties !== undefined && typeof additionalProperties !== 'boolean') return true
+  const declaredPatterns = keywordMap(schema, 'patternProperties')
+  return declaredPatterns !== undefined && Object.keys(openPatternProperties(schema, declaredPatterns)).length > 0
+}
+
+/**
  * The open-ended key signatures a schema declares — one per `patternProperties`
  * pattern, or one for a schema-valued `additionalProperties` — and none when it
  * declares no open keys at all. Only a *schema-valued* `additionalProperties`
@@ -867,18 +919,38 @@ const getIndexSignatures = (
  */
 const buildIndexSignatureLine = (
   index: { key: string; value: string },
-  declaredTypes: readonly string[],
+  declared: readonly { name: string; type: string }[],
   hasOptionalProperty: boolean,
   options: TypeOptions,
 ): string => {
   const readonlyPrefix = options.readonly ? 'readonly ' : ''
-  if (index.key !== 'string') return `${readonlyPrefix}[key: ${index.key}]: ${index.value}`
+  // Which declared properties this key actually covers. A `string` key covers
+  // them all; a template-literal one covers the names carrying its prefix —
+  // `[key: `x-${string}`]` beside a declared `x-internal` is the same `TS2411`
+  // the widening exists to prevent, and a key narrow enough to miss every
+  // declared name needs no widening at all.
+  const covered =
+    index.key === 'string' ? declared : declared.filter((property) => matchesKeyType(index.key, property.name))
+  if (covered.length === 0) return `${readonlyPrefix}[key: ${index.key}]: ${index.value}`
   const widened = unionOf([
     ...index.value.split(' | '),
-    ...declaredTypes,
+    ...covered.map((property) => property.type),
     ...(hasOptionalProperty ? ['undefined'] : []),
   ])
-  return `${readonlyPrefix}[key: string]: ${widened}`
+  return `${readonlyPrefix}[key: ${index.key}]: ${widened}`
+}
+
+/**
+ * Whether a rendered key type admits a literal property name. Only the two forms
+ * this file emits are asked about: `string`, and a union of `` `prefix${string}` ``
+ * template literals.
+ */
+const matchesKeyType = (key: string, name: string): boolean => {
+  if (key === 'string') return true
+  return key.split(' | ').some((member) => {
+    const prefix = /^`(.*)\$\{string\}`$/.exec(member)?.[1]
+    return prefix !== undefined && name.startsWith(prefix)
+  })
 }
 
 /** The description (or `$comment` fallback) to emit as JSDoc above a property. */
@@ -909,7 +981,7 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
     const requiredSet = new Set<string>(Array.isArray(declaredRequired) ? (declaredRequired as string[]) : [])
     const hasDescriptions = Object.values(properties).some((p) => propertyDescription(p) !== undefined)
 
-    const declaredTypes: string[] = []
+    const declared: { name: string; type: string }[] = []
     let hasOptionalProperty = false
     // Entries are emitted ready to place: multi-line layout wants each
     // declaration indented and `;`-terminated (with its JSDoc block already
@@ -922,7 +994,7 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
       const optional = isRequired ? '' : '?'
       if (!isRequired) hasOptionalProperty = true
       const propType = getTypeScriptType(propSchema, options, depth + 1)
-      declaredTypes.push(propType)
+      declared.push({ name: key, type: propType })
       const declaration = readonlyPrefix + safeKey(key) + optional + ': ' + propType
       if (!hasDescriptions) {
         entries.push(declaration)
@@ -933,7 +1005,7 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
     }
 
     for (const index of indexes) {
-      const line = buildIndexSignatureLine(index, declaredTypes, hasOptionalProperty, options)
+      const line = buildIndexSignatureLine(index, declared, hasOptionalProperty, options)
       entries.push(hasDescriptions ? '  ' + line + ';' : line)
     }
 
@@ -965,7 +1037,10 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
 const getLocalShapeType = (schema: SchemaNode, options: TypeOptions, depth: number): string | undefined => {
   const type = keywordOf(schema, 'type')
   if (!type) {
-    if (getIndexSignatures(schema, options, depth).length > 0) return objectTypeToTs(schema, options, depth)
+    // A predicate, not the signatures themselves: `objectTypeToTs` builds them
+    // again, and building one renders every pattern's value type through the
+    // whole recursive walk.
+    if (declaresOpenKeys(schema)) return objectTypeToTs(schema, options, depth)
 
     const additionalProperties = keywordOf(schema, 'additionalProperties')
     if (typeof additionalProperties === 'boolean') {
@@ -1271,37 +1346,31 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     const composed = (body: string): string =>
       [body, ...getCompositionMembers(schema, options, 0)].filter((member) => member !== 'unknown').join(' & ')
 
-    // Handle objects with only patternProperties (no fixed properties)
-    if (!hasProperties && hasPatternProperties) {
-      const record = patternPropertiesRecordType(patternProperties, options, 0) ?? 'Record<string, unknown>'
+    // An object whose keys all come from `patternProperties` / `additionalProperties`.
+    // Both are asked for together, through `getIndexSignatures`: checking
+    // `patternProperties` first and returning meant OpenAPI 3.0's Callback Object
+    // — `{ additionalProperties: PathItem, patternProperties: { '^x-': {} } }` —
+    // rendered as the extension record alone, dropping the Path Item map and
+    // with it every callback-expression key the object exists to carry.
+    if (!hasProperties && (hasPatternProperties || hasAdditionalProperties)) {
+      const indexes = getIndexSignatures(schema, options, 0)
+      if (indexes.length > 0) {
+        const body = indexSignaturesType(indexes, options, hasAdditionalProperties)
 
-      let result = ''
-      if (jsDocTitle && jsDocDescription) {
-        result += buildJsDocBlock(jsDocTitle, jsDocDescription)
+        let result = ''
+        if (jsDocTitle && jsDocDescription) {
+          result += buildJsDocBlock(jsDocTitle, jsDocDescription)
+        }
+        result += `export type ${typeName} = ${composed(body)};`
+
+        return result
       }
-      result += `export type ${typeName} = ${composed(record)};`
-
-      return result
-    }
-
-    // Handle objects with only additionalProperties (no fixed properties)
-    if (!hasProperties && hasAdditionalProperties) {
-      const additionalPropType = getTypeScriptType(additionalProperties as JSONSchema, options, 0)
-
-      let result = ''
-      if (jsDocTitle && jsDocDescription) {
-        result += buildJsDocBlock(jsDocTitle, jsDocDescription)
-      }
-      const body = `{\n  ${readonlyPrefix}[key: string]: ${additionalPropType};\n}`
-      result += `export type ${typeName} = ${composed(body)};`
-
-      return result
     }
 
     const schemaProps = declaredProperties ?? {}
     const declaredRequired = keywordOf(schema, 'required')
     const requiredSet = new Set<string>(Array.isArray(declaredRequired) ? (declaredRequired as string[]) : [])
-    const declaredTypes: string[] = []
+    const declared: { name: string; type: string }[] = []
     let hasOptionalProperty = false
     let properties = ''
     let isFirstProp = true
@@ -1317,7 +1386,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       const optional = isRequired ? '' : '?'
       if (!isRequired) hasOptionalProperty = true
       const propType = getTypeScriptType(propSchema, options, 0)
-      declaredTypes.push(propType)
+      declared.push({ name: key, type: propType })
       const quotedKey = readonlyPrefix + safeKey(key)
 
       // Add JSDoc comment from $comment or description if available
@@ -1333,7 +1402,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     // signature inside the same body — dropping them used to erase everything a
     // schema said about the keys it does not name.
     for (const index of getIndexSignatures(schema, options, 0)) {
-      appendLine('  ' + buildIndexSignatureLine(index, declaredTypes, hasOptionalProperty, options) + ';')
+      appendLine('  ' + buildIndexSignatureLine(index, declared, hasOptionalProperty, options) + ';')
     }
 
     let result = ''

@@ -1294,6 +1294,17 @@ describe('generate-parser-function', () => {
     expect(result).not.toContain("if (typeof input === 'boolean')")
   })
 
+  it('omits the meta-schema boolean branch for an untyped Schema def with an object shape', () => {
+    // No `type`, so JSON Schema would accept a boolean — but `properties` is what
+    // decides the rendered type, and it has no boolean in it. Casting to it is
+    // `TS2352`, so the pass-through parser did not compile.
+    const schema: JSONSchema = { properties: { a: { type: 'string' } } } as JSONSchema
+
+    const result = generateParserFunction(schema, 'Schema', { useRefImports: true })
+
+    expect(result).not.toContain("if (typeof input === 'boolean')")
+  })
+
   it('keeps the meta-schema boolean branch when the schema admits the boolean shorthand', () => {
     // How OpenAPI 3.1 and 3.2 declare their schema object: a JSON Schema is
     // either an object or a boolean, and the emitted type says so.

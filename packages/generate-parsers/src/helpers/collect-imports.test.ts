@@ -698,6 +698,25 @@ describe('collect-imports', () => {
       expect(imports).toContain("import type { OauthFlows } from './oauth-flows.js';")
     })
 
+    it('terminates when a conditional definition composes itself', () => {
+      // Resolving a `$ref` and walking into it is what makes this walk able to
+      // cycle; stopping at every `$ref`, which is what it did before, could not.
+      const cyclic = {
+        $defs: {
+          a: { type: 'object', allOf: [{ $ref: '#/$defs/b' }] },
+          b: {
+            if: { properties: { t: { const: 'x' } } },
+            then: { allOf: [{ $ref: '#/$defs/b' }], properties: { z: { $ref: '#/$defs/c' } } },
+          },
+          c: { type: 'object' },
+        },
+      }
+
+      const imports = collectImports(cyclic.$defs.a as never, { rootSchema: cyclic, selfRef: '#/$defs/a' })
+
+      expect(imports).toContain("import type { C } from './c.js';")
+    })
+
     it('leaves the ref alone when the root document is not on offer to resolve it', () => {
       // Without `rootSchema` the definition cannot be read, so there is nothing
       // to inline and nothing extra to import.

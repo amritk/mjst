@@ -4,7 +4,15 @@ import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { referencedConditional } from '@amritk/helpers/referenced-conditional'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
+import {
+  hasAdditionalProperties,
+  hasAllOf,
+  hasAnyOf,
+  hasItems,
+  hasOneOf,
+  hasRef,
+  isSchemaObject,
+} from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /** Extension emitted on every relative import specifier in generated code. */
@@ -176,6 +184,8 @@ const collectImportTargets = (
   // the type. A ref in both kinds of position belongs here.
   const valueRefs = new Set<string>()
   let typeOnlyDepth = 0
+  // Conditional definitions already inlined, so a cycle through one terminates.
+  const inlinedRefs = new Set<string>()
 
   /**
    * One `allOf` member, plus whatever the type emitter inlines *through* it.
@@ -188,8 +198,16 @@ const collectImportTargets = (
    */
   const collectRefsFromAllOfMember = (entry: unknown): void => {
     collectRefsFromValue(entry)
+    const ref = isSchemaObject(entry as JSONSchema) ? readKey(entry as Record<string, unknown>, '$ref') : undefined
+    // Resolving a ref and walking into it is how this walk reaches a cycle: a
+    // conditional whose own `then` composes it again recursed until the stack
+    // ran out, where stopping at every `$ref` (what this did before) could not.
+    // Each definition is inlined once — a second reach adds no ref the first did
+    // not already collect.
+    if (typeof ref === 'string' && inlinedRefs.has(ref)) return
     const inlined = referencedConditional(entry as JSONSchema, rootSchema)
     if (inlined === undefined) return
+    if (typeof ref === 'string') inlinedRefs.add(ref)
     typeOnlyDepth++
     for (const arm of ['if', 'then', 'else'] as const) {
       if (Object.hasOwn(inlined, arm)) collectRefsFromValue(readKey(inlined, arm))

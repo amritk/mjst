@@ -276,6 +276,27 @@ describe('collect-validator-imports', () => {
     expect(imports).toContain("import type { OauthFlows } from './oauth-flows.js'")
   })
 
+  it('terminates when a conditional definition composes itself', () => {
+    const cyclic = {
+      $defs: {
+        a: { type: 'object', allOf: [{ $ref: '#/$defs/b' }] },
+        b: {
+          if: { properties: { t: { const: 'x' } } },
+          then: { allOf: [{ $ref: '#/$defs/b' }], properties: { z: { $ref: '#/$defs/c' } } },
+        },
+        c: { type: 'object' },
+      },
+    }
+
+    const imports = collectValidatorImports(cyclic.$defs.a as never, {
+      rootSchema: cyclic,
+      selfRef: '#/$defs/a',
+      reads: ({ typeName }) => ({ type: typeName === 'C', validator: false }),
+    })
+
+    expect(imports).toContain("import type { C } from './c.js'")
+  })
+
   it('imports a `-or-reference` def from its own file, under its own names', () => {
     // `walkRefGraph` writes a file per `$defs` entry, and both the emitter and the
     // type generator name this one in full — so rewriting the ref to `parameter`

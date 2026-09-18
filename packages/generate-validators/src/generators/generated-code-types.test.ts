@@ -540,12 +540,16 @@ describe('generated-code-types', () => {
         },
         (content) => content.includes("import type { B } from './b.js'"),
       ],
-      // A folded branch drops the *call* and the type generator still names the
-      // branch's type, so this is the validator half going and the type staying.
+      // An `anyOf` with an unconstrained branch accepts everything, so both
+      // emitters answer `unknown`: the validator folds its check away and the
+      // type collapses (`X | unknown` *is* `unknown`). Neither names the ref, so
+      // neither half is imported — where the type generator used to emit
+      // `{ p?: A } | unknown`, which reads as though the branch still said
+      // something and kept an import for it.
       [
-        'folded-branch-keeps-the-type',
+        'both-halves-go-when-the-branch-folds',
         { anyOf: [{ type: 'object', properties: { p: { $ref: '#/$defs/a' } } }, true], ...defs },
-        (content) => content.includes("import type { A } from './a.js'"),
+        (content) => !content.includes("from './a.js'"),
       ],
     ]
 
