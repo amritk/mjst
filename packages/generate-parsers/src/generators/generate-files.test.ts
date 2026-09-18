@@ -443,8 +443,11 @@ describe('generate-files', () => {
     const { content: result } = generateFile(schema, 'Encoding', { selfRef: '#/$defs/encoding' })
 
     expect(result).not.toContain("import { type Encoding, parseEncoding, validateEncodingShape } from './encoding.js';")
+    // No `validateHeaderOrReferenceShape`: this body reaches the ref through
+    // `validateRecord(_headers, parseHeaderOrReference)` and never asks for the
+    // shape guard, so importing it would leave a binding nothing reads.
     expect(result).toContain(
-      "import { type HeaderOrReference, parseHeaderOrReference, validateHeaderOrReferenceShape } from './header-or-reference.js';",
+      "import { type HeaderOrReference, parseHeaderOrReference } from './header-or-reference.js';",
     )
   })
 

@@ -1,6 +1,7 @@
 import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
 import { quoteJsString } from '@amritk/helpers/quote-js-string'
+import { declaresKey, readKey } from '@amritk/helpers/read-key'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { hasOwnCheck, missingCheck, safeAccessor, safeKey } from '@amritk/helpers/safe-accessor'
@@ -572,7 +573,16 @@ const generateFallbackObject = (
   // the literal's *inherited* `constructor: Function` is compared against it
   // ("Type 'Function' is not comparable to type 'Record<string, Alpha>'") and a
   // single assertion is not enough to silence it.
-  return declaresPrototypeMemberProperty(schema) ? `${result} as unknown as ${typeName}` : result
+  if (declaresPrototypeMemberProperty(schema)) return `${result} as unknown as ${typeName}`
+  // A sibling `oneOf`/`anyOf` is rendered as a union member intersected onto the
+  // property block, and a branch that only lists `required` names keys this
+  // literal — built from the schema's *own* required keys — need not carry:
+  // OpenAPI's document wants one of `paths` / `components` / `webhooks`, and the
+  // fallback has none of them, so the emitted parser failed to compile. The
+  // conditional cases above assert for the same reason, and asserting cannot
+  // fail where the bare literal would have been accepted.
+  const composesUnion = isSchemaObject(schema) && (hasOneOf(schema) || hasAnyOf(schema))
+  return composesUnion ? `${result} as ${typeName}` : result
 }
 
 /**
@@ -3587,18 +3597,61 @@ const getConditionalObjectSchema = (schema: JSONSchema): JSONSchema.Object | nul
 }
 
 /**
+ * True when the *rendered type* for a schema admits a boolean.
+ *
+ * The question is not what JSON Schema accepts but what the emitted type spells,
+ * because the boolean branch casts to that type: a definition with `properties`
+ * and no `type` is accepted by the schema as a boolean and still renders as an
+ * object literal, so the cast is `TS2352` and the pass-through parser this
+ * heuristic exists to produce does not compile. `getLocalShapeType` decides the
+ * shape the same way — a `type` when there is one, otherwise whatever object
+ * keyword the node declares.
+ */
+const OBJECT_SHAPE_KEYWORDS = ['properties', 'patternProperties', 'additionalProperties', 'required'] as const
+
+/**
+ * Keywords that hand the rendered type to another schema. Whatever they resolve
+ * to is what the cast has to land in, and this function cannot see it — a
+ * `Schema` def written `{ oneOf: [{ $ref: a }, { $ref: b }] }` renders
+ * `export type Schema = A | B`, with no boolean anywhere in it.
+ */
+const DELEGATING_KEYWORDS = ['$ref', '$dynamicRef', 'allOf', 'anyOf', 'oneOf', 'if', 'not'] as const
+
+const admitsBooleanSchema = (schema: JSONSchema): boolean => {
+  if (typeof schema === 'boolean') return true
+  if (!isSchemaObject(schema)) return false
+  const record = schema as Record<string, unknown>
+  // `readKey`, not a plain index: these schemas come from the caller, and an
+  // inherited `Object.prototype.type` would otherwise answer for a keyword the
+  // document never declared.
+  const type = readKey(record, 'type')
+  // An explicit `type` is the local shape, and the union it renders keeps its
+  // boolean member through whatever is intersected onto it.
+  if (type !== undefined) return Array.isArray(type) ? type.includes('boolean') : type === 'boolean'
+  return ![...OBJECT_SHAPE_KEYWORDS, ...DELEGATING_KEYWORDS].some((keyword) => declaresKey(record, keyword))
+}
+
+/**
  * Generates a parser for SchemaObject that validates all JSON Schema 2020-12 properties.
  * This handles the special case where a schema can be any valid JSON Schema.
  */
-const generateSchemaObjectParser = (typeName: string): string => {
+const generateSchemaObjectParser = (typeName: string, schema: JSONSchema): string => {
   const functionName = generateParserName(typeName)
-
-  return `export const ${functionName} = (input: unknown): ${typeName} => {
-  if (typeof input === 'boolean') {
+  // The boolean shorthand is a 2020-12 spelling: OpenAPI 3.1 and 3.2 declare
+  // their schema object `type: ['object', 'boolean']`, while 3.0's is an object
+  // and nothing else. Emitting the branch regardless cast a `boolean` to a type
+  // with no boolean in it, which is `TS2352` — the pass-through parser this
+  // heuristic exists to produce then failed to compile at all.
+  const booleanBranch = admitsBooleanSchema(schema)
+    ? `  if (typeof input === 'boolean') {
     return input as ${typeName};
   }
   
-  if (!isObject(input)) {
+`
+    : ''
+
+  return `export const ${functionName} = (input: unknown): ${typeName} => {
+${booleanBranch}  if (!isObject(input)) {
     return {} as ${typeName};
   }
   
@@ -3639,7 +3692,7 @@ const selectParserStrategy = (schema: JSONSchema, typeName: string, options?: Ge
   // file naturally yields the root type `Schema`) and would otherwise collapse
   // to a validation-free pass-through parser.
   if (!options?.isRoot && typeName === `Schema${suffix}`) {
-    return generateSchemaObjectParser(typeName)
+    return generateSchemaObjectParser(typeName, schema)
   }
 
   const isObjectLikeSchema =

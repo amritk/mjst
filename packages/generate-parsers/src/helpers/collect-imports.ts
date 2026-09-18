@@ -1,7 +1,18 @@
+import { identifierMentions } from '@amritk/helpers/identifier-mentions'
+import { readKey } from '@amritk/helpers/read-key'
 import { refToFilename } from '@amritk/helpers/ref-to-filename'
 import { refToName } from '@amritk/helpers/ref-to-name'
+import { referencedConditional } from '@amritk/helpers/referenced-conditional'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
-import { hasAdditionalProperties, hasAllOf, hasAnyOf, hasItems, hasOneOf, hasRef } from '@amritk/helpers/schema-guards'
+import {
+  hasAdditionalProperties,
+  hasAllOf,
+  hasAnyOf,
+  hasItems,
+  hasOneOf,
+  hasRef,
+  isSchemaObject,
+} from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 /** Extension emitted on every relative import specifier in generated code. */
@@ -55,6 +66,17 @@ type CollectImportsOptions = {
    * type stripping.
    */
   readonly importExt?: ImportExtension
+  /**
+   * The file body this import list is being written above. When given, only the
+   * `$ref` imports whose names the body actually spells are emitted, and one
+   * whose parser is never called is narrowed to a type-only import.
+   *
+   * The walk below can only approximate what the emitters wrote: it stops at a
+   * `$ref` the type emitter inlines *through*, and it cannot see a branch that
+   * folded away. Asking the emitted text settles both directions, the way
+   * `collectHelpers` already settles which runtime helpers a file needs.
+   */
+  readonly usedIn?: string | undefined
 }
 
 /**
@@ -100,18 +122,28 @@ export const collectImports = (schema: JSONSchema, options?: CollectImportsOptio
   const typesOnly = options?.typesOnly === true
   const importExt = options?.importExt ?? 'js'
   const importMap = new Map<string, string>()
+  // Without a body to read, every target stands — the behaviour every caller had
+  // before the question could be asked.
+  const mentions = options?.usedIn === undefined ? () => true : identifierMentions(options.usedIn)
 
   for (const [filename, { typeName, typeOnly }] of collectImportTargets(schema, options)) {
     const importPath = getImportPathForFilename(filename, importExt)
-    // In types-only mode there is no parser to call. `typeOnly` is the same
-    // conclusion reached per ref: the emitters only ever named the type, so
-    // importing `parse`/`validate…Shape` beside it would leave two bindings
-    // nothing calls — a `noUnusedLocals` error in the consumer's build.
-    const importStatement =
-      typesOnly || typeOnly
-        ? `import type { ${typeName} } from '${importPath}';`
-        : `import { type ${typeName}, parse${typeName}, validate${typeName}Shape } from '${importPath}';`
-    importMap.set(filename, importStatement)
+    // In types-only mode there is no parser to call, and `typeOnly` is the same
+    // conclusion reached per ref. Beyond those two, each binding is kept only
+    // where the body spells it: they come apart in practice, since a
+    // `$ref`-discriminated union calls `parseX` and never the shape guard, and a
+    // ref the type emitter inlined through is named without either. Any binding
+    // nothing reads is `TS6133` in the consumer's build.
+    const values =
+      typesOnly || typeOnly ? [] : [`parse${typeName}`, `validate${typeName}Shape`].filter((name) => mentions(name))
+    const named = mentions(typeName)
+    if (values.length === 0) {
+      if (!named) continue
+      importMap.set(filename, `import type { ${typeName} } from '${importPath}';`)
+      continue
+    }
+    const specifiers = named ? [`type ${typeName}`, ...values] : values
+    importMap.set(filename, `import { ${specifiers.join(', ')} } from '${importPath}';`)
   }
 
   return Array.from(importMap.values()).sort()
@@ -152,6 +184,36 @@ const collectImportTargets = (
   // the type. A ref in both kinds of position belongs here.
   const valueRefs = new Set<string>()
   let typeOnlyDepth = 0
+  // Conditional definitions already inlined, so a cycle through one terminates.
+  const inlinedRefs = new Set<string>()
+
+  /**
+   * One `allOf` member, plus whatever the type emitter inlines *through* it.
+   *
+   * A member that is a local `$ref` to a conditional definition is not just
+   * named: `referencedConditional` reads the definition and renders its arms
+   * into this file, so a `$ref` inside those arms is a type name here even
+   * though the walk stops at the member. Rendered, never called — the emitted
+   * arm is a type — so the arms are walked as type-only positions.
+   */
+  const collectRefsFromAllOfMember = (entry: unknown): void => {
+    collectRefsFromValue(entry)
+    const ref = isSchemaObject(entry as JSONSchema) ? readKey(entry as Record<string, unknown>, '$ref') : undefined
+    // Resolving a ref and walking into it is how this walk reaches a cycle: a
+    // conditional whose own `then` composes it again recursed until the stack
+    // ran out, where stopping at every `$ref` (what this did before) could not.
+    // Each definition is inlined once — a second reach adds no ref the first did
+    // not already collect.
+    if (typeof ref === 'string' && inlinedRefs.has(ref)) return
+    const inlined = referencedConditional(entry as JSONSchema, rootSchema)
+    if (inlined === undefined) return
+    if (typeof ref === 'string') inlinedRefs.add(ref)
+    typeOnlyDepth++
+    for (const arm of ['if', 'then', 'else'] as const) {
+      if (Object.hasOwn(inlined, arm)) collectRefsFromValue(readKey(inlined, arm))
+    }
+    typeOnlyDepth--
+  }
 
   const collectRefsFromValue = (value: unknown): void => {
     if (typeof value !== 'object' || value === null) {
@@ -248,7 +310,7 @@ const collectImportTargets = (
     }
     if (hasAllOf(record)) {
       for (const item of record.allOf) {
-        collectRefsFromValue(item)
+        collectRefsFromAllOfMember(item)
       }
     }
 
@@ -373,7 +435,7 @@ const collectImportTargets = (
   }
   if (typeof schema === 'object' && schema !== null && hasAllOf(schema)) {
     for (const item of schema.allOf) {
-      collectRefsFromValue(item)
+      collectRefsFromAllOfMember(item)
     }
   }
 

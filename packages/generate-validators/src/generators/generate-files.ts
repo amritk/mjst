@@ -1,4 +1,5 @@
 import { generateTypeDefinition } from '@amritk/helpers/generate-type-definition'
+import { identifierMentions } from '@amritk/helpers/identifier-mentions'
 import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -39,16 +40,6 @@ type GenerateValidatorFileOptions = {
    */
   readonly formats?: ReadonlySet<string>
 }
-
-/**
- * Escapes a derived type name for use inside a `RegExp`.
- *
- * The names `refToName` builds are identifier characters and whatever the
- * caller's `typeSuffix` adds, and that suffix is a plain string nobody validates
- * — a `.` or a `+` in one would otherwise be read as regex syntax and match the
- * wrong text.
- */
-const escapeForWordMatch = (name: string): string => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
 /**
  * Generates a complete TypeScript validator file from a JSON Schema.
@@ -110,11 +101,10 @@ export const generateValidatorFile = (
   // is neither. Every half nothing reads is `TS6133` for a consumer with
   // `noUnusedLocals`, which is this repo and anything inheriting its flags.
   // Asking the emitted text keeps the import in step with whatever the two
-  // generators decided to write. The inexact direction is the harmless one: a
-  // schema string that happens to spell one of the names keeps a half that could
-  // have gone, which is what was emitted before anyone asked.
-  const emitted = typeDefinition + body
-  const mentions = (name: string): boolean => new RegExp(`\\b${escapeForWordMatch(name)}\\b`).test(emitted)
+  // generators decided to write. `identifierMentions` reads the code only —
+  // comments and quoted strings carry schema text, and a `description` or an
+  // error message naming a definition is not a use of it.
+  const mentions = identifierMentions(typeDefinition + body)
   const refImports = collectValidatorImports(schema, {
     selfRef: options?.selfRef,
     rootSchema: options?.rootSchema,

@@ -5,6 +5,7 @@ import { assertSchemaDepth, MAX_SCHEMA_DEPTH } from './max-schema-depth'
 import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive } from './mjst-extension'
 import { readKey } from './read-key'
 import { refToName } from './ref-to-name'
+import { referencedConditional } from './referenced-conditional'
 import { resolveRef } from './resolve-ref'
 import { safeKey } from './safe-accessor'
 import { isObjectSchema, isSchemaObject } from './schema-guards'
@@ -63,6 +64,15 @@ const MAX_TYPE_DEPTH = Math.floor(MAX_SCHEMA_DEPTH / 5)
 /** True when the node itself declares `name`, inherited values excluded. */
 const declares = (schema: SchemaNode, name: string): boolean => Object.hasOwn(schema as Record<string, unknown>, name)
 
+/**
+ * Keywords that hand a node's type to another schema: whatever they resolve to
+ * is the answer, so nothing local should be guessed alongside them.
+ */
+const COMPOSITION_KEYWORDS = ['$ref', '$dynamicRef', 'allOf', 'anyOf', 'oneOf', 'if', 'not'] as const
+
+/** True when a node delegates its type to a composed schema (see {@link COMPOSITION_KEYWORDS}). */
+const composes = (schema: SchemaNode): boolean => COMPOSITION_KEYWORDS.some((keyword) => declares(schema, keyword))
+
 /** Options controlling generated type output. */
 export type TypeOptions = {
   /** When true, every property, array, and record in the generated types is emitted as readonly. */
@@ -80,6 +90,12 @@ export type TypeOptions = {
    * type and the import agree.
    */
   readonly rootSchema?: Record<string, unknown>
+  /**
+   * Conditional definitions this render is already inlining, so a cycle through
+   * one terminates. Internal: callers never set it, `allOfMember` grows it as it
+   * descends.
+   */
+  readonly inliningRefs?: ReadonlySet<string>
 }
 
 /**
@@ -325,20 +341,12 @@ const withoutConditional = (schema: SchemaNode): SchemaNode => {
 }
 
 /**
- * The conditional definition an `allOf` member's local `$ref` points at, when
- * it points at one. OpenAPI's security scheme composes its per-type rules as
- * `allOf: [{ $ref: '#/$defs/type-http' }, …]`, each definition an `if`/`then`
- * on the `type` the composing schema enumerates; the definition's own file
- * cannot see that enumeration, so its conditional drops there and the ref would
- * name a type that says nothing. Reading the definition here is what lets the
- * composing type narrow on `type` the way the schema does.
+ * {@link referencedConditional}, bound to the root document these options carry.
+ * Shared with the import collectors, which have to import exactly the names this
+ * inlining puts in the file.
  */
-const referencedConditional = (entry: SchemaNode, options: TypeOptions): SchemaNode | undefined => {
-  const ref = keywordOf(entry, '$ref')
-  if (typeof ref !== 'string' || !ref.startsWith('#') || options.rootSchema === undefined) return undefined
-  const resolved = resolveRef(ref, options.rootSchema) as JSONSchema | undefined
-  return resolved !== undefined && isSchemaObject(resolved) && declares(resolved, 'if') ? resolved : undefined
-}
+const referencedConditionalOf = (entry: SchemaNode, options: TypeOptions): SchemaNode | undefined =>
+  referencedConditional(entry, options.rootSchema) as SchemaNode | undefined
 
 /**
  * Renders one `allOf` member against the schema composing it.
@@ -358,21 +366,31 @@ const allOfMember = (
   options: TypeOptions,
   depth: number,
 ): string => {
-  const source = isSchemaObject(entry)
-    ? declares(entry, 'if')
-      ? entry
-      : referencedConditional(entry, options)
-    : undefined
+  // A definition already being inlined further up is not inlined again: OpenAPI's
+  // security scheme composes conditionals that never cycle, but a conditional
+  // whose own `then` composes it does, and the render recursed until the depth
+  // cap refused the whole document. Naming the type instead is less precise and
+  // terminates — the same answer this reaches for any member it cannot read.
+  const ref = isSchemaObject(entry) ? keywordOf(entry, '$ref') : undefined
+  const inlining = typeof ref === 'string' && options.inliningRefs?.has(ref) === true
+  const source =
+    isSchemaObject(entry) && !inlining
+      ? declares(entry, 'if')
+        ? entry
+        : referencedConditionalOf(entry, options)
+      : undefined
   if (source === undefined) return wrapUnion(getTypeScriptType(entry, options, depth + 1))
+  const inner: TypeOptions =
+    typeof ref === 'string' ? { ...options, inliningRefs: new Set([...(options.inliningRefs ?? []), ref]) } : options
   const own = keywordMap(source, 'properties')
   const merged: Record<string, JSONSchema> = {}
   for (const block of [domain, own]) {
     if (block === undefined) continue
     for (const key of Object.keys(block)) assignKey(merged, key, readKey(block, key))
   }
-  const conditional = conditionalMember(source, merged, options, depth + 1)
+  const conditional = conditionalMember(source, merged, inner, depth + 1)
   const rest = source === entry ? withoutConditional(entry) : entry
-  const remainder = wrapUnion(getTypeScriptType(rest, options, depth + 1))
+  const remainder = wrapUnion(getTypeScriptType(rest, inner, depth + 1))
   // Each member is already parenthesized where it is a union, so the result is
   // safe as one factor of the composing intersection as it stands.
   return intersectionOf([remainder, ...(conditional === undefined ? [] : [wrapUnion(conditional)])])
@@ -459,6 +477,49 @@ const getTypeScriptType = (schema: JSONSchema, options: TypeOptions, depth: numb
 const isNullableSchema = (schema: JSONSchema): boolean =>
   isSchemaObject(schema) && keywordOf(schema, 'nullable') === true
 
+/**
+ * True when a rendered type is a union at its own top level — a ` | ` that no
+ * bracket encloses.
+ *
+ * `includes(' | ')` cannot tell `A | B` from `Record<string, A | B>`, which is
+ * why {@link wrapUnion} parenthesizes conservatively: over-wrapping only costs a
+ * pair of brackets. Deciding whether a member *needs* wrapping is the other
+ * direction, where a wrong answer is a wrong type, so it gets the exact test.
+ */
+const isTopLevelUnion = (type: string): boolean => {
+  let depth = 0
+  // A rendered type carries author data verbatim — a `const` or `enum` member is
+  // emitted as a JSON string literal, and `enum: ['a | b']` puts a bar inside
+  // quotes that means nothing to the parser. Quoted runs are skipped whole so
+  // the scan only ever sees syntax.
+  let quote: string | undefined
+  for (let i = 0; i < type.length; i++) {
+    const char = type[i]
+    if (quote !== undefined) {
+      if (char === '\\') i++
+      else if (char === quote) quote = undefined
+      continue
+    }
+    // Comments belong to the same scan as quotes, not to a pass before it. A
+    // `const` of `x/*y` renders as a quoted literal whose characters open a
+    // comment, and a regex pre-pass paired that with the *next* property's JSDoc
+    // terminator and blanked everything between — hiding the top-level bar and
+    // putting back the precedence defect the bracketing exists to prevent.
+    if (char === '/' && type[i + 1] === '*') {
+      const end = type.indexOf('*/', i + 2)
+      // Nothing closes it, so nothing after it is syntax either.
+      if (end === -1) return false
+      i = end + 1
+      continue
+    }
+    if (char === '"' || char === "'" || char === '`') quote = char
+    else if (char === '(' || char === '<' || char === '[' || char === '{') depth++
+    else if (char === ')' || char === '>' || char === ']' || char === '}') depth--
+    else if (char === '|' && depth === 0) return true
+  }
+  return false
+}
+
 /** Parenthesizes a union so it composes safely inside `[]`, `&`, or an optional marker. */
 const wrapUnion = (type: string): string => (type.includes(' | ') ? `(${type})` : type)
 
@@ -472,8 +533,18 @@ const wrapIntersection = (type: string): string => (type.includes(' & ') ? `(${t
 /** Appends `| null` unless the rendered type already admits null. */
 const withNull = (type: string): string => (type.split(' | ').includes('null') ? type : `${type} | null`)
 
-/** Joins members with ` | `, dropping duplicates while preserving order. */
-const unionOf = (members: readonly string[]): string => [...new Set(members)].join(' | ')
+/**
+ * Joins members with ` | `, dropping duplicates while preserving order.
+ *
+ * A single `unknown` member takes the whole union: `X | unknown` *is* `unknown`,
+ * and emitting both reads as though `X` still constrained something. OpenAPI
+ * 3.0's `SchemaXORContent` rendered `{ schema: unknown } | unknown`, which says
+ * nothing while looking like it says the `schema` branch survived.
+ */
+const unionOf = (members: readonly string[]): string => {
+  const unique = [...new Set(members)]
+  return unique.includes('unknown') ? 'unknown' : unique.join(' | ')
+}
 
 /**
  * Joins members with ` & `, dropping duplicates and any `unknown` member —
@@ -488,7 +559,16 @@ const intersectionOf = (members: readonly string[]): string => {
   // `type: 'object'` next to a `oneOf` contributes exactly that bare member.
   const meaningful = kept.length > 1 ? kept.filter((member) => member !== 'object') : kept
   if (meaningful.length === 0) return 'object'
-  return meaningful.join(' & ')
+  if (meaningful.length === 1) return meaningful[0] as string
+  // `&` binds tighter than `|`, so a member that is itself a union has to be
+  // bracketed or it stops being one factor: the array-form `type` of the JSON
+  // Schema meta-schema renders `{…} | boolean`, and joining that raw produced
+  // `{…} | boolean & Core & Applicator & …` — read as `{…} | (boolean & …)`,
+  // which is a different type and, since nothing satisfies the second branch,
+  // silently threw away every keyword the meta-schema defines. Most call sites
+  // already `wrapUnion` what they push; doing it here covers the ones that
+  // cannot know they are about to be intersected.
+  return meaningful.map((member) => (isTopLevelUnion(member) ? `(${member})` : member)).join(' & ')
 }
 
 /** Wraps a `Record<...>` in `Readonly<...>` when readonly output is requested. */
@@ -496,38 +576,203 @@ const recordType = (keyType: string, valueType: string, options: TypeOptions): s
   options.readonly ? `Readonly<Record<${keyType}, ${valueType}>>` : `Record<${keyType}, ${valueType}>`
 
 /**
- * Builds the `Record<…>` type for a schema's `patternProperties`. Every pattern's
- * value type is unioned (deduplicated) rather than only the first being used, so
- * `{ '^a': string-schema, '^b': number-schema }` becomes `Record<string, string |
- * number>` instead of silently dropping the second pattern. The template-literal
- * `` `x-${string}` `` key is kept only when the sole pattern is the `^x-` vendor
- * convention. Returns `undefined` when there are no usable patterns.
+ * The key type a single `patternProperties` pattern contributes, or `'string'`
+ * for any pattern whose key set cannot be narrowed.
+ *
+ * A pattern anchored at the start and made of ordinary characters — `^x-`, `^/`
+ * — matches exactly the keys carrying that prefix, which is a template literal
+ * type. Narrowing it is what lets a composed extension record survive: keyed on
+ * `string`, an index signature covers `x-foo` too and forces it to the mapped
+ * value type, so intersecting `Record<\`x-${string}\`, unknown>` onto it changes
+ * nothing and the Paths Object rejected the very extensions the schema allows.
+ * Keyed on `\`/${string}\`` the two key spaces are disjoint and both apply.
+ *
+ * Only for a lone pattern: a union of key patterns is not a key type.
  */
-const patternPropertiesRecordType = (
+const REGEX_SYNTAX: ReadonlySet<string> = new Set([
+  '\\',
+  '^',
+  '$',
+  '.',
+  '|',
+  '?',
+  '*',
+  '+',
+  '(',
+  ')',
+  '[',
+  ']',
+  '{',
+  '}',
+])
+
+/** A quantifier that can match its atom zero or one times, so the atom is not a prefix. */
+const startsOptional = (rest: string): boolean => /^[*?{]/.test(rest)
+
+/**
+ * The single characters a `[...]` class matches, or undefined when it is
+ * negated, escaped, open-ended or simply too large to be worth naming.
+ */
+const characterClassMembers = (body: string): readonly string[] | undefined => {
+  if (body === '' || body.startsWith('^') || body.includes('\\')) return undefined
+  const members: string[] = []
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i] as string
+    if (body[i + 1] === '-' && i + 2 < body.length) {
+      const from = char.codePointAt(0) as number
+      const to = (body[i + 2] as string).codePointAt(0) as number
+      if (to < from || to - from > 64) return undefined
+      for (let code = from; code <= to; code++) members.push(String.fromCodePoint(code))
+      i += 2
+      continue
+    }
+    members.push(char)
+  }
+  return members.length > 0 && members.length <= 64 ? members : undefined
+}
+
+/** True for a `|` that splits the whole pattern rather than sitting inside a group or class. */
+const hasTopLevelAlternation = (pattern: string): boolean => {
+  let depth = 0
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i]
+    if (char === '\\') i++
+    else if (char === '(' || char === '[') depth++
+    else if (char === ')' || char === ']') depth--
+    else if (char === '|' && depth <= 0) return true
+  }
+  return false
+}
+
+/**
+ * The prefixes every key a pattern matches must start with, or undefined when
+ * the pattern puts no bound on its first characters.
+ *
+ * This is deliberately a *superset* of the pattern's key set — `^[1-5](?:[0-9]{2}|XX)$`
+ * answers `1`…`5`, not the 505 status codes it really matches. A key type built
+ * from it therefore never rejects a key the schema accepts, which is the
+ * direction that has to be right. What it buys is that the key space stops being
+ * all of `string`: `x-owner` is outside it, so a composed extension record is no
+ * longer swallowed by the index signature and can apply on its own.
+ */
+const leadingPrefixes = (pattern: string): readonly string[] | undefined => {
+  if (!pattern.startsWith('^')) return undefined
+  const rest = pattern.slice(1)
+  // A top-level alternation has a second key space this scan never reaches:
+  // reading `^/|^x-` as the prefix `/` answers with a *subset*, and the whole
+  // point of the answer is that it is a superset. Only a bar inside a group or a
+  // class belongs to an atom rather than to the pattern.
+  if (hasTopLevelAlternation(rest)) return undefined
+
+  let run = ''
+  let cursor = 0
+  while (cursor < rest.length) {
+    const char = rest[cursor] as string
+    // `\/` and `\.` are literal characters spelled defensively — common in a
+    // path pattern. `\d` and friends are classes, so only punctuation escapes.
+    if (char === '\\') {
+      const escaped = rest[cursor + 1]
+      if (escaped === undefined || /[A-Za-z0-9]/.test(escaped)) break
+      run += escaped
+      cursor += 2
+      continue
+    }
+    if (REGEX_SYNTAX.has(char)) break
+    run += char
+    cursor += 1
+  }
+  // `^ab*` matches `a`, not `ab`: a quantifier binds to the character before it,
+  // so that one is not part of the prefix.
+  if (run !== '' && startsOptional(rest.slice(cursor))) run = run.slice(0, -1)
+  if (run !== '') return [run]
+
+  if (!rest.startsWith('[')) return undefined
+  const close = rest.indexOf(']')
+  if (close === -1 || startsOptional(rest.slice(close + 1))) return undefined
+  return characterClassMembers(rest.slice(1, close))
+}
+
+/**
+ * The key type one `patternProperties` pattern contributes, or `'string'` when
+ * its keys cannot be narrowed.
+ *
+ * Narrowing is what lets a composed extension record survive. Keyed on `string`,
+ * an index signature covers `x-foo` as well and forces it to the mapped value
+ * type, so intersecting `Record<`x-${string}`, unknown>` onto it changes
+ * nothing — the Paths and Responses Objects went on rejecting the very
+ * extensions the schema allows. Keyed on what the pattern can actually start
+ * with, the two key spaces are disjoint and both apply.
+ */
+const patternKeyType = (pattern: string): string => {
+  const prefixes = leadingPrefixes(pattern)
+  // A prefix goes into a template literal type verbatim, so anything that is
+  // syntax there has to take the pattern back to `string` rather than emit a
+  // file that does not parse: a backslash (`^\\x` renders `\x`, read as a
+  // hex escape), a backtick (which closes the literal), and `$` (which starts
+  // an interpolation).
+  if (prefixes === undefined || prefixes.some((prefix) => /[`\\$]/.test(prefix))) return 'string'
+  return prefixes.map((prefix) => `\`${prefix}\${string}\``).join(' | ')
+}
+
+/**
+ * One index signature per `patternProperties` pattern — or, when any pattern's
+ * keys cannot be narrowed, the single `string`-keyed signature carrying every
+ * pattern's value type.
+ *
+ * Separate signatures are what a multi-pattern block actually says: OpenAPI 3.0
+ * spells its Paths Object `{ '^\\/': PathItem, '^x-': {} }`, and collapsing that
+ * to one `string` key had to union the two value types, which put `PathItem` on
+ * `x-` keys and `unknown` on paths. Keeping them apart is both narrower and the
+ * only shape in which the extension keys stay extensions. Falling back together
+ * is still right when a key set is unknown: overlapping signatures TypeScript
+ * cannot order are worse than one honest wide one.
+ */
+const patternIndexSignatures = (
   patternProperties: Record<string, JSONSchema | boolean>,
   options: TypeOptions,
   depth: number,
-): string | undefined => {
+): readonly { key: string; value: string }[] => {
   const entries = Object.entries(patternProperties)
-  if (entries.length === 0) return undefined
+  if (entries.length === 0) return []
+  const signatures = entries.map(([pattern, value]) => ({
+    key: patternKeyType(pattern),
+    value: typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options, depth + 1),
+  }))
+  const widened = [{ key: 'string', value: unionOf(signatures.map((signature) => signature.value)) }]
+  if (signatures.length === 1) return signatures
+  if (signatures.some((signature) => signature.key === 'string')) return widened
 
-  const seen = new Set<string>()
-  const valueTypes: string[] = []
-  for (const [, value] of entries) {
-    const valueType =
-      typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options, depth + 1)
-    if (!seen.has(valueType)) {
-      seen.add(valueType)
-      valueTypes.push(valueType)
-    }
-  }
-  if (valueTypes.length === 0) return undefined
+  // Two patterns can still name one key space, and then only one signature may
+  // carry it: `^x-` twice over is a duplicate key.
+  const byKey = new Map<string, string[]>()
+  for (const { key, value } of signatures) byKey.set(key, [...(byKey.get(key) ?? []), value])
+  const grouped = [...byKey].map(([key, values]) => ({ key, value: unionOf(values) }))
 
-  const valueType = valueTypes.join(' | ')
-  // The `^x-` vendor-extension convention maps to a template-literal key, but only
-  // when it is the single pattern (a union of key patterns can't be expressed).
-  const keyType = entries.length === 1 && entries[0]?.[0] === '^x-' ? '`x-${string}`' : 'string'
-  return recordType(keyType, valueType, options)
+  // Distinct keys are not yet disjoint ones: `^x-` and `^x-a` narrow to
+  // `` `x-${string}` `` and `` `x-a${string}` ``, and TypeScript holds the second
+  // to the first's value type (`TS2413`) because every key it admits the first
+  // admits too. Only patterns that cannot collide keep their own signature.
+  return overlappingKeys(grouped.map((signature) => signature.key)) ? widened : grouped
+}
+
+/**
+ * The type for a schema whose keys all come from index signatures.
+ *
+ * `asBlock` keeps the two spellings these have always had: `additionalProperties`
+ * renders as a property block and a lone `patternProperties` pattern as a
+ * `Record<…>`. They mean the same type, and swapping either would churn every
+ * consumer's generated output for nothing. Several signatures need the block
+ * either way, since `Record<…>` holds only one key type.
+ */
+const indexSignaturesType = (
+  indexes: readonly { key: string; value: string }[],
+  options: TypeOptions,
+  asBlock: boolean,
+): string => {
+  const only = indexes[0] as { key: string; value: string }
+  if (!asBlock && indexes.length === 1) return recordType(only.key, only.value, options)
+  const readonlyPrefix = options.readonly ? 'readonly ' : ''
+  return `{\n${indexes.map(({ key, value }) => `  ${readonlyPrefix}[key: ${key}]: ${value};`).join('\n')}\n}`
 }
 
 /**
@@ -611,35 +856,94 @@ const arrayTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number):
 }
 
 /**
- * The open-ended key signature a schema declares, or undefined when it declares
- * none. Only a *schema-valued* `additionalProperties` counts: `true` is the JSON
- * Schema default, so emitting `[key: string]: unknown` for it would widen nearly
- * every generated type into uselessness, and `false` is a closed object.
+ * The literal key names an anchored alternation of plain literals matches, or
+ * undefined for any pattern that is not one.
+ *
+ * `^(?:schemas|responses|…)$` can match those names and nothing else. Anything
+ * carrying regex syntax — a quantifier, a class, a wildcard — matches an open
+ * set of keys and is not this.
  */
-const getIndexSignature = (
+const literalPatternKeys = (pattern: string): readonly string[] | undefined => {
+  const anchored = /^\^\((?:\?:)?([^()[\]{}.*+?^$\\|]+(?:\|[^()[\]{}.*+?^$\\|]+)*)\)\$$/.exec(pattern)
+  const bare = /^\^([^()[\]{}.*+?^$\\|]+)\$$/.exec(pattern)
+  const body = anchored?.[1] ?? bare?.[1]
+  return body === undefined ? undefined : body.split('|')
+}
+
+/**
+ * The `patternProperties` entries that say something the declared `properties`
+ * do not.
+ *
+ * A pattern that can only match keys the schema already declares constrains
+ * nothing new, and turning it into an index signature is actively worse than
+ * dropping it: the signature has to widen to cover every declared property, so
+ * `[key: string]: unknown | …` lands on the type and excess-property checking
+ * stops working for the whole object. OpenAPI's Components Object is exactly
+ * this — it re-lists all ten of its property names as an alternation, and the
+ * schema's own `$comment` says the enumeration is there so
+ * `unevaluatedProperties` works, not to describe any key.
+ */
+const openPatternProperties = (
+  schema: SchemaNode,
+  patternProperties: Record<string, JSONSchema>,
+): Record<string, JSONSchema> => {
+  const declared = keywordMap(schema, 'properties')
+  if (declared === undefined) return patternProperties
+  const kept: Record<string, JSONSchema> = {}
+  for (const [pattern, value] of Object.entries(patternProperties)) {
+    const keys = literalPatternKeys(pattern)
+    if (keys?.every((key) => Object.hasOwn(declared, key))) continue
+    assignKey(kept, pattern, value)
+  }
+  return kept
+}
+
+/**
+ * Whether a schema declares open-ended keys at all — the cheap question, asked
+ * where only the yes/no matters. {@link getIndexSignatures} answers it by
+ * rendering every value type, which is the whole recursive walk again.
+ */
+const declaresOpenKeys = (schema: SchemaNode): boolean => {
+  const additionalProperties = keywordOf(schema, 'additionalProperties')
+  if (additionalProperties !== undefined && typeof additionalProperties !== 'boolean') return true
+  const declaredPatterns = keywordMap(schema, 'patternProperties')
+  return declaredPatterns !== undefined && Object.keys(openPatternProperties(schema, declaredPatterns)).length > 0
+}
+
+/**
+ * The open-ended key signatures a schema declares — one per `patternProperties`
+ * pattern, or one for a schema-valued `additionalProperties` — and none when it
+ * declares no open keys at all. Only a *schema-valued* `additionalProperties`
+ * counts: `true` is the JSON Schema default, so emitting `[key: string]:
+ * unknown` for it would widen nearly every generated type into uselessness, and
+ * `false` is a closed object.
+ *
+ * A schema-valued `additionalProperties` wins outright, and that costs
+ * something TypeScript cannot give back. Where both are declared, JSON Schema
+ * reads `additionalProperties` as covering only the keys `patternProperties`
+ * did not — so OpenAPI 3.0's Callback Object, `{ additionalProperties: PathItem,
+ * patternProperties: { '^x-': {} } }`, accepts `x-anything`. Writing that needs
+ * `[key: string]: PathItem` beside `[key: `x-${string}`]: unknown`, and a
+ * `string` index has to be a supertype of every other, so the pair is `TS2411`.
+ * Between a type that takes every ordinary key and one that takes only the
+ * extensions, the first is the object's purpose.
+ */
+const getIndexSignatures = (
   schema: SchemaNode,
   options: TypeOptions,
   depth: number,
-): { key: string; value: string } | undefined => {
+): readonly { key: string; value: string }[] => {
   const additionalProperties = keywordOf(schema, 'additionalProperties')
   if (additionalProperties !== undefined && typeof additionalProperties !== 'boolean') {
-    return { key: 'string', value: getTypeScriptType(additionalProperties as JSONSchema, options, depth + 1) }
+    return [{ key: 'string', value: getTypeScriptType(additionalProperties as JSONSchema, options, depth + 1) }]
   }
 
-  const patternProperties = keywordOf(schema, 'patternProperties') as Record<string, JSONSchema> | undefined
-  if (patternProperties && typeof patternProperties === 'object') {
-    const entries = Object.entries(patternProperties)
-    if (entries.length === 0) return undefined
-    const valueTypes = entries.map(([, value]) =>
-      typeof value === 'boolean' ? getBooleanSubSchemaType(value) : getTypeScriptType(value, options, depth + 1),
-    )
-    // The `^x-` vendor-extension convention maps to a template-literal key, but
-    // only when it is the single pattern (a union of key patterns can't be expressed).
-    const key = entries.length === 1 && entries[0]?.[0] === '^x-' ? '`x-${string}`' : 'string'
-    return { key, value: unionOf(valueTypes) }
+  const declaredPatterns = keywordMap(schema, 'patternProperties')
+  if (declaredPatterns !== undefined) {
+    return patternIndexSignatures(openPatternProperties(schema, declaredPatterns), options, depth)
   }
 
-  return undefined
+  return []
 }
 
 /**
@@ -653,18 +957,66 @@ const getIndexSignature = (
  */
 const buildIndexSignatureLine = (
   index: { key: string; value: string },
-  declaredTypes: readonly string[],
+  declared: readonly { name: string; type: string }[],
   hasOptionalProperty: boolean,
   options: TypeOptions,
 ): string => {
   const readonlyPrefix = options.readonly ? 'readonly ' : ''
-  if (index.key !== 'string') return `${readonlyPrefix}[key: ${index.key}]: ${index.value}`
+  // Which declared properties this key actually covers. A `string` key covers
+  // them all; a template-literal one covers the names carrying its prefix —
+  // `[key: `x-${string}`]` beside a declared `x-internal` is the same `TS2411`
+  // the widening exists to prevent, and a key narrow enough to miss every
+  // declared name needs no widening at all.
+  const covered =
+    index.key === 'string' ? declared : declared.filter((property) => matchesKeyType(index.key, property.name))
+  if (covered.length === 0) return `${readonlyPrefix}[key: ${index.key}]: ${index.value}`
   const widened = unionOf([
     ...index.value.split(' | '),
-    ...declaredTypes,
+    ...covered.map((property) => property.type),
     ...(hasOptionalProperty ? ['undefined'] : []),
   ])
-  return `${readonlyPrefix}[key: string]: ${widened}`
+  return `${readonlyPrefix}[key: ${index.key}]: ${widened}`
+}
+
+/**
+ * Whether a rendered key type admits a literal property name. Only the two forms
+ * this file emits are asked about: `string`, and a union of `` `prefix${string}` ``
+ * template literals.
+ */
+const matchesKeyType = (key: string, name: string): boolean => {
+  const prefixes = keyTypePrefixes(key)
+  return prefixes === undefined || prefixes.some((prefix) => name.startsWith(prefix))
+}
+
+/**
+ * The prefixes a rendered key type admits, or undefined for `string` — which
+ * admits everything and so has no prefix list.
+ */
+const keyTypePrefixes = (key: string): readonly string[] | undefined => {
+  if (key === 'string') return undefined
+  const prefixes: string[] = []
+  for (const member of key.split(' | ')) {
+    const prefix = /^`(.*)\$\{string\}`$/.exec(member)?.[1]
+    if (prefix === undefined) return undefined
+    prefixes.push(prefix)
+  }
+  return prefixes
+}
+
+/** True when two of these key types admit a key in common. */
+const overlappingKeys = (keys: readonly string[]): boolean => {
+  const prefixLists = keys.map((key) => keyTypePrefixes(key))
+  if (prefixLists.some((prefixes) => prefixes === undefined)) return true
+  for (let i = 0; i < prefixLists.length; i++) {
+    for (let j = i + 1; j < prefixLists.length; j++) {
+      const left = prefixLists[i] as readonly string[]
+      const right = prefixLists[j] as readonly string[]
+      // One prefix extending another means every key the longer admits the
+      // shorter admits as well.
+      if (left.some((a) => right.some((b) => a.startsWith(b) || b.startsWith(a)))) return true
+    }
+  }
+  return false
 }
 
 /** The description (or `$comment` fallback) to emit as JSDoc above a property. */
@@ -684,7 +1036,7 @@ const propertyDescription = (propSchema: JSONSchema): string | undefined => {
  * signature inside the literal rather than being dropped.
  */
 const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number): string => {
-  const index = getIndexSignature(schema, options, depth)
+  const indexes = getIndexSignatures(schema, options, depth)
   const properties = keywordOf(schema, 'properties') as Record<string, JSONSchema> | undefined
 
   if (properties && Object.keys(properties).length > 0) {
@@ -695,7 +1047,7 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
     const requiredSet = new Set<string>(Array.isArray(declaredRequired) ? (declaredRequired as string[]) : [])
     const hasDescriptions = Object.values(properties).some((p) => propertyDescription(p) !== undefined)
 
-    const declaredTypes: string[] = []
+    const declared: { name: string; type: string }[] = []
     let hasOptionalProperty = false
     // Entries are emitted ready to place: multi-line layout wants each
     // declaration indented and `;`-terminated (with its JSDoc block already
@@ -708,7 +1060,7 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
       const optional = isRequired ? '' : '?'
       if (!isRequired) hasOptionalProperty = true
       const propType = getTypeScriptType(propSchema, options, depth + 1)
-      declaredTypes.push(propType)
+      declared.push({ name: key, type: propType })
       const declaration = readonlyPrefix + safeKey(key) + optional + ': ' + propType
       if (!hasDescriptions) {
         entries.push(declaration)
@@ -718,8 +1070,8 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
       entries.push((inlineDescription ? buildInlinePropertyComment(inlineDescription) : '') + '  ' + declaration + ';')
     }
 
-    if (index) {
-      const line = buildIndexSignatureLine(index, declaredTypes, hasOptionalProperty, options)
+    for (const index of indexes) {
+      const line = buildIndexSignatureLine(index, declared, hasOptionalProperty, options)
       entries.push(hasDescriptions ? '  ' + line + ';' : line)
     }
 
@@ -729,10 +1081,15 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
     return '{ ' + entries.join('; ') + ' }'
   }
 
-  if (index) {
-    return index.key === 'string' && !options.readonly
-      ? recordType('string', index.value, options)
-      : recordType(index.key, index.value, options)
+  const only = indexes[0]
+  if (only !== undefined && indexes.length === 1) {
+    return only.key === 'string' && !options.readonly
+      ? recordType('string', only.value, options)
+      : recordType(only.key, only.value, options)
+  }
+  if (indexes.length > 1) {
+    const readonlyPrefix = options.readonly ? 'readonly ' : ''
+    return `{ ${indexes.map(({ key, value }) => `${readonlyPrefix}[key: ${key}]: ${value}`).join('; ')} }`
   }
 
   return 'object'
@@ -746,22 +1103,40 @@ const objectTypeToTs = (schema: SchemaNode, options: TypeOptions, depth: number)
 const getLocalShapeType = (schema: SchemaNode, options: TypeOptions, depth: number): string | undefined => {
   const type = keywordOf(schema, 'type')
   if (!type) {
-    const index = getIndexSignature(schema, options, depth)
-    if (index) return objectTypeToTs(schema, options, depth)
+    // A predicate, not the signatures themselves: `objectTypeToTs` builds them
+    // again, and building one renders every pattern's value type through the
+    // whole recursive walk.
+    if (declaresOpenKeys(schema)) return objectTypeToTs(schema, options, depth)
+
+    // Declared properties first. A boolean `additionalProperties` says what to do
+    // with the keys *not* declared, so reading it ahead of them answered
+    // `Record<string, never>` for a schema that names properties — reachable
+    // once `openPatternProperties` started dropping a pattern that only re-lists
+    // those same names, which is what left nothing for `declaresOpenKeys` above.
+    const properties = keywordOf(schema, 'properties')
+    if (properties && Object.keys(properties).length > 0) return objectTypeToTs(schema, options, depth)
 
     const additionalProperties = keywordOf(schema, 'additionalProperties')
     if (typeof additionalProperties === 'boolean') {
       return recordType('string', getBooleanSubSchemaType(additionalProperties), options)
     }
 
-    const properties = keywordOf(schema, 'properties')
-    if (properties && Object.keys(properties).length > 0) return objectTypeToTs(schema, options, depth)
-
-    const defaultValue = keywordOf(schema, 'default')
-    if (defaultValue !== undefined) {
-      if (typeof defaultValue === 'string') return 'string'
-      if (typeof defaultValue === 'number') return 'number'
-      if (typeof defaultValue === 'boolean') return 'boolean'
+    // Last resort for a schema that says nothing else: guess the type from the
+    // shape of its `default`. A `default` is an annotation, not a constraint, so
+    // this only holds while nothing better is on offer — next to a composition
+    // keyword the guess is both redundant and wrong, and it gets *intersected*
+    // with what the composition says. OpenAPI 3.0's `additionalProperties`
+    // property is `{ oneOf: [Schema, Reference, { type: 'boolean' }], default:
+    // true }`, which came out as `boolean & (SchemaObject | ReferenceObject |
+    // boolean)` — every branch but `boolean` annihilated, so the ordinary
+    // `additionalProperties: { type: 'string' }` no longer type-checked.
+    if (!composes(schema)) {
+      const defaultValue = keywordOf(schema, 'default')
+      if (defaultValue !== undefined) {
+        if (typeof defaultValue === 'string') return 'string'
+        if (typeof defaultValue === 'number') return 'number'
+        if (typeof defaultValue === 'boolean') return 'boolean'
+      }
     }
 
     return undefined
@@ -888,7 +1263,7 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions, depth: numbe
 
   const unionBranches = unionBranchesOf(schema)
   if (unionBranches) {
-    const union = unionOf(unionBranches.map((branch) => getTypeScriptType(branch, options, depth + 1)))
+    const union = unionOf(unionBranches.map((branch) => unionBranchType(branch, domain, options, depth)))
     // A lone union is the whole type; alongside other members it is one factor
     // of an intersection and needs its own parentheses.
     if (members.length === 0 && !Array.isArray(allOf)) return union
@@ -897,6 +1272,51 @@ const getUnbrandedType = (schema: JSONSchema, options: TypeOptions, depth: numbe
 
   if (members.length === 0) return 'unknown'
   return intersectionOf(members)
+}
+
+/**
+ * One `oneOf`/`anyOf` branch, rendered against the schema composing it.
+ *
+ * A branch that only lists `required` is not a shape of its own — it is a
+ * constraint on the *composing* schema's properties, which is how "exactly one
+ * of these keys" is written. Rendered on its own it declares nothing, came out
+ * `unknown`, and was then dropped from the intersection as a member that says
+ * nothing: OpenAPI's `oneOf: [{ required: ['schema'] }, { required: ['content']
+ * }]` left a Parameter with both keys optional and no way to tell the two forms
+ * apart. Read against the property block it becomes `{ schema: SchemaObject } |
+ * { content: ContentObject }`, which is the constraint the schema states and a
+ * union TypeScript can narrow.
+ *
+ * `domain` is that property block, and supplies each required key's type; a key
+ * it does not declare is required with nothing said about it.
+ */
+const unionBranchType = (
+  branch: JSONSchema,
+  domain: Record<string, JSONSchema> | undefined,
+  options: TypeOptions,
+  depth: number,
+): string => {
+  const standalone = (): string => getTypeScriptType(branch, options, depth + 1)
+  // Anything carrying a shape of its own — a `$ref`, a composition, a `type`
+  // other than object — already renders to what it means.
+  if (!isPlainFragment(branch)) return standalone()
+  const required = requiredOf(branch)
+  const own = keywordMap(branch, 'properties')
+  if (required.length === 0) return standalone()
+
+  const properties: Record<string, JSONSchema> = {}
+  for (const key of required) {
+    const declared = domain === undefined ? undefined : readKey(domain, key)
+    assignKey(properties, key, declared === undefined ? true : (declared as JSONSchema))
+  }
+  if (own !== undefined) {
+    for (const key of Object.keys(own)) {
+      const sub = readKey(own, key) as JSONSchema
+      const existing = readKey(properties, key) as JSONSchema | undefined
+      assignKey(properties, key, existing === undefined ? sub : { allOf: [existing, sub] })
+    }
+  }
+  return objectTypeToTs({ type: 'object', properties, required: [...required] } as SchemaNode, options, depth)
 }
 
 /**
@@ -922,10 +1342,13 @@ const unionBranchesOf = (schema: SchemaNode): readonly JSONSchema[] | undefined 
 const getCompositionMembers = (schema: JSONSchema, options: TypeOptions, depth: number): string[] => {
   if (!isSchemaObject(schema)) return []
   const members: string[] = []
+  // The property block both `allOf` conditionals and `oneOf`/`anyOf` branches are
+  // read against: each is a constraint on *these* properties, not a shape apart
+  // from them.
+  const domain = keywordMap(schema, 'properties')
 
   const allOf = keywordOf(schema, 'allOf')
   if (Array.isArray(allOf)) {
-    const domain = keywordMap(schema, 'properties')
     for (const entry of allOf) members.push(allOfMember(entry as JSONSchema, domain, options, depth))
   }
 
@@ -936,7 +1359,7 @@ const getCompositionMembers = (schema: JSONSchema, options: TypeOptions, depth: 
 
   const unionBranches = unionBranchesOf(schema)
   if (unionBranches) {
-    members.push(wrapUnion(unionOf(unionBranches.map((branch) => getTypeScriptType(branch, options, depth + 1)))))
+    members.push(wrapUnion(unionOf(unionBranches.map((branch) => unionBranchType(branch, domain, options, depth)))))
   }
 
   // `X & unknown` is `X`: a branch that only lists `required`, or a ref with no
@@ -986,36 +1409,39 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     const hasAdditionalProperties = typeof additionalProperties === 'object' && additionalProperties !== null
     const hasPatternProperties = patternProperties !== undefined && Object.keys(patternProperties).length > 0
 
-    // Handle objects with only patternProperties (no fixed properties)
-    if (!hasProperties && hasPatternProperties) {
-      const record = patternPropertiesRecordType(patternProperties, options, 0) ?? 'Record<string, unknown>'
+    // A map shape composes like any other. Returning the map alone dropped every
+    // `allOf` member and sibling `$ref` the schema also declares — which for the
+    // Paths Object is the `$ref` to specification-extensions, so the type
+    // rejected the `x-` keys the schema allows (and the file imported a name it
+    // then never used).
+    const composed = (body: string): string =>
+      [body, ...getCompositionMembers(schema, options, 0)].filter((member) => member !== 'unknown').join(' & ')
 
-      let result = ''
-      if (jsDocTitle && jsDocDescription) {
-        result += buildJsDocBlock(jsDocTitle, jsDocDescription)
+    // An object whose keys all come from `patternProperties` / `additionalProperties`.
+    // `getIndexSignatures` decides between them rather than this branch: reading
+    // `patternProperties` first and returning meant OpenAPI 3.0's Callback Object
+    // — `{ additionalProperties: PathItem, patternProperties: { '^x-': {} } }` —
+    // rendered as the extension record alone, dropping the Path Item map and
+    // with it every callback-expression key the object exists to carry.
+    if (!hasProperties && (hasPatternProperties || hasAdditionalProperties)) {
+      const indexes = getIndexSignatures(schema, options, 0)
+      if (indexes.length > 0) {
+        const body = indexSignaturesType(indexes, options, hasAdditionalProperties)
+
+        let result = ''
+        if (jsDocTitle && jsDocDescription) {
+          result += buildJsDocBlock(jsDocTitle, jsDocDescription)
+        }
+        result += `export type ${typeName} = ${composed(body)};`
+
+        return result
       }
-      result += `export type ${typeName} = ${record};`
-
-      return result
-    }
-
-    // Handle objects with only additionalProperties (no fixed properties)
-    if (!hasProperties && hasAdditionalProperties) {
-      const additionalPropType = getTypeScriptType(additionalProperties as JSONSchema, options, 0)
-
-      let result = ''
-      if (jsDocTitle && jsDocDescription) {
-        result += buildJsDocBlock(jsDocTitle, jsDocDescription)
-      }
-      result += `export type ${typeName} = {\n  ${readonlyPrefix}[key: string]: ${additionalPropType};\n};`
-
-      return result
     }
 
     const schemaProps = declaredProperties ?? {}
     const declaredRequired = keywordOf(schema, 'required')
     const requiredSet = new Set<string>(Array.isArray(declaredRequired) ? (declaredRequired as string[]) : [])
-    const declaredTypes: string[] = []
+    const declared: { name: string; type: string }[] = []
     let hasOptionalProperty = false
     let properties = ''
     let isFirstProp = true
@@ -1031,7 +1457,7 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
       const optional = isRequired ? '' : '?'
       if (!isRequired) hasOptionalProperty = true
       const propType = getTypeScriptType(propSchema, options, 0)
-      declaredTypes.push(propType)
+      declared.push({ name: key, type: propType })
       const quotedKey = readonlyPrefix + safeKey(key)
 
       // Add JSDoc comment from $comment or description if available
@@ -1046,9 +1472,8 @@ export const generateTypeDefinition = (schema: JSONSchema, typeName: string, opt
     // Open-ended keys declared alongside fixed properties become an index
     // signature inside the same body — dropping them used to erase everything a
     // schema said about the keys it does not name.
-    const index = getIndexSignature(schema, options, 0)
-    if (index) {
-      appendLine('  ' + buildIndexSignatureLine(index, declaredTypes, hasOptionalProperty, options) + ';')
+    for (const index of getIndexSignatures(schema, options, 0)) {
+      appendLine('  ' + buildIndexSignatureLine(index, declared, hasOptionalProperty, options) + ';')
     }
 
     let result = ''

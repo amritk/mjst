@@ -1284,11 +1284,51 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'Schema', { useRefImports: true })
 
-    // Schema is a special case that handles both boolean and object types
-    expect(result).toContain("if (typeof input === 'boolean')")
+    // Schema is a special case: whatever it declares, the parser passes it through.
     expect(result).toContain('return input as Schema')
     expect(result).toContain('if (!isObject(input))')
     expect(result).toContain('return {} as Schema')
+    // …but only as far as the declared type goes. `type: 'object'` renders a type
+    // with no boolean in it, so a boolean branch casting to it is `TS2352` — the
+    // generated file would not compile.
+    expect(result).not.toContain("if (typeof input === 'boolean')")
+  })
+
+  it('omits the meta-schema boolean branch for an untyped Schema def with an object shape', () => {
+    // No `type`, so JSON Schema would accept a boolean — but `properties` is what
+    // decides the rendered type, and it has no boolean in it. Casting to it is
+    // `TS2352`, so the pass-through parser did not compile.
+    const schema: JSONSchema = { properties: { a: { type: 'string' } } } as JSONSchema
+
+    const result = generateParserFunction(schema, 'Schema', { useRefImports: true })
+
+    expect(result).not.toContain("if (typeof input === 'boolean')")
+  })
+
+  it('omits the meta-schema boolean branch for a Schema def that delegates its type', () => {
+    // `export type Schema = A | B` has no boolean in it, so the branch's cast is
+    // `TS2352`. What the rendered type spells is the question, and a composition
+    // keyword means this node does not decide it.
+    for (const schema of [
+      { allOf: [{ $ref: '#/$defs/base' }] },
+      { oneOf: [{ $ref: '#/$defs/a' }, { $ref: '#/$defs/b' }] },
+      { $ref: '#/$defs/base' },
+    ] as JSONSchema[]) {
+      const result = generateParserFunction(schema, 'Schema', { useRefImports: true })
+
+      expect(result).not.toContain("if (typeof input === 'boolean')")
+    }
+  })
+
+  it('keeps the meta-schema boolean branch when the schema admits the boolean shorthand', () => {
+    // How OpenAPI 3.1 and 3.2 declare their schema object: a JSON Schema is
+    // either an object or a boolean, and the emitted type says so.
+    const schema: JSONSchema = { type: ['object', 'boolean'] } as JSONSchema
+
+    const result = generateParserFunction(schema, 'Schema', { useRefImports: true })
+
+    expect(result).toContain("if (typeof input === 'boolean')")
+    expect(result).toContain('return input as Schema')
   })
 
   it('does not apply the meta-schema pass-through to a root type named Schema', () => {

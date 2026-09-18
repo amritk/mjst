@@ -664,6 +664,100 @@ describe('collect-imports', () => {
     expect(collectImports(schema)).toEqual(["import type { Contact } from './contact.js';"])
   })
 
+  describe('conditionals inlined through an allOf $ref', () => {
+    // OpenAPI's security scheme, in miniature: the composing schema enumerates
+    // `type`, each `allOf` member refs a definition that is an `if`/`then` on it,
+    // and one of those `then` arms refs a third definition. The type emitter
+    // reads the referenced definition and renders its arms *here*, so
+    // `OauthFlows` is a name in this file — but the ref walk stopped at the
+    // member, so the file said `OauthFlowsObject` with nothing importing it
+    // (`TS2304`) while the member's own file imported it and rendered nothing
+    // (`TS6133`).
+    const rootSchema = {
+      $defs: {
+        'security-scheme': {
+          type: 'object',
+          properties: { type: { enum: ['http', 'oauth2'] } },
+          required: ['type'],
+          allOf: [{ $ref: '#/$defs/type-oauth2' }],
+        },
+        'type-oauth2': {
+          if: { properties: { type: { const: 'oauth2' } } },
+          then: { properties: { flows: { $ref: '#/$defs/oauth-flows' } }, required: ['flows'] },
+        },
+        'oauth-flows': { type: 'object', properties: { implicit: { type: 'object' } } },
+      },
+    }
+
+    it('imports the type a referenced conditional names', () => {
+      const imports = collectImports(rootSchema.$defs['security-scheme'] as never, {
+        rootSchema,
+        selfRef: '#/$defs/security-scheme',
+      })
+
+      expect(imports).toContain("import type { OauthFlows } from './oauth-flows.js';")
+    })
+
+    it('terminates when a conditional definition composes itself', () => {
+      // Resolving a `$ref` and walking into it is what makes this walk able to
+      // cycle; stopping at every `$ref`, which is what it did before, could not.
+      const cyclic = {
+        $defs: {
+          a: { type: 'object', allOf: [{ $ref: '#/$defs/b' }] },
+          b: {
+            if: { properties: { t: { const: 'x' } } },
+            then: { allOf: [{ $ref: '#/$defs/b' }], properties: { z: { $ref: '#/$defs/c' } } },
+          },
+          c: { type: 'object' },
+        },
+      }
+
+      const imports = collectImports(cyclic.$defs.a as never, { rootSchema: cyclic, selfRef: '#/$defs/a' })
+
+      expect(imports).toContain("import type { C } from './c.js';")
+    })
+
+    it('leaves the ref alone when the root document is not on offer to resolve it', () => {
+      // Without `rootSchema` the definition cannot be read, so there is nothing
+      // to inline and nothing extra to import.
+      const imports = collectImports(rootSchema.$defs['security-scheme'] as never, {
+        selfRef: '#/$defs/security-scheme',
+      })
+
+      expect(imports).not.toContain("import type { OauthFlows } from './oauth-flows.js';")
+    })
+  })
+
+  describe('usedIn', () => {
+    const schema = {
+      type: 'object' as const,
+      properties: { contact: { $ref: '#/$defs/contact' } },
+    }
+
+    it('drops an import the emitted body never spells', () => {
+      expect(collectImports(schema, { usedIn: 'export const x = 1' })).toEqual([])
+    })
+
+    it('keeps only the bindings the body reads', () => {
+      expect(collectImports(schema, { usedIn: 'const a: Contact = parseContact(input)' })).toEqual([
+        "import { type Contact, parseContact } from './contact.js';",
+      ])
+    })
+
+    it('narrows to a type-only import when no function is called', () => {
+      expect(collectImports(schema, { usedIn: 'const a: Contact = input' })).toEqual([
+        "import type { Contact } from './contact.js';",
+      ])
+    })
+
+    it('does not count a name that only appears in a comment or a string', () => {
+      // A JSDoc block is the schema's `description` verbatim and a validator's
+      // error messages quote property names, so prose mentioning a definition
+      // would otherwise keep a binding nothing reads.
+      expect(collectImports(schema, { usedIn: '/** see Contact */ const m = "parseContact"' })).toEqual([])
+    })
+  })
+
   it('tolerates a malformed properties rather than throwing', () => {
     // `properties: null` is malformed, and was ignored before — `Object.values`
     // throws on it, which turned a bad schema into a crash out of the generator.
