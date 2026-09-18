@@ -738,7 +738,7 @@ describe('build-schema', () => {
 
       // Cross-file $ref import, embedded helper import, helper sibling import,
       // and the barrel all carry the literal on-disk .ts paths.
-      expect(root?.content).toContain("import { type Person, parsePerson, validatePersonShape } from './person.ts';")
+      expect(root?.content).toContain("import { type Person, parsePerson } from './person.ts';")
       expect(root?.content).toContain("from './_helpers/validate-record.ts';")
       expect(validateRecord?.content).toContain("import { isObject } from './is-object.ts'")
       expect(index?.content).toContain("from './document.ts';")

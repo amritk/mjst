@@ -244,6 +244,38 @@ describe('collect-validator-imports', () => {
     expect(halves(false, false)).toEqual([])
   })
 
+  it('imports the type a conditional reached through an allOf $ref names', () => {
+    // OpenAPI's security scheme: the composing schema enumerates `type`, each
+    // `allOf` member refs a definition that is an `if`/`then` on it, and a
+    // `then` arm refs a third definition. The *type* generator reads the member's
+    // definition and renders its arms into this file, so `OauthFlows` is a name
+    // here — while the walk, which stops at the member, left it unimported
+    // (`TS2304`) and its own file importing it unused (`TS6133`).
+    const rootSchema = {
+      $defs: {
+        'security-scheme': {
+          type: 'object',
+          properties: { type: { enum: ['http', 'oauth2'] } },
+          allOf: [{ $ref: '#/$defs/type-oauth2' }],
+        },
+        'type-oauth2': {
+          if: { properties: { type: { const: 'oauth2' } } },
+          then: { properties: { flows: { $ref: '#/$defs/oauth-flows' } }, required: ['flows'] },
+        },
+        'oauth-flows': { type: 'object', properties: { implicit: { type: 'object' } } },
+      },
+    }
+
+    const imports = collectValidatorImports(rootSchema.$defs['security-scheme'] as never, {
+      rootSchema,
+      selfRef: '#/$defs/security-scheme',
+      // The type half only: the emitter delegates to the member's own validator.
+      reads: ({ typeName }) => ({ type: typeName === 'OauthFlows', validator: false }),
+    })
+
+    expect(imports).toContain("import type { OauthFlows } from './oauth-flows.js'")
+  })
+
   it('imports a `-or-reference` def from its own file, under its own names', () => {
     // `walkRefGraph` writes a file per `$defs` entry, and both the emitter and the
     // type generator name this one in full — so rewriting the ref to `parameter`

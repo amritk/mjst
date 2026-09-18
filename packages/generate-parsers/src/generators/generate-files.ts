@@ -174,6 +174,7 @@ export const generateFile = (
       rootSchema,
       typeSuffix,
       importExt,
+      usedIn: typeDefinition,
     })
     let result = ''
 
@@ -234,7 +235,16 @@ export const generateFile = (
     importExt,
   )
   const imports = [
-    ...collectImports(schema, { selfRef, selfFilename: options?.selfFilename, rootSchema, typeSuffix, importExt }),
+    ...collectImports(schema, {
+      selfRef,
+      selfFilename: options?.selfFilename,
+      rootSchema,
+      typeSuffix,
+      importExt,
+      // Both halves of the file: the type names the type definition spells and
+      // the functions the emitted code calls are one question about one text.
+      usedIn: typeDefinition + '\n\n' + combinedFunctions,
+    }),
     ...helpers.imports,
   ]
 

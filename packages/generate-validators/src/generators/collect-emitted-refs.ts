@@ -1,4 +1,5 @@
 import { declaresKey, readKey } from '@amritk/helpers/read-key'
+import { referencedConditional } from '@amritk/helpers/referenced-conditional'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -169,7 +170,21 @@ export const collectEmittedRefs = (
   for (const key of ['oneOf', 'anyOf', 'allOf']) {
     const list = readKey(schema, key)
     if (!Array.isArray(list)) continue
-    for (const sub of list) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+    for (const sub of list) {
+      collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)
+      // An `allOf` member that refs a conditional definition is one the *type*
+      // generator inlines through rather than merely names: it reads the
+      // definition and renders its arms into this file, so a `$ref` inside them
+      // is a type name here. `includeTypeOnly` is the same gate the rest of the
+      // type generator's reach sits behind — the emitter itself delegates to the
+      // member's own `validateX`, so this adds nothing it calls.
+      if (key !== 'allOf' || !includeTypeOnly) continue
+      const inlined = referencedConditional(sub as JSONSchema, rootSchema)
+      if (inlined === undefined) continue
+      for (const arm of ['if', 'then', 'else']) {
+        if (declaresKey(inlined, arm)) collectEmittedRefs(readKey(inlined, arm), refs, rootSchema, includeTypeOnly)
+      }
+    }
   }
 
   if (tuple !== undefined) for (const sub of tuple) collectEmittedRefs(sub, refs, rootSchema, includeTypeOnly)

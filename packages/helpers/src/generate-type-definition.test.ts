@@ -1700,6 +1700,58 @@ describe('generateTypeDefinition', () => {
         'export type Doc = readonly string[] | null;',
       )
     })
+
+    // `&` binds tighter than `|`: emitted raw, this read as `{…} | (boolean &
+    // Extra)`, and since nothing satisfies a `boolean & object` the composed
+    // keywords were silently thrown away. This is the shape of the JSON Schema
+    // 2020-12 meta-schema, where it cost every keyword the dialect defines.
+    it('brackets a multi-type union before intersecting it with a composed schema', () => {
+      const schema: JSONSchema = {
+        type: ['object', 'boolean'],
+        properties: { a: { type: 'string' } },
+        allOf: [{ $ref: '#/$defs/extra' }],
+        $defs: { extra: { type: 'object', properties: { b: { type: 'number' } } } },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = ({ a?: string } | boolean) & Extra;')
+    })
+
+    it('leaves a union alone when nothing is intersected onto it', () => {
+      const schema: JSONSchema = { type: ['object', 'boolean'] } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = Record<string, unknown> | boolean;')
+    })
+
+    // A `default` is an annotation. Guessing a type from it next to a `oneOf`
+    // intersected the guess with the branches, and `boolean & SchemaObject` is
+    // uninhabited — OpenAPI 3.0's own `additionalProperties` property, which is
+    // exactly this shape, stopped accepting a schema.
+    it('does not guess a type from default when the node composes', () => {
+      const schema: JSONSchema = {
+        oneOf: [{ $ref: '#/$defs/inner' }, { type: 'boolean' }],
+        default: true,
+        $defs: { inner: { type: 'object', properties: { a: { type: 'string' } } } },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = Inner | boolean;')
+    })
+
+    it('still guesses a type from default when the node says nothing else', () => {
+      expect(generateTypeDefinition({ default: true } as JSONSchema, 'Doc')).toBe('export type Doc = boolean;')
+    })
+
+    // A bar inside a quoted literal is data, not syntax — bracketing on it would
+    // wrap a member that is not a union at all.
+    it('does not read a bar inside an enum literal as a union', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { enum: ['x | y'] } },
+        allOf: [{ $ref: '#/$defs/extra' }],
+        $defs: { extra: { type: 'object', properties: { b: { type: 'number' } } } },
+      } as JSONSchema
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = {\n  a?: "x | y";\n} & Extra;')
+    })
   })
 
   describe('tuples', () => {
@@ -1798,7 +1850,9 @@ describe('generateTypeDefinition', () => {
         },
       }
 
-      expect(generateTypeDefinition(schema, 'Doc')).toContain('outer?: { a?: string };')
+      // The `oneOf` is a constraint on `outer`'s own properties, so it lands as a
+      // member alongside them rather than being dropped: `a` is required here.
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('outer?: { a?: string } & { a: string };')
     })
 
     it('intersects a sibling union onto the declared properties', () => {
@@ -1812,13 +1866,99 @@ describe('generateTypeDefinition', () => {
     })
 
     it('drops unknown members rather than emitting `& unknown`', () => {
+      // A branch that constrains nothing still contributes nothing.
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        oneOf: [{}, {}],
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = {\n  a?: string;\n};')
+    })
+
+    // The OpenAPI Parameter Object, in miniature: `schema` xor `content` is
+    // written as a `oneOf` of bare `required` lists. Each branch is a constraint
+    // on the *composing* property block, so rendered on its own it declared
+    // nothing, came out `unknown`, and was dropped — leaving both keys optional
+    // and the two forms indistinguishable. Read against the block it is a union
+    // TypeScript can narrow on.
+    it('renders a required-only union branch against the composing properties', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string' }, schema: { type: 'object' }, content: { type: 'object' } },
+        required: ['name'],
+        oneOf: [{ required: ['schema'] }, { required: ['content'] }],
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe(
+        'export type Doc = {\n' +
+          '  name: string;\n' +
+          '  schema?: object;\n' +
+          '  content?: object;\n' +
+          '} & ({ schema: object } | { content: object });',
+      )
+    })
+
+    it('requires a key no property block declares without saying more about it', () => {
       const schema: JSONSchema = {
         type: 'object',
         properties: { a: { type: 'string' } },
         oneOf: [{ required: ['a'] }, { required: ['b'] }],
       }
 
-      expect(generateTypeDefinition(schema, 'Doc')).toBe('export type Doc = {\n  a?: string;\n};')
+      expect(generateTypeDefinition(schema, 'Doc')).toBe(
+        'export type Doc = {\n  a?: string;\n} & ({ a: string } | { b: unknown });',
+      )
+    })
+  })
+
+  describe('patternProperties that only re-list declared keys', () => {
+    // OpenAPI's Components Object, in miniature: the pattern re-lists the very
+    // property names the schema declares, and its `$comment` says the
+    // enumeration exists so `unevaluatedProperties` works. As an index signature
+    // it had to widen to cover every declared property — `[key: string]: unknown
+    // | …` — which silently turned off excess-property checking for the object.
+    it('contributes no index signature', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { schemas: { type: 'object' }, responses: { type: 'object' } },
+        patternProperties: { '^(?:schemas|responses)$': { propertyNames: { pattern: '^[a-z]+$' } } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toBe(
+        'export type Doc = {\n  schemas?: object;\n  responses?: object;\n};',
+      )
+    })
+
+    it('keeps a pattern that can match a key the schema does not declare', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { schemas: { type: 'object' } },
+        patternProperties: { '^(?:schemas|responses)$': { type: 'string' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('[key: string]:')
+    })
+
+    it('keeps a pattern carrying regex syntax even where the literals would match', () => {
+      // `^schemas.*$` matches `schemasFoo` too, so it is not a re-listing.
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { schemas: { type: 'object' } },
+        patternProperties: { '^schemas.*$': { type: 'string' } },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('[key: string]:')
+    })
+
+    it('keeps the vendor-extension pattern, which declares no property at all', () => {
+      const schema: JSONSchema = {
+        type: 'object',
+        properties: { a: { type: 'string' } },
+        patternProperties: { '^x-': true },
+      }
+
+      expect(generateTypeDefinition(schema, 'Doc')).toContain('[key: `x-${string}`]:')
     })
   })
 
