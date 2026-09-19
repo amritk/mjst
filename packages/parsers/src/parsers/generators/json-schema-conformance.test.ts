@@ -129,7 +129,7 @@ describe('JSON Schema Test Suite conformance', () => {
   })
 
   it('reports the conformance rate', () => {
-    console.log(`JSON Schema draft 2020-12 suite (generate-parsers, strict): ${conformanceRate(RESULTS)}`)
+    console.log(`JSON Schema draft 2020-12 suite (parser engine, strict): ${conformanceRate(RESULTS)}`)
     expect([...RESULTS.values()].filter((reason) => reason === null).length).toBeGreaterThan(0)
   })
 })

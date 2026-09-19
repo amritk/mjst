@@ -63,7 +63,7 @@ const prepareMs = async (prepare: () => unknown | Promise<unknown>, iterations =
 }
 
 const run = async (): Promise<void> => {
-  console.log('\n=== @amritk/generate-parsers vs zod vs typebox (parseSafe: assert + strip) ===\n')
+  console.log('\n=== @amritk/parsers (parse) vs zod vs typebox (parseSafe: assert + strip) ===\n')
   console.log(`Node/Bun: ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : process.version}`)
   console.log('Each library is timed in an isolated process; ±n% is the coefficient of variation,')
   console.log('and ~ flags a sample whose CV exceeded 10% (treat it as less trustworthy).')

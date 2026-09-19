@@ -108,7 +108,7 @@ describe('JSON Schema Test Suite conformance', () => {
   })
 
   it('reports the conformance rate, at the number the docs quote', () => {
-    console.log(`JSON Schema draft 2020-12 suite (generate-validators): ${conformanceRate(RESULTS)}`)
+    console.log(`JSON Schema draft 2020-12 suite (validator engine): ${conformanceRate(RESULTS)}`)
     const failing = [...RESULTS.keys()].filter((key) => RESULTS.get(key) !== null)
     expect(failing.length).toBeGreaterThan(0)
 

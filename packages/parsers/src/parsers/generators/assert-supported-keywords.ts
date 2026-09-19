@@ -36,7 +36,7 @@ const SUBSCHEMA_MAP_KEYS: readonly string[] = [
 /**
  * Throws when a schema (anywhere in its subtree) uses a keyword the *strict*
  * parser generator cannot enforce but which narrows the set of valid documents.
- * Mirrors generate-validators' `assertNoUnsupportedKeywords`: failing loudly at
+ * Mirrors the validator engine's `assertNoUnsupportedKeywords`: failing loudly at
  * generation time is strictly better than silently emitting a parser that
  * accepts input the schema forbids — a strict parser promises to "throw on
  * violations".
@@ -72,7 +72,7 @@ export const assertNoUnsupportedKeywords = (
     throw new Error(
       `[${typeName}] unsupported keyword "${keyword}": the strict parser generator ${detail}, and would ` +
         `silently accept documents the schema rejects. Generate a coercing (non-strict) parser, validate this ` +
-        `schema with @amritk/generate-validators, or remove the keyword.`,
+        `schema with a validate mode instead of parseStrict, or remove the keyword.`,
     )
   }
 

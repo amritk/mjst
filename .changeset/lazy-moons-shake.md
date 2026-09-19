@@ -1,6 +1,6 @@
 ---
 '@amritk/runtime-validators': minor
-'@amritk/generate-validators': minor
+'@amritk/parsers': minor
 '@amritk/mjst': minor
 ---
 

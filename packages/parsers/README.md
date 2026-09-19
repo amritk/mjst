@@ -15,13 +15,14 @@ one coherent set of TypeScript files carrying whichever runtime entry points you
 ask for — from a bare type, through a boolean guard and a full error report, to a
 coercer, a repairer and a total parser.
 
-It **composes** [`@amritk/generate-validators`](../generate-validators) and
-[`@amritk/generate-parsers`](../generate-parsers) rather than replacing them. That
-is deliberate. The two emit genuinely different code for the value-producing
-modes: a parser fuses building the output with checking it, and is several times
-faster for it; a validator keeps the passes apart, and can therefore report what
-was wrong. Collapsing them into one emitter would mean giving up one of those
-properties. Composing keeps both.
+Underneath it are **two** generator engines, not one: a validator, coercer and
+repairer engine, and a parser and type engine. They shipped separately as
+`@amritk/generate-validators` and `@amritk/generate-parsers` until this package
+absorbed them, and keeping both is deliberate. They emit genuinely different
+code for the value-producing modes: a parser fuses building the output with
+checking it, and is several times faster for it; a validator keeps the passes
+apart, and can therefore report what was wrong. Collapsing them into one emitter
+would mean giving up one of those properties.
 
 What makes one output directory possible is that both derive the TypeScript type
 from the same `@amritk/helpers/generate-type-definition`, so the type is declared
@@ -146,8 +147,8 @@ could import its 17 KiB of error types and runtime helpers.
 ## Is it faster?
 
 No, and it should not be. Ask this package for one mode and it emits **the exact
-bytes** the package that owns that mode would have emitted — which the test suite
-pins per mode, by fingerprint, not by reading the output. Identical code cannot
+bytes** the engine that owns that mode emits — which the test suite pins per
+mode, by fingerprint, not by reading the output. Identical code cannot
 run at a different speed, so there is no runtime claim to make here and none is
 made. `bun run bench` measures it anyway, and the deltas wander either side of
 zero between runs, which is what process-level variance looks like when there is
@@ -155,7 +156,7 @@ no underlying difference.
 
 What does change is the cold side, and only in the direction you would hope:
 
-| | before (both packages directly) | after |
+| | before (both engines directly) | after |
 |:---|:---|:---|
 | codegen for the whole matrix | 2.9 ms | 2.7 ms |
 | emitted bytes | 46.0 KiB | 45.8 KiB |
@@ -165,17 +166,15 @@ What does change is the cold side, and only in the direction you would hope:
 | per-mode bytes | — | identical |
 
 The one that matters is the last row of the middle block. Reaching every mode
-used to mean running both generators and shipping two trees for one schema,
-including two declarations of the same type — structurally interchangeable, but
-two things to keep in step. Now there is one.
+used to mean running both generators yourself and shipping two trees for one
+schema, including two declarations of the same type — structurally
+interchangeable, but two things to keep in step. Now there is one.
 
 ---
 
 ## Related packages
 
-- [`@amritk/generate-validators`](../generate-validators) — the validator, coercer and repairer engine
-- [`@amritk/generate-parsers`](../generate-parsers) — the parser and type engine
-- [`@amritk/helpers`](../helpers) — the shared type definition and fallback tables both read
+- [`@amritk/helpers`](../helpers) — the shared type definition and fallback tables both engines read
 - [`@amritk/mjst`](../cli) — the command-line interface
 
 ---

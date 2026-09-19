@@ -26,11 +26,11 @@ export type Coercer = (input: unknown) => unknown
  * They are not two implementations of one contract, which is the whole question
  * this benchmark is here to inform:
  *
- *   - `parser` is `@amritk/generate-parsers` in coercing (non-strict) mode. A
+ *   - `parser` is the parser engine in coercing (non-strict) mode. A
  *     total function: it repairs whatever it is given — coercing what it can and
  *     substituting the schema's defaults for what it cannot — and always returns
  *     a valid instance. Nothing is reported, because nothing failed.
- *   - `validator` is `@amritk/generate-validators` with `--coerce`. It moves
+ *   - `validator` is the validator engine in `coerce` mode. It moves
  *     scalars toward the declared type only where the schema leaves no choice,
  *     then runs the very same `validateX` and returns either the coerced value
  *     or the errors. Nothing is ever substituted, so a caller learns what was

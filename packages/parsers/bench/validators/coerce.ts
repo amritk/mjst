@@ -8,8 +8,8 @@ import { opsCell } from './measure.ts'
 
 /**
  * Head-to-head: the two mjst code paths that turn unknown input into a typed
- * value. `@amritk/generate-parsers` in coercing mode against
- * `@amritk/generate-validators --coerce`.
+ * value. The parser engine in coercing mode against the validator engine's
+ * `coerce` mode.
  *
  * This exists to answer a packaging question — whether the two generators are
  * one package wearing two names — so it reports the three things that decision
@@ -72,7 +72,7 @@ const compare = (mine: number, theirs: number): string => {
 }
 
 const run = async (): Promise<void> => {
-  console.log('\n=== @amritk/generate-parsers (coercing) vs @amritk/generate-validators --coerce ===\n')
+  console.log('\n=== parser engine (coercing) vs validator engine (coerce) ===\n')
   console.log(`Node/Bun: ${IS_BUN ? `Bun ${Bun.version}` : process.version}`)
   console.log('Each engine is timed in an isolated process; ±n% is the coefficient of variation,')
   console.log('and ~ flags a sample whose CV exceeded 10% (treat it as less trustworthy).')

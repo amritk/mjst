@@ -59,7 +59,7 @@ const collectDistModules = async (): Promise<string[]> => collectDistFiles(['.js
 const SUBPATH_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(['"])(#[^'"]*)\1/g
 
 /**
- * The helper sources `@amritk/generate-parsers` reads out of an *installed*
+ * The helper sources `@amritk/parsers` reads out of an *installed*
  * `@amritk/helpers` in `--helpers=embedded` mode. Mirrors `RuntimeHelperName`
  * in `packages/parsers/src/parsers/helpers/collect-helpers.ts`; keep in sync.
  */

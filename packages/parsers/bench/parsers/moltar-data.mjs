@@ -6,7 +6,7 @@
  * Written as plain JavaScript, not TypeScript, on purpose: the worker runs under
  * Node as well as Bun (the leaderboard publishes Node numbers, this repo benches
  * on Bun), and Node cannot import this package's TypeScript sources. It is the
- * parser-side twin of `generate-validators/bench/moltar-data.mjs`, and the two
+ * parser-side twin of `bench/validators/moltar-data.mjs`, and the two
  * agree on the fixture character for character.
  *
  * Two details of the upstream fixture matter and are easy to lose in a

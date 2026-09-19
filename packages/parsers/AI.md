@@ -1,8 +1,9 @@
 # @amritk/parsers — notes for AI coding agents
 
 One generator surface over mjst's types, guards, validators, coercers, repairers
-and parsers. Composes [`@amritk/generate-validators`](../generate-validators) and
-[`@amritk/generate-parsers`](../generate-parsers); it does not replace either.
+and parsers. It owns both generator engines: the validator/coercer/repairer one
+and the parser/type one, which used to ship as `@amritk/generate-validators` and
+`@amritk/generate-parsers` and are now internal modules here.
 
 > Pre-alpha: APIs and generated output change pre-1.0.
 
@@ -38,8 +39,8 @@ const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'va
 ## Gotchas — where agents fail
 
 1. **Options object, not positional booleans.** `generate(schema, typeName, options)`.
-   The two packages underneath take long positional argument lists; this one does
-   not, and you should not reach past it to them for a mode it already covers.
+   The two engines underneath take long positional argument lists; this is the
+   only entry point, and they are not reachable from outside the package.
 2. **The default is `['types', 'guard', 'validate']`** — read-only. Anything that
    rewrites a document (`coerce`, `repair`, `parse`) is opt-in.
 3. **`parse` and `parseStrict` are mutually exclusive** and `generate` throws if
@@ -64,11 +65,11 @@ const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'va
    matters. Do not build it by hand out of the other two: `isX(v) ? true :
    validateX(v)` pays for both passes and is no faster than `validateX`.
 
-8. **It emits the composed packages' exact bytes.** A single-mode build is
-   byte-identical to calling `@amritk/generate-validators` or
-   `@amritk/generate-parsers` directly, so there is no runtime difference to
-   reason about and no speedup to claim — do not tell a user this is faster. What
-   it changes is that the whole matrix comes out as one type instead of two, and
-   that a build asking for no validator mode ships no `validation-result.ts`.
+8. **It emits each engine's exact bytes.** A single-mode build is byte-identical
+   to what that engine emitted when it was its own package, so there is no runtime
+   difference to reason about and no speedup to claim — do not tell a user this is
+   faster. What it changes is that the whole matrix comes out as one type instead
+   of two, and that a build asking for no validator mode ships no
+   `validation-result.ts`.
 
 Only the `.` entry. Install: `bun add @amritk/parsers`.

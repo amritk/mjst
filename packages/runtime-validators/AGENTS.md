@@ -17,7 +17,7 @@ bun run --filter='@amritk/runtime-validators' test
 
 - **Eval-free is the entire point:** never introduce `new Function` / `eval`. It
   must run under a strict CSP. (For codegen'd straight-line validators, that's
-  `@amritk/generate-validators` — a different package.)
+  `@amritk/parsers` — a different package.)
 - **`validate` success is the literal `true`**; `{ valid: false; errors }` on
   failure. `validateGuard` returns a boolean type guard; `assert(schema, value)`
   returns the typed value or throws. Keep these three shapes.

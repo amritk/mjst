@@ -112,8 +112,7 @@ Most helpers have a colocated test file (`*.test.ts`) — read those for canonic
 
 ## Related packages
 
-- [`@amritk/generate-parsers`](../generate-parsers) — primary consumer
-- [`@amritk/generate-validators`](../generate-validators) — primary consumer
+- [`@amritk/parsers`](../parsers) — primary consumer
 - [`@amritk/mjst`](../cli) — the CLI surface
 
 ---

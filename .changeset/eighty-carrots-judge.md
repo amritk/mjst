@@ -1,5 +1,4 @@
 ---
-'@amritk/generate-validators': minor
 '@amritk/parsers': minor
 ---
 

@@ -1,24 +1,10 @@
 {
   "name": "@amritk/generate-parsers",
   "version": "0.24.0",
-  "description": "Generate TypeScript parsers and type definitions from JSON Schemas.",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "type": "module",
-  "sideEffects": false,
-  "engines": {
-    "node": ">=20"
-  },
+  "private": true,
+  "description": "Deprecated — the parser and type generator now ships as @amritk/parsers.",
   "license": "MIT",
   "author": "amritk",
-  "keywords": [
-    "json-schema",
-    "typescript",
-    "parser",
-    "code-generation",
-    "mjst"
-  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/amritk/mjst.git",
@@ -27,34 +13,5 @@
   "homepage": "https://github.com/amritk/mjst/tree/main/packages/generate-parsers#readme",
   "bugs": {
     "url": "https://github.com/amritk/mjst/issues"
-  },
-  "files": [
-    "dist",
-    "AI.md"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "scripts": {
-    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
-    "prepublishOnly": "node ../../scripts/check-publishable.mjs",
-    "types:check": "tsgo -p . --noEmit",
-    "test": "NODE_ENV=production vitest run --root ../.. generate-parsers",
-    "generate-readme": "bun run ./scripts/generate-readme.ts"
-  },
-  "exports": {
-    ".": {
-      "development": "./src/index.ts",
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
-  },
-  "dependencies": {
-    "@amritk/helpers": "workspace:*",
-    "@amritk/parsers": "workspace:*",
-    "json-schema-typed": "catalog:"
-  },
-  "devDependencies": {
-    "@amritk/generate-markdown": "workspace:*"
   }
 }

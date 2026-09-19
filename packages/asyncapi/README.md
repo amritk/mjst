@@ -17,7 +17,7 @@
 
 ## Overview
 
-`@amritk/asyncapi` walks an AsyncAPI document — 2.0 through 2.6, or 3.0 — and pulls every message's payload and headers out as **self-contained JSON Schema 2020-12 documents**, ready for [`@amritk/generate-parsers`](../generate-parsers), [`@amritk/generate-validators`](../generate-validators), [`@amritk/generate-examples`](../generate-examples), or [`@amritk/runtime-validators`](../runtime-validators). It is the extraction layer behind `mjst --input asyncapi`.
+`@amritk/asyncapi` walks an AsyncAPI document — 2.0 through 2.6, or 3.0 — and pulls every message's payload and headers out as **self-contained JSON Schema 2020-12 documents**, ready for [`@amritk/parsers`](../parsers), [`@amritk/generate-examples`](../generate-examples), or [`@amritk/runtime-validators`](../runtime-validators). It is the extraction layer behind `mjst --input asyncapi`.
 
 What "self-contained" buys: the AsyncAPI default schema dialect (a draft-07 superset) is upgraded to 2020-12 conventions, OpenAPI-format payloads get `nullable` folded into their `type`, and every `$ref` into the document's `#/components/schemas/...` is rebased into a local `$defs` with the referenced components copied in transitively — so each extracted schema stands alone as a generator input.
 

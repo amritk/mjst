@@ -2,20 +2,20 @@
 
 The official [JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite),
 vendored — the corpus every JSON Schema validator in every language is measured
-on. Four packages in this monorepo consume schemas, and all four are held to it
+on. Three packages in this monorepo consume schemas, and all three are held to it
 (see the `*conformance*` tests in each):
 
 | Package | What is measured | Rate |
 | --- | --- | --- |
 | `@amritk/runtime-validators` | `validate` / `validateGuard` verdicts | **1281 / 1281 (100%)** |
 | `@amritk/runtime-validators` | `format` assertion (the optional corpus) | 786 / 861 (91.3%) |
-| `@amritk/generate-validators` | generated predicate validators | 1276 / 1281 (99.6%) |
-| `@amritk/generate-parsers` | strict parsers — generated, linked, executed | 1242 / 1281 (97.0%) |
+| `@amritk/parsers` | generated predicate validators | 1276 / 1281 (99.6%) |
+| `@amritk/parsers` | strict parsers — generated, linked, executed | 1242 / 1281 (97.0%) |
 | `@amritk/resolve-refs` | verdict preserved after inlining (`$ref` corpus) | **170 / 170 (100%)** |
 
-All four are run with the `remotes/` documents below supplied through whatever
+All of them are run with the `remotes/` documents below supplied through whatever
 API the package offers for documents it did not load itself — the registry, for
-the three that have one. None of them fetches anything; see "What is vendored".
+the ones that have one. None of them fetches anything; see "What is vendored".
 
 `resolve-refs` is scored against the reference-carrying cases the interpreter
 answers correctly, which is the population where a resolution bug is visible at

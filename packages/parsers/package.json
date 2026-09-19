@@ -71,16 +71,6 @@
       "development": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./internal/parsers": {
-      "development": "./src/parsers/index.ts",
-      "types": "./dist/parsers/index.d.ts",
-      "default": "./dist/parsers/index.js"
-    },
-    "./internal/validators": {
-      "development": "./src/validators/index.ts",
-      "types": "./dist/validators/index.d.ts",
-      "default": "./dist/validators/index.js"
     }
   },
   "dependencies": {

@@ -23,8 +23,8 @@ import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
  * one-off interference spike costs a rerun instead of a false regression.
  *
  * Compared surfaces:
- *   - generate-parsers  — parse throughput (ops/s) per PARSE_CASE
- *   - generate-validators — validate throughput (ops/s, valid + invalid input)
+ *   - parsers — parse throughput (ops/s) per PARSE_CASE
+ *   - validators — validate throughput (ops/s, valid + invalid input)
  *   - api — request throughput (req/s) through the runtime and compiled
  *     engines, per API_BENCH_CASES
  *   - codegen — buildSchema time per parser (ms), timed in-process per tree
@@ -286,7 +286,7 @@ const run = async (): Promise<void> => {
       })
     : { PARSE_CASES: [] }
 
-  if (suites.has('parsers')) console.error('generate-parsers (parse ops/s)…')
+  if (suites.has('parsers')) console.error('parsers (parse ops/s)…')
   for (const parseCase of suites.has('parsers') ? parsersSchemas.PARSE_CASES : []) {
     const { base: baseResult, head: headResult } = runPair('parsers/bench/parsers', parseCase.name)
     progress({
@@ -306,7 +306,7 @@ const run = async (): Promise<void> => {
       })
     : { BENCH_CASES: [] }
 
-  if (suites.has('validators')) console.error('generate-validators (validate ops/s)…')
+  if (suites.has('validators')) console.error('validators (validate ops/s)…')
   for (const benchCase of suites.has('validators') ? validatorsSchemas.BENCH_CASES : []) {
     const { base: baseResult, head: headResult } = runPair('parsers/bench/validators', benchCase.name)
     for (const metric of ['valid', 'invalid'] as const) {

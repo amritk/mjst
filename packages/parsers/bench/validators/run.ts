@@ -81,7 +81,7 @@ const makeAjv = (): Ajv => {
 }
 
 const run = async (): Promise<void> => {
-  console.log('\n=== @amritk/generate-validators vs ajv vs typebox vs zod ===\n')
+  console.log('\n=== @amritk/parsers (validate) vs ajv vs typebox vs zod ===\n')
   console.log(`Node/Bun: ${typeof Bun !== 'undefined' ? `Bun ${Bun.version}` : process.version}`)
   console.log('Each library is timed in an isolated process; ±n% is the coefficient of variation,')
   console.log('and ~ flags a sample whose CV exceeded 10% (treat it as less trustworthy).\n')
