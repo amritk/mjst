@@ -1,0 +1,65 @@
+{
+  "name": "@amritk/generate",
+  "version": "0.1.0",
+  "description": "One generator surface over mjst's types, validators, coercers, repairers and parsers.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "typescript",
+    "validator",
+    "parser",
+    "code-generation",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/generate"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/generate#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "AI.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
+    "prepublishOnly": "node ../../scripts/check-publishable.mjs",
+    "types:check": "tsgo -p . --noEmit",
+    "test": "NODE_ENV=production vitest run --root ../.. packages/generate/"
+  },
+  "imports": {
+    "#internal/*": "./src/*.ts"
+  },
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@amritk/generate-parsers": "workspace:*",
+    "@amritk/generate-validators": "workspace:*",
+    "@amritk/helpers": "workspace:*",
+    "json-schema-typed": "catalog:"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.3"
+  }
+}

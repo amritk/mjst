@@ -31,7 +31,7 @@
     },
     "packages/adapters": {
       "name": "@amritk/adapters",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -70,7 +70,7 @@
     },
     "packages/asyncapi": {
       "name": "@amritk/asyncapi",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "dependencies": {
         "@amritk/adapters": "workspace:*",
         "@amritk/helpers": "workspace:*",
@@ -78,7 +78,7 @@
     },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.20.0",
+      "version": "0.21.1",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -102,9 +102,23 @@
         "@types/yargs": "^17.0.33",
       },
     },
+    "packages/generate": {
+      "name": "@amritk/generate",
+      "version": "0.1.0",
+      "dependencies": {
+        "@amritk/generate-parsers": "workspace:*",
+        "@amritk/generate-validators": "workspace:*",
+        "@amritk/helpers": "workspace:*",
+        "json-schema-typed": "catalog:",
+      },
+      "devDependencies": {
+        "esbuild": "^0.28.1",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/generate-examples": {
       "name": "@amritk/generate-examples",
-      "version": "0.8.4",
+      "version": "0.8.5",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "@amritk/runtime-validators": "workspace:*",
@@ -122,11 +136,11 @@
     },
     "packages/generate-markdown": {
       "name": "@amritk/generate-markdown",
-      "version": "0.7.0",
+      "version": "0.8.0",
     },
     "packages/generate-parsers": {
       "name": "@amritk/generate-parsers",
-      "version": "0.23.0",
+      "version": "0.24.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -141,7 +155,7 @@
     },
     "packages/generate-validators": {
       "name": "@amritk/generate-validators",
-      "version": "0.17.0",
+      "version": "0.18.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -161,7 +175,7 @@
     },
     "packages/helpers": {
       "name": "@amritk/helpers",
-      "version": "0.21.0",
+      "version": "0.22.0",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },
@@ -224,6 +238,8 @@
     "@amritk/api": ["@amritk/api@workspace:packages/api"],
 
     "@amritk/asyncapi": ["@amritk/asyncapi@workspace:packages/asyncapi"],
+
+    "@amritk/generate": ["@amritk/generate@workspace:packages/generate"],
 
     "@amritk/generate-examples": ["@amritk/generate-examples@workspace:packages/generate-examples"],
 
