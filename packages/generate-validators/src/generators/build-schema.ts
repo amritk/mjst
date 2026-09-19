@@ -212,6 +212,68 @@ export const everyItem = (arr: readonly unknown[], test: (item: unknown) => bool
  */
 export const escapePointer = (key: string): string =>
   key.indexOf('/') !== -1 || key.indexOf('~') !== -1 ? key.replace(/~/g, '~0').replace(/\\//g, '~1') : key
+
+/**
+ * The errors of the branch that was plainly the one meant, out of every branch a
+ * failing \`anyOf\` / \`oneOf\` rejected. Empty when no branch stands out.
+ *
+ * A failing combinator on its own says almost nothing: "must match a schema in
+ * anyOf" names no field and no reason, and on the shape this is most often used
+ * for — a union where the value plainly *is* one of the variants and one field of
+ * it is wrong — that is the least useful thing a validator can say. The branch
+ * errors are computed anyway to answer the yes/no question, so the only question
+ * is which of them are worth reporting.
+ *
+ * Branches that rejected the value's *kind* go first: a branch wanting a string
+ * has nothing to say about an object, so a \`string | { … }\` union is left with
+ * the one branch that was even talking about this value. When more than one
+ * survives they all describe the same kind of value, and the tie is broken the
+ * way a discriminated union reads from the outside — if every survivor but one
+ * was rejected on the value's *identity* (a \`const\` or \`enum\` on the value or
+ * one of its own properties), the remaining one is the variant the author meant.
+ *
+ * Nothing is reported when no branch stands out, which is as much as can be said
+ * honestly: "the branch with the fewest errors" would answer here too, and
+ * answers wrongly on \`oneOf: [aReference, theActualThing]\`, where "you did not
+ * write a $ref" is one complaint and the real mistake is two.
+ *
+ * \`path\` is where the combinator was applied, so a segment below it is a direct
+ * property of the value being judged. \`@amritk/runtime-validators\` selects the
+ * same branch by the same rule, so a generated validator and the interpreter
+ * explain a failing union the same way.
+ */
+export const selectBranchErrors = (
+  branches: readonly (readonly ValidationError[])[],
+  path: string,
+): readonly ValidationError[] => {
+  const candidates: (readonly ValidationError[])[] = []
+  for (const errors of branches) {
+    // The value itself is \`path\`, so a \`type\` error there is a rejected kind.
+    if (!errors.some((error) => error.keyword === 'type' && error.path === path)) candidates.push(errors)
+  }
+  if (candidates.length === 1) return candidates[0] as readonly ValidationError[]
+
+  let selected: readonly ValidationError[] | null = null
+  let rejectedOnIdentity = 0
+  for (const errors of candidates) {
+    // One segment below \`path\` and no deeper: a discriminator is conventionally a
+    // direct field, and a \`const\` buried further down is far more likely to be an
+    // ordinary payload constraint.
+    const identity = errors.some(
+      (error) =>
+        (error.keyword === 'const' || error.keyword === 'enum') && error.path.indexOf('/', path.length + 1) === -1,
+    )
+    if (identity) {
+      rejectedOnIdentity++
+      continue
+    }
+    // Two branches survive the discriminator, so it did not discriminate.
+    if (selected !== null) return []
+    selected = errors
+  }
+
+  return selected !== null && rejectedOnIdentity === candidates.length - 1 ? selected : []
+}
 `
 
 /**

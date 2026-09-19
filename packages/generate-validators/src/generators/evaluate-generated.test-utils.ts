@@ -6,7 +6,7 @@ import { VALIDATION_RESULT_CONTENT } from './build-schema'
  * Compiles a single generated validator source and returns its exports, with the
  * runtime helpers a generated file would import bound in scope.
  *
- * Those helpers (`valuesEqual`, `allUnique`, `escapePointer`) live in the emitted
+ * Those helpers ({@link HELPER_NAMES}) live in the emitted
  * `validation-result.ts`, so a test compiling one file in isolation has to supply
  * them. They are evaluated from {@link VALIDATION_RESULT_CONTENT} itself rather
  * than reimplemented here: every test file used to carry its own copy, and a copy
@@ -26,7 +26,7 @@ const toJavaScript = (code: string): string =>
   }).outputText
 
 /** The helper names generated code expects as free identifiers, in binding order. */
-const HELPER_NAMES = ['valuesEqual', 'allUnique', 'escapePointer', 'everyItem'] as const
+const HELPER_NAMES = ['valuesEqual', 'allUnique', 'escapePointer', 'everyItem', 'selectBranchErrors'] as const
 
 const RUNTIME_HELPERS: readonly unknown[] = (() => {
   const moduleExports: Record<string, unknown> = {}
