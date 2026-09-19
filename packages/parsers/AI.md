@@ -1,4 +1,4 @@
-# @amritk/generate — notes for AI coding agents
+# @amritk/parsers — notes for AI coding agents
 
 One generator surface over mjst's types, guards, validators, coercers, repairers
 and parsers. Composes [`@amritk/generate-validators`](../generate-validators) and
@@ -9,7 +9,7 @@ and parsers. Composes [`@amritk/generate-validators`](../generate-validators) an
 ## Minimal example
 
 ```ts
-import { generate } from '@amritk/generate'
+import { generate } from '@amritk/parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const schema: JSONSchema = {
@@ -56,4 +56,11 @@ const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'va
    everything. Pick `guard` when the answer is a branch, `validate` when someone
    has to be told what to fix.
 
-Only the `.` entry. Install: `bun add @amritk/generate`.
+7. **It emits the composed packages' exact bytes.** A single-mode build is
+   byte-identical to calling `@amritk/generate-validators` or
+   `@amritk/generate-parsers` directly, so there is no runtime difference to
+   reason about and no speedup to claim — do not tell a user this is faster. What
+   it changes is that the whole matrix comes out as one type instead of two, and
+   that a build asking for no validator mode ships no `validation-result.ts`.
+
+Only the `.` entry. Install: `bun add @amritk/parsers`.

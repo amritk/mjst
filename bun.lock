@@ -102,20 +102,6 @@
         "@types/yargs": "^17.0.33",
       },
     },
-    "packages/generate": {
-      "name": "@amritk/generate",
-      "version": "0.1.0",
-      "dependencies": {
-        "@amritk/generate-parsers": "workspace:*",
-        "@amritk/generate-validators": "workspace:*",
-        "@amritk/helpers": "workspace:*",
-        "json-schema-typed": "catalog:",
-      },
-      "devDependencies": {
-        "esbuild": "^0.28.1",
-        "typescript": "^5.9.3",
-      },
-    },
     "packages/generate-examples": {
       "name": "@amritk/generate-examples",
       "version": "0.8.5",
@@ -195,6 +181,20 @@
         "@stoplight/spectral-rulesets": "^1.22.7",
       },
     },
+    "packages/parsers": {
+      "name": "@amritk/parsers",
+      "version": "0.1.0",
+      "dependencies": {
+        "@amritk/generate-parsers": "workspace:*",
+        "@amritk/generate-validators": "workspace:*",
+        "@amritk/helpers": "workspace:*",
+        "json-schema-typed": "catalog:",
+      },
+      "devDependencies": {
+        "esbuild": "^0.28.1",
+        "typescript": "^5.9.3",
+      },
+    },
     "packages/resolve-refs": {
       "name": "@amritk/resolve-refs",
       "version": "0.7.1",
@@ -239,8 +239,6 @@
 
     "@amritk/asyncapi": ["@amritk/asyncapi@workspace:packages/asyncapi"],
 
-    "@amritk/generate": ["@amritk/generate@workspace:packages/generate"],
-
     "@amritk/generate-examples": ["@amritk/generate-examples@workspace:packages/generate-examples"],
 
     "@amritk/generate-markdown": ["@amritk/generate-markdown@workspace:packages/generate-markdown"],
@@ -254,6 +252,8 @@
     "@amritk/lint": ["@amritk/lint@workspace:packages/lint"],
 
     "@amritk/mjst": ["@amritk/mjst@workspace:packages/cli"],
+
+    "@amritk/parsers": ["@amritk/parsers@workspace:packages/parsers"],
 
     "@amritk/resolve-refs": ["@amritk/resolve-refs@workspace:packages/resolve-refs"],
 

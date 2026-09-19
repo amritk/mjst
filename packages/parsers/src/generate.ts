@@ -1,7 +1,6 @@
 import { buildSchema } from '@amritk/generate-parsers'
 import { buildValidatorSchema } from '@amritk/generate-validators'
 import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
-import { identifierMentions } from '@amritk/helpers/identifier-mentions'
 import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -147,10 +146,42 @@ export const generate = async (
 
   const typeSuffix = options.typeSuffix ?? ''
   const unknownKeys = options.unknownKeys ?? DEFAULT_UNKNOWN_KEYS
+  const needsValidator = wants(modes, VALIDATOR_MODES)
+  const needsParser = wants(modes, PARSER_MODES)
   const files: GeneratedFile[] = []
 
-  // The validator half owns the type, so it runs even for a types-only build and
-  // even when only the parser modes were asked for.
+  const parserFiles = async (): Promise<GeneratedFile[]> =>
+    buildSchema(
+      rootSchema,
+      rootTypeName,
+      options.extensions,
+      !needsParser, // typesOnly — when the parser is only here to author the type
+      false, // logWarnings
+      modes.includes('parseStrict'),
+      options.helpersMode ?? 'package',
+      options.helpersImportPrefix ?? './',
+      options.readonly === true,
+      options.stripUnknown === true,
+      typeSuffix,
+      'js',
+      options.caseInsensitive === true,
+      options.schemas,
+      unknownKeys,
+    )
+
+  // Whoever is going to be in the output anyway authors the type, and nobody else
+  // is run for it. Asking the validator generator for a parse-only build meant
+  // shipping its 17 KiB runtime contract with nothing to import it, and paying
+  // for a second codegen to produce a type the parser had already written — the
+  // two are identical, so there is nothing to choose between them but cost.
+  if (!needsValidator) {
+    for (const file of await parserFiles()) {
+      if (file.filename !== 'index.ts') files.push(file)
+    }
+    files.push({ filename: 'index.ts', content: generateIndexBarrel(files) })
+    return files
+  }
+
   const validatorFiles = await buildValidatorSchema(
     rootSchema,
     rootTypeName,
@@ -166,37 +197,14 @@ export const generate = async (
   for (const file of validatorFiles) {
     // The barrel is rebuilt at the end over the whole set, so the one the
     // validator generator wrote is dropped rather than merged.
-    if (file.filename === 'index.ts') continue
-    files.push(
-      wants(modes, VALIDATOR_MODES) || file.filename === 'validation-result.ts'
-        ? file
-        : { ...file, content: stripRuntime(file.content) },
-    )
+    if (file.filename !== 'index.ts') files.push(file)
   }
 
-  if (wants(modes, PARSER_MODES)) {
-    const parserFiles = await buildSchema(
-      rootSchema,
-      rootTypeName,
-      options.extensions,
-      false, // typesOnly — the type comes from the validator half
-      false, // logWarnings
-      modes.includes('parseStrict'),
-      options.helpersMode ?? 'package',
-      options.helpersImportPrefix ?? './',
-      options.readonly === true,
-      options.stripUnknown === true,
-      typeSuffix,
-      'js',
-      options.caseInsensitive === true,
-      options.schemas,
-      unknownKeys,
-    )
-
-    for (const file of parserFiles) {
+  if (needsParser) {
+    for (const file of await parserFiles()) {
       if (file.filename === 'index.ts') continue
-      // Helper modules declare no type, so `rehomeParserFile` hands them back
-      // untouched and they keep their own filenames.
+      // Helper modules declare no type, so they keep the one name they were
+      // emitted under and nothing about them needs rehoming.
       if (file.filename.includes('/')) {
         files.push(file)
         continue
@@ -211,74 +219,4 @@ export const generate = async (
 
   files.push({ filename: 'index.ts', content: generateIndexBarrel(files) })
   return files
-}
-
-/**
- * Drops everything a validator file runs, keeping its type declarations and
- * exactly the imports those still need.
- *
- * A types-only build still goes through the validator generator, because that is
- * where the type is authored; what it must not do is ship a `validateX` nobody
- * asked for. Removing the runtime afterwards rather than asking the generator
- * for a types-only mode keeps the type identical to the one every other mode is
- * built against, which is the premise the whole package rests on.
- *
- * Pruning the imports is not tidiness. This repo — and anything inheriting its
- * flags — compiles with `noUnusedLocals`, so an import left behind for a
- * function that is no longer there fails the consumer's build; and a mixed
- * `import { type Inner, validateInner }` has to lose its value half and keep its
- * type half, because the surviving type still names `Inner`.
- */
-const stripRuntime = (content: string): string => {
-  const lines = content.split('\n')
-  const kept: string[] = []
-  const imports: string[] = []
-  let depth = 0
-  let dropping = false
-
-  for (const line of lines) {
-    if (line.startsWith('import ')) {
-      imports.push(line)
-      continue
-    }
-    // Runtime declarations go whether or not they are exported: the generator
-    // hoists private helpers next to the functions that call them, and one left
-    // behind with its caller gone is an unused local in the consumer's build.
-    if (!dropping && /^(?:export )?(?:const|let|function) \w+/.test(line)) {
-      dropping = true
-      depth = 0
-    }
-    if (dropping) {
-      for (const char of line) {
-        if (char === '{' || char === '(' || char === '[') depth++
-        else if (char === '}' || char === ')' || char === ']') depth--
-      }
-      if (depth <= 0) dropping = false
-      continue
-    }
-    kept.push(line)
-  }
-
-  const body = kept
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-  const mentions = identifierMentions(body)
-
-  const pruned = imports.flatMap((statement) => {
-    const match = /^import\s+(type\s+)?\{([^}]*)\}\s+from\s+('[^']+');?$/.exec(statement.trim())
-    if (!match) return mentions(statement) ? [statement] : []
-
-    const [, , clause = '', specifier = ''] = match
-    const names = clause
-      .split(',')
-      .map((name) => name.trim().replace(/^type\s+/, ''))
-      .filter((name) => name !== '' && mentions(name))
-
-    // Whatever survives is only ever read by a type now, so the whole statement
-    // becomes type-only regardless of how it arrived.
-    return names.length > 0 ? [`import type { ${names.join(', ')} } from ${specifier};`] : []
-  })
-
-  return [...pruned, ...(pruned.length > 0 ? [''] : []), body].join('\n') + '\n'
 }

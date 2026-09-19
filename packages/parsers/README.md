@@ -1,6 +1,6 @@
 <div align="center">
 
-# @amritk/generate
+# @amritk/parsers
 
 **One generator surface over mjst's types, guards, validators, coercers, repairers and parsers.**
 
@@ -10,7 +10,7 @@
 
 ## Overview
 
-`@amritk/generate` is the front door. Given a JSON Schema (Draft 2020-12) it emits
+`@amritk/parsers` is the front door. Given a JSON Schema (Draft 2020-12) it emits
 one coherent set of TypeScript files carrying whichever runtime entry points you
 ask for — from a bare type, through a boolean guard and a full error report, to a
 coercer, a repairer and a total parser.
@@ -32,7 +32,7 @@ from the same `@amritk/helpers/generate-type-definition`, so the type is declare
 ## Installation
 
 ```bash
-bun add @amritk/generate
+bun add @amritk/parsers
 ```
 
 ---
@@ -40,7 +40,7 @@ bun add @amritk/generate
 ## Usage
 
 ```typescript
-import { generate } from '@amritk/generate'
+import { generate } from '@amritk/parsers'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const schema: JSONSchema = {
@@ -135,6 +135,39 @@ after the schema and one of them has to give way. There is exactly one
 `export type Config` in the output, whatever combination of modes you asked for
 — which the test suite asserts, over a corpus of schema shapes, by compiling the
 result under this repo's own flags.
+
+Ask for no validator mode and there is nothing to collide with, so the parser
+keeps both its own filename and the type it already authored, and no
+`validation-result.ts` is emitted at all — a parse-only build has nothing that
+could import its 17 KiB of error types and runtime helpers.
+
+---
+
+## Is it faster?
+
+No, and it should not be. Ask this package for one mode and it emits **the exact
+bytes** the package that owns that mode would have emitted — which the test suite
+pins per mode, by fingerprint, not by reading the output. Identical code cannot
+run at a different speed, so there is no runtime claim to make here and none is
+made. `bun run bench` measures it anyway, and the deltas wander either side of
+zero between runs, which is what process-level variance looks like when there is
+no underlying difference.
+
+What does change is the cold side, and only in the direction you would hope:
+
+| | before (both packages directly) | after |
+|:---|:---|:---|
+| codegen for the whole matrix | 2.9 ms | 2.7 ms |
+| emitted bytes | 46.0 KiB | 45.8 KiB |
+| files | 7 | 6 |
+| declarations of `Order` | **2** | **1** |
+| per-mode codegen | — | equal or slightly lower |
+| per-mode bytes | — | identical |
+
+The one that matters is the last row of the middle block. Reaching every mode
+used to mean running both generators and shipping two trees for one schema,
+including two declarations of the same type — structurally interchangeable, but
+two things to keep in step. Now there is one.
 
 ---
 

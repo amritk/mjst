@@ -1,8 +1,8 @@
 ---
-'@amritk/generate': minor
+'@amritk/parsers': minor
 ---
 
-New package: `@amritk/generate`, one surface over every mode mjst can generate.
+New package: `@amritk/parsers`, one surface over every mode mjst can generate.
 
 Until now the matrix was split across two packages with two long positional
 argument lists, and reaching a given cell meant knowing which package owned it.
@@ -38,3 +38,12 @@ in `x.parse.ts` importing it. There is exactly one `export type X` in the output
 whatever combination of modes you ask for — asserted over a corpus of schema
 shapes by compiling the result under this repo's own flags, `noUnusedLocals`
 included, and then linking and calling it.
+
+**It is not faster, and it should not be.** Ask it for one mode and it emits the
+exact bytes the package that owns that mode would have emitted, which is pinned
+per mode by fingerprint. Identical code cannot run at a different speed, so there
+is no runtime claim here. What changes is cold: the whole matrix costs slightly
+less to generate (2.9 ms → 2.7 ms), lands in six files instead of seven, and
+declares the type once instead of twice. A build that asks for no validator mode
+now also ships no `validation-result.ts`, where composing by hand would have left
+17 KiB of error types nothing could import.

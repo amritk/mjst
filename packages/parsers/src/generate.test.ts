@@ -232,14 +232,41 @@ describe('generate', () => {
     await expect(generate(schema, 'Doc', { modes: ['parse', 'parseStrict'] })).rejects.toThrow(/Ask for one/)
   })
 
-  it('keeps the parser half in its own file so the type file stays the type file', async () => {
-    const files = await generate(schema, 'Doc', { modes: ['types', 'parse'], helpersMode: 'embedded' })
-    const names = files.map((file) => file.filename)
+  it('moves the parser half aside only when the validator half is there to collide with', async () => {
+    const together = await generate(schema, 'Doc', { modes: ['types', 'validate', 'parse'], helpersMode: 'embedded' })
+    const names = together.map((file) => file.filename)
 
+    // Both generators name their file after the schema, so one gives way — and it
+    // is the parser, because a reader opening `doc.ts` should find the type.
     expect(names).toContain('doc.ts')
     expect(names).toContain('doc.parse.ts')
-    expect(files.find((file) => file.filename === 'doc.parse.ts')?.content).toContain(
+    expect(together.find((file) => file.filename === 'doc.parse.ts')?.content).toContain(
       "import type { Doc } from './doc.js'",
     )
+  })
+
+  it('leaves the parser file where it is when nothing collides with it', async () => {
+    const alone = await generate(schema, 'Doc', { modes: ['types', 'parse'], helpersMode: 'embedded' })
+    const names = alone.map((file) => file.filename)
+
+    // No validator half means no collision, so there is no suffix to resolve one
+    // — and the parser keeps the type it already authored.
+    expect(names).toContain('doc.ts')
+    expect(names).not.toContain('doc.parse.ts')
+    expect(alone.find((file) => file.filename === 'doc.ts')?.content).toContain('export type Doc')
+  })
+
+  it('ships no validator runtime for a build that asked for no validator mode', async () => {
+    const parseOnly = await generate(schema, 'Doc', { modes: ['types', 'parse'], helpersMode: 'embedded' })
+    const typesOnly = await generate(schema, 'Doc', { modes: ['types'], helpersMode: 'embedded' })
+
+    // `validation-result.ts` is 17 KiB of error types and runtime helpers. Nothing
+    // in either of these builds can import it, so shipping it is dead weight in
+    // the consumer's bundle.
+    expect(parseOnly.some((file) => file.filename === 'validation-result.ts')).toBe(false)
+    expect(typesOnly.some((file) => file.filename === 'validation-result.ts')).toBe(false)
+    // …and it is still there the moment something needs it.
+    const withValidate = await generate(schema, 'Doc', { modes: ['types', 'validate'], helpersMode: 'embedded' })
+    expect(withValidate.some((file) => file.filename === 'validation-result.ts')).toBe(true)
   })
 })
