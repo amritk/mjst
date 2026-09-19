@@ -1,5 +1,96 @@
 # @amritk/mjst
 
+## 0.22.0
+
+### Minor Changes
+
+- fcb615d: Explain a failing `anyOf` / `oneOf` with the errors of the branch that was
+  plainly the one meant. In generated validators this is `--branch-errors`, off by
+  default; the interpreter does it always, on the cold path it already had.
+
+  "must match a schema in anyOf" names no field and no reason. The branch errors
+  are computed anyway to answer the yes/no question, and generated validators threw
+  all of them away — so a typo in one field of a union-rooted definition pointed at
+  the whole object rather than at the field.
+
+  Both now select a branch by the same rule. Branches that rejected the value's
+  _kind_ are dropped first: a branch wanting a string has nothing to say about an
+  object, which leaves a `string | { … }` union — the commonest shape in a
+  hand-written config schema — with the one branch that was talking about this
+  value. When several survive they all describe the same kind of value, and the tie
+  is broken the way a discriminated union reads from the outside. Nothing extra is
+  reported when no branch stands out; "the branch with the fewest errors" would
+  answer here too, and answers wrongly on `oneOf: [aReference, theActualThing]`.
+
+  **Why it is a flag.** Collecting branch errors costs about 30% of the throughput
+  of a _valid_ instance against a union-rooted schema, because each branch is
+  handed a collector it closes over. Off, the generated code is exactly what it
+  would be without the option — no buffer, no collector, byte for byte. On, the
+  buffer is created by the first branch that has something to put in it, so a value
+  matching the first branch still allocates nothing; an eagerly-created one cost
+  40% rather than 30%.
+
+  The combinator's own error still comes first, so code matching on `keyword ===
+'anyOf'` is unaffected. Errors a reported branch produces now carry their real
+  instance path.
+
+- 3670138: Add `--coerce`: generated validators that coerce scalars toward what the schema
+  declares, and then validate.
+
+  For every type `X`, a `coerceX(input) => { valid: true, value } | { valid:
+false, errors }` is emitted alongside the existing `validateX` and `isX`, which
+  are unchanged. Off by default and free when off.
+
+  **Nothing is substituted.** A value that cannot be coerced into a valid one
+  reaches the validator untouched, so the error names what the caller actually
+  wrote, with the keyword and params that rejected it. `maxRetries: "many"` is an
+  error, not a `0`. And the constraint keywords run on the coerced value, so `"3"`
+  against `{ type: 'integer', minimum: 5 }` becomes `3` and _then_ fails
+  `minimum` — an answer neither a strict parser nor a repairing one can give.
+
+  **The input is never modified.** `value` is the input itself when nothing needed
+  coercing, and otherwise a copy sharing everything the coercion did not touch, so
+  callers do not pay for the defensive clone an in-place coercer forces.
+
+  **More precise than Ajv, in the safe direction.** The table is Ajv's
+  `coerceTypes` minus the cells where Ajv guesses: no whitespace-to-zero
+  (`Number(" ")` is `0`), no `0x`/`Infinity` strings, no trailing-point numerals,
+  and nothing coerced to or from `null` — `null` is a JSON value in its own right
+  and usually means "not set". Every value this coerces, Ajv coerces to the same
+  value, which is pinned as a property over the whole table and structurally over
+  a fuzz: a migration off Ajv never changes a value, it turns some of Ajv's silent
+  repairs into errors instead. Leading zeros and exponents stay, both being
+  ordinary ways to write a number in a YAML file.
+
+  **Unions are coerced when the answer is forced.** At a position offering several
+  scalar types — an array-form `type`, or a union of scalar branches — the value is
+  coerced only if exactly one of them can take it, so `string | { … }` turns `7`
+  into `"7"` while `number | string` leaves `true` alone and lets the validator
+  say what is wrong with it. A value that is already one of the offered types is
+  left alone. Ajv instead walks its own coercion list in order, which makes `"1"` a
+  number under `["number", "string"]` and a string under `["string", "number"]`;
+  the answer should not depend on the order the union was written in.
+
+### Patch Changes
+
+- eb52b44: Stop warning about `--force` on every run. The flag has been a no-op since
+  0.21.0 and stays one — but it is in the old docs, so everyone who followed them
+  got a line of noise on every build for a flag that now merely describes the
+  default. It is still accepted, and the help text still says it is deprecated,
+  which is where someone looks when they are ready to clean a script up.
+- Updated dependencies [fcb615d]
+- Updated dependencies [9a1260e]
+- Updated dependencies [3670138]
+  - @amritk/generate-validators@0.19.0
+  - @amritk/helpers@0.22.1
+  - @amritk/adapters@0.6.4
+  - @amritk/api@0.16.5
+  - @amritk/generate-examples@0.8.6
+  - @amritk/lint@0.6.1
+  - @amritk/resolve-refs@0.7.1
+  - @amritk/asyncapi@0.3.2
+  - @amritk/generate-parsers@0.24.1
+
 ## 0.21.1
 
 ### Patch Changes
