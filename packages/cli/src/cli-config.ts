@@ -53,6 +53,45 @@ export type CliConfig = {
    */
   readonly validators?: boolean
   /**
+   * When true, generated validators also get a `coerceX`: it moves scalars
+   * toward what the schema asks for and then runs the very same `validateX` over
+   * the result, so a config value written the YAML way reads the same however it
+   * arrived.
+   *
+   * The input is never modified, and nothing is ever substituted: where a value
+   * cannot be coerced into a valid one it is handed to the validator untouched,
+   * so the error names what the caller actually wrote, with the keyword and
+   * params that rejected it. That is the difference from a coercing *parser*,
+   * which repairs toward a default and leaves nothing to report.
+   *
+   * The table is Ajv's `coerceTypes` minus the cells where Ajv guesses — no
+   * whitespace-to-zero, no `0x`/`Infinity` strings, and nothing coerced to or
+   * from `null`. Every value this coerces, Ajv coerces to the same value, so
+   * moving off Ajv never changes a value; it turns some of Ajv's silent repairs
+   * into errors instead. At a union it coerces only when exactly one of the
+   * offered types can take the value, and leaves a value that is already one of
+   * them alone — so the answer does not depend on the order the union is
+   * written in, which under Ajv it does.
+   *
+   * Requires `validators`. `validateX` and `isX` are unchanged either way.
+   */
+  readonly coerce?: boolean
+  /**
+   * When true, a failing `anyOf` / `oneOf` in a generated validator also reports
+   * the errors of the branch it meant, instead of the bare "must match a schema
+   * in anyOf" that names no field and no reason.
+   *
+   * Off by default, and off costs nothing — the generated code is exactly what
+   * it would be without the option. On, each branch keeps what it complained
+   * about, which is a push per *failing* branch and one lazily-created array per
+   * combinator that had one. A valid instance fails no branch and allocates
+   * nothing, but the branches are still handed a collector, so measure before
+   * turning it on in a hot path.
+   *
+   * Requires `validators`.
+   */
+  readonly branchErrors?: boolean
+  /**
    * When true, also emit test-data files for every schema: a `fast-check`
    * arbitrary (`FooArbitrary`) that produces schema-valid values and a concrete
    * `fooExample` value. The files are written into an `examples/` subdirectory of

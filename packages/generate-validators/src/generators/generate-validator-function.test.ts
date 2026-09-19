@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { evaluateGenerated, evaluateValidator as evalValidator } from './evaluate-generated.test-utils'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
+/**
+ * A validator built with `--branch-errors` on. The option is off by default —
+ * off has to stay byte-for-byte what the generator emitted before it existed —
+ * so the tests that assert on branch errors ask for it by name.
+ */
+const withBranchErrors = (schema: unknown, typeName: string): string =>
+  generateValidatorFunction(schema as never, typeName, '', undefined, undefined, undefined, true)
+
 describe('generate-validator-function', () => {
   it('generates a validator for a required string property', () => {
     const schema = {
@@ -1983,6 +1991,178 @@ describe('generate-validator-function', () => {
       })
       expect(v({ a: 'ab' })).toBe(true)
       expect(v({ a: 'abcd' })).not.toBe(true) // matches both branches
+    })
+
+    // The branch errors were computed to answer the yes/no question and then
+    // thrown away, so a failing union pointed at the object rather than at the
+    // field the author got wrong. The two definitions people edit most in a real
+    // config schema are union-rooted, which makes this the common case.
+    // The option has to be free when it is off, and "free" means the generator
+    // emits the same text — not merely equivalent text. An eagerly-created branch
+    // buffer cost 40% of the throughput of a valid instance against a
+    // union-rooted schema, which is exactly the shape a config schema is full of,
+    // so nothing about the collector may leak into a build that did not ask.
+    it('emits identical code for unions when branch errors are off', () => {
+      for (const schema of [
+        { anyOf: [{ type: 'string' }, { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }] },
+        { oneOf: [{ type: 'string' }, { type: 'number' }] },
+        {
+          type: 'object',
+          properties: { u: { anyOf: [{ type: 'string' }, { type: 'number' }] } },
+        },
+      ]) {
+        const off = generateValidatorFunction(schema as never, 'Doc')
+        const on = withBranchErrors(schema, 'Doc')
+
+        expect(off).not.toContain('_br')
+        expect(off).not.toContain('selectBranchErrors')
+        expect(on).toContain('selectBranchErrors')
+        expect(off).not.toBe(on)
+      }
+    })
+
+    // On, the buffer is still created only by a branch that has something to put
+    // in it, so a value matching the first branch allocates nothing extra.
+    it('creates the branch buffer lazily so a matching value allocates nothing', () => {
+      const code = withBranchErrors({ anyOf: [{ type: 'string' }, { type: 'number' }] }, 'Doc')
+
+      expect(code).toContain('let _br: ValidationError[][] | null = null')
+      expect(code).toContain('(_br ??= []).push(_m)')
+    })
+
+    it('explains a failing anyOf with the branch that describes the value kind', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            anyOf: [
+              { type: 'string', enum: ['get', 'post'] },
+              { type: 'object', properties: { verb: { type: 'string', enum: ['GET', 'POST'] } }, required: ['verb'] },
+            ],
+          },
+          'Method',
+        ),
+      )
+
+      expect(v({ verb: 'GETT' })).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+          {
+            message: 'must be one of: "GET", "POST"',
+            path: '/verb',
+            keyword: 'enum',
+            params: { allowedValues: ['GET', 'POST'] },
+          },
+        ],
+      })
+    })
+
+    it('explains a failing anyOf nested under a property, with the branch path', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            type: 'object',
+            properties: {
+              method: {
+                anyOf: [
+                  { type: 'string' },
+                  { type: 'object', properties: { verb: { type: 'string' } }, required: ['verb'] },
+                ],
+              },
+            },
+          },
+          'Doc',
+        ),
+      )
+
+      expect(v({ method: { verb: 9 } })).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '/method', keyword: 'anyOf', params: {} },
+          { message: 'must be string', path: '/method/verb', keyword: 'type', params: { type: 'string' } },
+        ],
+      })
+    })
+
+    it('explains a failing oneOf the same way', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            oneOf: [{ type: 'string' }, { type: 'object', properties: { n: { type: 'integer' } }, required: ['n'] }],
+          },
+          'Either',
+        ),
+      )
+
+      expect(v({ n: 1.5 })).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+          { message: 'must be number', path: '/n', keyword: 'type', params: { type: 'integer' } },
+        ],
+      })
+    })
+
+    it('says nothing extra when a oneOf matched more than one branch', () => {
+      // Every branch the value matched is correct on its own terms, so the ones
+      // that did not are beside the point.
+      const v = evalValidator(
+        generateValidatorFunction(
+          { oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] } as never,
+          'Either',
+          '',
+          undefined,
+          undefined,
+          undefined,
+          true,
+        ),
+      )
+
+      expect(v('abcd')).toEqual({
+        valid: false,
+        errors: [{ message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} }],
+      })
+    })
+
+    it('says nothing extra when no branch describes the value at all', () => {
+      const v = evalValidator(
+        generateValidatorFunction(
+          { anyOf: [{ type: 'string' }, { type: 'number' }] } as never,
+          'Scalar',
+          '',
+          undefined,
+          undefined,
+          undefined,
+          true,
+        ),
+      )
+
+      expect(v(true)).toEqual({
+        valid: false,
+        errors: [{ message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} }],
+      })
+    })
+
+    // Two combinators in one scope each need their own branch buffer, and a
+    // nested one needs a buffer of its own inside the branch it runs in. Both
+    // would be a duplicate `const` in the same block if the emitter did not scope
+    // them, so this is really asserting the generated file still parses.
+    it('scopes the branch buffers of sibling and nested combinators', () => {
+      const v = evalValidator(
+        generateValidatorFunction(
+          {
+            type: 'object',
+            properties: {
+              a: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+              b: { anyOf: [{ type: 'boolean' }, { anyOf: [{ type: 'string' }, { type: 'null' }] }] },
+            },
+          } as never,
+          'Doc',
+        ),
+      )
+
+      expect(v({ a: 's', b: null })).toBe(true)
+      expect(v({ a: 's', b: {} })).not.toBe(true)
     })
 
     it('negates a not schema', () => {

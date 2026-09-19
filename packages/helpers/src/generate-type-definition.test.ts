@@ -1207,6 +1207,195 @@ describe('generateTypeDefinition', () => {
     expect(result).toContain('/** npm publishing configuration. */')
   })
 
+  // A union branch seeds each key its `required` names before merging the
+  // branch's own `properties` in, and that merge used to hand the renderer an
+  // `allOf` wrapper with no annotations on it. The type came out right and the
+  // docs quietly disappeared — but only for the required keys, which is why the
+  // optional property beside them is asserted here too.
+  it('keeps the description of a required property inside an anyOf branch', () => {
+    const schema: JSONSchema = {
+      anyOf: [
+        { type: 'string' },
+        {
+          type: 'object',
+          properties: {
+            req: { type: 'string', description: 'doc on a REQUIRED prop' },
+            opt: { type: 'string', description: 'doc on an OPTIONAL prop' },
+          },
+          required: ['req'],
+        },
+      ],
+    }
+
+    expect(generateTypeDefinition(schema, 'Branching', { readonly: true })).toBe(
+      'export type Branching = string | {\n' +
+        '  /** doc on a REQUIRED prop */\n' +
+        '  readonly req: string;\n' +
+        '  /** doc on an OPTIONAL prop */\n' +
+        '  readonly opt?: string;\n' +
+        '};',
+    )
+  })
+
+  it('keeps the description of a required property inside a oneOf branch', () => {
+    const schema: JSONSchema = {
+      oneOf: [
+        { type: 'number' },
+        {
+          type: 'object',
+          properties: { req: { type: 'string', description: 'doc on a REQUIRED prop' } },
+          required: ['req'],
+        },
+      ],
+    }
+
+    expect(generateTypeDefinition(schema, 'Branching')).toContain('/** doc on a REQUIRED prop */')
+  })
+
+  it('falls back to $comment for a required property inside an anyOf branch', () => {
+    const schema: JSONSchema = {
+      anyOf: [
+        { type: 'string' },
+        {
+          type: 'object',
+          properties: { req: { type: 'string', $comment: 'comment on a REQUIRED prop' } },
+          required: ['req'],
+        },
+      ],
+    }
+
+    expect(generateTypeDefinition(schema, 'Branching')).toContain('/** comment on a REQUIRED prop */')
+  })
+
+  // The same fold, reached the other way: here the composing schema declares the
+  // key and the branch re-declares it, so both fragments survive as an
+  // intersection. The wrapper still has to carry the docs.
+  it('keeps a description when a branch and the composing schema both declare a key', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { mode: { type: 'string', description: 'doc from the composing schema' } },
+      anyOf: [{ type: 'object', properties: { mode: { minLength: 1 } }, required: ['mode'] }],
+    }
+
+    // Both members of the intersection carry the docs: the property block states
+    // them, and the branch narrowing the same key must not read as undocumented.
+    expect(generateTypeDefinition(schema, 'Doc')).toBe(
+      'export type Doc = {\n' +
+        '  /** doc from the composing schema */\n' +
+        '  mode?: string;\n' +
+        '} & {\n' +
+        '  /** doc from the composing schema */\n' +
+        '  mode: string;\n' +
+        '};',
+    )
+  })
+
+  it('prefers the branch description over the composing schema one for the same key', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { mode: { type: 'string', description: 'doc from the composing schema' } },
+      anyOf: [
+        {
+          type: 'object',
+          properties: { mode: { minLength: 1, description: 'doc from the branch' } },
+          required: ['mode'],
+        },
+      ],
+    }
+
+    const result = generateTypeDefinition(schema, 'Doc')
+
+    expect(result).toContain('/** doc from the branch */')
+    expect(result).not.toContain('/** doc from the composing schema */\n  mode: string;')
+  })
+
+  // `if` and `then` fold into a single literal the same way a union branch does,
+  // so a key both fragments declare goes through the same merge.
+  it('keeps a description when if and then both declare the same key', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { kind: { enum: ['a', 'b'] } },
+      if: { properties: { kind: { const: 'a' } }, required: ['kind'] },
+      then: { properties: { kind: { description: 'the branch this key selects' } } },
+    }
+
+    expect(generateTypeDefinition(schema, 'Doc')).toContain('/** the branch this key selects */')
+  })
+
+  // Every regression above shares a shape: a composition path builds a property
+  // block of its own, and nothing asserted the annotations survived the trip.
+  // The unit tests each name one case, so a path nobody thought to document was
+  // simply unguarded — which is how required properties inside `anyOf` lost
+  // their docs for a whole patch release without a single test going red. This
+  // asserts the invariant itself over the composition shapes we support, so the
+  // next path added has to carry descriptions too.
+  it('emits every property description a composed schema declares', () => {
+    const doc = (name: string): JSONSchema => ({ type: 'string', description: `doc for ${name}` })
+
+    const shapes: Record<string, JSONSchema> = {
+      'plain property block': {
+        type: 'object',
+        properties: { a: doc('a'), b: doc('b') },
+        required: ['a'],
+      },
+      'anyOf branch': {
+        anyOf: [{ type: 'string' }, { type: 'object', properties: { a: doc('a'), b: doc('b') }, required: ['a'] }],
+      },
+      'oneOf branch': {
+        oneOf: [{ type: 'number' }, { type: 'object', properties: { a: doc('a'), b: doc('b') }, required: ['a', 'b'] }],
+      },
+      'branch beside a property block': {
+        type: 'object',
+        properties: { a: doc('a') },
+        anyOf: [{ type: 'object', properties: { b: doc('b') }, required: ['b'] }],
+      },
+      'inline allOf member': {
+        type: 'object',
+        properties: { a: doc('a') },
+        allOf: [{ type: 'object', properties: { b: doc('b') }, required: ['b'] }],
+      },
+      'if/then fold': {
+        type: 'object',
+        properties: { a: { enum: ['x', 'y'], description: 'doc for a' } },
+        if: { properties: { a: { const: 'x' } }, required: ['a'] },
+        then: { properties: { b: doc('b') }, required: ['b'] },
+      },
+      'branch nested under a property': {
+        type: 'object',
+        properties: {
+          nested: {
+            anyOf: [{ type: 'string' }, { type: 'object', properties: { a: doc('a'), b: doc('b') }, required: ['a'] }],
+          },
+        },
+      },
+    }
+
+    for (const [label, schema] of Object.entries(shapes)) {
+      const result = generateTypeDefinition(schema, 'Doc')
+      expect(result, label).toContain('/** doc for a */')
+      expect(result, label).toContain('/** doc for b */')
+    }
+  })
+
+  // The branch writes `req` after `opt`, and the type should say so. Seeding the
+  // required keys first silently reordered every branch literal.
+  it('renders branch properties in the order the branch declares them', () => {
+    const schema: JSONSchema = {
+      anyOf: [
+        { type: 'string' },
+        {
+          type: 'object',
+          properties: { opt: { type: 'string' }, req: { type: 'string' } },
+          required: ['req'],
+        },
+      ],
+    }
+
+    expect(generateTypeDefinition(schema, 'Branching')).toBe(
+      'export type Branching = string | { opt?: string; req: string };',
+    )
+  })
+
   it('generates record type for patternProperties-only schema without explicit type', () => {
     const schema: JSONSchema = {
       patternProperties: {
@@ -2274,6 +2463,91 @@ describe('generateTypeDefinition', () => {
 
       expect(generateTypeDefinition(schema, 'Doc', { rootSchema: {} })).toContain('channel?: unknown;')
     })
+  })
+
+  // A whole-output golden, and the only test here that fails when *anything*
+  // about the emitted text changes.
+  //
+  // Every other test in this file asserts the part of the output it was written
+  // to assert, which means a part nobody thought to name can change without one
+  // of them going red — and that is not hypothetical. Required properties inside
+  // an `anyOf` branch lost their JSDoc for a whole patch release, silently,
+  // because no test named that combination. The corpus tests would not have
+  // caught it either: they assert that generation produces non-empty output
+  // without throwing, nothing about what the output says.
+  //
+  // So this pins one schema that exercises every composition path at once. It is
+  // meant to be updated when the output genuinely changes — the point is that
+  // updating it is a deliberate act, visible in the diff, rather than something
+  // that happens to nobody's notice.
+  it('emits the whole expected type for a schema using every composition path', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      description: 'A request the gateway knows how to forward.',
+      properties: {
+        id: { type: 'string', description: 'Stable identifier for this route.' },
+        label: { type: 'string', $comment: 'Shown in the dashboard; no URL here.' },
+        mode: { enum: ['proxy', 'mock'] },
+        method: {
+          anyOf: [
+            { type: 'string', enum: ['get', 'post'] },
+            {
+              type: 'object',
+              properties: {
+                verb: { type: 'string', description: 'The HTTP verb to send.' },
+                retries: { type: 'integer', description: 'How many times to retry.' },
+              },
+              required: ['verb'],
+            },
+          ],
+        },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Free-form labels.' },
+      },
+      required: ['id', 'method'],
+      if: { properties: { mode: { const: 'mock' } }, required: ['mode'] },
+      then: {
+        properties: { fixture: { type: 'string', description: 'Response body to serve.' } },
+        required: ['fixture'],
+      },
+      oneOf: [{ required: ['id'] }, { required: ['label'] }],
+      patternProperties: { '^x-': true },
+    }
+
+    expect(generateTypeDefinition(schema, 'Route', { readonly: true })).toBe(
+      [
+        '/**',
+        '* Route',
+        '*',
+        '* A request the gateway knows how to forward.',
+        '*/',
+        'export type Route = {',
+        '  /** Stable identifier for this route. */',
+        '  readonly id: string;',
+        '  /** Shown in the dashboard; no URL here. */',
+        '  readonly label?: string;',
+        '  readonly mode?: "proxy" | "mock";',
+        '  readonly method: "get" | "post" | {',
+        '  /** The HTTP verb to send. */',
+        '  readonly verb: string;',
+        '  /** How many times to retry. */',
+        '  readonly retries?: number;',
+        '};',
+        '  /** Free-form labels. */',
+        '  readonly tags?: readonly string[];',
+        '  readonly [key: `x-${string}`]: unknown;',
+        '} & ({',
+        '  readonly mode: "mock";',
+        '  /** Response body to serve. */',
+        '  readonly fixture: string;',
+        '} | { readonly mode?: "proxy" }) & ({',
+        '  /** Stable identifier for this route. */',
+        '  readonly id: string;',
+        '} | {',
+        '  /** Shown in the dashboard; no URL here. */',
+        '  readonly label: string;',
+        '});',
+      ].join('\n'),
+    )
   })
 
   it('names the nesting limit instead of overflowing the stack', () => {

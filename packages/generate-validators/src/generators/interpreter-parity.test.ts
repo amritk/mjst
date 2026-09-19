@@ -1,3 +1,4 @@
+import type { ValidationError } from '@amritk/runtime-validators'
 import { validate } from '@amritk/runtime-validators'
 import { describe, expect, it } from 'vitest'
 
@@ -571,6 +572,128 @@ const randomSchema = (rng: () => number): Record<string, unknown> => {
   if (rng() < 0.2) s.nullable = true
   return s
 }
+
+/**
+ * How a failing `anyOf` / `oneOf` is *explained* — which is a second contract
+ * between the two implementations, and one nothing pinned.
+ *
+ * The verdict blocks above are deliberately silent about messages, and that was
+ * the right call for every keyword that reports what it checked. A combinator is
+ * different: "must match a schema in anyOf" names no field and no reason, so both
+ * implementations pick a branch and report its errors instead — by the same rule,
+ * written twice, in two languages (one walks and collects, one emits code that
+ * collects). Two implementations of one rule is exactly where a shared oracle
+ * earns its keep, and drift here is invisible: both would still return `false`.
+ *
+ * Errors are compared as `(path, keyword, params)`, which is what a caller
+ * branches on. Wording stays a separate concern, as everywhere else in this file.
+ */
+const errorShape = (result: unknown): unknown[] =>
+  result === true || result === null || typeof result !== 'object'
+    ? []
+    : ((result as { errors?: ValidationError[] }).errors ?? []).map(({ path, keyword, params }) => ({
+        path,
+        keyword,
+        params,
+      }))
+
+describe('generator/interpreter branch-error parity', () => {
+  const assertSameErrors = (schema: Record<string, unknown>, values: readonly unknown[]): void => {
+    // Branch errors are opt-in in the generator and always on in the
+    // interpreter, so parity is asserted with the option the interpreter's
+    // behaviour corresponds to.
+    const generated = evaluateValidator(
+      generateValidatorFunction(schema as never, 'Root', '', undefined, undefined, undefined, true),
+    )
+    const interpreted = validate(schema as never)
+    for (const value of values) {
+      expect(errorShape(generated(value)), `${JSON.stringify(schema)} on ${JSON.stringify(value)}`).toEqual(
+        errorShape(interpreted(value)),
+      )
+    }
+  }
+
+  it('agrees on a scalar-or-object union, the shape a config schema is full of', () => {
+    assertSameErrors(
+      {
+        anyOf: [
+          { type: 'string', enum: ['get', 'post'] },
+          {
+            type: 'object',
+            properties: { verb: { type: 'string', enum: ['GET', 'POST'] }, path: { type: 'string' } },
+            required: ['verb'],
+          },
+        ],
+      },
+      [{ verb: 'GETT' }, { path: '/x' }, { verb: 'GET', path: 9 }, 'gett', 42, null, []],
+    )
+  })
+
+  it('agrees on a discriminated union', () => {
+    const variant = (kind: string, payload: string): Record<string, unknown> => ({
+      type: 'object',
+      properties: { kind: { const: kind }, value: { type: payload } },
+      required: ['kind', 'value'],
+    })
+    assertSameErrors({ oneOf: [variant('a', 'integer'), variant('b', 'string')] }, [
+      { kind: 'b', value: 42 },
+      { kind: 'a', value: 'x' },
+      { kind: 'unknown', value: 1 },
+      { value: 1 },
+    ])
+  })
+
+  it('agrees on a union nested under a property, paths included', () => {
+    assertSameErrors(
+      {
+        type: 'object',
+        properties: {
+          method: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'object', properties: { verb: { type: 'string' } }, required: ['verb'] },
+            ],
+          },
+        },
+      },
+      [{ method: { verb: 9 } }, { method: {} }, { method: 9 }, { method: 'get' }],
+    )
+  })
+
+  it('agrees on a union with no branch worth reporting', () => {
+    assertSameErrors({ anyOf: [{ type: 'string' }, { type: 'number' }] }, [true, null, {}, []])
+    assertSameErrors(
+      {
+        oneOf: [
+          { type: 'object', properties: { $ref: { type: 'string' } }, required: ['$ref'] },
+          { type: 'object', properties: { id: { type: 'string' }, n: { type: 'integer' } }, required: ['id'] },
+        ],
+      },
+      [{ id: 'x', n: 1.5 }, {}],
+    )
+  })
+
+  it('agrees on a union that matched too many branches', () => {
+    assertSameErrors({ oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] }, ['abcd', 'ab', 7])
+  })
+
+  it('agrees on a union of unions', () => {
+    assertSameErrors(
+      {
+        anyOf: [
+          { type: 'boolean' },
+          {
+            anyOf: [
+              { type: 'string', minLength: 3 },
+              { type: 'object', properties: { a: { type: 'integer' } } },
+            ],
+          },
+        ],
+      },
+      [{ a: 'x' }, 'ab', 7, null],
+    )
+  })
+})
 
 describe('generator/interpreter fuzz parity', () => {
   it('agrees across random schemas and values combining the four keyword groups', { timeout: 60_000 }, () => {

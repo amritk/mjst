@@ -1154,8 +1154,18 @@ const isIdentityMismatch = (error: ValidationError): boolean =>
   (error.keyword === 'const' || error.keyword === 'enum') && error.path.indexOf('/', 1) === -1
 
 /**
- * The errors of the branch a discriminator selects, or `null` when no
- * discriminator selects one.
+ * Whether `error` is a branch rejecting the value's *kind* — a `type` mismatch
+ * on the value itself, before anything about its contents was even looked at.
+ *
+ * A branch that wanted a string cannot explain what is wrong with an object, so
+ * it is not a candidate for having been the one the author meant. The branches
+ * run with an empty base path, so the value itself is the empty pointer.
+ */
+const isKindMismatch = (error: ValidationError): boolean => error.keyword === 'type' && error.path === ''
+
+/**
+ * The errors of the branch that was plainly the one meant, or `null` when no
+ * branch stands out.
  *
  * A failing `anyOf` / `oneOf` on its own says almost nothing: "must match a
  * schema in anyOf" names no field and no reason, and on the shape this is most
@@ -1166,32 +1176,37 @@ const isIdentityMismatch = (error: ValidationError): boolean =>
  * describing 23 variants nobody meant, or a `discriminator` keyword the schema
  * has to declare.
  *
- * So the branches are asked *why* they failed, and the answer is read for a
- * discriminator: if every branch but one was rejected on the value's identity
- * (a `const` or `enum` on one of its own properties) and exactly one was not,
- * that one is the variant the author meant, and its errors are the real ones.
+ * So the branches are asked *why* they failed, and the answer is read in two
+ * steps. First the branches that rejected the value's *kind* are dropped: a
+ * branch wanting a string has nothing to say about an object, and a union of
+ * `string | { … }` — the commonest shape in a hand-written config schema — is
+ * left with exactly one branch that was even talking about this value. That one
+ * is the variant the author meant, whatever it then complained about.
+ *
+ * When more than one branch survives, they are all describing the same kind of
+ * value and something has to pick between them: if every one but a single
+ * survivor was rejected on the value's identity (a `const` or `enum` on one of
+ * its own properties) then that survivor is the variant, which is what a
+ * discriminated union looks like from the outside.
  *
  * Reading the errors rather than the schema is what makes this work through
  * `$ref`s — the branches of a real OpenAPI union are almost always refs, whose
  * targets a compile-time analysis could not see. It also keeps the rule from
  * guessing: "the branch with the fewest errors" would answer here too, and
  * answers wrongly on the shape `oneOf: [aReference, theActualThing]`, where
- * "you did not write a $ref" is one complaint and the real mistake is two. When
- * there is no discriminator this reports nothing extra, which is exactly as much
- * as can be said honestly.
+ * "you did not write a $ref" is one complaint and the real mistake is two. Both
+ * describe an object, so both survive the first step, neither is an identity
+ * rejection, and nothing is reported. When no branch stands out this reports
+ * nothing extra, which is exactly as much as can be said honestly.
  */
-const discriminatedBranchErrors = (
+const selectedBranchErrors = (
   ctx: InterpreterContext,
   nodes: readonly CompiledNode[],
   value: unknown,
   depth: number,
   scope: DynamicScope,
 ): readonly ValidationError[] | null => {
-  // A discriminator is a property, so there is nothing to select on otherwise.
-  if (!isObjectValue(value)) return null
-
-  let selected: ValidationError[] | null = null
-  let rejectedOnIdentity = 0
+  const candidates: ValidationError[][] = []
   for (const node of nodes) {
     const sub = newErrorContext(ctx)
     node.run(sub, value, '', null, depth + 1, scope)
@@ -1200,6 +1215,16 @@ const discriminatedBranchErrors = (
     // `oneOf` failed for having matched more than one. Nothing to explain.
     if (errors === null) return null
 
+    if (!errors.some(isKindMismatch)) candidates.push(errors)
+  }
+
+  // Exactly one branch was talking about this kind of value at all, so there is
+  // nothing left to discriminate between — it is the one the author meant.
+  if (candidates.length === 1) return candidates[0] as ValidationError[]
+
+  let selected: ValidationError[] | null = null
+  let rejectedOnIdentity = 0
+  for (const errors of candidates) {
     if (errors.some(isIdentityMismatch)) {
       rejectedOnIdentity++
       continue
@@ -1209,7 +1234,7 @@ const discriminatedBranchErrors = (
     selected = errors
   }
 
-  return selected !== null && rejectedOnIdentity === nodes.length - 1 ? selected : null
+  return selected !== null && rejectedOnIdentity === candidates.length - 1 ? selected : null
 }
 
 /**
@@ -1228,7 +1253,7 @@ const failWithBranch = (
   fail(ctx, error, path)
   if (!ctx.emitErrors || ctx.failed) return
 
-  const selected = discriminatedBranchErrors(ctx, nodes, value, depth, scope)
+  const selected = selectedBranchErrors(ctx, nodes, value, depth, scope)
   if (selected === null) return
   for (const inner of selected) {
     // The branch ran with an empty base path, so its paths are relative to the

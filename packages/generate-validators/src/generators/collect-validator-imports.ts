@@ -39,9 +39,20 @@ type CollectValidatorImportsOptions = {
    * Defaults to "both", which is what every caller wanted before anyone asked the
    * question.
    */
-  readonly reads?: (names: { readonly typeName: string; readonly validatorName: string }) => {
+  readonly reads?: (names: {
+    readonly typeName: string
+    readonly validatorName: string
+    readonly coercerName: string
+  }) => {
     readonly type: boolean
     readonly validator: boolean
+    /**
+     * The `$ref` target's value-coercing walk. Only a file generated with
+     * coercion on names it, and even then only where the ref sits somewhere the
+     * coercion pass walks — so it comes apart from the other two halves the same
+     * way they come apart from each other.
+     */
+    readonly coercer?: boolean
   }
 }
 
@@ -53,11 +64,13 @@ const buildImport = (ref: string, suffix: string, reads: Reads): string | null =
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
-  const { type, validator } = reads({ typeName, validatorName })
+  const coercerName = `coerce${typeName}Value`
+  const { type, validator, coercer = false } = reads({ typeName, validatorName, coercerName })
   // `.js` extension so the emitted import resolves under Node ESM (not just Bun);
   // `./x.js` → sibling `x.ts` is the standard NodeNext form.
-  if (type && validator) return `import { type ${typeName}, ${validatorName} } from './${filename}.js'`
-  if (validator) return `import { ${validatorName} } from './${filename}.js'`
+  const values = [...(validator ? [validatorName] : []), ...(coercer ? [coercerName] : [])]
+  if (type && values.length > 0) return `import { type ${typeName}, ${values.join(', ')} } from './${filename}.js'`
+  if (values.length > 0) return `import { ${values.join(', ')} } from './${filename}.js'`
   if (type) return `import type { ${typeName} } from './${filename}.js'`
   return null
 }

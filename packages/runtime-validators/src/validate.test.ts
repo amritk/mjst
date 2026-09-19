@@ -1571,11 +1571,64 @@ describe('validate', () => {
     ])
   })
 
-  it('says nothing extra when the value is not an object', () => {
-    // A discriminator is a property, so there is nothing to select on.
+  it('says nothing extra when no branch describes the value at all', () => {
+    // Every branch wanted a different kind of value, so none of them has anything
+    // to say about this one beyond what the combinator error already said.
     const result = validate({ anyOf: [{ type: 'string' }, { type: 'number' }] })(true)
     expect(result === true ? [] : result.errors).toEqual([
       { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+    ])
+  })
+
+  // The commonest shape in a hand-written config schema, and the one a
+  // discriminator cannot help with: a value that may be written the short way or
+  // the long way. The string branch has nothing to say about an object, so the
+  // object branch is the only one that was talking about this value — and the
+  // field the author actually got wrong is the useful thing to report.
+  it('explains a failing anyOf with the only branch that describes the value kind', () => {
+    const validator = validate({
+      anyOf: [
+        { type: 'string', enum: ['get', 'post'] },
+        { type: 'object', properties: { verb: { type: 'string', enum: ['GET', 'POST'] } }, required: ['verb'] },
+      ],
+    })
+
+    expect(validator({ verb: 'GETT' })).toEqual({
+      valid: false,
+      errors: [
+        { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+        {
+          message: 'must be one of: "GET", "POST"',
+          path: '/verb',
+          keyword: 'enum',
+          params: { allowedValues: ['GET', 'POST'] },
+        },
+      ],
+    })
+  })
+
+  it('explains a failing anyOf over scalars from the branch of the right type', () => {
+    const result = validate({ anyOf: [{ type: 'string', minLength: 5 }, { type: 'number' }] })('ab')
+
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+      { message: 'must have at least 5 characters', path: '', keyword: 'minLength', params: { limit: 5 } },
+    ])
+  })
+
+  it('says nothing extra when two branches of the same kind both fit', () => {
+    // `oneOf: [aReference, theActualThing]` — both describe an object, neither is
+    // rejected on identity, and "you did not write a $ref" is not the mistake.
+    // Guessing here is exactly what "the branch with the fewest errors" gets wrong.
+    const result = validate({
+      oneOf: [
+        { type: 'object', properties: { $ref: { type: 'string' } }, required: ['$ref'] },
+        { type: 'object', properties: { id: { type: 'string' }, n: { type: 'integer' } }, required: ['id'] },
+      ],
+    })({ id: 'x', n: 'not a number' })
+
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
     ])
   })
 

@@ -49,6 +49,110 @@ export type ValidationError = {
 export type ValidationResult = true | { valid: false; errors: ValidationError[] }
 
 /**
+ * The result of a generated coercing validator.
+ *
+ * Unlike \`ValidationResult\` there is no bare \`true\`: a caller that coerces wants
+ * the value back, and the whole point is that it may differ from what went in.
+ * The input is never modified — \`value\` is the input itself when nothing needed
+ * coercing, and otherwise a copy that shares everything the coercion did not
+ * touch. So a caller does not have to clone defensively the way an in-place
+ * coercer forces them to.
+ */
+export type CoercionResult<T> = { valid: true; value: T } | { valid: false; errors: ValidationError[] }
+
+/**
+ * A string this will read as a number: an optional sign, digits with an optional
+ * fractional part, an optional exponent. Nothing else.
+ *
+ * Deliberately narrower than what \`Number()\` accepts, which is where Ajv gets
+ * its surprises — \`Number(" ")\` is \`0\`, \`Number("0x10")\` is \`16\` and
+ * \`Number("Infinity")\` is a value JSON cannot even represent. A config that says
+ * \`retries: " "\` has a mistake in it, and answering \`0\` is the one thing worse
+ * than rejecting it. Leading zeros (\`"007"\`) and exponents (\`"1e3"\`) stay: both
+ * are ordinary ways to write a number in a YAML file, and neither is ambiguous.
+ */
+const NUMERIC_STRING = /^[+-]?(?:\\d+|\\d*\\.\\d+)(?:[eE][+-]?\\d+)?$/
+
+/**
+ * One scalar, coerced toward \`type\`, or returned untouched when that is not
+ * possible.
+ *
+ * Returning the original on failure is what keeps the error honest: nothing is
+ * substituted, so the validator that runs next rejects the value the caller
+ * actually wrote, with the keyword and params that rejected it. That is the
+ * difference between this and a parser's repair, which repairs toward a default
+ * and leaves nothing to report.
+ *
+ * The table is Ajv's \`coerceTypes\` minus the cells where Ajv guesses. Every
+ * value this coerces, Ajv coerces to the same value — \`coerced-vs-ajv\` pins that
+ * as a property, so moving off Ajv never changes a value, it only turns some of
+ * Ajv's silent repairs into errors. What is deliberately *not* coerced:
+ *
+ *  - **Anything to or from \`null\`.** Ajv reads \`null\` as \`""\`, \`0\` and
+ *    \`false\`, and reads \`""\`, \`0\` and \`false\` back as \`null\`. \`null\` is a
+ *    JSON value in its own right and usually means "not set"; turning it into an
+ *    empty string, or an empty string into it, loses the distinction the document
+ *    drew.
+ *  - **Strings that are not cleanly numeric** ({@link NUMERIC_STRING}) — no
+ *    whitespace padding, no \`0x\`/\`0o\`/\`0b\`, no \`Infinity\`, no trailing \`.\`.
+ */
+export const coerceScalar = (value: unknown, type: string): unknown => {
+  switch (type) {
+    case 'string':
+      return typeof value === 'number' || typeof value === 'boolean' ? String(value) : value
+    case 'number':
+    case 'integer': {
+      if (typeof value === 'boolean') return value ? 1 : 0
+      if (typeof value !== 'string' || !NUMERIC_STRING.test(value)) return value
+      const asNumber = Number(value)
+      if (!Number.isFinite(asNumber)) return value
+      return type === 'integer' && asNumber % 1 !== 0 ? value : asNumber
+    }
+    case 'boolean':
+      if (value === 'true' || value === 1) return true
+      if (value === 'false' || value === 0) return false
+      return value
+    default:
+      return value
+  }
+}
+
+/**
+ * One scalar at a position that offers several types — a \`type\` array, or a
+ * union of scalar branches — coerced only when exactly one of them can take it.
+ *
+ * A value whose type is already one of the offered types is left alone: it is
+ * what the schema asked for, and the question of coercion does not arise. That
+ * one rule is where this parts company with Ajv, which walks its own coercion
+ * list in order and so turns \`"1"\` into \`1\` under \`["number", "string"]\` while
+ * leaving it a string under \`["string", "number"]\`. The answer should not depend
+ * on the order someone wrote the union in.
+ *
+ * Otherwise every offered type is tried, and the coercion is taken only if it is
+ * the only one that succeeds. \`true\` against \`number | string\` could be \`1\` or
+ * \`"true"\` with equal justification, so it stays \`true\` and the validator says
+ * what is wrong with it.
+ */
+export const coerceUnion = (value: unknown, types: readonly string[]): unknown => {
+  const actual = value === null ? 'null' : typeof value
+  for (const type of types) {
+    // \`integer\` is satisfied by a number, so a non-integral number is not a
+    // *type* mismatch here — the validator is what holds it to being whole.
+    if (actual === type || (actual === 'number' && type === 'integer')) return value
+  }
+
+  let coerced: unknown = value
+  let found = 0
+  for (const type of types) {
+    const candidate = coerceScalar(value, type)
+    if (candidate === value) continue
+    coerced = candidate
+    found++
+  }
+  return found === 1 ? coerced : value
+}
+
+/**
  * How deep a structural comparison walks before it gives up and answers "not
  * equal".
  *
@@ -212,6 +316,68 @@ export const everyItem = (arr: readonly unknown[], test: (item: unknown) => bool
  */
 export const escapePointer = (key: string): string =>
   key.indexOf('/') !== -1 || key.indexOf('~') !== -1 ? key.replace(/~/g, '~0').replace(/\\//g, '~1') : key
+
+/**
+ * The errors of the branch that was plainly the one meant, out of every branch a
+ * failing \`anyOf\` / \`oneOf\` rejected. Empty when no branch stands out.
+ *
+ * A failing combinator on its own says almost nothing: "must match a schema in
+ * anyOf" names no field and no reason, and on the shape this is most often used
+ * for — a union where the value plainly *is* one of the variants and one field of
+ * it is wrong — that is the least useful thing a validator can say. The branch
+ * errors are computed anyway to answer the yes/no question, so the only question
+ * is which of them are worth reporting.
+ *
+ * Branches that rejected the value's *kind* go first: a branch wanting a string
+ * has nothing to say about an object, so a \`string | { … }\` union is left with
+ * the one branch that was even talking about this value. When more than one
+ * survives they all describe the same kind of value, and the tie is broken the
+ * way a discriminated union reads from the outside — if every survivor but one
+ * was rejected on the value's *identity* (a \`const\` or \`enum\` on the value or
+ * one of its own properties), the remaining one is the variant the author meant.
+ *
+ * Nothing is reported when no branch stands out, which is as much as can be said
+ * honestly: "the branch with the fewest errors" would answer here too, and
+ * answers wrongly on \`oneOf: [aReference, theActualThing]\`, where "you did not
+ * write a $ref" is one complaint and the real mistake is two.
+ *
+ * \`path\` is where the combinator was applied, so a segment below it is a direct
+ * property of the value being judged. \`@amritk/runtime-validators\` selects the
+ * same branch by the same rule, so a generated validator and the interpreter
+ * explain a failing union the same way.
+ */
+export const selectBranchErrors = (
+  branches: readonly (readonly ValidationError[])[],
+  path: string,
+): readonly ValidationError[] => {
+  const candidates: (readonly ValidationError[])[] = []
+  for (const errors of branches) {
+    // The value itself is \`path\`, so a \`type\` error there is a rejected kind.
+    if (!errors.some((error) => error.keyword === 'type' && error.path === path)) candidates.push(errors)
+  }
+  if (candidates.length === 1) return candidates[0] as readonly ValidationError[]
+
+  let selected: readonly ValidationError[] | null = null
+  let rejectedOnIdentity = 0
+  for (const errors of candidates) {
+    // One segment below \`path\` and no deeper: a discriminator is conventionally a
+    // direct field, and a \`const\` buried further down is far more likely to be an
+    // ordinary payload constraint.
+    const identity = errors.some(
+      (error) =>
+        (error.keyword === 'const' || error.keyword === 'enum') && error.path.indexOf('/', path.length + 1) === -1,
+    )
+    if (identity) {
+      rejectedOnIdentity++
+      continue
+    }
+    // Two branches survive the discriminator, so it did not discriminate.
+    if (selected !== null) return []
+    selected = errors
+  }
+
+  return selected !== null && rejectedOnIdentity === candidates.length - 1 ? selected : []
+}
 `
 
 /**
@@ -320,6 +486,8 @@ export const buildValidatorSchema = async (
   schemas?: Readonly<Record<string, unknown>>,
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats?: 'all' | readonly string[],
+  coerce = false,
+  branchErrors = false,
 ): Promise<GeneratedFile[]> => {
   // Resolved once: which names are enforced decides both what the emitters check
   // and what `formats.ts` has to define.
@@ -389,6 +557,8 @@ export const buildValidatorSchema = async (
       typeSuffix,
       unknownKeys,
       formats: enforced,
+      coerce,
+      branchErrors,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })

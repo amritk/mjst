@@ -264,6 +264,8 @@ const runValidators = async (
     undefined,
     config.unknownKeys,
     config.formats,
+    config.coerce === true,
+    config.branchErrors === true,
   )
   const staged: string[] = []
 
@@ -727,20 +729,31 @@ const run = async (): Promise<void> => {
   const cliConfig = parseCliArgs(args)
   const config = { ...fileConfig, ...cliConfig }
 
+  // `--coerce` shapes the validators; on its own it has nothing to act on, and
+  // silently generating no coercion for a run that asked for it is worse than
+  // saying so.
+  if (config.coerce && !config.validators) {
+    console.error('Error: --coerce shapes the generated validators, so it needs --validators too.')
+    process.exit(1)
+  }
+
+  if (config.branchErrors && !config.validators) {
+    console.error('Error: --branch-errors shapes the generated validators, so it needs --validators too.')
+    process.exit(1)
+  }
+
   if (config.outDir && config.outFile) {
     console.error('Error: provide only one of --out-dir or --out-file, not both.')
     process.exit(1)
   }
 
-  // Accepted and ignored rather than rejected: --force was the escape hatch from
-  // an ownership check that no longer exists, and erroring on it would break the
-  // package.json scripts that had to carry it. Warn so it gets dropped, but do
-  // not fail a run over a flag that now describes the default.
-  if (config.force) {
-    console.warn(
-      'Warning: --force is deprecated and does nothing; generated files always replace what is at their path.',
-    )
-  }
+  // `--force` is accepted and ignored rather than rejected: it was the escape
+  // hatch from an ownership check that no longer exists, and erroring on it would
+  // break the package.json scripts that had to carry it. It used to warn as well,
+  // which turned out to be the wrong trade — the flag is in the old docs, so
+  // everyone who followed them got a line of noise on every build for a flag that
+  // now merely describes the default. The help text says it is deprecated; that
+  // is where someone looks when they are ready to clean a script up.
 
   // The root type name becomes a TypeScript identifier *and* the output filename,
   // so an unchecked value is both a compile error (`export type ../../X = …`) and

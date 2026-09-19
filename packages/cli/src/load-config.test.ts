@@ -263,6 +263,13 @@ describe('load-config', () => {
     )
   })
 
+  it('loads the coerce flag from a config file', async () => {
+    const configPath = join(tmpdir(), `test-config-${Date.now()}-coerce.json`)
+    await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', validators: true, coerce: true }))
+
+    expect(await loadConfig(configPath)).toEqual({ schema: 's.json', outDir: 'o', validators: true, coerce: true })
+  })
+
   it('loads the force flag from a config file', async () => {
     const configPath = join(tmpdir(), `test-config-${Date.now()}-force.json`)
     await writeFile(configPath, JSON.stringify({ schema: 's.json', outDir: 'o', force: true }))

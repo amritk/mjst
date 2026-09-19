@@ -342,6 +342,19 @@ type NestingContext = {
    * `validateX` see the same check.
    */
   readonly formats: ReadonlySet<string>
+  /**
+   * Whether a failing `anyOf` / `oneOf` also reports the errors of the branch it
+   * meant, instead of the bare "must match a schema in anyOf".
+   *
+   * Off by default, and off costs nothing: the emitted text is exactly what it
+   * was before the feature existed. On, each branch keeps what it complained
+   * about, which is a push per failing branch and a lazily-created array per
+   * combinator that had one. A valid instance fails no branch and so allocates
+   * nothing — but an *eagerly* created buffer cost 40% of the throughput of a
+   * valid instance against a union-rooted schema, which is why this is a choice
+   * rather than the default.
+   */
+  readonly branchErrors: boolean
 }
 
 /**
@@ -382,9 +395,23 @@ const returnError = (message: string, path: string, keyword: string, params = '{
 /** The IIFE-local buffer a match expression's checks report through. */
 const MATCH_ERROR_SINK = '_m'
 
+/**
+ * Where a branch of a reported combinator sends its errors, and where the value
+ * it is judging lives. Passed only by `anyOf` / `oneOf`, which surface the
+ * branch errors; every other match expression asks a yes/no question and throws
+ * them away.
+ */
+type BranchCollector = {
+  /** The emitted name of the `ValidationError[][]` the branch appends to. */
+  buffer: string
+  /** The emitted path expression for the value the branch is judging. */
+  path: string
+}
+
 const createRootContext = (
   rootSchema?: Record<string, unknown>,
   formats: ReadonlySet<string> = NO_FORMATS,
+  branchErrors = false,
 ): NestingContext => ({
   objVar: 'obj',
   pathPrefix: '${_path}',
@@ -393,6 +420,7 @@ const createRootContext = (
   rootSchema,
   sink: ROOT_ERROR_SINK,
   formats,
+  branchErrors,
 })
 
 /**
@@ -1292,6 +1320,7 @@ const generateValueCheckLines = (
   // names, independent of the caller's context. `key` is intentionally dropped
   // (set to `''`) because `path` already locates the value.
   const valueCtx: NestingContext = {
+    branchErrors: ctx.branchErrors,
     objVar: ctx.objVar,
     pathPrefix: path.slice(1, -1),
     depth: ctx.depth + 1,
@@ -1333,6 +1362,7 @@ const generateMatchesExpr = (
   suffix: string,
   ctx: NestingContext,
   required = false,
+  branch?: BranchCollector,
 ): string => {
   if (sub === true) return 'true'
   if (sub === false) return 'false'
@@ -1347,11 +1377,23 @@ const generateMatchesExpr = (
   // The branch's checks report into the IIFE-local buffer rather than the
   // validator's `errors`, so the expression stays a pure yes/no answer. Each
   // nested match IIFE declares its own `_m`, so the innermost one always wins.
-  const checks = generateValueChecks('', value, '`${_path}`', sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK }, required)
+  // Where the branch's errors say they are. A caller that discards them passes
+  // nothing and gets the validator's own root, which is what every call site did
+  // while the errors went nowhere; a caller that *reports* them has to say where
+  // the value being judged actually lives, or the paths come out relative to the
+  // wrong thing — `/verb` for a union under `/method`, which is neither where the
+  // mistake is nor a pointer into the instance at all.
+  const valuePath = branch === undefined ? '`${_path}`' : branch.path
+  const checks = generateValueChecks('', value, valuePath, sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK }, required)
   if (checks.length === 0) return 'true'
   const body = checks.join('\n')
   const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
-  return `((): boolean => { const _m: ValidationError[] = []\n${binding}${body}\n    return _m.length === 0 })()`
+  // Keeping what the branch complained about, instead of dropping it on the
+  // floor, is what lets a failing combinator name the field that is wrong. Only a
+  // branch that failed has anything to contribute, and the buffer it reports into
+  // is declared in the block enclosing this expression.
+  const collect = branch === undefined ? '' : `\n    if (_m.length !== 0) (${branch.buffer} ??= []).push(_m)`
+  return `((): boolean => { const _m: ValidationError[] = []\n${binding}${body}${collect}\n    return _m.length === 0 })()`
 }
 
 /**
@@ -1444,6 +1486,55 @@ const generateUnevaluatedChecks = (
  * a string. The interpreter and Ajv both read a hole as a value that has to answer
  * for itself.
  */
+/**
+ * The buffer a combinator's branches report their errors into.
+ *
+ * Block-scoped at every use, which is what lets the name stay the same
+ * everywhere: two sibling combinators in one scope each get their own block
+ * rather than a duplicate declaration, and a combinator nested inside a branch
+ * declares its own inside that branch's IIFE — the same way each match
+ * expression declares its own `_m`.
+ */
+const BRANCH_BUFFER = '_br'
+
+/**
+ * Appends the branch errors worth reporting to the ones already collected.
+ *
+ * A `for…of` rather than a spread because every emitted report starts with
+ * `(errors ??= [])`: two of them on consecutive lines are not separated by ASI,
+ * and the pair fused into a single call that swallowed the first error.
+ */
+const selectBranchErrorsLine = (path: string, ctx: NestingContext): string =>
+  `for (const _e of selectBranchErrors(${BRANCH_BUFFER} ?? [], ${path})) ${ctx.sink}.push(_e)`
+
+/**
+ * A combinator's failure report, wrapped in the block that scopes its branch
+ * buffer. `guard` is the condition under which the combinator has failed;
+ * evaluating it is what runs the branches and fills the buffer.
+ *
+ * The buffer starts `null` and is created by the first branch that has
+ * something to put in it. Declaring it as an array instead cost 40% of the
+ * throughput of a valid instance against a union-rooted schema — the commonest
+ * shape there is — because the allocation happened on every evaluation while
+ * only a *failing* branch ever fills one, and a value that matches the first
+ * branch fails none.
+ */
+const branchBufferBlock = (
+  guard: string,
+  message: string,
+  keyword: string,
+  path: string,
+  ctx: NestingContext,
+): string[] => [
+  `  {`,
+  `    let ${BRANCH_BUFFER}: ValidationError[][] | null = null`,
+  `    if (${guard}) {`,
+  `      ${pushError(ctx.sink, message, path, keyword)}`,
+  `      ${selectBranchErrorsLine(path, ctx)}`,
+  `    }`,
+  `  }`,
+]
+
 const generateCombinatorChecks = (
   key: string,
   raw: string,
@@ -1460,24 +1551,50 @@ const generateCombinatorChecks = (
   }
 
   if (hasAnyOf(schema) && schema.anyOf.length > 0) {
-    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx, true))
+    const collector = ctx.branchErrors ? { buffer: BRANCH_BUFFER, path } : undefined
+    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx, true, collector))
     // A branch that matches everything (`true`, `{}`, an annotation-only schema)
     // makes the whole `anyOf` vacuous. Emitting it anyway produced
     // `if (!(… || true))`, whose body TypeScript knows is unreachable — 58
     // `TS7027`s across the two corpora, in output the repo compiles with
     // `allowUnreachableCode: false`.
     if (!conds.includes('true')) {
-      lines.push(`  if (!(${conds.join(' || ')})) {`)
-      lines.push(`    ${pushError(ctx.sink, `'must match a schema in anyOf'`, path, 'anyOf')}`)
-      lines.push(`  }`)
+      if (ctx.branchErrors) {
+        lines.push(
+          ...branchBufferBlock(`!(${conds.join(' || ')})`, `'must match a schema in anyOf'`, 'anyOf', path, ctx),
+        )
+      } else {
+        lines.push(`  if (!(${conds.join(' || ')})) {`)
+        lines.push(`    ${pushError(ctx.sink, `'must match a schema in anyOf'`, path, 'anyOf')}`)
+        lines.push(`  }`)
+      }
     }
   }
 
   if (hasOneOf(schema) && schema.oneOf.length > 0) {
-    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx, true)} ? 1 : 0)`)
-    lines.push(`  if ((${conds.join(' + ')}) !== 1) {`)
-    lines.push(`    ${pushError(ctx.sink, `'must match exactly one schema in oneOf'`, path, 'oneOf')}`)
-    lines.push(`  }`)
+    const collector = ctx.branchErrors ? { buffer: BRANCH_BUFFER, path } : undefined
+    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx, true, collector)} ? 1 : 0)`)
+    // Only a *zero*-match failure has branches worth explaining: when more than
+    // one matched, every branch the value matched is correct on its own terms and
+    // the ones that did not are beside the point. The interpreter splits the same
+    // way, so `_count` is compared twice rather than once against `!== 1`.
+    const message = `'must match exactly one schema in oneOf'`
+    if (!ctx.branchErrors) {
+      lines.push(`  if ((${conds.join(' + ')}) !== 1) {`)
+      lines.push(`    ${pushError(ctx.sink, message, path, 'oneOf')}`)
+      lines.push(`  }`)
+    } else {
+      lines.push(`  {`)
+      lines.push(`    let ${BRANCH_BUFFER}: ValidationError[][] | null = null`)
+      lines.push(`    const _n = ${conds.join(' + ')}`)
+      lines.push(`    if (_n === 0) {`)
+      lines.push(`      ${pushError(ctx.sink, message, path, 'oneOf')}`)
+      lines.push(`      ${selectBranchErrorsLine(path, ctx)}`)
+      lines.push(`    } else if (_n !== 1) {`)
+      lines.push(`      ${pushError(ctx.sink, message, path, 'oneOf')}`)
+      lines.push(`    }`)
+      lines.push(`  }`)
+    }
   }
 
   const not = readKey(schema as Record<string, unknown>, 'not')
@@ -1635,6 +1752,7 @@ const generateInlineObjectChecks = (
   if (!isSchemaObject(propSchema)) return []
 
   const child: NestingContext = {
+    branchErrors: ctx.branchErrors,
     objVar: `_obj${ctx.depth + 1}`,
     // When `key` is empty the value is located AT `ctx.pathPrefix` already (e.g. an
     // inline object reached through a combinator branch or a dynamic-key value), so
@@ -1695,6 +1813,7 @@ const generateInlineObjectChecks = (
 const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx: NestingContext): string[] => {
   const at = `\`${ctx.pathPrefix}/\${escapePointer(_name)}\``
   const nameCtx: NestingContext = {
+    branchErrors: ctx.branchErrors,
     objVar: ctx.objVar,
     pathPrefix: `${ctx.pathPrefix}/\${escapePointer(_name)}`,
     depth: ctx.depth + 1,
@@ -2303,11 +2422,12 @@ const generateObjectValidator = (
   rootSchema: Record<string, unknown> | undefined,
   unknownKeys: UnknownKeysStrategy,
   formats: ReadonlySet<string>,
+  branchErrors: boolean,
 ): string => {
   const vName = validatorName(typeName)
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const properties = hasProperties(schema) ? schema.properties : {}
-  const ctx = createRootContext(rootSchema, formats)
+  const ctx = createRootContext(rootSchema, formats, branchErrors)
 
   const propertyLines: string[] = []
 
@@ -2916,6 +3036,7 @@ const generateScalarValidator = (
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
   formats: ReadonlySet<string>,
+  branchErrors: boolean,
 ): string => {
   const vName = validatorName(typeName)
 
@@ -2941,7 +3062,8 @@ const generateScalarValidator = (
   // `{ $ref: '#/$defs/s', minLength: 3 }` used to compile to a bare delegation
   // and accept `"q"`, contradicting this file's own note that a `$ref`'s
   // siblings still apply.
-  const generalRoot = (): string => generateGeneralRootValidator(schema, typeName, suffix, rootSchema, formats)
+  const generalRoot = (): string =>
+    generateGeneralRootValidator(schema, typeName, suffix, rootSchema, formats, branchErrors)
 
   // Top-level $ref — delegate entirely
   if (hasRef(schema)) {
@@ -3024,7 +3146,7 @@ const generateScalarValidator = (
     declaresKey(schema, 'not') ||
     declaresKey(schema, 'if')
   ) {
-    const ctx = createRootContext(rootSchema, formats)
+    const ctx = createRootContext(rootSchema, formats, branchErrors)
     const checks: string[] = []
     // The root path expression the shared emitters use, as a template literal body.
     const rootPath = '`${_path}`'
@@ -3088,7 +3210,7 @@ const generateScalarValidator = (
   // value is valid when it matches any listed type.
   const rootTypeArray = getTypeArray(schema)
   if (rootTypeArray) {
-    const ctx = createRootContext(rootSchema, formats)
+    const ctx = createRootContext(rootSchema, formats, branchErrors)
     const rootPath = '`${_path}`'
     const checks: string[] = []
 
@@ -3154,7 +3276,7 @@ const generateScalarValidator = (
     // emitted `typeof input === 'string' && input.length < 2`, which is `TS2339`
     // on `never`. The check is inert at runtime either way (the type test in front
     // of it can never pass), but the file has to compile.
-    const rootCtx = createRootContext(rootSchema, formats)
+    const rootCtx = createRootContext(rootSchema, formats, branchErrors)
     const constraintLines = generateConstraintChecks('', '_root', '`${_path}`', schema, suffix, rootCtx)
 
     if (!wrongType) {
@@ -3204,7 +3326,7 @@ const generateScalarValidator = (
   // test (`typeof x === 'string'`, `Array.isArray(x)`, the object block's own
   // shape check), which is exactly the semantics needed, so hand it the whole
   // schema and let it decide what applies.
-  const typelessCtx = createRootContext(rootSchema, formats)
+  const typelessCtx = createRootContext(rootSchema, formats, branchErrors)
   const typelessChecks = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, typelessCtx)
   if (typelessChecks.length === 0) {
     return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
@@ -3244,8 +3366,9 @@ const generateGeneralRootValidator = (
   suffix: string,
   rootSchema: Record<string, unknown> | undefined,
   formats: ReadonlySet<string>,
+  branchErrors: boolean,
 ): string => {
-  const ctx = createRootContext(rootSchema, formats)
+  const ctx = createRootContext(rootSchema, formats, branchErrors)
   const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
   const body = checks.join('\n')
   return withHoisted(
@@ -3377,6 +3500,7 @@ export const generateValidatorFunction = (
   rootSchema?: Record<string, unknown>,
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats: ReadonlySet<string> = NO_FORMATS,
+  branchErrors = false,
 ): string => {
   assertGeneratableRefs(schema, typeName)
 
@@ -3392,11 +3516,11 @@ export const generateValidatorFunction = (
     rewritten,
     typeName,
     document,
-    unevaluatedMatcher(suffix, createRootContext(document, formats)),
+    unevaluatedMatcher(suffix, createRootContext(document, formats, branchErrors)),
   )
 
   if (carriesUnevaluated(rewritten)) {
-    return generateGeneralRootValidator(rewritten, typeName, suffix, document, formats)
+    return generateGeneralRootValidator(rewritten, typeName, suffix, document, formats, branchErrors)
   }
 
   // The object emitter walks `properties` and friends and knows nothing about a
@@ -3405,8 +3529,8 @@ export const generateValidatorFunction = (
   // {@link declaresKeywordOutside} routes it on to the general emitter and every
   // keyword composes.
   if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
-    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys, formats)
+    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys, formats, branchErrors)
   }
 
-  return generateScalarValidator(rewritten, typeName, suffix, document, formats)
+  return generateScalarValidator(rewritten, typeName, suffix, document, formats, branchErrors)
 }

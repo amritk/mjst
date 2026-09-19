@@ -84,6 +84,20 @@
       "default": false,
       "description": "Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code."
     },
+    "coerce": {
+      "type": "boolean",
+      "x-cli-flag": "--coerce",
+      "x-icon": "\ud83e\uddea",
+      "default": false,
+      "description": "Also emit a coerceX alongside each validateX. It moves scalars toward the type the schema declares and then runs the very same validateX over the result, so a config value written the YAML way reads the same whether it came from a config file or an extension. The input is never modified and nothing is substituted: a value that cannot be coerced into a valid one reaches the validator untouched, so the error names what the caller actually wrote, with the keyword and params that rejected it. The table is Ajv's coerceTypes minus the cells where Ajv guesses \u2014 no whitespace-to-zero, no hex or Infinity strings, and nothing coerced to or from null \u2014 so every value this coerces, Ajv coerces to the same value, and the rest become errors rather than silent repairs. At a union it coerces only when exactly one of the offered types can take the value, and leaves a value that is already one of them alone, so the answer does not depend on the order the union was written in. Requires validators."
+    },
+    "branchErrors": {
+      "type": "boolean",
+      "x-cli-flag": "--branch-errors",
+      "x-icon": "\ud83c\udf3f",
+      "default": false,
+      "description": "Explain a failing anyOf/oneOf with the errors of the branch it meant, instead of the bare \"must match a schema in anyOf\" that names no field and no reason. The branch that rejected the value's kind is dropped first, so a string-or-object union is left with the one branch that was talking about this value; where several remain, a discriminator breaks the tie; where none stands out, nothing extra is reported. Off by default and off costs nothing \u2014 the generated code is exactly what it would be without the option. On, each branch keeps what it complained about: a push per failing branch and one lazily-created array per combinator that had one. Requires validators."
+    },
     "examples": {
       "type": "boolean",
       "x-cli-flag": "--examples",
