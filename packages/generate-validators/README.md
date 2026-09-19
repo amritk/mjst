@@ -30,6 +30,10 @@ Each generated file exports:
 - An `isFoo(input: unknown): input is Foo` boolean type guard — a single flat
   predicate (no error array, no cold-path call) reaching the same verdict as
   `validateFoo`, for the common "is this valid?" question
+- With `check`, a `checkFoo(input: unknown, _path?: string): ValidationResult`
+  that stops at the first violation and reports it — the same result type
+  `validateFoo` returns, carrying exactly the error `validateFoo` would have
+  reported first
 
 A shared `validation-result.ts` template and an `index.ts` barrel are emitted alongside the generated files.
 
@@ -88,7 +92,7 @@ if (!result.valid) {
 
 ## API
 
-### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?, coerce?, branchErrors?, repair?)`
+### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?, coerce?, branchErrors?, repair?, importExt?, check?)`
 
 | Parameter | Type | Default | Description |
 |:---|:---|:---|:---|
@@ -101,6 +105,8 @@ if (!result.valid) {
 | `coerce` | `boolean` | `false` | Also emit a `coerceX`, which moves scalars toward the declared type and then runs the same `validateX`. See [Coercing and repairing](#coercing-and-repairing). |
 | `branchErrors` | `boolean` | `false` | Explain a failing `anyOf` / `oneOf` with the errors of the branch it plainly meant. Costs a little on unions, so it is opt-in. |
 | `repair` | `boolean` | `false` | Also emit a `repairX`, which coerces, validates, and then repairs each rejected position to a value the schema supplies — reporting the errors it repaired. Implies `coerce`. See [Coercing and repairing](#coercing-and-repairing). |
+| `importExt` | `'js' \| 'ts'` | `'js'` | Extension on every emitted relative import specifier. `'js'` is the NodeNext form a compiled consumer needs; `'ts'` points at the files on disk, so the output runs under Node's type stripping with no build step. |
+| `check` | `boolean` | `false` | Also emit a `checkX`, which returns the same `ValidationResult` as `validateX` but stops at the first violation. See [Reporting only the first error](#reporting-only-the-first-error). |
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
 
@@ -138,6 +144,32 @@ a pure function of its inputs. Loading is yours to do, or
 [`@amritk/resolve-refs`](../resolve-refs)'. Registering more than the schema uses
 costs nothing: only the documents actually reached are emitted. A `$ref` to a URI
 nobody registered still stops the build, with a message naming the ref.
+
+---
+
+## Reporting only the first error
+
+`isX` is the cheap answer and says nothing; `validateX` walks the whole document
+and says everything. `check: true` emits the one in between.
+
+`checkX(input, _path?)` returns the same `ValidationResult` as `validateX` — so a
+caller that already renders one renders this one with the code it has — with an
+`errors` array holding exactly one error: the one `validateX` would have reported
+first, down to the same `path`, `keyword` and `params`. On the benchmark corpus it
+runs 2.5x to 4.7x `validateX` on invalid input, and about level with it on valid
+input, where there is nothing to skip.
+
+It is a separate emitted body rather than a wrapper, because the obvious wrapper
+does not work: `isX(v) ? true : validateX(v)` pays for both passes and measures no
+faster than `validateX` on failing input.
+
+A few unsatisfiable shapes cannot take the short-circuiting form — an
+`allOf: [false]`, an always-matching `not`, an `anyOf` whose every branch is
+statically impossible. Their report is not guarded by any runtime condition, so a
+short-circuiting body would leave everything behind it unreachable, which a
+consumer's build rejects. Those are detected while generating, and `checkX` runs
+`validateX` and returns its first error instead. The contract is identical; only
+the short circuit is lost.
 
 ---
 

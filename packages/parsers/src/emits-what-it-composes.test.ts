@@ -52,8 +52,8 @@ const fingerprint = (files: readonly GeneratedFile[]): string =>
     .sort()
     .join('\u0001')
 
-const V = (coerce: boolean, repair: boolean): Promise<GeneratedFile[]> =>
-  buildValidatorSchema(schema, 'Order', '', undefined, 'count-keys', undefined, coerce, false, repair)
+const V = (coerce: boolean, repair: boolean, check = false): Promise<GeneratedFile[]> =>
+  buildValidatorSchema(schema, 'Order', '', undefined, 'count-keys', undefined, coerce, false, repair, 'js', check)
 
 const P = (strict: boolean): Promise<GeneratedFile[]> =>
   buildSchema(schema, 'Order', undefined, false, false, strict, 'embedded', './', false, false)
@@ -62,6 +62,7 @@ describe('@amritk/parsers emits what it composes', () => {
   it.each([
     ['guard', ['types', 'guard'] as Mode[], () => V(false, false)],
     ['validate', ['types', 'validate'] as Mode[], () => V(false, false)],
+    ['check', ['types', 'check'] as Mode[], () => V(false, false, true)],
     ['coerce', ['types', 'coerce'] as Mode[], () => V(true, false)],
     ['repair', ['types', 'repair'] as Mode[], () => V(false, true)],
     ['parse', ['types', 'parse'] as Mode[], () => P(false)],

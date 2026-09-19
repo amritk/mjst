@@ -27,9 +27,9 @@ const files = await buildValidatorSchema(schema, 'Document')
    `validateFoo` returns `true | { valid: false; errors: ValidationError[] }`.
    Check `if (result !== true)` for the failure path — `if (result.valid)` is
    wrong.
-2. **Positional signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?, coerce?, branchErrors?, repair?)`
-   — async, no `strict`/`typesOnly`/options object, and the last three are
-   *positional booleans*, so reaching `repair` means passing what comes before it.
+2. **Positional signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?, coerce?, branchErrors?, repair?, importExt?, check?)`
+   — async, no `strict`/`typesOnly`/options object, and everything from `coerce`
+   on is *positional*, so reaching `check` means passing what comes before it.
    Returns `GeneratedFile[]` in memory (you write them). `unknownKeys`
    (`'count-keys'` by default, `'count-enumerable'` for Node-only output) picks
    how a closed object's guard counts keys; nothing in the generated code detects
@@ -56,7 +56,14 @@ const files = await buildValidatorSchema(schema, 'Document')
    `items`, or with `prefixItems` alongside), and generation **throws** for those
    rather than widening the verdict.
 
-6. **`coerce` and `repair` add entry points, they do not change `validateX`.**
+6. **`check: true` emits `checkX`, the fail-fast half.** Same signature and same
+   `ValidationResult` as `validateX`, with exactly one error in it — the one
+   `validateX` would have reported first, identical `path`, `keyword` and
+   `params` — so the two share error handling. It is 2.5x to 4.7x `validateX` on
+   invalid input and a wash on valid input. Do not hand-roll it as
+   `isX(v) ? true : validateX(v)`: that pays for both passes and measures no
+   faster than `validateX` alone.
+7. **`coerce` and `repair` add entry points, they do not change `validateX`.**
    `coerce: true` emits `coerceX` → `CoercionResult<T>` (`{ valid: true, value }`
    or `{ valid: false, errors }`); it moves a scalar toward the declared type and
    substitutes nothing. `repair: true` implies coercion and emits `repairX` →

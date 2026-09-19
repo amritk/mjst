@@ -8,7 +8,7 @@ import { formatCheckName } from './emit-format-checks'
 import { NO_FORMATS } from './enforced-keywords'
 import { generateCoerceFunction } from './generate-coerce-function'
 import { generateRepairFunction } from './generate-repair-function'
-import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
+import { generateBooleanGuard, generateCheckFunction, generateValidatorFunction } from './generate-validator-function'
 
 /**
  * Options for controlling what gets generated in a validator file.
@@ -42,6 +42,14 @@ type GenerateValidatorFileOptions = {
    */
   readonly formats?: ReadonlySet<string>
   /**
+   * Whether to emit the fail-fast half — `checkX`, which answers with the same
+   * `ValidationResult` as `validateX` but stops at the first violation, so its
+   * `errors` array holds exactly one error. Off by default: a caller who wants
+   * every error should not carry a second body, and `validateX` / `isX` are
+   * byte-for-byte the same either way.
+   */
+  readonly check?: boolean
+  /**
    * Whether to emit the coercing half — `coerceX`, and the value walk a `$ref`
    * in another file calls. Off by default: a caller who does not coerce should
    * not carry the code, and `validateX` / `isX` are byte-for-byte the same
@@ -74,6 +82,8 @@ type GenerateValidatorFileOptions = {
  * - The exported TypeScript type definition
  * - The exported validator function (`validateX`, rich `ValidationResult`)
  * - The exported boolean type-guard (`isX`, a flat `input is X` predicate)
+ * - Optionally the fail-fast validator (`checkX`, the same `ValidationResult`
+ *   carrying only the first error)
  *
  * @example
  * ```typescript
@@ -116,6 +126,12 @@ export const generateValidatorFile = (
     options?.branchErrors === true,
   )
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix, unknownKeys, formats)
+  // Emitted from the same generator as `validateX`, off the same schema, so the
+  // two can only disagree about how far they looked — never about the verdict.
+  const checker =
+    options?.check === true
+      ? generateCheckFunction(schema, typeName, typeSuffix, options?.rootSchema, unknownKeys, formats)
+      : ''
   // Appended rather than woven in: `coerceX` runs the walk and then calls the
   // very same `validateX`, so every error it reports is the one the validator
   // already produced and the two can never drift apart.
@@ -127,7 +143,7 @@ export const generateValidatorFile = (
   const coercer = wantsCoerce ? generateCoerceFunction(schema, typeName, typeSuffix).code : ''
   const repairer = options?.repair === true ? generateRepairFunction(schema, typeName, typeSuffix).code : ''
 
-  const appended = [coercer, repairer].filter((part) => part !== '')
+  const appended = [checker, coercer, repairer].filter((part) => part !== '')
   const body = validatorFunction + booleanGuard + (appended.length === 0 ? '' : '\n\n' + appended.join('\n\n'))
 
   // The imports are collected last because which halves of a `$ref`'s import are
@@ -147,9 +163,10 @@ export const generateValidatorFile = (
     rootSchema: options?.rootSchema,
     typeSuffix,
     importExt,
-    reads: ({ typeName: name, validatorName, coercerName, repairerName }) => ({
+    reads: ({ typeName: name, validatorName, checkerName, coercerName, repairerName }) => ({
       type: mentions(name),
       validator: mentions(validatorName),
+      checker: mentions(checkerName),
       coercer: mentions(coercerName),
       repairer: mentions(repairerName),
     }),

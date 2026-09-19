@@ -48,11 +48,19 @@ type CollectValidatorImportsOptions = {
   readonly reads?: (names: {
     readonly typeName: string
     readonly validatorName: string
+    readonly checkerName: string
     readonly coercerName: string
     readonly repairerName: string
   }) => {
     readonly type: boolean
     readonly validator: boolean
+    /**
+     * The `$ref` target's fail-fast validator. Only a file generated with the
+     * check half on names it, and then only from inside its own `checkX` — the
+     * accumulating body still calls `validateX`, so the two halves of one import
+     * come apart exactly like the coercing and repairing ones do.
+     */
+    readonly checker?: boolean
     /**
      * The `$ref` target's value-coercing walk. Only a file generated with
      * coercion on names it, and even then only where the ref sits somewhere the
@@ -78,16 +86,19 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
+  const checkerName = `check${typeName}`
   const coercerName = `coerce${typeName}Value`
   const repairerName = `repair${typeName}At`
   const {
     type,
     validator,
+    checker = false,
     coercer = false,
     repairer = false,
   } = reads({
     typeName,
     validatorName,
+    checkerName,
     coercerName,
     repairerName,
   })
@@ -95,6 +106,7 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
   // `./x.js` → sibling `x.ts` is the standard NodeNext form.
   const values = [
     ...(validator ? [validatorName] : []),
+    ...(checker ? [checkerName] : []),
     ...(coercer ? [coercerName] : []),
     ...(repairer ? [repairerName] : []),
   ]

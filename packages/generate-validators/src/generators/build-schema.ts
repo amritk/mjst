@@ -659,6 +659,8 @@ const RESERVED_WORDS = new Set([
  * Each generated file exports:
  * - A TypeScript type definition
  * - A `validateFoo(input: unknown, _path?: string): ValidationResult` function
+ * - A `checkFoo(input: unknown, _path?: string): ValidationResult` function, when
+ *   `check` is on — the same result type, stopped at the first violation
  *
  * A `validation-result.ts` file containing the `ValidationResult` and `ValidationError`
  * runtime contract is always emitted. An `index.ts` re-exports everything.
@@ -705,6 +707,7 @@ export const buildValidatorSchema = async (
   branchErrors = false,
   repair = false,
   importExt: 'js' | 'ts' = 'js',
+  check = false,
 ): Promise<GeneratedFile[]> => {
   // Resolved once: which names are enforced decides both what the emitters check
   // and what `formats.ts` has to define.
@@ -774,6 +777,7 @@ export const buildValidatorSchema = async (
       typeSuffix,
       unknownKeys,
       formats: enforced,
+      check,
       coerce,
       branchErrors,
       repair,

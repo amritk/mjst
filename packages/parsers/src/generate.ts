@@ -40,6 +40,13 @@ export type Mode =
    */
   | 'validate'
   /**
+   * `checkX(input): ValidationResult` — the same result `validateX` returns, with
+   * the one error that stopped it. Use it when a failure has to be reported but
+   * only the first thing wrong matters: it costs a single error object and walks
+   * no further, where `validateX` keeps going to collect the rest.
+   */
+  | 'check'
+  /**
    * `coerceX(input): CoercionResult<X>` — move a scalar toward the declared type
    * where the schema leaves no choice, then validate. Substitutes nothing, so a
    * value it cannot coerce is rejected as written.
@@ -65,10 +72,10 @@ export type Mode =
   | 'parseStrict'
 
 /** Every mode, for a caller who wants the lot. */
-export const ALL_MODES: readonly Mode[] = ['types', 'guard', 'validate', 'coerce', 'repair', 'parse']
+export const ALL_MODES: readonly Mode[] = ['types', 'guard', 'validate', 'check', 'coerce', 'repair', 'parse']
 
 /** The modes served by the validator generator. */
-const VALIDATOR_MODES: ReadonlySet<Mode> = new Set<Mode>(['guard', 'validate', 'coerce', 'repair'])
+const VALIDATOR_MODES: ReadonlySet<Mode> = new Set<Mode>(['guard', 'validate', 'check', 'coerce', 'repair'])
 
 /** The modes served by the parser generator. */
 const PARSER_MODES: ReadonlySet<Mode> = new Set<Mode>(['parse', 'parseStrict'])
@@ -215,6 +222,7 @@ export const generate = async (
     options.branchErrors === true,
     modes.includes('repair'),
     importExt,
+    modes.includes('check'),
   )
 
   for (const file of validatorFiles) {

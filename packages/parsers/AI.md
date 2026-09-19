@@ -29,6 +29,7 @@ const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'va
 | `types` | `X` | — | — | — |
 | `guard` | `isX` | — | a boolean | first problem |
 | `validate` | `validateX` | — | every error | the end |
+| `check` | `checkX` | — | the first error | first problem |
 | `coerce` | `coerceX` | coerced | every error | the end |
 | `repair` | `repairX` | repaired | repairs **and** errors | the end |
 | `parse` | `parseX` | repaired | nothing (total) | never |
@@ -55,8 +56,15 @@ const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'va
    *not* faster than `validateX` on input that is valid, where both must check
    everything. Pick `guard` when the answer is a branch, `validate` when someone
    has to be told what to fix.
+7. **`check` is the middle of those two, and it returns `validateX`'s type.**
+   `checkX` hands back the same `true | { valid: false, errors }`, with exactly
+   one error in it — the one `validateX` would have reported first, same `path`,
+   `keyword` and `params` — so error-handling code is shared between the two.
+   Pick it when a failure has to be reported but only the first thing wrong
+   matters. Do not build it by hand out of the other two: `isX(v) ? true :
+   validateX(v)` pays for both passes and is no faster than `validateX`.
 
-7. **It emits the composed packages' exact bytes.** A single-mode build is
+8. **It emits the composed packages' exact bytes.** A single-mode build is
    byte-identical to calling `@amritk/generate-validators` or
    `@amritk/generate-parsers` directly, so there is no runtime difference to
    reason about and no speedup to claim — do not tell a user this is faster. What

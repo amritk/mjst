@@ -433,6 +433,57 @@ describe('generated-code-types', () => {
     expect(typeErrors(sources)).toEqual([])
   })
 
+  // The fail-fast half is the same generator emitting a different shape, and the
+  // shape is the risk: every report is a `return`, so a value the schema settles
+  // on its own terms — an `allOf: [false]`, an always-matching `not` — would leave
+  // the rest of the body unreachable, and an early `return` narrows the value for
+  // every sibling keyword behind it, which is how `{ type: 'number', minLength: 2 }`
+  // comes to read `.length` off `never`. Neither is a syntax error and neither
+  // shows up at runtime; both stop the consumer's build. The extra shapes below
+  // are exactly those two hazards, since nothing in `CASES` is contradictory
+  // enough to provoke them.
+  it('emits type-correct fail-fast validator files too', { timeout: 120_000 }, async () => {
+    const unsatisfiable: ReadonlyArray<readonly [string, JSONSchema]> = [
+      ['false-in-all-of', { type: 'object', properties: { a: { allOf: [false] } }, required: ['a'] }],
+      ['false-required-property', { type: 'object', properties: { b: false, c: { type: 'string' } }, required: ['b'] }],
+      ['false-both-arms', { if: { type: 'string' }, then: false, else: false }],
+      ['always-matching-not', { type: 'object', properties: { a: { not: {} } }, required: ['a'] }],
+      ['any-of-all-unsatisfiable', { type: 'object', properties: { a: { anyOf: [false, false] } }, required: ['a'] }],
+      ['one-of-all-unsatisfiable', { type: 'object', properties: { a: { oneOf: [false, false] } }, required: ['a'] }],
+      ['empty-enum', { type: 'object', properties: { a: { enum: [] } }, required: ['a'] }],
+      ['false-pattern-property', { type: 'object', patternProperties: { '^x-': false } }],
+      ['false-property-names', { type: 'object', propertyNames: false, minProperties: 1 }],
+      // A `type` beside a keyword from another family: nonsense as a schema,
+      // ordinary as something a consumer has in a file somewhere.
+      ['string-keyword-on-a-number', { type: 'object', properties: { a: { type: 'number', minLength: 2 } } }],
+      ['array-keyword-on-a-string', { type: 'object', properties: { a: { type: 'string', minItems: 1 } } }],
+      ['object-keyword-on-a-string', { type: 'string', properties: { a: { type: 'string' } }, required: ['a'] }],
+      ['number-keyword-on-an-array-root', { type: 'array', minimum: 3, minLength: 2 }],
+      ['cross-family-under-a-multi-type', { type: ['string', 'number'], minItems: 1, items: { type: 'string' } }],
+      ['cross-family-in-an-array-item', { type: 'array', items: { type: 'boolean', minLength: 1 } }],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema] of [...CASES, ...unsatisfiable]) {
+      const files = await buildValidatorSchema(
+        schema,
+        'Doc',
+        '',
+        undefined,
+        undefined,
+        undefined,
+        false,
+        false,
+        false,
+        'js',
+        true,
+      )
+      for (const file of files) sources.set(`/check-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
   // The repairing half is a third generator on the same file, and the one most
   // able to emit something the consumer's build rejects: it inlines a fallback
   // *literal* per position, so a schema whose default does not type-check against

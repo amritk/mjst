@@ -117,6 +117,7 @@ describe('generate', () => {
 
     expect(doc).toContain('export const validateDoc')
     expect(doc).toContain('export const isDoc')
+    expect(doc).not.toContain('export const checkDoc')
     expect(doc).not.toContain('export const coerceDoc')
     expect(doc).not.toContain('export const repairDoc')
     // Nothing that rewrites a document is on by default.
@@ -127,6 +128,7 @@ describe('generate', () => {
     ['types only', ['types'] as Mode[]],
     ['guard only', ['types', 'guard'] as Mode[]],
     ['validate only', ['types', 'validate'] as Mode[]],
+    ['check only', ['types', 'check'] as Mode[]],
     ['coerce', ['types', 'validate', 'coerce'] as Mode[]],
     ['repair', ['types', 'validate', 'repair'] as Mode[]],
     ['parse', ['types', 'parse'] as Mode[]],
@@ -151,6 +153,7 @@ describe('generate', () => {
 
     const isDoc = link<(v: unknown) => boolean>(files, 'isDoc')
     const validateDoc = link<(v: unknown) => unknown>(files, 'validateDoc')
+    const checkDoc = link<(v: unknown) => true | { valid: false; errors: unknown[] }>(files, 'checkDoc')
     const coerceDoc = link<(v: unknown) => { valid: boolean; value?: unknown }>(files, 'coerceDoc')
     const repairDoc = link<(v: unknown) => { valid: boolean; value: unknown; repairs: unknown[] }>(files, 'repairDoc')
     const parseDoc = link<(v: unknown) => unknown>(files, 'parseDoc')
@@ -162,6 +165,10 @@ describe('generate', () => {
     // validate — every error
     expect(validateDoc({ n: 5 })).toBe(true)
     expect(validateDoc({ n: 99 })).toMatchObject({ valid: false })
+
+    // check — the same result as validate, stopped at the first thing wrong
+    expect(checkDoc({ n: 5 })).toBe(true)
+    expect(checkDoc({ n: 99 })).toMatchObject({ valid: false, errors: [{ keyword: 'maximum' }] })
 
     // coerce — a value written in the wrong type is the right value
     expect(coerceDoc({ n: '5' })).toEqual({ valid: true, value: { n: 5 } })

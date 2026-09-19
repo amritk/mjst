@@ -61,6 +61,12 @@ import { type UnevaluatedMatchFn, unevaluatedItemsExpr, unevaluatedPropertiesExp
 const validatorName = (typeName: string): string => `validate${typeName}`
 
 /**
+ * Derives the fail-fast validator name from a type name.
+ * e.g. "InfoObject" -> "checkInfoObject"
+ */
+const checkerName = (typeName: string): string => `check${typeName}`
+
+/**
  * The generated expression that reads `key` off the object held in `objVar`.
  *
  * Delegates to the shared {@link safeAccessor} rather than emitting a bare
@@ -355,6 +361,12 @@ type NestingContext = {
    * rather than the default.
    */
   readonly branchErrors: boolean
+  /**
+   * Whether this emission is the short-circuiting `checkX` — see {@link FailFast}.
+   * Shared by reference across every context of one emission, so a shape that
+   * blocks the fail-fast form anywhere blocks it for the whole function.
+   */
+  readonly failFast: FailFast
 }
 
 /**
@@ -365,7 +377,134 @@ type NestingContext = {
 const ROOT_ERROR_SINK = '(errors ??= [])'
 
 /**
- * Emits one `errors.push(...)`.
+ * Whether this emission is building the fail-fast `checkX` rather than the
+ * accumulating `validateX`, and whether a shape it met makes that impossible.
+ *
+ * One state object is shared by every context of one emission — the same way
+ * `hoisted` is — because `blocked` is an answer about the *whole* function and
+ * the shape that settles it can sit anywhere in the schema.
+ *
+ * `blocked` is set by a site that would emit a report no runtime condition
+ * guards: an `allOf: [false]`, a `not: {}`, an `anyOf` whose every branch is
+ * statically unsatisfiable. In `validateX` those are an ordinary `errors.push`
+ * with the rest of the body after them; in `checkX` they are a `return`, and
+ * everything after is code TypeScript calls unreachable — `TS7027` in the
+ * generated file for any consumer compiling with `allowUnreachableCode: false`,
+ * which is this repo and anything inheriting its flags. Rather than emit a file
+ * that does not compile, {@link generateCheckFunction} falls back for that
+ * schema and takes the first error off `validateX` instead.
+ */
+type FailFast = {
+  /** Whether the fail-fast half is what is being emitted. */
+  readonly on: boolean
+  /** Set once some shape has made a short-circuiting body impossible to emit. */
+  blocked: boolean
+}
+
+/** The state every accumulating emission shares: not fail-fast, never blocked. */
+const ACCUMULATING: FailFast = { on: false, blocked: false }
+
+/**
+ * The stand-in sink a fail-fast body reports through.
+ *
+ * It is never spelled into the output: {@link pushError} recognises it and emits
+ * an outright `return` instead of a push. Carrying the decision on the sink is
+ * what keeps all ~45 report sites untouched — each already asks `ctx.sink` where
+ * its error goes, and a match expression's `_m` overrides it exactly as before,
+ * which is what stops a `return` escaping an IIFE instead of the validator.
+ */
+const FAIL_FAST_SINK = '\u0000fail-fast'
+
+/**
+ * A condition TypeScript folds away: nothing in it but boolean literals and the
+ * operators joining them.
+ *
+ * The emitters build one whenever a subschema decides itself — an `anyOf` whose
+ * every branch is unsatisfiable, an `unevaluated*` sweep whose coverage is
+ * provable at generation time. `if (<folded>) { errors.push(…) }` is harmless,
+ * which is why `validateX` has always emitted it; `if (<folded>) { return … }`
+ * makes everything after it unreachable, so a fail-fast body that would emit one
+ * gives up and falls back instead. Deliberately inexact in the safe direction: a
+ * condition it does not recognise as constant is treated as a runtime one, and
+ * one it wrongly does costs a fallback rather than a file that will not compile.
+ */
+const LITERAL_CONDITION = /^[\s()!&|]*(?:(?:true|false)[\s()!&|]*)+$/
+
+/**
+ * Gives up on the fail-fast form of the function being emitted.
+ *
+ * Only the root sink can do this: inside a match expression the report is still
+ * a push into the IIFE's own buffer, so nothing there is unreachable and nothing
+ * there is blocked.
+ */
+const blockFailFast = (ctx: NestingContext): void => {
+  if (ctx.sink === FAIL_FAST_SINK) ctx.failFast.blocked = true
+}
+
+/**
+ * The prefix on a hoisted declaration's name.
+ *
+ * `validateX` and `checkX` are emitted independently but land in one module, and
+ * each hoists its known-key sets and compiled pattern tables under a name counted
+ * from its own list — so the two halves of one file both wrote `_knownKeys0` and
+ * the module had the name declared twice. The fail-fast half takes a prefix of
+ * its own rather than a shared counter, because the two lists are built by
+ * separate walks and nothing keeps their numbering in step.
+ */
+const hoistPrefix = (ctx: NestingContext): string => (ctx.failFast.on ? '_check' : '')
+
+/**
+ * The accessor a `type` check reads through, given where its report goes.
+ *
+ * A fail-fast report is a `return`, and a `return` narrows the value for
+ * everything after it — so a sibling keyword from another family then reads a
+ * property off `never`. `{ "type": "number", "minLength": 2 }` is nonsense, but
+ * it is nonsense that has to compile in the consumer's build, and the emitters
+ * deliberately re-guard every check with its own runtime type test rather than
+ * lean on a narrowing. Reading the type test through a cast keeps the narrowing
+ * off the accessor, which is the same trick the typed root plays with its
+ * `const _root: unknown = input`. Where the report is a push nothing narrows and
+ * the emitted text is exactly what it always was.
+ */
+const typeTestAccessor = (raw: string, ctx: NestingContext): string =>
+  ctx.sink === FAIL_FAST_SINK ? `(${raw} as unknown)` : raw
+
+/**
+ * The name this emission exports under: `validateX` while it accumulates,
+ * `checkX` once it stops at the first violation. The two are the same contract —
+ * a `ValidationResult` either way — so a caller can swap one for the other and
+ * keep its error handling.
+ */
+const emittedName = (typeName: string, failFast: FailFast): string =>
+  failFast.on ? checkerName(typeName) : validatorName(typeName)
+
+/**
+ * The lazily-created `errors` array a body reports into, or nothing at all: a
+ * fail-fast body has returned every failure it found by the time it gets here,
+ * so it never declares the array and would only leave an unused local behind.
+ */
+const errorsBinding = (failFast: FailFast): string[] =>
+  failFast.on ? [] : ['  let errors: ValidationError[] | undefined']
+
+/** The verdict that closes a body, read off whatever {@link errorsBinding} declared. */
+const errorsVerdict = (failFast: FailFast): string =>
+  failFast.on ? '  return true' : '  return errors !== undefined ? { valid: false, errors } : true'
+
+/**
+ * The same error, as the whole result of an early return.
+ *
+ * A validator whose very first check settles the verdict — a root `type` that
+ * does not match, a `false` schema — returns the failure outright rather than
+ * accumulating into a list, so it needs the object without the sink. It is also
+ * every report a fail-fast `checkX` makes: stopping at the first violation is
+ * the same statement, wherever in the body it lands.
+ */
+const returnError = (message: string, path: string, keyword: string, params = '{}'): string =>
+  `return { valid: false, errors: [{ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} }] }`
+
+/**
+ * Emits one `errors.push(...)` — or, when the sink is {@link FAIL_FAST_SINK},
+ * the `return` that settles the whole verdict there and then.
  *
  * Every generated error carries the keyword that rejected the value and that
  * keyword's own values, matching `@amritk/runtime-validators` — so an error from
@@ -380,17 +519,9 @@ const ROOT_ERROR_SINK = '(errors ??= [])'
  * whatever expression the call site wants evaluated at runtime.
  */
 const pushError = (sink: string, message: string, path: string, keyword: string, params = '{}'): string =>
-  `${sink}.push({ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} })`
-
-/**
- * The same error, as the whole result of an early return.
- *
- * A validator whose very first check settles the verdict — a root `type` that
- * does not match, a `false` schema — returns the failure outright rather than
- * accumulating into a list, so it needs the object without the sink.
- */
-const returnError = (message: string, path: string, keyword: string, params = '{}'): string =>
-  `return { valid: false, errors: [{ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} }] }`
+  sink === FAIL_FAST_SINK
+    ? returnError(message, path, keyword, params)
+    : `${sink}.push({ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} })`
 
 /** The IIFE-local buffer a match expression's checks report through. */
 const MATCH_ERROR_SINK = '_m'
@@ -412,15 +543,21 @@ const createRootContext = (
   rootSchema?: Record<string, unknown>,
   formats: ReadonlySet<string> = NO_FORMATS,
   branchErrors = false,
+  failFast: FailFast = ACCUMULATING,
 ): NestingContext => ({
   objVar: 'obj',
   pathPrefix: '${_path}',
   depth: 0,
   hoisted: [],
   rootSchema,
-  sink: ROOT_ERROR_SINK,
+  sink: failFast.on ? FAIL_FAST_SINK : ROOT_ERROR_SINK,
   formats,
-  branchErrors,
+  // A fail-fast body reports one error and stops, so there is no second error for
+  // a branch explanation to sit beside. Leaving the option on would emit the
+  // `selectBranchErrors` sweep *after* the `return` that ends the function, which
+  // is unreachable code the consumer's build rejects.
+  branchErrors: branchErrors && !failFast.on,
+  failFast,
 })
 
 /**
@@ -563,7 +700,7 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   const known = Object.keys(hasProperties(schema) ? schema.properties : {})
   const d = ctx.depth
 
-  const knownKeysName = `_knownKeys${ctx.hoisted.length}`
+  const knownKeysName = `${hoistPrefix(ctx)}_knownKeys${ctx.hoisted.length}`
   const check = unknownKeyCheck(known, knownKeysName)
   // The reference is the emitted test itself, not the name: see {@link Hoisted}.
   const unknownTest = check.isUnknown(`_key${d}`)
@@ -576,7 +713,7 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   const patterns = patternPropertySources(schema)
   let patternGuard = ''
   if (patterns.length > 0) {
-    const patternsName = `_patterns${ctx.hoisted.length}`
+    const patternsName = `${hoistPrefix(ctx)}_patterns${ctx.hoisted.length}`
     // Hoisted as `new RegExp` rather than literals because the sources are only
     // known as strings here; the flags still come from `regexFlagsFor`, so these
     // read `pattern` the same way every emitted literal does.
@@ -646,6 +783,10 @@ const generatePropertyChecks = (
     const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
     const parentPath = ctx.depth === 0 ? '_path' : `\`${ctx.pathPrefix}\``
     if (isRequired) {
+      // Absent fails `required`, present fails `false`: both arms report, so in
+      // fail-fast form both arms return and the object's remaining checks are
+      // unreachable.
+      blockFailFast(ctx)
       return [
         `  if (${missingCheck(ctx.objVar, key)}) {`,
         `    ${pushError(ctx.sink, JSON.stringify(`must have required property '${key}'`), parentPath, 'required', JSON.stringify({ missingProperty: key }))}`,
@@ -732,8 +873,20 @@ const generateKeywordChecks = (
   // apply to the same value, so the delegation is one check among the rest
   // rather than the end of the story.
   if (hasRef(schema)) {
-    const vName = validatorName(refToName(schema.$ref, suffix))
-    const delegate = [`  const _r = ${vName}(${raw}, ${path})`, `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`]
+    const target = refToName(schema.$ref, suffix)
+    // A fail-fast body asks the target's own fail-fast half. It answers with the
+    // very error `validateX` would have reported first for this position, so the
+    // two agree on what the first error is, and it stops as soon as it has one.
+    // Inside a match expression the sink is the IIFE's `_m` and a `return` there
+    // would leave the branch rather than the validator, so that half keeps
+    // delegating to `validateX` and pushing — byte for byte what it always was.
+    const delegate =
+      ctx.sink === FAIL_FAST_SINK
+        ? [`  const _r = ${checkerName(target)}(${raw}, ${path})`, `  if (_r !== true) return _r`]
+        : [
+            `  const _r = ${validatorName(target)}(${raw}, ${path})`,
+            `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`,
+          ]
     // The delegation result gets a block of its own, so two of them can sit in
     // the same statement list: `{ $ref, allOf: [{ $ref }] }` is a real shape, and
     // one `const _r` per branch in one scope is a `SyntaxError` in the emitted
@@ -790,7 +943,7 @@ const generateKeywordChecks = (
   if (instanceOf === undefined && primitive === undefined) {
     if (hasType(schema)) {
       const t = schema.type as string
-      const wrongType = wrongTypeCondition(raw, t)
+      const wrongType = wrongTypeCondition(typeTestAccessor(raw, ctx), t)
       if (wrongType) {
         lines.push(`  if (${presence === '' ? wrongType : `${presence}(${wrongType})`}) {`)
         lines.push(
@@ -809,7 +962,7 @@ const generateKeywordChecks = (
     const typeArray = getTypeArray(schema)
     if (typeArray) {
       const allWrong = typeArray
-        .map((t) => wrongTypeCondition(raw, t))
+        .map((t) => wrongTypeCondition(typeTestAccessor(raw, ctx), t))
         .filter((c) => c !== '')
         .map((c) => `(${c})`)
         .join(' && ')
@@ -1058,11 +1211,17 @@ const generateConstraintChecks = (
     // (`{ $ref, minLength: 3 }`) goes through the general value checks, which
     // emit the delegation *and* the siblings instead of only the first of them.
     if (hasRef(itemSchema) && !declaresKeywordOutside(itemSchema, ['$ref'])) {
-      const vName = validatorName(refToName(itemSchema.$ref, suffix))
+      // The same split the named-property delegation makes: a fail-fast body asks
+      // the target's own fail-fast half and hands its answer straight back, a
+      // `return` out of the `for` being a `return` out of the validator.
+      const failFast = ctx.sink === FAIL_FAST_SINK
+      const target = refToName(itemSchema.$ref, suffix)
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
-      lines.push(`      const _ir = ${vName}(${raw}[${iv}], ${itemPath})`)
-      lines.push(`      if (_ir !== true) ${ctx.sink}.push(..._ir.errors)`)
+      lines.push(
+        `      const _ir = ${failFast ? checkerName(target) : validatorName(target)}(${raw}[${iv}], ${itemPath})`,
+      )
+      lines.push(`      if (_ir !== true) ${failFast ? 'return _ir' : `${ctx.sink}.push(..._ir.errors)`}`)
       lines.push(`    }`)
       lines.push(`  }`)
     } else if (isSchemaObject(itemSchema)) {
@@ -1296,6 +1455,10 @@ const generateValueCheckLines = (
   // (and a bare `{}`) accepts everything and falls through to the `[]` below.
   if (propSchema === false) {
     const report = pushError(ctx.sink, JSON.stringify(FALSE_SCHEMA_MESSAGE), path, 'false schema')
+    // The value is there and `false` rejects it, so in fail-fast form the report
+    // is a `return` no condition guards and every sibling check behind it is
+    // unreachable. An `allOf: [false]` or a `then: false` is the shape.
+    if (required) blockFailFast(ctx)
     // Wrapped in a block, never emitted bare. The report starts with `(` — the
     // sink is `(errors ??= [])` — and the emitted code carries no semicolons, so
     // after a line ending in an expression ASI does not break the two apart: a
@@ -1321,6 +1484,7 @@ const generateValueCheckLines = (
   // (set to `''`) because `path` already locates the value.
   const valueCtx: NestingContext = {
     branchErrors: ctx.branchErrors,
+    failFast: ctx.failFast,
     objVar: ctx.objVar,
     pathPrefix: path.slice(1, -1),
     depth: ctx.depth + 1,
@@ -1450,6 +1614,7 @@ const generateUnevaluatedChecks = (
   const properties = unevaluatedPropertiesExpr(raw, schema, ctx.rootSchema, ctx.depth, match)
   if (properties === null) throw new Error(UNPROVABLE_COVERAGE_MESSAGE('unevaluatedProperties'))
   if (properties !== undefined) {
+    if (LITERAL_CONDITION.test(`!(${properties.expr})`)) blockFailFast(ctx)
     lines.push(`  if (typeof ${raw} === 'object' && ${raw} !== null && !Array.isArray(${raw})) {`)
     for (const statement of properties.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${properties.expr})) {`)
@@ -1461,6 +1626,7 @@ const generateUnevaluatedChecks = (
   const items = unevaluatedItemsExpr(raw, schema, ctx.rootSchema, ctx.depth, match)
   if (items === null) throw new Error(UNPROVABLE_COVERAGE_MESSAGE('unevaluatedItems'))
   if (items !== undefined) {
+    if (LITERAL_CONDITION.test(`!(${items.expr})`)) blockFailFast(ctx)
     lines.push(`  if (Array.isArray(${raw})) {`)
     for (const statement of items.setup) lines.push(`    ${statement}`)
     lines.push(`    if (!(${items.expr})) {`)
@@ -1564,7 +1730,9 @@ const generateCombinatorChecks = (
           ...branchBufferBlock(`!(${conds.join(' || ')})`, `'must match a schema in anyOf'`, 'anyOf', path, ctx),
         )
       } else {
-        lines.push(`  if (!(${conds.join(' || ')})) {`)
+        const condition = `!(${conds.join(' || ')})`
+        if (LITERAL_CONDITION.test(condition)) blockFailFast(ctx)
+        lines.push(`  if (${condition}) {`)
         lines.push(`    ${pushError(ctx.sink, `'must match a schema in anyOf'`, path, 'anyOf')}`)
         lines.push(`  }`)
       }
@@ -1610,6 +1778,8 @@ const generateCombinatorChecks = (
     // as `validateN(…)(errors ??= [])`, swallowing the `not` error entirely and
     // accepting an instance the schema forbids.
     if (cond !== 'false') {
+      // `not: {}` matches everything, so the report is unconditional.
+      if (LITERAL_CONDITION.test(cond)) blockFailFast(ctx)
       lines.push(`  if (${cond}) {`)
       lines.push(`    ${pushError(ctx.sink, `'must NOT match the schema in not'`, path, 'not')}`)
       lines.push(`  }`)
@@ -1715,7 +1885,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
         // where they stop paying. The array literal that used to stand here was
         // rebuilt on *every key of every object validated*, which is the one
         // place in this loop where an allocation is not free.
-        const check = unknownKeyCheck(known, `_knownKeys${ctx.hoisted.length}`)
+        const check = unknownKeyCheck(known, `${hoistPrefix(ctx)}_knownKeys${ctx.hoisted.length}`)
         const knownTest = check.isKnown(kv)
         for (const declaration of check.declarations) {
           ctx.hoisted.push({ declaration, reference: knownTest })
@@ -1753,6 +1923,7 @@ const generateInlineObjectChecks = (
 
   const child: NestingContext = {
     branchErrors: ctx.branchErrors,
+    failFast: ctx.failFast,
     objVar: `_obj${ctx.depth + 1}`,
     // When `key` is empty the value is located AT `ctx.pathPrefix` already (e.g. an
     // inline object reached through a combinator branch or a dynamic-key value), so
@@ -1814,6 +1985,7 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx:
   const at = `\`${ctx.pathPrefix}/\${escapePointer(_name)}\``
   const nameCtx: NestingContext = {
     branchErrors: ctx.branchErrors,
+    failFast: ctx.failFast,
     objVar: ctx.objVar,
     pathPrefix: `${ctx.pathPrefix}/\${escapePointer(_name)}`,
     depth: ctx.depth + 1,
@@ -2423,11 +2595,12 @@ const generateObjectValidator = (
   unknownKeys: UnknownKeysStrategy,
   formats: ReadonlySet<string>,
   branchErrors: boolean,
+  failFast: FailFast,
 ): string => {
-  const vName = validatorName(typeName)
+  const vName = emittedName(typeName, failFast)
   const required = new Set(hasRequired(schema) ? schema.required : [])
   const properties = hasProperties(schema) ? schema.properties : {}
-  const ctx = createRootContext(rootSchema, formats, branchErrors)
+  const ctx = createRootContext(rootSchema, formats, branchErrors, failFast)
 
   const propertyLines: string[] = []
 
@@ -2522,10 +2695,13 @@ const generateObjectValidator = (
       `  if (typeof input !== 'object' || input === null || Array.isArray(input)) {`,
       `    ${returnError(`'must be object'`, '_path', 'type', JSON.stringify({ type: 'object' }))}`,
       `  }`,
-      ``,
-      `  let errors: ValidationError[] | undefined`,
+      // The blank line separates the shape check from the `errors` declaration
+      // under it; a fail-fast body declares nothing there, and two blank lines in
+      // a row is just untidy output.
+      ...(failFast.on ? [] : ['']),
+      ...errorsBinding(failFast),
       body,
-      `  return errors !== undefined ? { valid: false, errors } : true`,
+      errorsVerdict(failFast),
       `}`,
     ].join('\n')
 
@@ -3037,8 +3213,9 @@ const generateScalarValidator = (
   rootSchema: Record<string, unknown> | undefined,
   formats: ReadonlySet<string>,
   branchErrors: boolean,
+  failFast: FailFast,
 ): string => {
-  const vName = validatorName(typeName)
+  const vName = emittedName(typeName, failFast)
 
   // A boolean root. `false` is the schema no instance satisfies — it used to
   // share the `true` branch and accept everything, which is the one direction a
@@ -3063,12 +3240,12 @@ const generateScalarValidator = (
   // and accept `"q"`, contradicting this file's own note that a `$ref`'s
   // siblings still apply.
   const generalRoot = (): string =>
-    generateGeneralRootValidator(schema, typeName, suffix, rootSchema, formats, branchErrors)
+    generateGeneralRootValidator(schema, typeName, suffix, rootSchema, formats, branchErrors, failFast)
 
   // Top-level $ref — delegate entirely
   if (hasRef(schema)) {
     if (declaresKeywordOutside(schema, ['$ref'])) return generalRoot()
-    const delegateName = validatorName(refToName(schema.$ref, suffix))
+    const delegateName = emittedName(refToName(schema.$ref, suffix), failFast)
     return [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
       `  return ${delegateName}(input, _path)`,
@@ -3146,7 +3323,7 @@ const generateScalarValidator = (
     declaresKey(schema, 'not') ||
     declaresKey(schema, 'if')
   ) {
-    const ctx = createRootContext(rootSchema, formats, branchErrors)
+    const ctx = createRootContext(rootSchema, formats, branchErrors, failFast)
     const checks: string[] = []
     // The root path expression the shared emitters use, as a template literal body.
     const rootPath = '`${_path}`'
@@ -3159,7 +3336,7 @@ const generateScalarValidator = (
     const rootTypeArray = getTypeArray(schema)
     if (rootTypeArray) {
       const allWrong = rootTypeArray
-        .map((t) => wrongTypeCondition('input', t))
+        .map((t) => wrongTypeCondition(typeTestAccessor('input', ctx), t))
         .filter((c) => c !== '')
         .map((c) => `(${c})`)
         .join(' && ')
@@ -3173,7 +3350,7 @@ const generateScalarValidator = (
       }
     } else if (hasType(schema)) {
       const t = schema.type as string
-      const wrongType = wrongTypeCondition('input', t)
+      const wrongType = wrongTypeCondition(typeTestAccessor('input', ctx), t)
       if (wrongType) {
         checks.push(`  if (${wrongType}) {`)
         checks.push(
@@ -3196,9 +3373,9 @@ const generateScalarValidator = (
       ctx.hoisted,
       [
         `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-        `  let errors: ValidationError[] | undefined`,
+        ...errorsBinding(failFast),
         body,
-        `  return errors !== undefined ? { valid: false, errors } : true`,
+        errorsVerdict(failFast),
         `}`,
       ].join('\n'),
     )
@@ -3210,12 +3387,12 @@ const generateScalarValidator = (
   // value is valid when it matches any listed type.
   const rootTypeArray = getTypeArray(schema)
   if (rootTypeArray) {
-    const ctx = createRootContext(rootSchema, formats, branchErrors)
+    const ctx = createRootContext(rootSchema, formats, branchErrors, failFast)
     const rootPath = '`${_path}`'
     const checks: string[] = []
 
     const allWrong = rootTypeArray
-      .map((t) => wrongTypeCondition('input', t))
+      .map((t) => wrongTypeCondition(typeTestAccessor('input', ctx), t))
       .filter((c) => c !== '')
       .map((c) => `(${c})`)
       .join(' && ')
@@ -3249,9 +3426,9 @@ const generateScalarValidator = (
       ctx.hoisted,
       [
         `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-        `  let errors: ValidationError[] | undefined`,
+        ...errorsBinding(failFast),
         body,
-        `  return errors !== undefined ? { valid: false, errors } : true`,
+        errorsVerdict(failFast),
         `}`,
       ].join('\n'),
     )
@@ -3276,7 +3453,7 @@ const generateScalarValidator = (
     // emitted `typeof input === 'string' && input.length < 2`, which is `TS2339`
     // on `never`. The check is inert at runtime either way (the type test in front
     // of it can never pass), but the file has to compile.
-    const rootCtx = createRootContext(rootSchema, formats, branchErrors)
+    const rootCtx = createRootContext(rootSchema, formats, branchErrors, failFast)
     const constraintLines = generateConstraintChecks('', '_root', '`${_path}`', schema, suffix, rootCtx)
 
     if (!wrongType) {
@@ -3308,9 +3485,9 @@ const generateScalarValidator = (
         `    ${returnError(`'must be ${typLabel}'`, '_path', 'type', JSON.stringify({ type: schema.type }))}`,
         `  }`,
         ...(readsBinding('_root', constraintLines.join('\n')) ? [`  const _root: unknown = input`] : []),
-        `  let errors: ValidationError[] | undefined`,
+        ...errorsBinding(failFast),
         constraintLines.join('\n'),
-        `  return errors !== undefined ? { valid: false, errors } : true`,
+        errorsVerdict(failFast),
         `}`,
       ].join('\n'),
     )
@@ -3326,7 +3503,7 @@ const generateScalarValidator = (
   // test (`typeof x === 'string'`, `Array.isArray(x)`, the object block's own
   // shape check), which is exactly the semantics needed, so hand it the whole
   // schema and let it decide what applies.
-  const typelessCtx = createRootContext(rootSchema, formats, branchErrors)
+  const typelessCtx = createRootContext(rootSchema, formats, branchErrors, failFast)
   const typelessChecks = generateConstraintChecks('', 'input', '`${_path}`', schema, suffix, typelessCtx)
   if (typelessChecks.length === 0) {
     return [`export const ${vName} = (_input: unknown, _path = ''): ValidationResult => {`, `  return true`, `}`].join(
@@ -3338,9 +3515,9 @@ const generateScalarValidator = (
     typelessCtx.hoisted,
     [
       `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  let errors: ValidationError[] | undefined`,
+      ...errorsBinding(failFast),
       typelessChecks.join('\n'),
-      `  return errors !== undefined ? { valid: false, errors } : true`,
+      errorsVerdict(failFast),
       `}`,
     ].join('\n'),
   )
@@ -3367,17 +3544,18 @@ const generateGeneralRootValidator = (
   rootSchema: Record<string, unknown> | undefined,
   formats: ReadonlySet<string>,
   branchErrors: boolean,
+  failFast: FailFast,
 ): string => {
-  const ctx = createRootContext(rootSchema, formats, branchErrors)
+  const ctx = createRootContext(rootSchema, formats, branchErrors, failFast)
   const checks = generateValueChecks('', 'input', '`${_path}`', schema, suffix, ctx, true)
   const body = checks.join('\n')
   return withHoisted(
     ctx.hoisted,
     [
-      `export const ${validatorName(typeName)} = (input: unknown, _path = ''): ValidationResult => {`,
-      `  let errors: ValidationError[] | undefined`,
+      `export const ${emittedName(typeName, failFast)} = (input: unknown, _path = ''): ValidationResult => {`,
+      ...errorsBinding(failFast),
       body,
-      `  return errors !== undefined ? { valid: false, errors } : true`,
+      errorsVerdict(failFast),
       `}`,
     ].join('\n'),
   )
@@ -3501,6 +3679,72 @@ export const generateValidatorFunction = (
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats: ReadonlySet<string> = NO_FORMATS,
   branchErrors = false,
+): string =>
+  generateValidatorSource(schema, typeName, suffix, rootSchema, unknownKeys, formats, branchErrors, {
+    on: false,
+    blocked: false,
+  })
+
+/**
+ * Generates the fail-fast half: a `checkX(input, _path?)` that returns the same
+ * `ValidationResult` as `validateX` and stops at the first violation, so the
+ * `errors` array it hands back holds exactly one error — the one `validateX`
+ * would have reported first.
+ *
+ * Same return type on purpose. A caller that already renders a `ValidationResult`
+ * renders this one with the code it has; the only difference is how much of the
+ * document was looked at before the answer came back.
+ *
+ * A schema whose emitted body would report with no runtime condition in front of
+ * it cannot take this shape — see {@link FailFast} — so for those `checkX` runs
+ * `validateX` and hands back its first error. The verdict is identical either
+ * way; only the short circuit is lost.
+ */
+export const generateCheckFunction = (
+  schema: JSONSchema,
+  typeName: string,
+  suffix = '',
+  rootSchema?: Record<string, unknown>,
+  unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats: ReadonlySet<string> = NO_FORMATS,
+): string => {
+  const failFast: FailFast = { on: true, blocked: false }
+  const source = generateValidatorSource(schema, typeName, suffix, rootSchema, unknownKeys, formats, false, failFast)
+  // The sentinel is a stand-in {@link pushError} is meant to consume, never text.
+  // An emitter that spells `${ctx.sink}.push(…)` for itself instead of going
+  // through it writes the sentinel into the output, where it is an unprintable
+  // character in the middle of an expression — a parse error a long way from its
+  // cause. Say so here instead.
+  if (source.includes(FAIL_FAST_SINK)) {
+    throw new Error(
+      `the fail-fast validator for "${typeName}" emitted the error sink verbatim, which means some emitter ` +
+        'reported through `ctx.sink` without going through `pushError`. That report has to take the fail-fast ' +
+        'form (a `return`) or stay on the accumulating path.',
+    )
+  }
+  if (!failFast.blocked) return source
+
+  // `slice(0, 1)` rather than an indexed read: a `ValidationResult` that is not
+  // `true` always carries an error, but `noUncheckedIndexedAccess` does not know
+  // that, and a cast in generated code is a cast a consumer has to trust.
+  return [
+    `export const ${checkerName(typeName)} = (input: unknown, _path = ''): ValidationResult => {`,
+    `  const _r = ${validatorName(typeName)}(input, _path)`,
+    `  return _r === true ? true : { valid: false, errors: _r.errors.slice(0, 1) }`,
+    `}`,
+  ].join('\n')
+}
+
+/** The body of both halves: the same emitters, told which shape to take. */
+const generateValidatorSource = (
+  schema: JSONSchema,
+  typeName: string,
+  suffix: string,
+  rootSchema: Record<string, unknown> | undefined,
+  unknownKeys: UnknownKeysStrategy,
+  formats: ReadonlySet<string>,
+  branchErrors: boolean,
+  failFast: FailFast,
 ): string => {
   assertGeneratableRefs(schema, typeName)
 
@@ -3516,11 +3760,11 @@ export const generateValidatorFunction = (
     rewritten,
     typeName,
     document,
-    unevaluatedMatcher(suffix, createRootContext(document, formats, branchErrors)),
+    unevaluatedMatcher(suffix, createRootContext(document, formats, branchErrors, failFast)),
   )
 
   if (carriesUnevaluated(rewritten)) {
-    return generateGeneralRootValidator(rewritten, typeName, suffix, document, formats, branchErrors)
+    return generateGeneralRootValidator(rewritten, typeName, suffix, document, formats, branchErrors, failFast)
   }
 
   // The object emitter walks `properties` and friends and knows nothing about a
@@ -3529,8 +3773,8 @@ export const generateValidatorFunction = (
   // {@link declaresKeywordOutside} routes it on to the general emitter and every
   // keyword composes.
   if (declaresObjectType(rewritten) && objectRootIsSelfContained(rewritten)) {
-    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys, formats, branchErrors)
+    return generateObjectValidator(rewritten, typeName, suffix, document, unknownKeys, formats, branchErrors, failFast)
   }
 
-  return generateScalarValidator(rewritten, typeName, suffix, document, formats, branchErrors)
+  return generateScalarValidator(rewritten, typeName, suffix, document, formats, branchErrors, failFast)
 }
