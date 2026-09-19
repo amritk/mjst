@@ -43,8 +43,12 @@
     "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
     "prebench": "bun run --filter='@amritk/helpers' build && bun run build",
     "bench": "bun --conditions development ./bench/run.ts",
+    "prebench:coerce": "bun run --filter='@amritk/helpers' build && bun run --filter='@amritk/generate-parsers' build && bun run build",
+    "bench:coerce": "bun --conditions development ./bench/coerce.ts",
     "prebench:node": "bun run --filter='@amritk/helpers' build && bun run build",
     "bench:node": "node ./bench/run.ts",
+    "prebench:coerce:node": "bun run --filter='@amritk/helpers' build && bun run --filter='@amritk/generate-parsers' build && bun run build",
+    "bench:coerce:node": "node ./bench/coerce.ts",
     "bench:moltar": "bun --conditions development ./bench/moltar.ts",
     "bench:moltar:leaderboard": "bun --conditions development ./bench/moltar-leaderboard.ts"
   },
