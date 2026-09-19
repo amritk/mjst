@@ -1,4 +1,7 @@
-import { getMjstPrimitive } from '@amritk/helpers/mjst-extension'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+import { generateDefaultFromPattern } from './generate-default-from-pattern'
+import { getMjstPrimitive } from './mjst-extension'
 import {
   hasAllOf,
   hasAnyOf,
@@ -12,9 +15,7 @@ import {
   hasRequired,
   hasType,
   isSchemaObject,
-} from '@amritk/helpers/schema-guards'
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-import { generateDefaultFromPattern } from '#generators/generate-default-from-pattern'
+} from './schema-guards'
 
 /**
  * True when a schema's `default` is an instance of the type it declares. A

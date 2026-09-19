@@ -546,11 +546,13 @@ const files = await buildValidatorSchema(schema, 'Document')
    `validateFoo` returns `true | { valid: false; errors: ValidationError[] }`.
    Check `if (result !== true)` for the failure path — `if (result.valid)` is
    wrong.
-2. **Small signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?)`
-   — async, no `strict`/`typesOnly`/options object. Returns `GeneratedFile[]` in
-   memory (you write them). `unknownKeys` (`'count-keys'` by default,
-   `'count-enumerable'` for Node-only output) picks how a closed object's guard
-   counts keys; nothing in the generated code detects its runtime.
+2. **Positional signature:** `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?, coerce?, branchErrors?, repair?)`
+   — async, no `strict`/`typesOnly`/options object, and the last three are
+   *positional booleans*, so reaching `repair` means passing what comes before it.
+   Returns `GeneratedFile[]` in memory (you write them). `unknownKeys`
+   (`'count-keys'` by default, `'count-enumerable'` for Node-only output) picks
+   how a closed object's guard counts keys; nothing in the generated code detects
+   its runtime.
 3. **Output includes a shared `validation-result.ts`** (`ValidationError`,
    `ValidationResult`, helpers) plus the `index.ts` barrel — and a `formats.ts`
    when `formats` is passed. Each error is
@@ -572,6 +574,20 @@ const files = await buildValidatorSchema(schema, 'Document')
    applicators, a node under an *inert* `additionalItems` — one with no array
    `items`, or with `prefixItems` alongside), and generation **throws** for those
    rather than widening the verdict.
+
+6. **`coerce` and `repair` add entry points, they do not change `validateX`.**
+   `coerce: true` emits `coerceX` → `CoercionResult<T>` (`{ valid: true, value }`
+   or `{ valid: false, errors }`); it moves a scalar toward the declared type and
+   substitutes nothing. `repair: true` implies coercion and emits `repairX` →
+   `RepairResult<T>` (`{ valid: true, value, repairs }` or `{ valid: false, value,
+   errors, repairs }`); it also substitutes a schema-supplied value for each
+   position the validator rejected, as tolerantly as
+   `@amritk/generate-parsers`' coercing mode (both read one fallback table out of
+   `@amritk/helpers`). `repairs` **are** the `validateX` errors the repairs came
+   from, same `path`/`keyword`/`params` — do not expect a separate shape. Note the
+   verdict rule: a *fully repaired* document is `valid: true` with a non-empty
+   `repairs`, so `result.valid` alone does not tell you the input was clean; check
+   `repairs.length` if that matters.
 
 Only the `.` entry. Install: `bun add @amritk/generate-validators`.
 

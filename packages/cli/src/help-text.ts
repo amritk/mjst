@@ -30,6 +30,9 @@ Output:
   --validators          Also emit validateX/isX validators into a validators/ subdir
   --coerce              Also emit coerceX, which coerces scalars the way Ajv's coerceTypes
                         does and then validates (requires --validators)
+  --repair              Also emit repairX, which coerces, validates, then repairs each
+                        rejected position to a schema-supplied value and reports the
+                        errors it repaired (implies --coerce; requires --validators)
   --branch-errors       Explain a failing anyOf/oneOf with the errors of the branch it
                         meant (requires --validators; costs a little on unions)
   --examples            Also emit fast-check arbitraries + example values under examples/

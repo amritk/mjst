@@ -88,7 +88,7 @@ if (!result.valid) {
 
 ## API
 
-### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?)`
+### `buildValidatorSchema(rootSchema, rootTypeName, typeSuffix?, schemas?, unknownKeys?, formats?, coerce?, branchErrors?, repair?)`
 
 | Parameter | Type | Default | Description |
 |:---|:---|:---|:---|
@@ -98,6 +98,9 @@ if (!result.valid) {
 | `schemas` | `Record<string, unknown>` | — | Documents you have **already loaded**, keyed by the absolute URI a `$ref` names them by. See below. |
 | `unknownKeys` | `'count-keys' \| 'count-enumerable'` | `'count-keys'` | How the fast paths prove a closed object (`additionalProperties: false`) has no undeclared key: `Object.keys(obj).length` (fastest on Bun) or a `for…in` count (fastest on Node). See [Choosing how keys are counted](#choosing-how-keys-are-counted). |
 | `formats` | `'all' \| string[]` | — | String `format`s the generated validators enforce. Unset leaves `format` an annotation, as JSON Schema reads it. See [Semantics](#semantics). |
+| `coerce` | `boolean` | `false` | Also emit a `coerceX`, which moves scalars toward the declared type and then runs the same `validateX`. See [Coercing and repairing](#coercing-and-repairing). |
+| `branchErrors` | `boolean` | `false` | Explain a failing `anyOf` / `oneOf` with the errors of the branch it plainly meant. Costs a little on unions, so it is opt-in. |
+| `repair` | `boolean` | `false` | Also emit a `repairX`, which coerces, validates, and then repairs each rejected position to a value the schema supplies — reporting the errors it repaired. Implies `coerce`. See [Coercing and repairing](#coercing-and-repairing). |
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
 
@@ -135,6 +138,89 @@ a pure function of its inputs. Loading is yours to do, or
 [`@amritk/resolve-refs`](../resolve-refs)'. Registering more than the schema uses
 costs nothing: only the documents actually reached are emitted. A `$ref` to a URI
 nobody registered still stops the build, with a message naming the ref.
+
+---
+
+## Coercing and repairing
+
+Three entry points, in increasing order of how much they are willing to do to a
+document. Each is opt-in, and each is built on the one before it, so they can
+never disagree about what is wrong with a value.
+
+| | moves a value written in the wrong type | substitutes a value the input did not contain | tells you what it did |
+|:---|:---|:---|:---|
+| `validateX` | no | no | errors |
+| `coerceX` | yes | no | errors |
+| `repairX` | yes | yes | errors **and** repairs |
+
+### `coerceX` — coerce, then validate
+
+`coerceX(input)` returns `CoercionResult<T>`: `{ valid: true, value }` or
+`{ valid: false, errors }`. It moves a scalar toward the type the schema
+declares, so a config value written the YAML way (`retries: "5"`) reads the same
+as one written the JSON way. Nothing is substituted — a value it cannot coerce
+reaches the validator untouched, so the error names what the caller actually
+wrote.
+
+The table is Ajv's `coerceTypes` minus the cells where Ajv guesses: no
+whitespace-to-zero, no `0x` or `Infinity` strings, nothing coerced to or from
+`null`. Every value this coerces, Ajv coerces to the same value; the rest become
+errors rather than silent repairs.
+
+### `repairX` — coerce, validate, repair, repeat
+
+`repairX(input)` returns `RepairResult<T>`:
+
+```typescript
+type RepairResult<T> =
+  | { valid: true; value: T; repairs: ValidationError[] }
+  | { valid: false; value: unknown; errors: ValidationError[]; repairs: ValidationError[] }
+```
+
+It coerces, runs the same `validateX`, and repairs each rejected position to a
+value the schema itself supplies — a `default`, a `const`, the first `enum`
+member, or a fallback built to satisfy that position's own bounds — then
+re-validates, until the document is accepted or nothing further can be repaired.
+
+**`repairs` are the validator's own errors**, the ones a repair was found for. Not
+a parallel account of what went wrong, but the same objects, with the same `path`,
+`keyword` and `params` the value would have been rejected with:
+
+```typescript
+const result = repairConfig({ retries: 99, name: 'Al' })
+// result.valid   → true
+// result.value   → { retries: 3, name: 'xxx' }
+// result.repairs → [
+//   { keyword: 'maximum',   path: '/retries', params: { comparison: '<=', limit: 10 }, … },
+//   { keyword: 'minLength', path: '/name',    params: { limit: 3 }, … },
+// ]
+```
+
+So a caller that logs a repair logs exactly what a rejection would have said, and
+the two cannot drift apart — there is only one of them.
+
+Read the verdict by what you want the tolerance to be. A document needing nothing
+comes back `valid: true` with an empty `repairs`. One fully repaired comes back
+`valid: true` with a non-empty one — check `repairs.length` if a repaired document
+is not good enough for you. One that could not be fully repaired comes back
+`valid: false` carrying both the repairs applied and the errors still outstanding
+against the value handed back.
+
+**What it will substitute.** Everything
+[`@amritk/generate-parsers`](../generate-parsers) substitutes in its coercing
+mode, because both read the same fallback table out of `@amritk/helpers` — down
+to fabricating a `"xxx"` to satisfy a `minLength: 3`, and building a whole object
+for a root that arrived as `"nope"`. That is a deliberately tolerant policy, and
+the `repairs` list is what keeps it honest: nothing is substituted silently. Where
+the two differ is `minItems` — a short array is padded here and left short by the
+parser, so the parser can return a document its own schema rejects and this cannot.
+
+**Guarantees.** The input is never modified, and everything a repair did not touch
+is shared rather than copied, so repairing one field of a large document does not
+clone it. A position is repaired at most once, so an unsatisfiable schema
+(`minLength: 5` under `maxLength: 2`) reports rather than spins. And whatever comes
+back `valid: true` is a value `validateX` accepts — a repair that leaves the
+document invalid is not a repair.
 
 ---
 

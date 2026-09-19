@@ -7,6 +7,7 @@ import { collectValidatorImports } from './collect-validator-imports'
 import { formatCheckName } from './emit-format-checks'
 import { NO_FORMATS } from './enforced-keywords'
 import { generateCoerceFunction } from './generate-coerce-function'
+import { generateRepairFunction } from './generate-repair-function'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -47,6 +48,13 @@ type GenerateValidatorFileOptions = {
    * either way.
    */
   readonly coerce?: boolean
+  /**
+   * Whether to emit the repairing half — `repairX`, and the position lookup a
+   * `$ref` in another file calls. Implies {@link coerce}: `repairX` coerces
+   * first, so anything merely written in the wrong type is right before the
+   * validator ever sees it, and never shows up as a repair.
+   */
+  readonly repair?: boolean
   /**
    * Whether a failing `anyOf` / `oneOf` also reports the errors of the branch it
    * meant. Off by default, and off is free — the emitted text is exactly what it
@@ -108,9 +116,16 @@ export const generateValidatorFile = (
   // Appended rather than woven in: `coerceX` runs the walk and then calls the
   // very same `validateX`, so every error it reports is the one the validator
   // already produced and the two can never drift apart.
-  const coercer = options?.coerce === true ? generateCoerceFunction(schema, typeName, typeSuffix).code : ''
+  // Repair builds on coercion rather than beside it, so asking for one asks for
+  // both. Keeping them separate halves would mean two passes disagreeing about
+  // what a scalar written in the wrong type is — the exact drift this package
+  // avoids by having `coerceX` and `validateX` share one answer.
+  const wantsCoerce = options?.coerce === true || options?.repair === true
+  const coercer = wantsCoerce ? generateCoerceFunction(schema, typeName, typeSuffix).code : ''
+  const repairer = options?.repair === true ? generateRepairFunction(schema, typeName, typeSuffix).code : ''
 
-  const body = validatorFunction + booleanGuard + (coercer === '' ? '' : '\n\n' + coercer)
+  const appended = [coercer, repairer].filter((part) => part !== '')
+  const body = validatorFunction + booleanGuard + (appended.length === 0 ? '' : '\n\n' + appended.join('\n\n'))
 
   // The imports are collected last because which halves of a `$ref`'s import are
   // needed is a question about the text that was just emitted. A `$ref` in a
@@ -128,10 +143,11 @@ export const generateValidatorFile = (
     selfRef: options?.selfRef,
     rootSchema: options?.rootSchema,
     typeSuffix,
-    reads: ({ typeName: name, validatorName, coercerName }) => ({
+    reads: ({ typeName: name, validatorName, coercerName, repairerName }) => ({
       type: mentions(name),
       validator: mentions(validatorName),
       coercer: mentions(coercerName),
+      repairer: mentions(repairerName),
     }),
   })
 
@@ -149,6 +165,8 @@ export const generateValidatorFile = (
     'ValidationResult',
     ...(/\bValidationError\b/.test(body) ? ['ValidationError'] : []),
     ...(/\bCoercionResult\b/.test(body) ? ['CoercionResult'] : []),
+    ...(/\bRepairResult\b/.test(body) ? ['RepairResult'] : []),
+    ...(/\bRepairLookup\b/.test(body) ? ['RepairLookup'] : []),
   ]
 
   // `.js` extension so the relative import resolves under Node ESM, not only Bun.
@@ -161,7 +179,7 @@ export const generateValidatorFile = (
   // means. All live in `validation-result.js`; import each only when the
   // generated body (validator or boolean guard) uses it, so files that need none
   // carry no unused import.
-  const runtimeHelpers = (
+  const runtimeHelpers: string[] = (
     [
       'valuesEqual',
       'allUnique',
@@ -170,8 +188,13 @@ export const generateValidatorFile = (
       'selectBranchErrors',
       'coerceScalar',
       'coerceUnion',
+      'applyRepairs',
     ] as const
   ).filter((name) => body.includes(`${name}(`))
+  // `MAX_REPAIR_PASSES` is a bound the repair loop reads as a bare identifier
+  // rather than calls, so the "is it invoked" test that finds every other helper
+  // does not see it.
+  if (body.includes('MAX_REPAIR_PASSES')) runtimeHelpers.push('MAX_REPAIR_PASSES')
   if (runtimeHelpers.length > 0) {
     result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.js'\n`
   }
@@ -198,7 +221,7 @@ export const generateValidatorFile = (
   }
 
   result += typeDefinition + '\n\n' + validatorFunction + '\n\n' + booleanGuard
-  if (coercer !== '') result += '\n\n' + coercer
+  for (const part of appended) result += '\n\n' + part
 
   return result
 }

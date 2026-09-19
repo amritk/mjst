@@ -264,8 +264,9 @@ const runValidators = async (
     undefined,
     config.unknownKeys,
     config.formats,
-    config.coerce === true,
+    config.coerce === true || config.repair === true,
     config.branchErrors === true,
+    config.repair === true,
   )
   const staged: string[] = []
 
@@ -734,6 +735,11 @@ const run = async (): Promise<void> => {
   // saying so.
   if (config.coerce && !config.validators) {
     console.error('Error: --coerce shapes the generated validators, so it needs --validators too.')
+    process.exit(1)
+  }
+
+  if (config.repair && !config.validators) {
+    console.error('Error: --repair shapes the generated validators, so it needs --validators too.')
     process.exit(1)
   }
 

@@ -401,6 +401,15 @@ Under `--table` only the content between `<!-- config-table-start -->
 <td colspan="4">Also emit a coerceX alongside each validateX. It moves scalars toward the type the schema declares and then runs the very same validateX over the result, so a config value written the YAML way reads the same whether it came from a config file or an extension. The input is never modified and nothing is substituted: a value that cannot be coerced into a valid one reaches the validator untouched, so the error names what the caller actually wrote, with the keyword and params that rejected it. The table is Ajv's coerceTypes minus the cells where Ajv guesses — no whitespace-to-zero, no hex or Infinity strings, and nothing coerced to or from null — so every value this coerces, Ajv coerces to the same value, and the rest become errors rather than silent repairs. At a union it coerces only when exactly one of the offered types can take the value, and leaves a value that is already one of them alone, so the answer does not depend on the order the union was written in. Requires validators.</td>
 </tr>
 <tr>
+<td>🔧 <code>repair</code></td>
+<td><code>--repair</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit a repairX alongside each validateX. It coerces, runs the very same validateX, and then repairs each position the validator rejected to a value the schema itself supplies — a default, a const, the first enum member, or a fallback built to satisfy that position's own bounds — re-validating until the document is accepted or nothing further can be repaired. The repairs it reports are the validator's own errors, the ones a repair was found for, so a caller logs the same path, keyword and params it would have been rejected with and the two can never drift apart. A document needing nothing comes back valid with an empty repairs list; one fully repaired comes back valid with a non-empty one, leaving the caller to decide whether that is acceptable; one that could not be fully repaired comes back invalid carrying both the repairs applied and the errors still outstanding. The input is never modified and everything the repair did not touch is shared. Implies coerce, so a value merely written in the wrong type is right before the validator sees it and never counts as a repair. Requires validators.</td>
+</tr>
+<tr>
 <td>🌿 <code>branchErrors</code></td>
 <td><code>--branch-errors</code></td>
 <td><code>boolean</code></td>

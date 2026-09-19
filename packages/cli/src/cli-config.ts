@@ -77,6 +77,26 @@ export type CliConfig = {
    */
   readonly coerce?: boolean
   /**
+   * When true, generated validators also get a `repairX`: it coerces, validates,
+   * and then repairs each position the validator rejected to a value the schema
+   * itself supplies — a `default`, a `const`, the first `enum` member, or a
+   * fallback built to satisfy the position's own bounds. The result carries the
+   * repaired value together with `repairs`, which *are* the errors `validateX`
+   * produced for the positions that were repaired, so a caller logs the same
+   * path, keyword and params it would have been rejected with.
+   *
+   * A document needing no repair comes back valid with an empty `repairs`; one
+   * fully repaired comes back valid with a non-empty one, leaving the caller to
+   * decide whether that is acceptable; one that could not be fully repaired
+   * comes back invalid carrying both the repairs applied and the errors still
+   * outstanding.
+   *
+   * Implies `coerce` — repairing runs after coercion, so a value merely written
+   * in the wrong type is right before the validator sees it and never counts as
+   * a repair. Requires `validators`.
+   */
+  readonly repair?: boolean
+  /**
    * When true, a failing `anyOf` / `oneOf` in a generated validator also reports
    * the errors of the branch it meant, instead of the bare "must match a schema
    * in anyOf" that names no field and no reason.

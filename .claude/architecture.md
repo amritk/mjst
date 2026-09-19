@@ -72,7 +72,7 @@ Core code generator. Given a `JSONSchema` and a root type name, produces an arra
 
 ### `@amritk/generate-validators` (`packages/generate-validators`)
 
-Generates lightweight predicate-style validators: each schema becomes a `validateFoo(input, _path?): ValidationResult` function. No coercion, just shape checks plus structured error paths.
+Generates lightweight predicate-style validators: each schema becomes a `validateFoo(input, _path?): ValidationResult` function — shape checks plus structured error paths. Two opt-in entry points build on it rather than changing it: `coerce` adds `coerceFoo` (move scalars toward the declared type, then run the same `validateFoo`), and `repair` adds `repairFoo` (coerce, validate, then repair each rejected position to a schema-supplied value, reporting the validator's own errors as the repairs). `repair` reads the same fallback table as `generate-parsers`, hoisted into `@amritk/helpers` as `get-default-value` so the two cannot land on different repaired documents.
 
 - **Depends on:** `@amritk/helpers`, `json-schema-typed`
 - **Subpath imports:** `#generators/*` → `./src/generators/*.ts`

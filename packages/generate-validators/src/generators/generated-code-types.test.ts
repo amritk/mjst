@@ -433,6 +433,23 @@ describe('generated-code-types', () => {
     expect(typeErrors(sources)).toEqual([])
   })
 
+  // The repairing half is a third generator on the same file, and the one most
+  // able to emit something the consumer's build rejects: it inlines a fallback
+  // *literal* per position, so a schema whose default does not type-check against
+  // the property it repairs is a `TS2322` in the consumer's build and nowhere
+  // else. It also names `RepairResult`, `RepairLookup`, `applyRepairs` and
+  // `MAX_REPAIR_PASSES`, each of which has to be imported by the same
+  // asked-of-the-emitted-text rule the other halves use.
+  it('emits type-correct repairing validator files too', { timeout: 120_000 }, async () => {
+    const sources = new Map<string, string>()
+    for (const [name, schema] of CASES) {
+      const files = await buildValidatorSchema(schema, 'Doc', '', undefined, undefined, undefined, false, false, true)
+      for (const file of files) sources.set(`/repair-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
   // The unused-symbol flags are exactly what the hoist pruning exists to satisfy,
   // and the corpora are no help: 3 of their 4,242 generated files hoist anything
   // at all, so "both corpora byte-identical" says almost nothing about a change

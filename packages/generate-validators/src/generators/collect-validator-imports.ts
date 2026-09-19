@@ -43,6 +43,7 @@ type CollectValidatorImportsOptions = {
     readonly typeName: string
     readonly validatorName: string
     readonly coercerName: string
+    readonly repairerName: string
   }) => {
     readonly type: boolean
     readonly validator: boolean
@@ -53,6 +54,13 @@ type CollectValidatorImportsOptions = {
      * way they come apart from each other.
      */
     readonly coercer?: boolean
+    /**
+     * The `$ref` target's position lookup, which answers what a repair at some
+     * position under it repairs to. Only a file generated with repair on names
+     * it, and a repairing file always coerces too — so this half never appears
+     * without {@link coercer}, though the reverse is ordinary.
+     */
+    readonly repairer?: boolean
   }
 }
 
@@ -65,10 +73,25 @@ const buildImport = (ref: string, suffix: string, reads: Reads): string | null =
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
   const coercerName = `coerce${typeName}Value`
-  const { type, validator, coercer = false } = reads({ typeName, validatorName, coercerName })
+  const repairerName = `repair${typeName}At`
+  const {
+    type,
+    validator,
+    coercer = false,
+    repairer = false,
+  } = reads({
+    typeName,
+    validatorName,
+    coercerName,
+    repairerName,
+  })
   // `.js` extension so the emitted import resolves under Node ESM (not just Bun);
   // `./x.js` → sibling `x.ts` is the standard NodeNext form.
-  const values = [...(validator ? [validatorName] : []), ...(coercer ? [coercerName] : [])]
+  const values = [
+    ...(validator ? [validatorName] : []),
+    ...(coercer ? [coercerName] : []),
+    ...(repairer ? [repairerName] : []),
+  ]
   if (type && values.length > 0) return `import { type ${typeName}, ${values.join(', ')} } from './${filename}.js'`
   if (values.length > 0) return `import { ${values.join(', ')} } from './${filename}.js'`
   if (type) return `import type { ${typeName} } from './${filename}.js'`
