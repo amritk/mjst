@@ -28,6 +28,8 @@ Output:
   --out-file <file>     Single-file output instead of a directory (requires --types-only)
   --types-only          Generate type definitions only, without parser functions
   --validators          Also emit validateX/isX validators into a validators/ subdir
+  --coerce              Also emit coerceX, which coerces scalars the way Ajv's coerceTypes
+                        does and then validates (requires --validators)
   --examples            Also emit fast-check arbitraries + example values under examples/
   --message-contracts   Also emit @amritk/api channel contracts under contracts/ (--input asyncapi only)
   --discriminator <p>   Property naming which message a frame is, for --message-contracts (default: type)

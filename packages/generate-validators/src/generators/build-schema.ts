@@ -49,6 +49,69 @@ export type ValidationError = {
 export type ValidationResult = true | { valid: false; errors: ValidationError[] }
 
 /**
+ * The result of a generated coercing validator.
+ *
+ * Unlike \`ValidationResult\` there is no bare \`true\`: a caller that coerces wants
+ * the value back, and the whole point is that it may differ from what went in.
+ * The input is never modified — \`value\` is the input itself when nothing needed
+ * coercing, and otherwise a copy that shares everything the coercion did not
+ * touch. So a caller does not have to clone defensively the way an in-place
+ * coercer forces them to.
+ */
+export type CoercionResult<T> = { valid: true; value: T } | { valid: false; errors: ValidationError[] }
+
+/**
+ * One scalar, coerced toward \`type\` the way Ajv's \`coerceTypes: true\` does, or
+ * returned untouched when that is not possible.
+ *
+ * Returning the original on failure is what keeps the error honest: nothing is
+ * substituted, so the validator that runs next rejects the value the caller
+ * actually wrote, with the keyword and params that rejected it. That is the
+ * difference between this and a parser's repair, which repairs toward a default
+ * and leaves nothing to report.
+ *
+ * The table is Ajv's, checked against it rather than reconstructed from the
+ * documentation, and it has corners worth knowing: a whitespace-only string
+ * coerces to \`0\` (\`" " == +" "\`), \`null\` coerces to every scalar type, and
+ * \`boolean\` accepts only the exact strings \`"true"\` and \`"false"\` — not
+ * \`"TRUE"\`, \`"yes"\` or \`"1"\`. \`coerced-vs-ajv\` pins every cell of it.
+ */
+export const coerceScalar = (value: unknown, type: string): unknown => {
+  switch (type) {
+    case 'string':
+      if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+      return value === null ? '' : value
+    case 'number':
+    case 'integer': {
+      if (typeof value === 'boolean') return value ? 1 : 0
+      if (value === null) return 0
+      if (typeof value !== 'string' || value === '') return value
+      const asNumber = Number(value)
+      // Ajv's test is \`data && data == +data\`, which for a string is exactly
+      // "converts to a number at all" — no regex anywhere, which is what makes
+      // \`"007"\` 7, \`" 1 "\` 1 and \`"1e3"\` 1000.
+      if (Number.isNaN(asNumber)) return value
+      // And its integrality test is \`!(data % 1)\`. \`Infinity % 1\` is \`NaN\`, which
+      // is falsy, so Ajv takes \`"Infinity"\` as an integer. Matching the
+      // expression rather than the intent is the point here: the corners are the
+      // only place two implementations of one table can disagree.
+      const fraction = asNumber % 1
+      return type === 'integer' && fraction !== 0 && !Number.isNaN(fraction) ? value : asNumber
+    }
+    case 'boolean':
+      if (value === 'true') return true
+      if (value === 'false') return false
+      if (value === 0) return false
+      if (value === 1) return true
+      return value === null ? false : value
+    case 'null':
+      return value === '' || value === 0 || value === false ? null : value
+    default:
+      return value
+  }
+}
+
+/**
  * How deep a structural comparison walks before it gives up and answers "not
  * equal".
  *
@@ -382,6 +445,7 @@ export const buildValidatorSchema = async (
   schemas?: Readonly<Record<string, unknown>>,
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats?: 'all' | readonly string[],
+  coerce = false,
 ): Promise<GeneratedFile[]> => {
   // Resolved once: which names are enforced decides both what the emitters check
   // and what `formats.ts` has to define.
@@ -451,6 +515,7 @@ export const buildValidatorSchema = async (
       typeSuffix,
       unknownKeys,
       formats: enforced,
+      coerce,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })

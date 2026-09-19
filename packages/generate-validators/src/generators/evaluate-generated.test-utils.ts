@@ -26,7 +26,14 @@ const toJavaScript = (code: string): string =>
   }).outputText
 
 /** The helper names generated code expects as free identifiers, in binding order. */
-const HELPER_NAMES = ['valuesEqual', 'allUnique', 'escapePointer', 'everyItem', 'selectBranchErrors'] as const
+const HELPER_NAMES = [
+  'valuesEqual',
+  'allUnique',
+  'escapePointer',
+  'everyItem',
+  'selectBranchErrors',
+  'coerceScalar',
+] as const
 
 const RUNTIME_HELPERS: readonly unknown[] = (() => {
   const moduleExports: Record<string, unknown> = {}

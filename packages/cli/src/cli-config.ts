@@ -53,6 +53,21 @@ export type CliConfig = {
    */
   readonly validators?: boolean
   /**
+   * When true, generated validators also get a `coerceX`: it moves scalars
+   * toward what the schema asks for — Ajv's `coerceTypes` table, so a config
+   * value written the YAML way reads the same however it arrived — and then runs
+   * the very same `validateX` over the result.
+   *
+   * The input is never modified, and nothing is ever substituted: where a value
+   * cannot be coerced into a valid one it is handed to the validator untouched,
+   * so the error names what the caller actually wrote, with the keyword and
+   * params that rejected it. That is the difference from a coercing *parser*,
+   * which repairs toward a default and leaves nothing to report.
+   *
+   * Requires `validators`. `validateX` and `isX` are unchanged either way.
+   */
+  readonly coerce?: boolean
+  /**
    * When true, also emit test-data files for every schema: a `fast-check`
    * arbitrary (`FooArbitrary`) that produces schema-valid values and a concrete
    * `fooExample` value. The files are written into an `examples/` subdirectory of

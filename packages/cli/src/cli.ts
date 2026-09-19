@@ -264,6 +264,7 @@ const runValidators = async (
     undefined,
     config.unknownKeys,
     config.formats,
+    config.coerce === true,
   )
   const staged: string[] = []
 
@@ -726,6 +727,14 @@ const run = async (): Promise<void> => {
   const fileConfig = configPath ? await loadConfig(configPath) : {}
   const cliConfig = parseCliArgs(args)
   const config = { ...fileConfig, ...cliConfig }
+
+  // `--coerce` shapes the validators; on its own it has nothing to act on, and
+  // silently generating no coercion for a run that asked for it is worse than
+  // saying so.
+  if (config.coerce && !config.validators) {
+    console.error('Error: --coerce shapes the generated validators, so it needs --validators too.')
+    process.exit(1)
+  }
 
   if (config.outDir && config.outFile) {
     console.error('Error: provide only one of --out-dir or --out-file, not both.')

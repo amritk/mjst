@@ -392,6 +392,15 @@ Under `--table` only the content between `<!-- config-table-start -->
 <td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
 </tr>
 <tr>
+<td>🧪 <code>coerce</code></td>
+<td><code>--coerce</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit a coerceX alongside each validateX. It moves scalars toward the type the schema declares — Ajv's coerceTypes table, so a config value written the YAML way reads the same whether it came from a config file or an extension — and then runs the very same validateX over the result. The input is never modified and nothing is substituted: a value that cannot be coerced into a valid one reaches the validator untouched, so the error names what the caller actually wrote, with the keyword and params that rejected it. Positions where the schema says more than one thing (an array-form type, a combinator branch) are left alone rather than guessed at. Requires validators.</td>
+</tr>
+<tr>
 <td>🎲 <code>examples</code></td>
 <td><code>--examples</code></td>
 <td><code>boolean</code></td>

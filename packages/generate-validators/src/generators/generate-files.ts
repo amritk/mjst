@@ -6,6 +6,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { collectValidatorImports } from './collect-validator-imports'
 import { formatCheckName } from './emit-format-checks'
 import { NO_FORMATS } from './enforced-keywords'
+import { generateCoerceFunction } from './generate-coerce-function'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
 /**
@@ -39,6 +40,13 @@ type GenerateValidatorFileOptions = {
    * alongside.
    */
   readonly formats?: ReadonlySet<string>
+  /**
+   * Whether to emit the coercing half — `coerceX`, and the value walk a `$ref`
+   * in another file calls. Off by default: a caller who does not coerce should
+   * not carry the code, and `validateX` / `isX` are byte-for-byte the same
+   * either way.
+   */
+  readonly coerce?: boolean
 }
 
 /**
@@ -90,8 +98,12 @@ export const generateValidatorFile = (
     formats,
   )
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix, unknownKeys, formats)
+  // Appended rather than woven in: `coerceX` runs the walk and then calls the
+  // very same `validateX`, so every error it reports is the one the validator
+  // already produced and the two can never drift apart.
+  const coercer = options?.coerce === true ? generateCoerceFunction(schema, typeName, typeSuffix).code : ''
 
-  const body = validatorFunction + booleanGuard
+  const body = validatorFunction + booleanGuard + (coercer === '' ? '' : '\n\n' + coercer)
 
   // The imports are collected last because which halves of a `$ref`'s import are
   // needed is a question about the text that was just emitted. A `$ref` in a
@@ -109,9 +121,10 @@ export const generateValidatorFile = (
     selfRef: options?.selfRef,
     rootSchema: options?.rootSchema,
     typeSuffix,
-    reads: ({ typeName: name, validatorName }) => ({
+    reads: ({ typeName: name, validatorName, coercerName }) => ({
       type: mentions(name),
       validator: mentions(validatorName),
+      coercer: mentions(coercerName),
     }),
   })
 
@@ -125,7 +138,11 @@ export const generateValidatorFile = (
   // only appear as a type annotation, so its absence from the body is
   // conclusive; schema text mentioning it merely keeps the import, which is what
   // was emitted before.
-  const resultTypes = ['ValidationResult', ...(/\bValidationError\b/.test(body) ? ['ValidationError'] : [])]
+  const resultTypes = [
+    'ValidationResult',
+    ...(/\bValidationError\b/.test(body) ? ['ValidationError'] : []),
+    ...(/\bCoercionResult\b/.test(body) ? ['CoercionResult'] : []),
+  ]
 
   // `.js` extension so the relative import resolves under Node ESM, not only Bun.
   let result = `import type { ${resultTypes.join(', ')} } from './validation-result.js'\n`
@@ -138,7 +155,7 @@ export const generateValidatorFile = (
   // generated body (validator or boolean guard) uses it, so files that need none
   // carry no unused import.
   const runtimeHelpers = (
-    ['valuesEqual', 'allUnique', 'escapePointer', 'everyItem', 'selectBranchErrors'] as const
+    ['valuesEqual', 'allUnique', 'escapePointer', 'everyItem', 'selectBranchErrors', 'coerceScalar'] as const
   ).filter((name) => body.includes(`${name}(`))
   if (runtimeHelpers.length > 0) {
     result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.js'\n`
@@ -166,6 +183,7 @@ export const generateValidatorFile = (
   }
 
   result += typeDefinition + '\n\n' + validatorFunction + '\n\n' + booleanGuard
+  if (coercer !== '') result += '\n\n' + coercer
 
   return result
 }

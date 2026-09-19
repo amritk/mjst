@@ -417,6 +417,22 @@ describe('generated-code-types', () => {
     expect(typeErrors(sources)).toEqual([])
   })
 
+  // The coercing half is emitted from a different generator, so it can drift from
+  // the type definition and the validator on its own: an accessor that stops
+  // type-checking against `Record<string, unknown>`, a `CoercionResult` or
+  // `coerceScalar` referenced without an import, a `$ref` walk named but never
+  // brought in. None of those are syntax errors — they surface in the consumer's
+  // build, which is the one place this package must never be the cause.
+  it('emits type-correct coercing validator files too', { timeout: 120_000 }, async () => {
+    const sources = new Map<string, string>()
+    for (const [name, schema] of CASES) {
+      const files = await buildValidatorSchema(schema, 'Doc', '', undefined, undefined, undefined, true)
+      for (const file of files) sources.set(`/coerce-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
   // The unused-symbol flags are exactly what the hoist pruning exists to satisfy,
   // and the corpora are no help: 3 of their 4,242 generated files hoist anything
   // at all, so "both corpora byte-identical" says almost nothing about a change
