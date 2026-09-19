@@ -12,25 +12,23 @@ import { generateValidatorFunction } from './generate-validator-function'
  * coerceTypes: true }` as the oracle — the exact configuration the feature
  * exists to replace.
  *
- * Two things have to match, not one. The verdict, as everywhere else in this
- * package; and the *value*, because a coercing validator that agrees on
- * accept/reject while producing a different number is worse than one that
- * disagrees loudly. Ajv coerces in place, so the oracle is run against a clone
- * and the clone is compared against what `coerceX` returns.
+ * The contract is *subset*, not equality. Every value this coerces, Ajv coerces
+ * to the same value; Ajv coerces some things this deliberately will not. That is
+ * the safe direction and the one that makes a migration off Ajv legible: a value
+ * never comes out different, some of Ajv's silent repairs come out as errors
+ * instead. `coerces only what ajv coerces, and to the same value` pins it over
+ * the whole table, and `divergences` enumerates every cell where the two part
+ * company and why.
  *
- * The table itself is checked separately and exhaustively in `coerceScalar`'s
- * own test; this is about the walk — that the right cells get applied at the
- * right positions, under nesting, tuples, pattern keys and the constraint
- * keywords that run after coercion. `"3"` against `{ type: 'integer', minimum:
- * 5 }` has to become `3` and *then* fail `minimum`, which is a different answer
- * from both "reject as a string" and "repair to something valid".
+ * Two things are compared where the rules coincide, not one: the verdict, as
+ * everywhere else in this package; and the *value*, because a coercing validator
+ * that agrees on accept/reject while producing a different number is worse than
+ * one that disagrees loudly. Ajv coerces in place, so the oracle is run against a
+ * clone and the clone is compared against what `coerceX` returns.
  *
- * Positions where the schema gives more than one answer — a combinator, an
- * array-form `type` — are deliberately absent here and covered by
- * `leaves an ambiguous position alone` below. Ajv resolves those by trying its
- * own coercion list in order, which is a fact about Ajv's list rather than about
- * the schema, so agreeing with it there would mean adopting a rule the schema
- * does not state.
+ * `"3"` against `{ type: 'integer', minimum: 5 }` has to become `3` and *then*
+ * fail `minimum`, which is a different answer from both "reject as a string" and
+ * "repair to something valid".
  */
 
 // Deterministic PRNG so a failure reproduces exactly. (mulberry32)
@@ -53,11 +51,50 @@ const toJavaScript = (code: string): string =>
 
 type Coercer = (input: unknown) => { valid: true; value: unknown } | { valid: false; errors: unknown[] }
 
+const generated = (schema: Record<string, unknown>): Record<string, unknown> =>
+  evaluateGenerated(
+    generateValidatorFunction(schema as never, 'Root') + '\n\n' + generateCoerceFunction(schema as never, 'Root').code,
+  )
+
 /** Compiles the validator and its coercing half together, as a file would carry them. */
-const compile = (schema: Record<string, unknown>): Coercer => {
-  const code =
-    generateValidatorFunction(schema as never, 'Root') + '\n\n' + generateCoerceFunction(schema as never, 'Root').code
-  return evaluateGenerated(code)['coerceRoot'] as Coercer
+const compile = (schema: Record<string, unknown>): Coercer => generated(schema)['coerceRoot'] as Coercer
+
+/** The coercion walk alone, which returns its value whether or not it validates. */
+const compileWalk = (schema: Record<string, unknown>): ((input: unknown) => unknown) =>
+  generated(schema)['coerceRootValue'] as (input: unknown) => unknown
+
+/**
+ * The subset property at every position of a structure: what we produced is
+ * either what the caller wrote or what Ajv would have produced. Declining is
+ * always allowed; inventing a third answer never is.
+ */
+const invented = (original: unknown, mine: unknown, ajv: unknown, path = ''): string[] => {
+  if (Array.isArray(mine)) {
+    if (!Array.isArray(original) || !Array.isArray(ajv)) return []
+    return mine.flatMap((item, index) => invented(original[index], item, ajv[index], `${path}/${index}`))
+  }
+  if (mine !== null && typeof mine === 'object') {
+    if (original === null || typeof original !== 'object' || ajv === null || typeof ajv !== 'object') return []
+    const o = original as Record<string, unknown>
+    const a = ajv as Record<string, unknown>
+    return Object.keys(mine as Record<string, unknown>).flatMap((key) =>
+      invented(o[key], (mine as Record<string, unknown>)[key], a[key], `${path}/${key}`),
+    )
+  }
+  if (Object.is(mine, original) || Object.is(mine, ajv)) return []
+  return [`${path}: wrote ${String(original)}, ajv ${String(ajv)}, mjst ${String(mine)}`]
+}
+
+const assertNeverInvents = (schema: Record<string, unknown>, values: readonly unknown[]): void => {
+  const walk = compileWalk(schema)
+  const validate = new Ajv2020({ allErrors: true, coerceTypes: true }).compile(schema)
+  const divergences: string[] = []
+  for (const value of values) {
+    const byAjv = structuredClone(value)
+    validate(byAjv)
+    divergences.push(...invented(value, walk(structuredClone(value)), byAjv))
+  }
+  expect(divergences, `schema ${JSON.stringify(schema)}\n${divergences.join('\n')}`).toEqual([])
 }
 
 const assertAgrees = (schema: Record<string, unknown>, values: readonly unknown[]): void => {
@@ -151,14 +188,11 @@ const coerceScalar = (() => {
 })()
 
 describe('coerced-vs-ajv', () => {
-  // The table itself, cell by cell, against the only thing that defines it.
-  // Reconstructing Ajv's rules from its documentation gets the ordinary cases
-  // right and the corners wrong, and the corners are the whole risk: a
-  // whitespace-only string is `0`, `null` coerces to every scalar type, `"007"`
-  // is 7 and `"Infinity"` is an *integer* (Ajv's test is `!(data % 1)`, and
-  // `Infinity % 1` is `NaN`, which is falsy). Every one of those was found here
-  // rather than reasoned out.
-  it('coerces each scalar exactly as ajv does, cell by cell', () => {
+  // The subset property, cell by cell, over deliberately hostile values. This is
+  // what makes "more precise than Ajv" a checkable claim rather than a hope: we
+  // may decline where Ajv coerces, but we may never produce a value Ajv would not
+  // have produced. Anything else would silently change data on migration.
+  it('coerces only what ajv coerces, and to the same value', () => {
     const divergences: string[] = []
     for (const type of SCALARS) {
       const validate = new Ajv2020({ allErrors: true, coerceTypes: true }).compile({
@@ -167,25 +201,47 @@ describe('coerced-vs-ajv', () => {
       })
       for (const value of TABLE_VALUES) {
         const box: Record<string, unknown> = { d: value }
-        const accepted = validate(box) as boolean
-        // Ours leaves a value it cannot coerce untouched and lets the validator
-        // reject it, so "ajv rejected" and "we changed nothing" are the same
-        // answer.
-        const expected = accepted ? box['d'] : value
-        const actual = coerceScalar(value, type)
-        if (!Object.is(actual, expected)) {
-          divergences.push(
-            `${type} <- ${String(value)} (${typeof value}): ajv=${String(expected)} mjst=${String(actual)}`,
-          )
+        const ajv = (validate(box) as boolean) ? box['d'] : value
+        const mine = coerceScalar(value, type)
+        // Declining is always allowed. Producing something Ajv would not is not.
+        if (!Object.is(mine, value) && !Object.is(mine, ajv)) {
+          divergences.push(`${type} <- ${String(value)} (${typeof value}): ajv=${String(ajv)} mjst=${String(mine)}`)
         }
       }
     }
     expect(divergences, divergences.join('\n')).toEqual([])
   })
 
-  it('agrees on a scalar property of every coercible type', () => {
+  // Every cell where we deliberately decline something Ajv accepts. Written out
+  // rather than derived, because each one is a judgement that should have to be
+  // edited by hand if it ever changes.
+  it('declines exactly the cells ajv guesses at', () => {
+    const cases: ReadonlyArray<readonly [unknown, string, string]> = [
+      // `Number(" ")` is 0. A config that says `retries: " "` has a mistake in it,
+      // and answering `0` is the one thing worse than rejecting it.
+      [' ', 'number', 'whitespace is not a number'],
+      [' 1 ', 'number', 'a padded numeral is not a numeral'],
+      ['0x10', 'number', 'JSON has no hex literals'],
+      ['Infinity', 'number', 'JSON cannot represent it'],
+      ['Infinity', 'integer', 'and Ajv calls it an integer, because `Infinity % 1` is NaN'],
+      ['1.', 'number', 'a trailing point is a typo, not a number'],
+      // `null` is a JSON value in its own right and usually means "not set".
+      [null, 'string', 'null is not an empty string'],
+      [null, 'number', 'null is not zero'],
+      [null, 'boolean', 'null is not false'],
+      ['', 'null', 'an empty string is not null'],
+      [0, 'null', 'zero is not null'],
+      [false, 'null', 'false is not null'],
+    ]
+
+    for (const [value, type, why] of cases) {
+      expect(coerceScalar(value, type), `${type} <- ${String(value)}: ${why}`).toBe(value)
+    }
+  })
+
+  it('never invents a value for a scalar property of any coercible type', () => {
     for (const type of SCALARS) {
-      assertAgrees(
+      assertNeverInvents(
         { type: 'object', properties: { d: { type } } },
         VALUES.map((d) => ({ d })),
       )
@@ -244,7 +300,7 @@ describe('coerced-vs-ajv', () => {
   })
 
   it('agrees on pattern and additional properties', () => {
-    assertAgrees(
+    assertNeverInvents(
       {
         type: 'object',
         properties: { known: { type: 'integer' } },
@@ -285,7 +341,7 @@ describe('coerced-vs-ajv', () => {
     for (let i = 0; i < 300; i++) {
       const schema = { type: 'object', properties: { d: node(2) } }
       const values = Array.from({ length: 12 }, () => ({ d: randomValue(rng, 2) }))
-      assertAgrees(schema, values)
+      assertNeverInvents(schema, values)
     }
   })
 

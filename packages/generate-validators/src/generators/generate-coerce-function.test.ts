@@ -121,20 +121,79 @@ describe('generate-coerce-function', () => {
     })
   })
 
-  // A union says more than one thing about the value, and coercing toward one of
-  // them would be inventing an answer the schema does not give. Ajv picks by the
-  // order of its own coercion list, which silently makes `"1"` a number under
-  // `['number', 'string']` and leaves it a string under `['string', 'number']`.
-  it('leaves a position the schema is ambiguous about alone', () => {
+  // A union is not a reason to give up. `string | { … }` is the commonest shape
+  // in a hand-written config schema, and a number written where the short form
+  // goes has exactly one reading — the object branch cannot take a scalar, so it
+  // never competes for one.
+  it('coerces through a union when only one branch can take the value', () => {
     const coerce = compile({
       type: 'object',
       properties: {
-        union: { type: ['number', 'string'] },
-        branch: { anyOf: [{ type: 'number' }, { type: 'string' }] },
+        short: { anyOf: [{ type: 'string' }, { type: 'object', properties: { verb: { type: 'string' } } }] },
+        numOrNull: { type: ['number', 'null'] },
+        numOrBool: { anyOf: [{ type: 'number' }, { type: 'boolean' }] },
       },
     })
 
-    expect(coerce({ union: '1', branch: '2' })).toEqual({ valid: true, value: { union: '1', branch: '2' } })
+    expect(coerce({ short: 7, numOrNull: '3', numOrBool: 'true' })).toEqual({
+      valid: true,
+      value: { short: '7', numOrNull: 3, numOrBool: true },
+    })
+  })
+
+  it('leaves a value that is already one of the offered types alone', () => {
+    // Where this parts company with Ajv, which walks its own coercion list in
+    // order and so makes `"1"` a number under `['number', 'string']` while
+    // leaving it a string under `['string', 'number']`. The answer should not
+    // depend on the order someone wrote the union in.
+    const coerce = compile({
+      type: 'object',
+      properties: {
+        numberFirst: { type: ['number', 'string'] },
+        stringFirst: { type: ['string', 'number'] },
+      },
+    })
+
+    expect(coerce({ numberFirst: '1', stringFirst: '1' })).toEqual({
+      valid: true,
+      value: { numberFirst: '1', stringFirst: '1' },
+    })
+  })
+
+  it('leaves a value two branches could equally take alone', () => {
+    // `true` could be `1` or `"true"` with equal justification, so it stays what
+    // the caller wrote and the validator says what is wrong with it.
+    const coerce = compile({ type: 'object', properties: { d: { type: ['number', 'string'] } } })
+
+    expect(coerce({ d: true })).toEqual({
+      valid: false,
+      errors: [
+        {
+          message: 'must be number or string',
+          path: '/d',
+          keyword: 'type',
+          params: { type: ['number', 'string'] },
+        },
+      ],
+    })
+  })
+
+  it('leaves a union it cannot reason about alone', () => {
+    // A branch carrying a `$ref` or a nested combinator is a shape this cannot
+    // enumerate candidates for, so the whole position is declined rather than
+    // coerced toward the branches it *can* read. (Asserted on the emitted code:
+    // a `$ref` compiles to a call into a sibling file, which the single-function
+    // harness does not build.)
+    const { code } = generateCoerceFunction(
+      {
+        type: 'object',
+        properties: { d: { anyOf: [{ type: 'string' }, { $ref: '#/$defs/other' }] } },
+      } as never,
+      'Root',
+    )
+
+    expect(code).not.toContain('coerceUnion(')
+    expect(code).toContain('export const coerceRootValue = (input: unknown): unknown => input')
   })
 
   it('emits no walk at all for a schema with nothing to coerce', () => {

@@ -20,6 +20,7 @@ type MutableConfig = {
   typesOnly?: boolean
   validators?: boolean
   coerce?: boolean
+  branchErrors?: boolean
   examples?: boolean
   messageContracts?: boolean
   discriminator?: string
@@ -53,6 +54,7 @@ const BOOLEAN_KEYS = new Set<keyof MutableConfig>([
   'typesOnly',
   'validators',
   'coerce',
+  'branchErrors',
   'examples',
   'messageContracts',
   'build',
@@ -229,6 +231,9 @@ const assignBoolean = (config: MutableConfig, key: string, value: boolean): bool
       return true
     case 'coerce':
       config.coerce = value
+      return true
+    case 'branchErrors':
+      config.branchErrors = value
       return true
     case 'examples':
       config.examples = value

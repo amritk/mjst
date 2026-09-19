@@ -265,6 +265,7 @@ const runValidators = async (
     config.unknownKeys,
     config.formats,
     config.coerce === true,
+    config.branchErrors === true,
   )
   const staged: string[] = []
 
@@ -733,6 +734,11 @@ const run = async (): Promise<void> => {
   // saying so.
   if (config.coerce && !config.validators) {
     console.error('Error: --coerce shapes the generated validators, so it needs --validators too.')
+    process.exit(1)
+  }
+
+  if (config.branchErrors && !config.validators) {
+    console.error('Error: --branch-errors shapes the generated validators, so it needs --validators too.')
     process.exit(1)
   }
 

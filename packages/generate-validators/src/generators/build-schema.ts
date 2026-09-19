@@ -61,8 +61,21 @@ export type ValidationResult = true | { valid: false; errors: ValidationError[] 
 export type CoercionResult<T> = { valid: true; value: T } | { valid: false; errors: ValidationError[] }
 
 /**
- * One scalar, coerced toward \`type\` the way Ajv's \`coerceTypes: true\` does, or
- * returned untouched when that is not possible.
+ * A string this will read as a number: an optional sign, digits with an optional
+ * fractional part, an optional exponent. Nothing else.
+ *
+ * Deliberately narrower than what \`Number()\` accepts, which is where Ajv gets
+ * its surprises — \`Number(" ")\` is \`0\`, \`Number("0x10")\` is \`16\` and
+ * \`Number("Infinity")\` is a value JSON cannot even represent. A config that says
+ * \`retries: " "\` has a mistake in it, and answering \`0\` is the one thing worse
+ * than rejecting it. Leading zeros (\`"007"\`) and exponents (\`"1e3"\`) stay: both
+ * are ordinary ways to write a number in a YAML file, and neither is ambiguous.
+ */
+const NUMERIC_STRING = /^[+-]?(?:\\d+|\\d*\\.\\d+)(?:[eE][+-]?\\d+)?$/
+
+/**
+ * One scalar, coerced toward \`type\`, or returned untouched when that is not
+ * possible.
  *
  * Returning the original on failure is what keeps the error honest: nothing is
  * substituted, so the validator that runs next rejects the value the caller
@@ -70,45 +83,73 @@ export type CoercionResult<T> = { valid: true; value: T } | { valid: false; erro
  * difference between this and a parser's repair, which repairs toward a default
  * and leaves nothing to report.
  *
- * The table is Ajv's, checked against it rather than reconstructed from the
- * documentation, and it has corners worth knowing: a whitespace-only string
- * coerces to \`0\` (\`" " == +" "\`), \`null\` coerces to every scalar type, and
- * \`boolean\` accepts only the exact strings \`"true"\` and \`"false"\` — not
- * \`"TRUE"\`, \`"yes"\` or \`"1"\`. \`coerced-vs-ajv\` pins every cell of it.
+ * The table is Ajv's \`coerceTypes\` minus the cells where Ajv guesses. Every
+ * value this coerces, Ajv coerces to the same value — \`coerced-vs-ajv\` pins that
+ * as a property, so moving off Ajv never changes a value, it only turns some of
+ * Ajv's silent repairs into errors. What is deliberately *not* coerced:
+ *
+ *  - **Anything to or from \`null\`.** Ajv reads \`null\` as \`""\`, \`0\` and
+ *    \`false\`, and reads \`""\`, \`0\` and \`false\` back as \`null\`. \`null\` is a
+ *    JSON value in its own right and usually means "not set"; turning it into an
+ *    empty string, or an empty string into it, loses the distinction the document
+ *    drew.
+ *  - **Strings that are not cleanly numeric** ({@link NUMERIC_STRING}) — no
+ *    whitespace padding, no \`0x\`/\`0o\`/\`0b\`, no \`Infinity\`, no trailing \`.\`.
  */
 export const coerceScalar = (value: unknown, type: string): unknown => {
   switch (type) {
     case 'string':
-      if (typeof value === 'number' || typeof value === 'boolean') return String(value)
-      return value === null ? '' : value
+      return typeof value === 'number' || typeof value === 'boolean' ? String(value) : value
     case 'number':
     case 'integer': {
       if (typeof value === 'boolean') return value ? 1 : 0
-      if (value === null) return 0
-      if (typeof value !== 'string' || value === '') return value
+      if (typeof value !== 'string' || !NUMERIC_STRING.test(value)) return value
       const asNumber = Number(value)
-      // Ajv's test is \`data && data == +data\`, which for a string is exactly
-      // "converts to a number at all" — no regex anywhere, which is what makes
-      // \`"007"\` 7, \`" 1 "\` 1 and \`"1e3"\` 1000.
-      if (Number.isNaN(asNumber)) return value
-      // And its integrality test is \`!(data % 1)\`. \`Infinity % 1\` is \`NaN\`, which
-      // is falsy, so Ajv takes \`"Infinity"\` as an integer. Matching the
-      // expression rather than the intent is the point here: the corners are the
-      // only place two implementations of one table can disagree.
-      const fraction = asNumber % 1
-      return type === 'integer' && fraction !== 0 && !Number.isNaN(fraction) ? value : asNumber
+      if (!Number.isFinite(asNumber)) return value
+      return type === 'integer' && asNumber % 1 !== 0 ? value : asNumber
     }
     case 'boolean':
-      if (value === 'true') return true
-      if (value === 'false') return false
-      if (value === 0) return false
-      if (value === 1) return true
-      return value === null ? false : value
-    case 'null':
-      return value === '' || value === 0 || value === false ? null : value
+      if (value === 'true' || value === 1) return true
+      if (value === 'false' || value === 0) return false
+      return value
     default:
       return value
   }
+}
+
+/**
+ * One scalar at a position that offers several types — a \`type\` array, or a
+ * union of scalar branches — coerced only when exactly one of them can take it.
+ *
+ * A value whose type is already one of the offered types is left alone: it is
+ * what the schema asked for, and the question of coercion does not arise. That
+ * one rule is where this parts company with Ajv, which walks its own coercion
+ * list in order and so turns \`"1"\` into \`1\` under \`["number", "string"]\` while
+ * leaving it a string under \`["string", "number"]\`. The answer should not depend
+ * on the order someone wrote the union in.
+ *
+ * Otherwise every offered type is tried, and the coercion is taken only if it is
+ * the only one that succeeds. \`true\` against \`number | string\` could be \`1\` or
+ * \`"true"\` with equal justification, so it stays \`true\` and the validator says
+ * what is wrong with it.
+ */
+export const coerceUnion = (value: unknown, types: readonly string[]): unknown => {
+  const actual = value === null ? 'null' : typeof value
+  for (const type of types) {
+    // \`integer\` is satisfied by a number, so a non-integral number is not a
+    // *type* mismatch here — the validator is what holds it to being whole.
+    if (actual === type || (actual === 'number' && type === 'integer')) return value
+  }
+
+  let coerced: unknown = value
+  let found = 0
+  for (const type of types) {
+    const candidate = coerceScalar(value, type)
+    if (candidate === value) continue
+    coerced = candidate
+    found++
+  }
+  return found === 1 ? coerced : value
 }
 
 /**
@@ -446,6 +487,7 @@ export const buildValidatorSchema = async (
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats?: 'all' | readonly string[],
   coerce = false,
+  branchErrors = false,
 ): Promise<GeneratedFile[]> => {
   // Resolved once: which names are enforced decides both what the emitters check
   // and what `formats.ts` has to define.
@@ -516,6 +558,7 @@ export const buildValidatorSchema = async (
       unknownKeys,
       formats: enforced,
       coerce,
+      branchErrors,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })

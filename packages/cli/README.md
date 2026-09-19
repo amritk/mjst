@@ -398,7 +398,16 @@ Under `--table` only the content between `<!-- config-table-start -->
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="4">Also emit a coerceX alongside each validateX. It moves scalars toward the type the schema declares — Ajv's coerceTypes table, so a config value written the YAML way reads the same whether it came from a config file or an extension — and then runs the very same validateX over the result. The input is never modified and nothing is substituted: a value that cannot be coerced into a valid one reaches the validator untouched, so the error names what the caller actually wrote, with the keyword and params that rejected it. Positions where the schema says more than one thing (an array-form type, a combinator branch) are left alone rather than guessed at. Requires validators.</td>
+<td colspan="4">Also emit a coerceX alongside each validateX. It moves scalars toward the type the schema declares and then runs the very same validateX over the result, so a config value written the YAML way reads the same whether it came from a config file or an extension. The input is never modified and nothing is substituted: a value that cannot be coerced into a valid one reaches the validator untouched, so the error names what the caller actually wrote, with the keyword and params that rejected it. The table is Ajv's coerceTypes minus the cells where Ajv guesses — no whitespace-to-zero, no hex or Infinity strings, and nothing coerced to or from null — so every value this coerces, Ajv coerces to the same value, and the rest become errors rather than silent repairs. At a union it coerces only when exactly one of the offered types can take the value, and leaves a value that is already one of them alone, so the answer does not depend on the order the union was written in. Requires validators.</td>
+</tr>
+<tr>
+<td>🌿 <code>branchErrors</code></td>
+<td><code>--branch-errors</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Explain a failing anyOf/oneOf with the errors of the branch it meant, instead of the bare "must match a schema in anyOf" that names no field and no reason. The branch that rejected the value's kind is dropped first, so a string-or-object union is left with the one branch that was talking about this value; where several remain, a discriminator breaks the tie; where none stands out, nothing extra is reported. Off by default and off costs nothing — the generated code is exactly what it would be without the option. On, each branch keeps what it complained about: a push per failing branch and one lazily-created array per combinator that had one. Requires validators.</td>
 </tr>
 <tr>
 <td>🎲 <code>examples</code></td>

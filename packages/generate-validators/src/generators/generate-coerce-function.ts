@@ -57,18 +57,59 @@ const schemaMap = (schema: Record<string, unknown>, key: string): Record<string,
 /**
  * The type a node declares, when it declares exactly one and that one is a
  * scalar this can coerce toward.
- *
- * An array-form `type` is deliberately not read: `["string", "number"]` says the
- * value may be either, and coercing toward one of them would be inventing an
- * answer the schema does not give. Ajv resolves that by trying its coercion
- * list in order, which is a rule about Ajv's list rather than about the schema,
- * and one that silently turns `"1"` into `1` under `["number", "string"]` and
- * leaves it `"1"` under `["string", "number"]`. Leaving it alone costs a
- * coercion we could have made and never makes a wrong one.
  */
 const soleScalarType = (schema: Record<string, unknown>): string | null => {
   const type = readKey(schema, 'type')
   return typeof type === 'string' && COERCIBLE_TYPES.has(type) ? type : null
+}
+
+/**
+ * Every scalar type a node offers, when *all* it offers are scalars — an
+ * array-form `type`, or a union whose branches each declare one.
+ *
+ * A union is not a reason to give up on coercing: `string | { … }` is the
+ * commonest shape in a hand-written config schema, and a number written where
+ * the short form goes has exactly one sensible reading. What matters is that the
+ * reading is forced rather than picked, which is what `coerceUnion` decides at
+ * runtime — it needs the candidates, not a choice made here.
+ *
+ * A branch that is not a plain scalar type (an object, a `$ref`, another
+ * combinator) contributes no candidate but does not disqualify the union: it
+ * simply cannot take a scalar, so it never competes for one.
+ */
+const unionScalarTypes = (schema: Record<string, unknown>): readonly string[] | null => {
+  const declared = readKey(schema, 'type')
+  if (Array.isArray(declared)) {
+    const types = declared.filter((entry): entry is string => typeof entry === 'string')
+    return types.length > 0 && types.every((type) => COERCIBLE_TYPES.has(type)) ? types : null
+  }
+
+  // A union node that says nothing else about the value itself. `type` alongside
+  // the branches would narrow them, and reading the branches without it would
+  // ignore what the node said.
+  if (declared !== undefined) return null
+  const branches = readKey(schema, 'anyOf') ?? readKey(schema, 'oneOf')
+  if (!Array.isArray(branches) || branches.length === 0) return null
+
+  const types: string[] = []
+  for (const branch of branches) {
+    if (!isSchemaObject(branch as JSONSchema)) return null
+    const type = soleScalarType(branch as Record<string, unknown>)
+    // Only a *bare* scalar branch offers a candidate. One carrying constraints
+    // (`{ type: 'string', pattern: … }`) still does — the coercion makes it a
+    // string and the validator judges the rest — but one carrying a `$ref` or a
+    // nested combinator is a shape this cannot reason about.
+    if (type !== null) types.push(type)
+    else if (
+      declaresObjectKeys(branch as Record<string, unknown>) ||
+      declaresArrayItems(branch as Record<string, unknown>)
+    )
+      continue
+    else if (readKey(branch as Record<string, unknown>, 'type') === 'object') continue
+    else if (readKey(branch as Record<string, unknown>, 'type') === 'array') continue
+    else return null
+  }
+  return types.length > 0 ? types : null
 }
 
 /**
@@ -257,6 +298,9 @@ const coercerFor = (schema: JSONSchema, ctx: CoerceContext): Coercer => {
   const scalar = soleScalarType(node)
   if (scalar !== null) return (valueExpr) => `coerceScalar(${valueExpr}, ${JSON.stringify(scalar)})`
 
+  const union = unionScalarTypes(node)
+  if (union !== null) return (valueExpr) => `coerceUnion(${valueExpr}, ${JSON.stringify(union)})`
+
   const type = readKey(node, 'type')
   if (type === 'object' || (type === undefined && declaresObjectKeys(node))) return emitObjectCoercer(node, ctx)
   if (type === 'array' || (type === undefined && declaresArrayItems(node))) return emitArrayCoercer(node, ctx)
@@ -305,5 +349,5 @@ export const generateCoerceFunction = (
     `}`,
   ].join('\n')
 
-  return { code: walk, usesCoerceScalar: walk.includes('coerceScalar(') }
+  return { code: walk, usesCoerceScalar: walk.includes('coerceScalar(') || walk.includes('coerceUnion(') }
 }

@@ -61,6 +61,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['discriminator'] === 'string' && { discriminator: obj['discriminator'] }),
     ...(typeof obj['build'] === 'boolean' && { build: obj['build'] }),
     ...(typeof obj['coerce'] === 'boolean' && { coerce: obj['coerce'] }),
+    ...(typeof obj['branchErrors'] === 'boolean' && { branchErrors: obj['branchErrors'] }),
     ...(typeof obj['force'] === 'boolean' && { force: obj['force'] }),
     ...(typeof obj['logWarnings'] === 'boolean' && { logWarnings: obj['logWarnings'] }),
     ...(typeof obj['strict'] === 'boolean' && { strict: obj['strict'] }),

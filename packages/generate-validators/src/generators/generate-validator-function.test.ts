@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest'
 import { evaluateGenerated, evaluateValidator as evalValidator } from './evaluate-generated.test-utils'
 import { generateBooleanGuard, generateValidatorFunction } from './generate-validator-function'
 
+/**
+ * A validator built with `--branch-errors` on. The option is off by default —
+ * off has to stay byte-for-byte what the generator emitted before it existed —
+ * so the tests that assert on branch errors ask for it by name.
+ */
+const withBranchErrors = (schema: unknown, typeName: string): string =>
+  generateValidatorFunction(schema as never, typeName, '', undefined, undefined, undefined, true)
+
 describe('generate-validator-function', () => {
   it('generates a validator for a required string property', () => {
     const schema = {
@@ -1989,15 +1997,48 @@ describe('generate-validator-function', () => {
     // thrown away, so a failing union pointed at the object rather than at the
     // field the author got wrong. The two definitions people edit most in a real
     // config schema are union-rooted, which makes this the common case.
+    // The option has to be free when it is off, and "free" means the generator
+    // emits the same text — not merely equivalent text. An eagerly-created branch
+    // buffer cost 40% of the throughput of a valid instance against a
+    // union-rooted schema, which is exactly the shape a config schema is full of,
+    // so nothing about the collector may leak into a build that did not ask.
+    it('emits identical code for unions when branch errors are off', () => {
+      for (const schema of [
+        { anyOf: [{ type: 'string' }, { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }] },
+        { oneOf: [{ type: 'string' }, { type: 'number' }] },
+        {
+          type: 'object',
+          properties: { u: { anyOf: [{ type: 'string' }, { type: 'number' }] } },
+        },
+      ]) {
+        const off = generateValidatorFunction(schema as never, 'Doc')
+        const on = withBranchErrors(schema, 'Doc')
+
+        expect(off).not.toContain('_br')
+        expect(off).not.toContain('selectBranchErrors')
+        expect(on).toContain('selectBranchErrors')
+        expect(off).not.toBe(on)
+      }
+    })
+
+    // On, the buffer is still created only by a branch that has something to put
+    // in it, so a value matching the first branch allocates nothing extra.
+    it('creates the branch buffer lazily so a matching value allocates nothing', () => {
+      const code = withBranchErrors({ anyOf: [{ type: 'string' }, { type: 'number' }] }, 'Doc')
+
+      expect(code).toContain('let _br: ValidationError[][] | null = null')
+      expect(code).toContain('(_br ??= []).push(_m)')
+    })
+
     it('explains a failing anyOf with the branch that describes the value kind', () => {
       const v = evalValidator(
-        generateValidatorFunction(
+        withBranchErrors(
           {
             anyOf: [
               { type: 'string', enum: ['get', 'post'] },
               { type: 'object', properties: { verb: { type: 'string', enum: ['GET', 'POST'] } }, required: ['verb'] },
             ],
-          } as never,
+          },
           'Method',
         ),
       )
@@ -2018,7 +2059,7 @@ describe('generate-validator-function', () => {
 
     it('explains a failing anyOf nested under a property, with the branch path', () => {
       const v = evalValidator(
-        generateValidatorFunction(
+        withBranchErrors(
           {
             type: 'object',
             properties: {
@@ -2029,7 +2070,7 @@ describe('generate-validator-function', () => {
                 ],
               },
             },
-          } as never,
+          },
           'Doc',
         ),
       )
@@ -2045,10 +2086,10 @@ describe('generate-validator-function', () => {
 
     it('explains a failing oneOf the same way', () => {
       const v = evalValidator(
-        generateValidatorFunction(
+        withBranchErrors(
           {
             oneOf: [{ type: 'string' }, { type: 'object', properties: { n: { type: 'integer' } }, required: ['n'] }],
-          } as never,
+          },
           'Either',
         ),
       )
@@ -2066,7 +2107,15 @@ describe('generate-validator-function', () => {
       // Every branch the value matched is correct on its own terms, so the ones
       // that did not are beside the point.
       const v = evalValidator(
-        generateValidatorFunction({ oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] } as never, 'Either'),
+        generateValidatorFunction(
+          { oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] } as never,
+          'Either',
+          '',
+          undefined,
+          undefined,
+          undefined,
+          true,
+        ),
       )
 
       expect(v('abcd')).toEqual({
@@ -2077,7 +2126,15 @@ describe('generate-validator-function', () => {
 
     it('says nothing extra when no branch describes the value at all', () => {
       const v = evalValidator(
-        generateValidatorFunction({ anyOf: [{ type: 'string' }, { type: 'number' }] } as never, 'Scalar'),
+        generateValidatorFunction(
+          { anyOf: [{ type: 'string' }, { type: 'number' }] } as never,
+          'Scalar',
+          '',
+          undefined,
+          undefined,
+          undefined,
+          true,
+        ),
       )
 
       expect(v(true)).toEqual({

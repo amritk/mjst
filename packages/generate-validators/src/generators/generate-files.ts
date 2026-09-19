@@ -47,6 +47,12 @@ type GenerateValidatorFileOptions = {
    * either way.
    */
   readonly coerce?: boolean
+  /**
+   * Whether a failing `anyOf` / `oneOf` also reports the errors of the branch it
+   * meant. Off by default, and off is free — the emitted text is exactly what it
+   * was before the option existed.
+   */
+  readonly branchErrors?: boolean
 }
 
 /**
@@ -96,6 +102,7 @@ export const generateValidatorFile = (
     options?.rootSchema,
     unknownKeys,
     formats,
+    options?.branchErrors === true,
   )
   const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix, unknownKeys, formats)
   // Appended rather than woven in: `coerceX` runs the walk and then calls the
@@ -155,7 +162,15 @@ export const generateValidatorFile = (
   // generated body (validator or boolean guard) uses it, so files that need none
   // carry no unused import.
   const runtimeHelpers = (
-    ['valuesEqual', 'allUnique', 'escapePointer', 'everyItem', 'selectBranchErrors', 'coerceScalar'] as const
+    [
+      'valuesEqual',
+      'allUnique',
+      'escapePointer',
+      'everyItem',
+      'selectBranchErrors',
+      'coerceScalar',
+      'coerceUnion',
+    ] as const
   ).filter((name) => body.includes(`${name}(`))
   if (runtimeHelpers.length > 0) {
     result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.js'\n`

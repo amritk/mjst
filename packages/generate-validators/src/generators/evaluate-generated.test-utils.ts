@@ -33,6 +33,7 @@ const HELPER_NAMES = [
   'everyItem',
   'selectBranchErrors',
   'coerceScalar',
+  'coerceUnion',
 ] as const
 
 const RUNTIME_HELPERS: readonly unknown[] = (() => {

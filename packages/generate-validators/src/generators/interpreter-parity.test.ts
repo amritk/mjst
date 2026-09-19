@@ -599,7 +599,12 @@ const errorShape = (result: unknown): unknown[] =>
 
 describe('generator/interpreter branch-error parity', () => {
   const assertSameErrors = (schema: Record<string, unknown>, values: readonly unknown[]): void => {
-    const generated = evaluateValidator(generateValidatorFunction(schema as never, 'Root'))
+    // Branch errors are opt-in in the generator and always on in the
+    // interpreter, so parity is asserted with the option the interpreter's
+    // behaviour corresponds to.
+    const generated = evaluateValidator(
+      generateValidatorFunction(schema as never, 'Root', '', undefined, undefined, undefined, true),
+    )
     const interpreted = validate(schema as never)
     for (const value of values) {
       expect(errorShape(generated(value)), `${JSON.stringify(schema)} on ${JSON.stringify(value)}`).toEqual(
