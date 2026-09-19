@@ -72,6 +72,101 @@ describe('@amritk/parsers emits what it composes', () => {
     expect(fingerprint(composed)).toBe(fingerprint(await direct()))
   })
 
+  // Every option the two generators take, reached through the facade and reached
+  // directly, asserted equal. This is the audit that decides whether the packages
+  // underneath can be retired: an option with no route through the facade is a
+  // capability that would be lost, and a route that produces different bytes is
+  // worse than none because it looks like it works.
+  it.each([
+    [
+      'typeSuffix',
+      { typeSuffix: 'Dto' } as GenerateOptions,
+      () => buildValidatorSchema(schema, 'Order', 'Dto', undefined, 'count-keys', undefined, false, false),
+    ],
+    [
+      'unknownKeys: count-enumerable',
+      { unknownKeys: 'count-enumerable' } as GenerateOptions,
+      () => buildValidatorSchema(schema, 'Order', '', undefined, 'count-enumerable', undefined, false, false),
+    ],
+    [
+      'formats: all',
+      { formats: 'all' } as GenerateOptions,
+      () => buildValidatorSchema(schema, 'Order', '', undefined, 'count-keys', 'all', false, false),
+    ],
+    [
+      'formats: a list',
+      { formats: ['uuid', 'email'] } as GenerateOptions,
+      () => buildValidatorSchema(schema, 'Order', '', undefined, 'count-keys', ['uuid', 'email'], false, false),
+    ],
+    [
+      'branchErrors',
+      { branchErrors: true } as GenerateOptions,
+      () => buildValidatorSchema(schema, 'Order', '', undefined, 'count-keys', undefined, false, true),
+    ],
+    [
+      'importExt: ts',
+      { importExt: 'ts' } as GenerateOptions,
+      () => buildValidatorSchema(schema, 'Order', '', undefined, 'count-keys', undefined, false, false, false, 'ts'),
+    ],
+  ])('reaches the validator generator\u2019s %s', async (_label, options, direct) => {
+    const composed = await generate(schema, 'Order', { modes: ['types', 'guard', 'validate'], ...options })
+
+    expect(fingerprint(composed)).toBe(fingerprint(await direct()))
+  })
+
+  it.each([
+    [
+      'stripUnknown',
+      { stripUnknown: true } as GenerateOptions,
+      () => buildSchema(schema, 'Order', undefined, false, false, false, 'embedded', './', false, true),
+    ],
+    [
+      'readonly',
+      { readonly: true } as GenerateOptions,
+      () => buildSchema(schema, 'Order', undefined, false, false, false, 'embedded', './', true, false),
+    ],
+    [
+      'caseInsensitive',
+      { caseInsensitive: true } as GenerateOptions,
+      () =>
+        buildSchema(schema, 'Order', undefined, false, false, false, 'embedded', './', false, false, '', 'js', true),
+    ],
+    [
+      'helpersMode: package',
+      { helpersMode: 'package' } as GenerateOptions,
+      () => buildSchema(schema, 'Order', undefined, false, false, false, 'package', './', false, false),
+    ],
+    [
+      'importExt: ts',
+      { importExt: 'ts' } as GenerateOptions,
+      () => buildSchema(schema, 'Order', undefined, false, false, false, 'embedded', './', false, false, '', 'ts'),
+    ],
+    [
+      'typeSuffix',
+      { typeSuffix: 'Dto' } as GenerateOptions,
+      () => buildSchema(schema, 'Order', undefined, false, false, false, 'embedded', './', false, false, 'Dto'),
+    ],
+  ])('reaches the parser generator\u2019s %s', async (_label, options, direct) => {
+    const composed = await generate(schema, 'Order', {
+      modes: ['types', 'parse'],
+      helpersMode: 'embedded',
+      ...options,
+    })
+
+    expect(fingerprint(composed)).toBe(fingerprint(await direct()))
+  })
+
+  it('reaches a $ref into a separately registered document', async () => {
+    const remote = { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] } satisfies JSONSchema
+    const registry = { 'https://example.com/user.json': remote }
+    const root: JSONSchema = { type: 'object', properties: { u: { $ref: 'https://example.com/user.json' } } }
+
+    const composed = await generate(root, 'Order', { modes: ['types', 'guard', 'validate'], schemas: registry })
+    const direct = await buildValidatorSchema(root, 'Order', '', registry, 'count-keys', undefined, false, false)
+
+    expect(fingerprint(composed)).toBe(fingerprint(direct))
+  })
+
   it('declares the type twice across the two direct calls, and once through the facade', async () => {
     const count = (files: readonly GeneratedFile[]): number =>
       files.reduce((total, file) => total + (file.content.match(/^export type Order\b/gm)?.length ?? 0), 0)

@@ -6,6 +6,9 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { rehomeParserFile } from './rehome-parser-file'
 
+/** The extension emitted on relative import specifiers. */
+export type ImportExtension = 'js' | 'ts'
+
 /** A generated TypeScript file, as every mjst generator hands one back. */
 export type GeneratedFile = {
   filename: string
@@ -108,6 +111,24 @@ export type GenerateOptions = {
   readonly helpersImportPrefix?: string
   /** Schema extensions, keyed by definition name, passed through to the parser half. */
   readonly extensions?: Parameters<typeof buildSchema>[2]
+  /**
+   * Extension on every emitted relative import specifier. `'js'` (the default) is
+   * the standard NodeNext form a compiled consumer needs; `'ts'` emits the literal
+   * on-disk paths, so the output runs directly under Node's type stripping with no
+   * build step.
+   *
+   * It reaches both halves, which is not a detail: they share one directory here,
+   * and a set where the parser files say `.ts` and the validator files say `.js`
+   * is one that resolves under neither runtime.
+   */
+  readonly importExt?: ImportExtension
+  /**
+   * Print warnings the parser generator raises about the schema — a keyword it
+   * cannot enforce, a construct it had to widen. Off by default because this is a
+   * library call, and a library that writes to stdout is a nuisance in anything
+   * that embeds it.
+   */
+  readonly logWarnings?: boolean
 }
 
 /** Whether any requested mode needs that generator run at all. */
@@ -146,6 +167,7 @@ export const generate = async (
 
   const typeSuffix = options.typeSuffix ?? ''
   const unknownKeys = options.unknownKeys ?? DEFAULT_UNKNOWN_KEYS
+  const importExt: ImportExtension = options.importExt ?? 'js'
   const needsValidator = wants(modes, VALIDATOR_MODES)
   const needsParser = wants(modes, PARSER_MODES)
   const files: GeneratedFile[] = []
@@ -156,14 +178,14 @@ export const generate = async (
       rootTypeName,
       options.extensions,
       !needsParser, // typesOnly — when the parser is only here to author the type
-      false, // logWarnings
+      options.logWarnings === true,
       modes.includes('parseStrict'),
       options.helpersMode ?? 'package',
       options.helpersImportPrefix ?? './',
       options.readonly === true,
       options.stripUnknown === true,
       typeSuffix,
-      'js',
+      importExt,
       options.caseInsensitive === true,
       options.schemas,
       unknownKeys,
@@ -178,7 +200,7 @@ export const generate = async (
     for (const file of await parserFiles()) {
       if (file.filename !== 'index.ts') files.push(file)
     }
-    files.push({ filename: 'index.ts', content: generateIndexBarrel(files) })
+    files.push({ filename: 'index.ts', content: generateIndexBarrel(files, { importExt }) })
     return files
   }
 
@@ -192,6 +214,7 @@ export const generate = async (
     modes.includes('coerce') || modes.includes('repair'),
     options.branchErrors === true,
     modes.includes('repair'),
+    importExt,
   )
 
   for (const file of validatorFiles) {
@@ -212,11 +235,11 @@ export const generate = async (
       const moduleName = file.filename.replace(/\.ts$/, '')
       files.push({
         filename: `${moduleName}${PARSER_SUFFIX}.ts`,
-        content: rehomeParserFile(file.content, moduleName, PARSER_SUFFIX),
+        content: rehomeParserFile(file.content, moduleName, PARSER_SUFFIX, importExt),
       })
     }
   }
 
-  files.push({ filename: 'index.ts', content: generateIndexBarrel(files) })
+  files.push({ filename: 'index.ts', content: generateIndexBarrel(files, { importExt }) })
   return files
 }

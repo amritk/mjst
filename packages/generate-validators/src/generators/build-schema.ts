@@ -704,6 +704,7 @@ export const buildValidatorSchema = async (
   coerce = false,
   branchErrors = false,
   repair = false,
+  importExt: 'js' | 'ts' = 'js',
 ): Promise<GeneratedFile[]> => {
   // Resolved once: which names are enforced decides both what the emitters check
   // and what `formats.ts` has to define.
@@ -776,6 +777,7 @@ export const buildValidatorSchema = async (
       coerce,
       branchErrors,
       repair,
+      importExt,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })
@@ -794,7 +796,7 @@ export const buildValidatorSchema = async (
   const formatModule = emitFormatModule(called)
   if (formatModule !== '') files.push({ filename: 'formats.ts', content: formatModule })
 
-  files.push({ filename: 'index.ts', content: generateIndexBarrel(files) })
+  files.push({ filename: 'index.ts', content: generateIndexBarrel(files, { importExt }) })
 
   return files
 }

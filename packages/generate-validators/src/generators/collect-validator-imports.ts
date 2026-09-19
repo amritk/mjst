@@ -25,6 +25,12 @@ type CollectValidatorImportsOptions = {
    */
   readonly typeSuffix?: string
   /**
+   * Extension on every emitted relative specifier. `'js'` is the NodeNext form a
+   * compiled consumer needs; `'ts'` is the literal on-disk path, which is what
+   * runs under Node's type stripping with no build step.
+   */
+  readonly importExt?: 'js' | 'ts'
+  /**
    * Whether the file being generated reads each half of a `$ref`'s import — the
    * type, the validator, or both.
    *
@@ -68,7 +74,7 @@ type CollectValidatorImportsOptions = {
  * Generates an import statement for a single $ref, importing both the type
  * and the validator function from the ref's generated file.
  */
-const buildImport = (ref: string, suffix: string, reads: Reads): string | null => {
+const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' | 'ts'): string | null => {
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
@@ -92,9 +98,10 @@ const buildImport = (ref: string, suffix: string, reads: Reads): string | null =
     ...(coercer ? [coercerName] : []),
     ...(repairer ? [repairerName] : []),
   ]
-  if (type && values.length > 0) return `import { type ${typeName}, ${values.join(', ')} } from './${filename}.js'`
-  if (values.length > 0) return `import { ${values.join(', ')} } from './${filename}.js'`
-  if (type) return `import type { ${typeName} } from './${filename}.js'`
+  if (type && values.length > 0)
+    return `import { type ${typeName}, ${values.join(', ')} } from './${filename}.${importExt}'`
+  if (values.length > 0) return `import { ${values.join(', ')} } from './${filename}.${importExt}'`
+  if (type) return `import type { ${typeName} } from './${filename}.${importExt}'`
   return null
 }
 
@@ -117,6 +124,7 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
   const rootSchema = options?.rootSchema
   const typeSuffix = options?.typeSuffix ?? ''
   const reads: Reads = options?.reads ?? (() => ({ type: true, validator: true }))
+  const importExt = options?.importExt ?? 'js'
 
   // `includeTypeOnly`: the import brings in the type as well as the validator, so
   // it has to cover the positions the *type* generator reads even where the
@@ -147,7 +155,7 @@ export const collectValidatorImports = (schema: JSONSchema, options?: CollectVal
       if (!resolved) continue
     }
 
-    const statement = buildImport(ref, typeSuffix, reads)
+    const statement = buildImport(ref, typeSuffix, reads, importExt)
     // A ref whose file the emitted text neither names nor calls — a branch that
     // folded away took both halves with it — needs no import at all. The filename
     // is still marked seen: a second ref to it would reach the same answer.

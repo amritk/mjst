@@ -256,6 +256,47 @@ describe('generate', () => {
     expect(alone.find((file) => file.filename === 'doc.ts')?.content).toContain('export type Doc')
   })
 
+  it.each([['js'], ['ts']] as const)('emits %s specifiers consistently across both halves', async (ext) => {
+    const files = await generate(schema, 'Doc', {
+      modes: [...ALL_MODES],
+      helpersMode: 'embedded',
+      importExt: ext,
+    })
+
+    const specifiers = files.flatMap((file) =>
+      [...file.content.matchAll(/from '(\.[^']*)'/g)].map((m) => m[1] as string),
+    )
+
+    expect(specifiers.length).toBeGreaterThan(0)
+    // One directory, one extension. A set where the parser files say `.ts` and the
+    // validator files say `.js` resolves under neither runtime, and that is what
+    // hardcoding it on one side of the split would have produced.
+    expect(specifiers.filter((specifier) => !specifier.endsWith(`.${ext}`))).toEqual([])
+  })
+
+  it('resolves every relative specifier to a file it actually emitted', async () => {
+    const files = await generate(schema, 'Doc', { modes: [...ALL_MODES], helpersMode: 'embedded', importExt: 'ts' })
+    const emitted = new Set(files.map((file) => file.filename))
+
+    const dangling = files.flatMap((file) => {
+      const dir = file.filename.includes('/') ? `${file.filename.slice(0, file.filename.lastIndexOf('/'))}/` : ''
+      return [...file.content.matchAll(/from '(\.[^']*)'/g)]
+        .map((match) => (match[1] as string).replace(/^\.\//, ''))
+        .map((specifier) => {
+          const joined: string[] = []
+          for (const segment of `${dir}${specifier}`.split('/')) {
+            if (segment === '.' || segment === '') continue
+            if (segment === '..') joined.pop()
+            else joined.push(segment)
+          }
+          return joined.join('/')
+        })
+        .filter((target) => !emitted.has(target))
+    })
+
+    expect(dangling).toEqual([])
+  })
+
   it('ships no validator runtime for a build that asked for no validator mode', async () => {
     const parseOnly = await generate(schema, 'Doc', { modes: ['types', 'parse'], helpersMode: 'embedded' })
     const typesOnly = await generate(schema, 'Doc', { modes: ['types'], helpersMode: 'embedded' })

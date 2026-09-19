@@ -55,8 +55,8 @@ const declarationEnd = (source: string, start: number): number => {
  * side (`./inner.parse.js`). Leaving the import alone would point the value names
  * at a module that no longer exports them.
  */
-const rehomeImport = (statement: string, suffix: string): string[] => {
-  const match = /^import\s+\{([^}]*)\}\s+from\s+'\.\/([^']+)\.js';?$/.exec(statement.trim())
+const rehomeImport = (statement: string, suffix: string, ext: 'js' | 'ts'): string[] => {
+  const match = /^import\s+\{([^}]*)\}\s+from\s+'\.\/([^']+)\.(?:js|ts)';?$/.exec(statement.trim())
   if (!match) return [statement]
 
   const [, clause = '', module = ''] = match
@@ -73,8 +73,8 @@ const rehomeImport = (statement: string, suffix: string): string[] => {
   const values = names.filter((name) => !name.startsWith('type '))
 
   const lines: string[] = []
-  if (types.length > 0) lines.push(`import type { ${types.join(', ')} } from './${module}.js';`)
-  if (values.length > 0) lines.push(`import { ${values.join(', ')} } from './${module}${suffix}.js';`)
+  if (types.length > 0) lines.push(`import type { ${types.join(', ')} } from './${module}.${ext}';`)
+  if (values.length > 0) lines.push(`import { ${values.join(', ')} } from './${module}${suffix}.${ext}';`)
   return lines
 }
 
@@ -90,7 +90,12 @@ const rehomeImport = (statement: string, suffix: string): string[] => {
  * helper module), so the caller can hand it every file without sorting them
  * first.
  */
-export const rehomeParserFile = (source: string, moduleName: string, suffix: string): string => {
+export const rehomeParserFile = (
+  source: string,
+  moduleName: string,
+  suffix: string,
+  ext: 'js' | 'ts' = 'js',
+): string => {
   const declared: string[] = []
   let result = source
 
@@ -112,7 +117,9 @@ export const rehomeParserFile = (source: string, moduleName: string, suffix: str
 
   const rehomed = result
     .split('\n')
-    .flatMap((line) => (line.startsWith('import ') && line.includes("from './") ? rehomeImport(line, suffix) : [line]))
+    .flatMap((line) =>
+      line.startsWith('import ') && line.includes("from './") ? rehomeImport(line, suffix, ext) : [line],
+    )
 
   // The declarations that just left were readers too. A `$ref`'s *type* is
   // typically named by the removed `export type Doc = { r?: Inner }` and by
@@ -122,7 +129,7 @@ export const rehomeParserFile = (source: string, moduleName: string, suffix: str
   const mentions = identifierMentions(body)
   const kept = rehomed.filter((line) => !line.startsWith('import ') || importIsRead(line, mentions))
 
-  return `import type { ${declared.join(', ')} } from './${moduleName}.js';\n${kept.join('\n')}`
+  return `import type { ${declared.join(', ')} } from './${moduleName}.${ext}';\n${kept.join('\n')}`
 }
 
 /** Whether anything outside the import statements still names what it brings in. */

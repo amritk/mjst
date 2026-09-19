@@ -55,6 +55,8 @@ type GenerateValidatorFileOptions = {
    * validator ever sees it, and never shows up as a repair.
    */
   readonly repair?: boolean
+  /** Extension on every emitted relative specifier: `'js'` (default) or `'ts'`. */
+  readonly importExt?: 'js' | 'ts'
   /**
    * Whether a failing `anyOf` / `oneOf` also reports the errors of the branch it
    * meant. Off by default, and off is free — the emitted text is exactly what it
@@ -102,6 +104,7 @@ export const generateValidatorFile = (
     ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
   })
   const unknownKeys = options?.unknownKeys ?? DEFAULT_UNKNOWN_KEYS
+  const importExt = options?.importExt ?? 'js'
   const formats = options?.formats ?? NO_FORMATS
   const validatorFunction = generateValidatorFunction(
     schema,
@@ -143,6 +146,7 @@ export const generateValidatorFile = (
     selfRef: options?.selfRef,
     rootSchema: options?.rootSchema,
     typeSuffix,
+    importExt,
     reads: ({ typeName: name, validatorName, coercerName, repairerName }) => ({
       type: mentions(name),
       validator: mentions(validatorName),
@@ -170,7 +174,7 @@ export const generateValidatorFile = (
   ]
 
   // `.js` extension so the relative import resolves under Node ESM, not only Bun.
-  let result = `import type { ${resultTypes.join(', ')} } from './validation-result.js'\n`
+  let result = `import type { ${resultTypes.join(', ')} } from './validation-result.${importExt}'\n`
 
   // Structural `const` checks call the runtime `valuesEqual` helper; structural
   // `uniqueItems` checks call `allUnique`; error paths built from a runtime key
@@ -196,7 +200,7 @@ export const generateValidatorFile = (
   // does not see it.
   if (body.includes('MAX_REPAIR_PASSES')) runtimeHelpers.push('MAX_REPAIR_PASSES')
   if (runtimeHelpers.length > 0) {
-    result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.js'\n`
+    result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.${importExt}'\n`
   }
 
   // The `format` checks live in their own generated module, and only the ones
@@ -207,7 +211,7 @@ export const generateValidatorFile = (
     .filter((name) => body.includes(`${name}(`))
     .sort()
   if (formatChecks.length > 0) {
-    result += `import { ${formatChecks.join(', ')} } from './formats.js'\n`
+    result += `import { ${formatChecks.join(', ')} } from './formats.${importExt}'\n`
   }
 
   for (const imp of refImports) {
