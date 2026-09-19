@@ -17,6 +17,7 @@ export default defineConfig({
       { find: /^@amritk\/generate-examples$/, replacement: resolve(root, 'packages/generate-examples/src/index.ts') },
       { find: /^@amritk\/generate-markdown$/, replacement: resolve(root, 'packages/generate-markdown/src/index.ts') },
       { find: /^@amritk\/generate-parsers$/, replacement: resolve(root, 'packages/generate-parsers/src/index.ts') },
+      { find: /^@amritk\/parsers$/, replacement: resolve(root, 'packages/parsers/src/index.ts') },
       {
         find: /^@amritk\/generate-validators$/,
         replacement: resolve(root, 'packages/generate-validators/src/index.ts'),

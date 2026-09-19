@@ -47,6 +47,27 @@ const declarationEnd = (source: string, start: number): number => {
 }
 
 /**
+ * An import of a sibling module, recognised without ever writing the specifier
+ * prefix as a string.
+ *
+ * This is a regex rather than the obvious `line.includes("from './")` because
+ * the build rewrites that literal. `tsc-alias -f` scans the compiled output for
+ * import specifiers to resolve, cannot tell a string that merely *looks* like
+ * one from the real thing, and turned `"from './"` into `"from './index.js"` —
+ * a predicate that is never true. Nothing failed loudly: every test in this repo
+ * aliases workspace packages to `src`, so rehoming worked in the suite and
+ * silently stopped happening in the shipped package, which then emitted parser
+ * files importing names from the validator file that does not export them.
+ *
+ * The repo has been here before — a corrupted regex literal shipped
+ * `@amritk/generate-parsers@0.12.3` dead on arrival, which is what
+ * `scripts/check-publishable.mjs` exists to talk about. The rule this encodes:
+ * never spell an import specifier as a plain string literal in code that gets
+ * compiled through `tsc-alias`.
+ */
+const RELATIVE_IMPORT = /^import\s.*\sfrom\s+'\.\.?\//
+
+/**
  * Rewrites one relative import so it points at the parser half of that module.
  *
  * A parser file importing a `$ref` target wants three things from it, and after
@@ -117,9 +138,7 @@ export const rehomeParserFile = (
 
   const rehomed = result
     .split('\n')
-    .flatMap((line) =>
-      line.startsWith('import ') && line.includes("from './") ? rehomeImport(line, suffix, ext) : [line],
-    )
+    .flatMap((line) => (RELATIVE_IMPORT.test(line) ? rehomeImport(line, suffix, ext) : [line]))
 
   // The declarations that just left were readers too. A `$ref`'s *type* is
   // typically named by the removed `export type Doc = { r?: Inner }` and by

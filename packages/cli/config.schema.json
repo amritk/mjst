@@ -82,7 +82,14 @@
       "x-cli-flag": "--validators",
       "x-icon": "\u2705",
       "default": false,
-      "description": "Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code."
+      "description": "Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. They share one directory and one declaration of X with the parser: the type and the validators land in x.ts, and the parser moves to x.parse.ts beside them, importing the type from there. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code."
+    },
+    "check": {
+      "type": "boolean",
+      "x-cli-flag": "--check",
+      "x-icon": "\ud83d\udd0e",
+      "default": false,
+      "description": "Also emit a checkX alongside each validateX. It is the same ValidationResult, carrying the one error that stopped it: where validateX walks the whole document to collect every violation, checkX gives up at the first and costs a single error object. Reach for it when a failure has to be reported but only the first thing wrong matters \u2014 a service refusing to boot on a bad config does not need the other nine. When nothing has to be reported at all, isX is cheaper still, since it builds no error object. validateX and isX are unchanged either way. Requires validators."
     },
     "coerce": {
       "type": "boolean",

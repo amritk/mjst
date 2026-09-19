@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { CLI_BIN, ROOT, runCommand, runNode } from './e2e-helpers'
@@ -148,6 +149,49 @@ describe('dist-smoke', () => {
       }
     `
     await runNode(['--input-type=module', '-e', loader])
+  })
+
+  it('the built @amritk/parsers still rehomes a $ref import', async () => {
+    // A behavioural assertion on the *built* artifact, because this exact bug
+    // shipped invisibly: `tsc-alias -f` rewrote the string literal `"from './"`
+    // inside `rehome-parser-file.ts` into `"from './index.js"`, a predicate that
+    // is never true, so the rehoming step silently stopped running. Every other
+    // test in this repo aliases workspace packages to `src`, where the literal is
+    // intact — so the whole suite stayed green while the shipped package emitted
+    // parser files importing names from the validator file that does not export
+    // them. Only running the built code catches it.
+    const { generate } = (await import(pathToFileURL(join(ROOT, 'packages/parsers/dist/index.js')).href)) as {
+      generate: (
+        schema: unknown,
+        name: string,
+        options: Record<string, unknown>,
+      ) => Promise<{ filename: string; content: string }[]>
+    }
+
+    const schema = {
+      type: 'object',
+      properties: { r: { $ref: '#/$defs/inner' } },
+      required: ['r'],
+      $defs: { inner: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] } },
+    }
+    const files = await generate(schema, 'Doc', {
+      modes: ['types', 'validate', 'parse'],
+      helpersMode: 'embedded',
+    })
+
+    const parserHalf = files.find((file) => file.filename === 'doc.parse.ts')?.content ?? ''
+
+    // The value half of the `$ref` import has to point at the *parser* sibling.
+    expect(parserHalf).toContain("from './inner.parse.js'")
+    expect(parserHalf).not.toMatch(/import \{[^}]*\bparseInner\b[^}]*\} from '\.\/inner\.js'/)
+    // And every relative specifier must name a file this same build emitted.
+    const emitted = new Set(files.map((file) => file.filename))
+    const dangling = files.flatMap((file) =>
+      [...file.content.matchAll(/from '(\.\/[^']*)'/g)]
+        .map((match) => (match[1] as string).replace(/^\.\//, '').replace(/\.js$/, '.ts'))
+        .filter((target) => !emitted.has(target)),
+    )
+    expect(dangling).toEqual([])
   })
 
   it('the built CLI starts and reports its version', async () => {

@@ -27,7 +27,10 @@ Output:
   --out-dir <dir>       Output directory for the generated files
   --out-file <file>     Single-file output instead of a directory (requires --types-only)
   --types-only          Generate type definitions only, without parser functions
-  --validators          Also emit validateX/isX validators into a validators/ subdir
+  --validators          Also emit validateX/isX validators beside the parsers, over one
+                        shared declaration of each generated type
+  --check               Also emit checkX, the same result as validateX but stopped at the
+                        first violation (requires --validators)
   --coerce              Also emit coerceX, which coerces scalars the way Ajv's coerceTypes
                         does and then validates (requires --validators)
   --repair              Also emit repairX, which coerces, validates, then repairs each

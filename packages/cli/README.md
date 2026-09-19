@@ -95,19 +95,35 @@ JSON-Pointer error paths — and an `isX(input)` boolean type guard:
 npx mjst --schema ./schema.json --out-dir ./generated --validators
 ```
 
-The validators carry the same schema-derived filenames as the parsers, so they land in a
-`validators/` subdirectory to avoid colliding:
+Both halves land in one directory, over a single declaration of each type. The type and the
+validators share the file named after the schema; the parser moves next to them under a
+`.parse` suffix and imports the type from there:
 
 ```
 generated/
-  schema.ts, index.ts            ← parsers + types
-  validators/
-    schema.ts, index.ts          ← validateX / isX
-    validation-result.ts         ← ValidationResult / ValidationError contract
+  schema.ts                      ← export type X, plus isX / validateX
+  schema.parse.ts                ← parseX, importing the type from ./schema
+  validation-result.ts           ← ValidationResult / ValidationError contract
+  index.ts                       ← a barrel over all of it
 ```
 
-This works with `--schema-dir` too (the `validators/` tree mirrors the parser layout) and with
-`--build`. It cannot be combined with `--types-only` or `--out-file`, which emit no runtime code.
+So there is exactly one `export type X` in the output, and the guard, the validator and the
+parser are all talking about it.
+
+This works with `--schema-dir` and `--input asyncapi` too — each schema's own subdirectory
+carries both halves — and with `--build`. It cannot be combined with `--types-only` or
+`--out-file`, which emit no runtime code.
+
+Ask for no validators and there is nothing to collide with, so the parser keeps `schema.ts` and
+its own type, and no `validation-result.ts` is emitted at all.
+
+Three flags shape the validators, and each needs `--validators` alongside it:
+
+- `--check` adds `checkX`, the same `ValidationResult` as `validateX` but stopped at the first
+  violation, so it costs one error object rather than however many the document earns.
+- `--coerce` adds `coerceX`, which moves scalars toward the declared type and then validates.
+- `--repair` adds `repairX`, which coerces, validates, and then repairs each rejected position
+  to a value the schema supplies.
 
 ### Running the generated output
 
@@ -389,7 +405,16 @@ Under `--table` only the content between `<!-- config-table-start -->
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
+<td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. They share one directory and one declaration of X with the parser: the type and the validators land in x.ts, and the parser moves to x.parse.ts beside them, importing the type from there. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
+</tr>
+<tr>
+<td>🔎 <code>check</code></td>
+<td><code>--check</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Also emit a checkX alongside each validateX. It is the same ValidationResult, carrying the one error that stopped it: where validateX walks the whole document to collect every violation, checkX gives up at the first and costs a single error object. Reach for it when a failure has to be reported but only the first thing wrong matters — a service refusing to boot on a bad config does not need the other nine. When nothing has to be reported at all, isX is cheaper still, since it builds no error object. validateX and isX are unchanged either way. Requires validators.</td>
 </tr>
 <tr>
 <td>🧪 <code>coerce</code></td>
@@ -713,7 +738,7 @@ usage error. Run `mjst markdown --help` for details.
 <td align="center"><code>false</code></td>
 </tr>
 <tr>
-<td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
+<td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. They share one directory and one declaration of X with the parser: the type and the validators land in x.ts, and the parser moves to x.parse.ts beside them, importing the type from there. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
 </tr>
 <tr>
 <td>🎲 <code>examples</code></td>

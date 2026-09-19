@@ -443,21 +443,33 @@ describe('cli-e2e', () => {
     expect(planProbes.badKind?.ok).toBe(false)
   })
 
-  // --validators emits validateX/isX beside the parsers. The files carry the
-  // same schema-derived names as the parsers, so they land in a validators/
-  // subdirectory; prove they compile and enforce the schema at runtime.
-  it('emits working validators into a validators/ subdir with --validators', async () => {
+  // --validators emits validateX/isX beside the parsers, in one directory over
+  // one declaration of the type: the validators and the type land in
+  // `workflow.ts`, the parser in `workflow.parse.ts`, and the root barrel
+  // re-exports both halves. Prove the whole thing compiles and enforces the
+  // schema at runtime.
+  it('emits parsers and validators into one directory with --validators', async () => {
     const outDir = await generate('validators-single', WORKFLOW_SCHEMA, ['--validators', '--build'])
 
-    // Parsers still land at the output root; validators mirror them under validators/.
-    const rootIndex = await readFile(join(outDir, 'index.js'), 'utf-8')
-    expect(rootIndex).toContain('parseWorkflow')
+    const files = (await readdir(outDir)).sort()
+    expect(files).toContain('workflow.js')
+    expect(files).toContain('workflow.parse.js')
+    // There is no second tree any more, and nothing left to collide.
+    expect(files).not.toContain('validators')
 
-    const probes = await runProbes(join(outDir, 'validators/index.js'), {
+    // Exactly one declaration of the type, in the file a reader would open for it.
+    const declaring = await readFile(join(outDir, 'workflow.d.ts'), 'utf-8')
+    expect(declaring).toContain('Workflow')
+    const parserHalf = await readFile(join(outDir, 'workflow.parse.js'), 'utf-8')
+    expect(parserHalf).toContain('parseWorkflow')
+
+    const probes = await runProbes(join(outDir, 'index.js'), {
       valid: "m.validateWorkflow({ steps: [{ kind: 'manual', owner: { name: 'a' } }] })",
       invalid: "m.validateWorkflow({ steps: [{ kind: 'bogus' }] })",
       guardTrue: "m.isWorkflow({ steps: [{ kind: 'manual' }] })",
       guardFalse: 'm.isWorkflow({ steps: 7 })',
+      // The parser half is reachable from the very same barrel.
+      parsed: "m.parseWorkflow({ steps: [{ kind: 'manual' }] })",
     })
 
     expect(probes.valid?.value).toBe(true)
@@ -467,6 +479,30 @@ describe('cli-e2e', () => {
     expect(invalid.errors.length).toBeGreaterThan(0)
     expect(probes.guardTrue?.value).toBe(true)
     expect(probes.guardFalse?.value).toBe(false)
+    expect(probes.parsed?.ok).toBe(true)
+  })
+
+  // --check adds checkX, which answers with the same ValidationResult validateX
+  // gives but stops at the first violation. The two must disagree on nothing but
+  // how many errors they collected.
+  it('emits a first-error-only checkX with --check', async () => {
+    const outDir = await generate('check-single', WORKFLOW_SCHEMA, ['--validators', '--check', '--build'])
+
+    const probes = await runProbes(join(outDir, 'index.js'), {
+      checked: "m.checkWorkflow({ steps: [{ kind: 'bogus' }, { kind: 'nonsense' }] })",
+      validated: "m.validateWorkflow({ steps: [{ kind: 'bogus' }, { kind: 'nonsense' }] })",
+      // A valid document is accepted exactly as validateX accepts it.
+      accepted: "m.checkWorkflow({ steps: [{ kind: 'manual' }] })",
+    })
+
+    const checked = probes.checked?.value as { valid: false; errors: { path: string }[] }
+    const validated = probes.validated?.value as { valid: false; errors: { path: string }[] }
+    expect(checked.valid).toBe(false)
+    expect(checked.errors).toHaveLength(1)
+    // Same first error, so the one it reports is the one validateX led with.
+    expect(checked.errors[0]).toEqual(validated.errors[0])
+    expect(validated.errors.length).toBeGreaterThan(1)
+    expect(probes.accepted?.value).toBe(true)
   })
 
   // The coercing half has only ever been exercised through the src-aliased
@@ -475,7 +511,7 @@ describe('cli-e2e', () => {
   it('emits working coercing validators with --coerce', async () => {
     const outDir = await generate('coerce-single', WORKFLOW_SCHEMA, ['--validators', '--coerce', '--build'])
 
-    const probes = await runProbes(join(outDir, 'validators/index.js'), {
+    const probes = await runProbes(join(outDir, 'index.js'), {
       // `"3"` is not a `steps` array, but `name` is a string position reached
       // through a `$ref`, so the coercion has to cross a file boundary.
       coerced: "m.coerceWorkflow({ steps: [{ kind: 'manual', owner: { name: 7 } }] })",
@@ -502,13 +538,13 @@ describe('cli-e2e', () => {
     expect(probes.validateStillPure?.value).toBe(false)
   })
 
-  it('rejects --coerce and --branch-errors without --validators', async () => {
+  it('rejects --coerce, --check and --branch-errors without --validators', async () => {
     const caseDir = join(workDir, 'coerce-needs-validators')
     await mkdir(caseDir, { recursive: true })
     const schemaPath = join(caseDir, 'schema.json')
     await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
 
-    for (const flag of ['--coerce', '--branch-errors']) {
+    for (const flag of ['--coerce', '--check', '--branch-errors']) {
       const result = await runCli(['--schema', schemaPath, '--out-dir', join(caseDir, 'out'), flag])
 
       expect(result.code, flag).toBe(1)
@@ -532,10 +568,10 @@ describe('cli-e2e', () => {
     const withoutFlag = await generate('branch-errors-off', schema, ['--validators', '--build'])
     const withFlag = await generate('branch-errors-on', schema, ['--validators', '--branch-errors', '--build'])
 
-    const off = (await runProbes(join(withoutFlag, 'validators/index.js'), probe)).failing?.value as {
+    const off = (await runProbes(join(withoutFlag, 'index.js'), probe)).failing?.value as {
       errors: { path: string; keyword: string }[]
     }
-    const on = (await runProbes(join(withFlag, 'validators/index.js'), probe)).failing?.value as {
+    const on = (await runProbes(join(withFlag, 'index.js'), probe)).failing?.value as {
       errors: { path: string; keyword: string }[]
     }
 
@@ -543,7 +579,7 @@ describe('cli-e2e', () => {
     expect(on.errors.map((error) => `${error.keyword}${error.path}`)).toEqual(['anyOf', 'enum/verb'])
   })
 
-  it('mirrors the schema-dir layout under validators/ with --validators', async () => {
+  it('keeps each schema-dir subtree whole under --validators', async () => {
     const caseDir = join(workDir, 'validators-schema-dir')
     await mkdir(join(caseDir, 'schemas/nested'), { recursive: true })
     await writeFile(
@@ -568,17 +604,25 @@ describe('cli-e2e', () => {
       { cwd: ROOT },
     )
 
-    const docProbes = await runProbes(join(outDir, 'validators/doc/index.js'), {
+    // Each schema's own subdirectory now carries both halves, so there is no
+    // parallel validators/ tree to mirror.
+    expect(await readdir(outDir)).not.toContain('validators')
+
+    const docProbes = await runProbes(join(outDir, 'doc/index.js'), {
       valid: "m.validateDoc({ id: 'x' })",
       invalid: 'm.isDoc({})',
+      parsed: 'm.parseDoc({})',
     })
-    const planProbes = await runProbes(join(outDir, 'validators/nested/plan/index.js'), {
+    const planProbes = await runProbes(join(outDir, 'nested/plan/index.js'), {
       guard: "m.isPlan({ axiom: { kind: 'assume' } })",
+      parsed: "m.parsePlan({ axiom: { kind: 'assume' } })",
     })
 
     expect(docProbes.valid?.value).toBe(true)
     expect(docProbes.invalid?.value).toBe(false)
+    expect(docProbes.parsed?.ok).toBe(true)
     expect(planProbes.guard?.value).toBe(true)
+    expect(planProbes.parsed?.ok).toBe(true)
   })
 
   it('rejects --validators combined with --types-only', async () => {
@@ -964,13 +1008,12 @@ describe('cli-e2e', () => {
     expect(parserProbes.valid?.ok).toBe(true)
     expect(parserProbes.negativeLumens?.ok).toBe(false)
 
-    const validatorProbes = await runProbes(
-      join(outDir, 'validators/channels/lighting-measured/light-measured/index.js'),
-      {
-        valid: 'm.isLightMeasured({ lumens: 5 })',
-        wrongType: "m.isLightMeasured({ lumens: 'bright' })",
-      },
-    )
+    // The validators ride in the message's own tree, off the same barrel the
+    // parser came from.
+    const validatorProbes = await runProbes(join(outDir, 'channels/lighting-measured/light-measured/index.js'), {
+      valid: 'm.isLightMeasured({ lumens: 5 })',
+      wrongType: "m.isLightMeasured({ lumens: 'bright' })",
+    })
     expect(validatorProbes.valid?.value).toBe(true)
     expect(validatorProbes.wrongType?.value).toBe(false)
 

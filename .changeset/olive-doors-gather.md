@@ -47,3 +47,14 @@ less to generate (2.9 ms → 2.7 ms), lands in six files instead of seven, and
 declares the type once instead of twice. A build that asks for no validator mode
 now also ships no `validation-result.ts`, where composing by hand would have left
 17 KiB of error types nothing could import.
+
+
+Also: the rehoming step recognises a sibling import by regex rather than by the
+obvious `line.includes("from './")`. `tsc-alias -f` rewrites that literal in the
+compiled output — it cannot tell a string that merely looks like an import
+specifier from a real one — turning the predicate into one that is never true.
+Nothing failed loudly, because every test in this repo aliases workspace packages
+to `src`; the suite stayed green while the built package emitted parser files
+importing names from the validator file that does not export them. A dist-level
+smoke test now asserts the built artifact still rehomes, since only running the
+built code can catch it.
