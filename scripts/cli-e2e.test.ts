@@ -469,6 +469,80 @@ describe('cli-e2e', () => {
     expect(probes.guardFalse?.value).toBe(false)
   })
 
+  // The coercing half has only ever been exercised through the src-aliased
+  // tests. This is the one place it runs the way a consumer gets it: emitted by
+  // the packed CLI, compiled, and imported by plain Node.
+  it('emits working coercing validators with --coerce', async () => {
+    const outDir = await generate('coerce-single', WORKFLOW_SCHEMA, ['--validators', '--coerce', '--build'])
+
+    const probes = await runProbes(join(outDir, 'validators/index.js'), {
+      // `"3"` is not a `steps` array, but `name` is a string position reached
+      // through a `$ref`, so the coercion has to cross a file boundary.
+      coerced: "m.coerceWorkflow({ steps: [{ kind: 'manual', owner: { name: 7 } }] })",
+      // Nothing to coerce: the value comes back as the very object passed in.
+      untouched:
+        '(() => { const input = { steps: [] }; const r = m.coerceWorkflow(input); return r.valid && r.value === input })()',
+      // A value no coercion can rescue keeps the error the validator would give.
+      rejected: "m.coerceWorkflow({ steps: [{ kind: 'bogus' }] })",
+      // The pure form is unchanged and still exported alongside.
+      validateStillPure: "m.validateWorkflow({ steps: [{ kind: 'manual', owner: { name: 7 } }] }) === true",
+    })
+
+    const coerced = probes.coerced?.value as { valid: true; value: { steps: { owner: { name: unknown } }[] } }
+    expect(coerced.valid).toBe(true)
+    expect(coerced.value.steps[0]?.owner.name).toBe('7')
+
+    expect(probes.untouched?.value).toBe(true)
+
+    const rejected = probes.rejected?.value as { valid: false; errors: { path: string; keyword: string }[] }
+    expect(rejected.valid).toBe(false)
+    expect(rejected.errors.length).toBeGreaterThan(0)
+
+    // `--coerce` adds `coerceX`; it does not change what `validateX` says.
+    expect(probes.validateStillPure?.value).toBe(false)
+  })
+
+  it('rejects --coerce and --branch-errors without --validators', async () => {
+    const caseDir = join(workDir, 'coerce-needs-validators')
+    await mkdir(caseDir, { recursive: true })
+    const schemaPath = join(caseDir, 'schema.json')
+    await writeFile(schemaPath, JSON.stringify(PLAN_SCHEMA), 'utf-8')
+
+    for (const flag of ['--coerce', '--branch-errors']) {
+      const result = await runCli(['--schema', schemaPath, '--out-dir', join(caseDir, 'out'), flag])
+
+      expect(result.code, flag).toBe(1)
+      expect(result.stderr, flag).toContain('--validators')
+    }
+  })
+
+  // Branch errors are opt-in because collecting them costs throughput on every
+  // union. Both halves of that are worth proving from the shipped artifact: the
+  // flag explains the failure, and its absence leaves the error exactly as it was.
+  it('explains a failing union only when --branch-errors is passed', async () => {
+    const schema = {
+      title: 'Method',
+      anyOf: [
+        { type: 'string', enum: ['get', 'post'] },
+        { type: 'object', properties: { verb: { type: 'string', enum: ['GET', 'POST'] } }, required: ['verb'] },
+      ],
+    }
+    const probe = { failing: "m.validateMethod({ verb: 'GETT' })" }
+
+    const withoutFlag = await generate('branch-errors-off', schema, ['--validators', '--build'])
+    const withFlag = await generate('branch-errors-on', schema, ['--validators', '--branch-errors', '--build'])
+
+    const off = (await runProbes(join(withoutFlag, 'validators/index.js'), probe)).failing?.value as {
+      errors: { path: string; keyword: string }[]
+    }
+    const on = (await runProbes(join(withFlag, 'validators/index.js'), probe)).failing?.value as {
+      errors: { path: string; keyword: string }[]
+    }
+
+    expect(off.errors.map((error) => error.keyword)).toEqual(['anyOf'])
+    expect(on.errors.map((error) => `${error.keyword}${error.path}`)).toEqual(['anyOf', 'enum/verb'])
+  })
+
   it('mirrors the schema-dir layout under validators/ with --validators', async () => {
     const caseDir = join(workDir, 'validators-schema-dir')
     await mkdir(join(caseDir, 'schemas/nested'), { recursive: true })
@@ -583,8 +657,11 @@ describe('cli-e2e', () => {
   })
 
   // --force guarded the removed ownership check. It stays accepted so existing
-  // scripts keep running, warns, and changes nothing about the result.
-  it('accepts the deprecated --force flag with a warning', async () => {
+  // scripts keep running, and changes nothing about the result. It used to warn
+  // as well, which was the wrong trade: the flag is in the old docs, so everyone
+  // who followed them paid a line of noise on every build for a flag that now
+  // merely describes the default. The help text is where it says "deprecated".
+  it('accepts the deprecated --force flag silently', async () => {
     const caseDir = join(workDir, 'force-deprecated')
     await mkdir(caseDir, { recursive: true })
     const schemaPath = join(caseDir, 'schema.json')
@@ -594,7 +671,7 @@ describe('cli-e2e', () => {
     const forced = await runCli(['--schema', schemaPath, '--out-file', outFile, '--types-only', '--force'])
 
     expect(forced.code).toBe(0)
-    expect(forced.stderr).toMatch(/--force is deprecated/)
+    expect(forced.stderr).not.toMatch(/--force/)
     expect(await readFile(outFile, 'utf-8')).toContain('type Plan')
   })
 
