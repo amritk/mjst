@@ -154,6 +154,37 @@ const requiredOf = (schema: SchemaNode): readonly string[] => {
   return Array.isArray(declared) ? declared.filter((key): key is string => typeof key === 'string') : []
 }
 
+/** The description (or `$comment` fallback) to emit as JSDoc above a property. */
+const propertyDescription = (propSchema: JSONSchema): string | undefined => {
+  if (!isSchemaObject(propSchema)) return undefined
+  const description = keywordOf(propSchema, 'description')
+  if (typeof description === 'string') return description
+  const comment = keywordOf(propSchema, '$comment')
+  if (typeof comment === 'string') return comment
+  return undefined
+}
+
+/**
+ * Two things a schema says about the same key, folded into one property.
+ *
+ * Both are kept — each may constrain the value differently — but the `allOf`
+ * node holding them says nothing itself, and the JSDoc above a property is read
+ * off the node this returns. So the merge carries a description forward, taking
+ * the more specific fragment's first. Without that, folding two fragments
+ * silently deleted the docs the schema wrote: a required property inside an
+ * `anyOf` branch is seeded with `true` before the branch's own `properties` are
+ * merged in, so every one of them arrived here as a pair and came out
+ * undocumented, while the optional properties beside it kept their comments.
+ */
+const intersectProperties = (existing: JSONSchema | undefined, sub: JSONSchema): JSONSchema => {
+  // `true` admits every value, so intersecting it only hides what the other
+  // fragment says — including its annotations.
+  if (existing === undefined || existing === true) return sub
+  if (sub === true) return existing
+  const description = propertyDescription(sub) ?? propertyDescription(existing)
+  return description === undefined ? { allOf: [existing, sub] } : { allOf: [existing, sub], description }
+}
+
 /**
  * Every value a schema admits, when that set is finite and spelled out —
  * a `const`, an `enum`, or a `boolean`/`null` type (with the nullable idioms
@@ -259,7 +290,7 @@ const branchOf = (fragments: readonly JSONSchema[], options: TypeOptions, depth:
     for (const key of Object.keys(declared)) {
       const sub = readKey(declared, key) as JSONSchema
       const existing = readKey(properties, key) as JSONSchema | undefined
-      assignKey(properties, key, existing === undefined ? sub : { allOf: [existing, sub] })
+      assignKey(properties, key, intersectProperties(existing, sub))
     }
     for (const key of requiredOf(fragment)) required.add(key)
   }
@@ -1019,16 +1050,6 @@ const overlappingKeys = (keys: readonly string[]): boolean => {
   return false
 }
 
-/** The description (or `$comment` fallback) to emit as JSDoc above a property. */
-const propertyDescription = (propSchema: JSONSchema): string | undefined => {
-  if (!isSchemaObject(propSchema)) return undefined
-  const description = keywordOf(propSchema, 'description')
-  if (typeof description === 'string') return description
-  const comment = keywordOf(propSchema, '$comment')
-  if (typeof comment === 'string') return comment
-  return undefined
-}
-
 /**
  * Renders an `object` schema: a property literal when it declares properties, a
  * `Record`/index type when it only declares open-ended keys, else the bare
@@ -1304,17 +1325,22 @@ const unionBranchType = (
   const own = keywordMap(branch, 'properties')
   if (required.length === 0) return standalone()
 
+  const declaredBy = (key: string): JSONSchema | undefined =>
+    domain === undefined ? undefined : (readKey(domain, key) as JSONSchema | undefined)
+
+  // The branch's own property block comes first, so the literal reads in the
+  // order the schema writes it rather than required keys first.
   const properties: Record<string, JSONSchema> = {}
-  for (const key of required) {
-    const declared = domain === undefined ? undefined : readKey(domain, key)
-    assignKey(properties, key, declared === undefined ? true : (declared as JSONSchema))
-  }
   if (own !== undefined) {
     for (const key of Object.keys(own)) {
-      const sub = readKey(own, key) as JSONSchema
-      const existing = readKey(properties, key) as JSONSchema | undefined
-      assignKey(properties, key, existing === undefined ? sub : { allOf: [existing, sub] })
+      assignKey(properties, key, intersectProperties(declaredBy(key), readKey(own, key) as JSONSchema))
     }
+  }
+  // A key only `required` names takes the composing schema's declaration, and
+  // is present with any value when that schema does not declare it either.
+  for (const key of required) {
+    if (Object.hasOwn(properties, key)) continue
+    assignKey(properties, key, declaredBy(key) ?? true)
   }
   return objectTypeToTs({ type: 'object', properties, required: [...required] } as SchemaNode, options, depth)
 }
