@@ -2465,6 +2465,91 @@ describe('generateTypeDefinition', () => {
     })
   })
 
+  // A whole-output golden, and the only test here that fails when *anything*
+  // about the emitted text changes.
+  //
+  // Every other test in this file asserts the part of the output it was written
+  // to assert, which means a part nobody thought to name can change without one
+  // of them going red — and that is not hypothetical. Required properties inside
+  // an `anyOf` branch lost their JSDoc for a whole patch release, silently,
+  // because no test named that combination. The corpus tests would not have
+  // caught it either: they assert that generation produces non-empty output
+  // without throwing, nothing about what the output says.
+  //
+  // So this pins one schema that exercises every composition path at once. It is
+  // meant to be updated when the output genuinely changes — the point is that
+  // updating it is a deliberate act, visible in the diff, rather than something
+  // that happens to nobody's notice.
+  it('emits the whole expected type for a schema using every composition path', () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      description: 'A request the gateway knows how to forward.',
+      properties: {
+        id: { type: 'string', description: 'Stable identifier for this route.' },
+        label: { type: 'string', $comment: 'Shown in the dashboard; no URL here.' },
+        mode: { enum: ['proxy', 'mock'] },
+        method: {
+          anyOf: [
+            { type: 'string', enum: ['get', 'post'] },
+            {
+              type: 'object',
+              properties: {
+                verb: { type: 'string', description: 'The HTTP verb to send.' },
+                retries: { type: 'integer', description: 'How many times to retry.' },
+              },
+              required: ['verb'],
+            },
+          ],
+        },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Free-form labels.' },
+      },
+      required: ['id', 'method'],
+      if: { properties: { mode: { const: 'mock' } }, required: ['mode'] },
+      then: {
+        properties: { fixture: { type: 'string', description: 'Response body to serve.' } },
+        required: ['fixture'],
+      },
+      oneOf: [{ required: ['id'] }, { required: ['label'] }],
+      patternProperties: { '^x-': true },
+    }
+
+    expect(generateTypeDefinition(schema, 'Route', { readonly: true })).toBe(
+      [
+        '/**',
+        '* Route',
+        '*',
+        '* A request the gateway knows how to forward.',
+        '*/',
+        'export type Route = {',
+        '  /** Stable identifier for this route. */',
+        '  readonly id: string;',
+        '  /** Shown in the dashboard; no URL here. */',
+        '  readonly label?: string;',
+        '  readonly mode?: "proxy" | "mock";',
+        '  readonly method: "get" | "post" | {',
+        '  /** The HTTP verb to send. */',
+        '  readonly verb: string;',
+        '  /** How many times to retry. */',
+        '  readonly retries?: number;',
+        '};',
+        '  /** Free-form labels. */',
+        '  readonly tags?: readonly string[];',
+        '  readonly [key: `x-${string}`]: unknown;',
+        '} & ({',
+        '  readonly mode: "mock";',
+        '  /** Response body to serve. */',
+        '  readonly fixture: string;',
+        '} | { readonly mode?: "proxy" }) & ({',
+        '  /** Stable identifier for this route. */',
+        '  readonly id: string;',
+        '} | {',
+        '  /** Shown in the dashboard; no URL here. */',
+        '  readonly label: string;',
+        '});',
+      ].join('\n'),
+    )
+  })
+
   it('names the nesting limit instead of overflowing the stack', () => {
     let node: unknown = { type: 'string' }
     for (let i = 0; i < 500; i++) node = { type: 'object', properties: { a: node } }
