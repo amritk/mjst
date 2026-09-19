@@ -61,7 +61,7 @@ const SUBPATH_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(['"])(#[^'"]*)\1/
 /**
  * The helper sources `@amritk/generate-parsers` reads out of an *installed*
  * `@amritk/helpers` in `--helpers=embedded` mode. Mirrors `RuntimeHelperName`
- * in `packages/generate-parsers/src/helpers/collect-helpers.ts`; keep in sync.
+ * in `packages/parsers/src/parsers/helpers/collect-helpers.ts`; keep in sync.
  */
 const RUNTIME_HELPER_SOURCES = ['has-ref', 'is-object', 'validate-array', 'validate-record'].map(
   (helper) => `src/${helper}.ts`,
@@ -96,9 +96,9 @@ describe('dist-smoke', () => {
   })
 
   it('no `#` subpath-import specifier survives into dist', async () => {
-    // generate-parsers, generate-validators and generate-examples declare
-    // `imports: { "#generators/*": "./src/generators/*.ts" }` and publish that
-    // map, but their `files` ships no `src/` — so any `#` specifier that
+    // parsers and generate-examples declare `imports` maps such as
+    // `{ "#generators/*": "./src/generators/*.ts" }` and publish them, but
+    // their `files` ships no `src/` — so any `#` specifier that
     // reached dist would resolve to a path missing from the tarball. tsc-alias
     // rewrites all of them today; this pins that, because the failure mode
     // (ERR_MODULE_NOT_FOUND only for installed consumers) is invisible to the

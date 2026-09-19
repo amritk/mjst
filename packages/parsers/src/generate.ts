@@ -1,8 +1,8 @@
-import { buildSchema } from '@amritk/generate-parsers'
-import { buildValidatorSchema } from '@amritk/generate-validators'
 import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
 import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import { buildSchema } from '#parsers/index'
+import { buildValidatorSchema } from '#validators/index'
 
 import { rehomeParserFile } from './rehome-parser-file'
 
@@ -145,14 +145,14 @@ const wants = (modes: readonly Mode[], group: ReadonlySet<Mode>): boolean => mod
  * Generates one coherent set of files for a schema, carrying whichever entry
  * points were asked for.
  *
- * This composes `@amritk/generate-validators` and `@amritk/generate-parsers`
- * rather than reimplementing either. That is deliberate: the two emit genuinely
- * different code for the value-producing modes — a parser fuses building the
- * output with checking it and is several times faster for it, while a validator
- * keeps the passes apart and can therefore report — and collapsing them into one
- * emitter would mean giving up one of those properties. Composing keeps both and
- * spends the cost on reconciling their output instead, which is bounded and
- * testable.
+ * This composes the two generator engines that live beside it, `./parsers` and
+ * `./validators`, rather than reimplementing either. That is deliberate: the two
+ * emit genuinely different code for the value-producing modes — a parser fuses
+ * building the output with checking it and is several times faster for it, while
+ * a validator keeps the passes apart and can therefore report — and collapsing
+ * them into one emitter would mean giving up one of those properties. Composing
+ * keeps both and spends the cost on reconciling their output instead, which is
+ * bounded and testable.
  *
  * What makes the reconciliation honest is that both generators derive the type
  * from the same `@amritk/helpers/generate-type-definition`, so the type is

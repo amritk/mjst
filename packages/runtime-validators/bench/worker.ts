@@ -2,10 +2,10 @@ import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
 // The measurement core is shared, not copied: the canonical implementation
-// lives in generate-parsers/bench/measure.ts and the other bench packages
+// lives in parsers/bench/parsers/measure.ts and the other bench packages
 // reach for it the same way. Bench code is unpublished dev tooling, so the
 // cross-package relative import is deliberate.
-import { measure, type Stats } from '../../generate-parsers/bench/measure.ts'
+import { measure, type Stats } from '../../parsers/bench/parsers/measure.ts'
 import { RUNTIME_BENCH_CASES } from './cases.ts'
 import { BENCH_CASES } from './schemas.ts'
 

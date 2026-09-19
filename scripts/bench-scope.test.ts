@@ -92,19 +92,20 @@ describe('bench-scope', () => {
   })
 
   // Bench harness code is shared across packages (every bench measures through
-  // generate-parsers/bench/measure.ts), so it cannot be scoped to one suite.
+  // parsers/bench/parsers/measure.ts), so it cannot be scoped to one suite.
   it('runs everything when bench harness code changes', () => {
     const scope = selectSuites(['packages/yaml/bench/worker.ts'], readWorkspace(`${import.meta.dirname}/..`))
     expect(names(scope.suites)).toBe(names(SUITES.map((suite) => suite.name)))
   })
 
-  // api and generate-validators both depend on runtime-validators; nothing
-  // downstream of it feeds the parser benches. Its own `runtime` suite leads,
-  // so an interpreter change is now timed directly rather than only through
-  // the request path that wraps it.
+  // api and parsers both depend on runtime-validators, and the parser,
+  // validator and codegen suites all sit in parsers now that both generator
+  // engines live there — so the interpreter's dependants reach every suite but
+  // yaml. Its own `runtime` suite leads, so an interpreter change is timed
+  // directly rather than only through the request path that wraps it.
   it('scopes a runtime-validators change to its dependants', () => {
     const scope = selectSuites(['packages/runtime-validators/src/index.ts'], readWorkspace(`${import.meta.dirname}/..`))
-    expect(names(scope.suites)).toBe('api,runtime,validators')
+    expect(names(scope.suites)).toBe('api,codegen,parsers,runtime,validators')
   })
 
   it('explains when a benchmarked package simply does not depend on the change', () => {

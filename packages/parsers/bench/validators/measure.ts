@@ -1,7 +1,7 @@
 /**
  * Re-export of the shared bench measurement core. The canonical copy lives in
- * `./parsers/measure.ts`, next to the parser engine's own bench, and every
- * other bench in the repo reaches for that one rather than keeping a copy.
+ * `../parsers/measure.ts` (both benches used to carry identical copies that had
+ * to be kept in sync by hand).
  */
 export {
   fmtOps,
@@ -11,4 +11,4 @@ export {
   opsCell,
   type Stats,
   statsOf,
-} from './parsers/measure.ts'
+} from '../parsers/measure.ts'

@@ -3,10 +3,10 @@ import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { buildSchema } from '@amritk/generate-parsers'
-import { buildValidatorSchema } from '@amritk/generate-validators'
 
 import { generate, type Mode } from '../src/index.ts'
+import { buildSchema } from '../src/parsers/index.ts'
+import { buildValidatorSchema } from '../src/validators/index.ts'
 import { type ModeId, SCHEMA, TYPE_NAME } from './cases.ts'
 
 type GeneratedFile = { filename: string; content: string }

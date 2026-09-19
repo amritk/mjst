@@ -40,22 +40,7 @@
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
-    "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
-    "prebench": "bun run --filter='@amritk/helpers' build && bun run build",
-    "bench": "bun --conditions development ./bench/run.ts",
-    "prebench:check": "bun run --filter='@amritk/helpers' build && bun run build",
-    "bench:check": "bun --conditions development ./bench/check.ts",
-    "prebench:coerce": "bun run --filter='@amritk/helpers' build && bun run --filter='@amritk/generate-parsers' build && bun run build",
-    "bench:coerce": "bun --conditions development ./bench/coerce.ts",
-    "prebench:node": "bun run --filter='@amritk/helpers' build && bun run build",
-    "bench:node": "node ./bench/run.ts",
-    "prebench:coerce:node": "bun run --filter='@amritk/helpers' build && bun run --filter='@amritk/generate-parsers' build && bun run build",
-    "bench:coerce:node": "node ./bench/coerce.ts",
-    "bench:moltar": "bun --conditions development ./bench/moltar.ts",
-    "bench:moltar:leaderboard": "bun --conditions development ./bench/moltar-leaderboard.ts"
-  },
-  "imports": {
-    "#generators/*": "./src/generators/*.ts"
+    "test": "NODE_ENV=production vitest run --root ../.. generate-validators"
   },
   "exports": {
     ".": {
@@ -65,19 +50,8 @@
     }
   },
   "dependencies": {
-    "json-schema-typed": "catalog:",
-    "@amritk/helpers": "workspace:*"
-  },
-  "devDependencies": {
-    "@amritk/generate-parsers": "workspace:*",
-    "@amritk/runtime-validators": "workspace:*",
-    "@ryoppippi/unplugin-typia": "^2.6.5",
-    "@scalar/openapi-parser": "^0.26.1",
-    "@sinclair/typebox": "^0.34.49",
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
-    "benny": "^3.7.1",
-    "typia": "^12.1.1",
-    "zod": "^4.4.3"
+    "@amritk/helpers": "workspace:*",
+    "@amritk/parsers": "workspace:*",
+    "json-schema-typed": "catalog:"
   }
 }

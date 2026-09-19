@@ -28,8 +28,9 @@ export type Suite = {
 
 /**
  * Every suite `bench-compare.ts` can run, in table order. `codegen` shares
- * generate-parsers with `parsers`: it times `buildSchema` (compile time)
- * rather than the parser it emits (run time).
+ * @amritk/parsers with `parsers`: it times `buildSchema` (compile time)
+ * rather than the parser it emits (run time). `validators` sits in the same
+ * package now that both generator engines live there.
  *
  * `runtime` times @amritk/runtime-validators directly. It used to be covered
  * only through `api`, which runs the interpreter behind a whole request path —
@@ -38,10 +39,10 @@ export type Suite = {
  * even though @amritk/lint runs those keywords on every schema rule.
  */
 export const SUITES: readonly Suite[] = [
-  { name: 'parsers', pkgDir: 'generate-parsers' },
-  { name: 'validators', pkgDir: 'generate-validators' },
+  { name: 'parsers', pkgDir: 'parsers' },
+  { name: 'validators', pkgDir: 'parsers' },
   { name: 'api', pkgDir: 'api' },
-  { name: 'codegen', pkgDir: 'generate-parsers' },
+  { name: 'codegen', pkgDir: 'parsers' },
   { name: 'yaml', pkgDir: 'yaml' },
   { name: 'runtime', pkgDir: 'runtime-validators' },
 ]
@@ -88,7 +89,7 @@ export const readWorkspace = (tree: string): readonly WorkspacePackage[] => {
     }
     if (!manifest.name) continue
     // devDependencies count: bench code imports sibling packages through them
-    // (generate-parsers' bench reaches for generate-markdown), and an
+    // (the parsers bench reaches for typebox, zod and ajv), and an
     // over-wide scope only costs runtime, while a missing edge costs the
     // regression you were looking for.
     const deps = { ...manifest.dependencies, ...manifest.peerDependencies, ...manifest.devDependencies }
@@ -116,7 +117,7 @@ const directlyChanged = (paths: readonly string[]): Set<string> => {
  * True when a change reaches beyond one package's runtime code: anything
  * outside `packages/` that isn't provably inert, or any bench harness edit.
  * Harness code crosses package lines (every bench shares
- * generate-parsers/bench/measure.ts) and a change to how a number is measured
+ * parsers/bench/parsers/measure.ts) and a change to how a number is measured
  * should be seen against every number, so those run the full set.
  */
 const forcesFullRun = (paths: readonly string[]): boolean =>

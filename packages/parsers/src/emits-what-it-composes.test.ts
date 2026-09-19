@@ -1,14 +1,16 @@
-import { buildSchema } from '@amritk/generate-parsers'
-import { buildValidatorSchema } from '@amritk/generate-validators'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
+import { buildSchema } from '#parsers/index'
+import { buildValidatorSchema } from '#validators/index'
 
 import { type GeneratedFile, generate, type Mode } from './generate'
 
 /**
  * The load-bearing promise of a facade: asking it for one mode gives you exactly
- * what the package that owns that mode would have given you. Not equivalent code
- * — the same bytes.
+ * what the engine that owns that mode would have given you. Not equivalent code
+ * — the same bytes. The engines now live next door as internal modules rather
+ * than as separate packages, so the direct call reaches for them directly; the
+ * comparison is unchanged, because it was always facade against engine.
  *
  * This is worth a test rather than a benchmark. If the output is identical then
  * runtime parity is a tautology and there is nothing to measure; if it ever
@@ -74,10 +76,10 @@ describe('@amritk/parsers emits what it composes', () => {
   })
 
   // Every option the two generators take, reached through the facade and reached
-  // directly, asserted equal. This is the audit that decides whether the packages
-  // underneath can be retired: an option with no route through the facade is a
-  // capability that would be lost, and a route that produces different bytes is
-  // worse than none because it looks like it works.
+  // directly, asserted equal. This is the audit that decided the packages the
+  // engines came from could be retired: an option with no route through the
+  // facade is a capability that would be lost, and a route that produces
+  // different bytes is worse than none because it looks like it works.
   it.each([
     [
       'typeSuffix',

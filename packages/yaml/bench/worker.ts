@@ -3,10 +3,10 @@ import { parse, parseDocument } from '@amritk/yaml'
 import { parse as reference } from 'yaml'
 
 // The measurement core is shared, not copied: the canonical implementation
-// lives in generate-parsers/bench/measure.ts and the other bench packages
+// lives in parsers/bench/parsers/measure.ts and the other bench packages
 // reach for it the same way. Bench code is unpublished dev tooling, so the
 // cross-package relative import is deliberate.
-import { measure, type Stats } from '../../generate-parsers/bench/measure.ts'
+import { measure, type Stats } from '../../parsers/bench/parsers/measure.ts'
 import { YAML_BENCH_CASES } from './cases.ts'
 import { FIXTURES } from './fixtures.ts'
 

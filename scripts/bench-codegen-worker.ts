@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { statsOf } from '../packages/generate-parsers/bench/measure.ts'
+import { statsOf } from '../packages/parsers/bench/parsers/measure.ts'
 
 /**
  * One isolated codegen measurement for `bench-compare.ts`: times `buildSchema`

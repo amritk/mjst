@@ -17,6 +17,17 @@ export default defineConfig({
       { find: /^@amritk\/generate-examples$/, replacement: resolve(root, 'packages/generate-examples/src/index.ts') },
       { find: /^@amritk\/generate-markdown$/, replacement: resolve(root, 'packages/generate-markdown/src/index.ts') },
       { find: /^@amritk\/generate-parsers$/, replacement: resolve(root, 'packages/generate-parsers/src/index.ts') },
+      // The two generator engines live inside @amritk/parsers as internal
+      // modules; the subpath rules come first so the bare-name rule below
+      // never swallows them.
+      {
+        find: /^@amritk\/parsers\/internal\/parsers$/,
+        replacement: resolve(root, 'packages/parsers/src/parsers/index.ts'),
+      },
+      {
+        find: /^@amritk\/parsers\/internal\/validators$/,
+        replacement: resolve(root, 'packages/parsers/src/validators/index.ts'),
+      },
       { find: /^@amritk\/parsers$/, replacement: resolve(root, 'packages/parsers/src/index.ts') },
       {
         find: /^@amritk\/generate-validators$/,
