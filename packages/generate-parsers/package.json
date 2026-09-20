@@ -1,7 +1,7 @@
 {
   "name": "@amritk/generate-parsers",
-  "version": "0.24.0",
-  "description": "Deprecated \u2014 merged into @amritk/parsers. Kept as a compatibility shim; use `generate` instead.",
+  "version": "0.25.0",
+  "description": "Deprecated — merged into @amritk/parsers. Kept as a compatibility shim; use `generate` instead.",
   "license": "MIT",
   "author": "amritk",
   "repository": {
