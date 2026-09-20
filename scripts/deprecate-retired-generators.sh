@@ -2,18 +2,18 @@
 #
 # Deprecate @amritk/generate-parsers and @amritk/generate-validators on npm.
 #
-# Both engines now ship inside @amritk/parsers, which reaches every mode they
-# had through one `generate()` call. The two package directories in this repo
-# are `private: true` stubs, which stops *this repo* from publishing those names
-# again but does nothing to npm — every published version stays installable and
-# undeprecated until this runs.
+# RUN THIS AFTER the final release of both packages has published, not before.
 #
-# Because they are private, there will never be a final "deprecated" release to
-# carry the notice in a manifest. `npm deprecate` against the published range is
-# the whole mechanism, which is why it is a script rather than a release step.
+# Both engines now ship inside @amritk/parsers. The last release of each package
+# is a compatibility shim over it, published for one reason: npm serves the
+# README of the *latest* version, so the signpost pointing at the replacement
+# only reaches npmjs.com by shipping it. Deprecating before that publish would
+# leave the old README — describing an API that has moved — as the page everyone
+# sees.
 #
-# The ranges cover every version ever published: 0.24.0 and 0.18.0 are `latest`
-# for the two packages respectively. Re-run with a wider bound if that changes.
+# The ranges are open-ended on purpose: they must cover the final shim release
+# too. A deprecated package is deprecated at every version, including the one
+# carrying the notice.
 #
 # Requires an npm login with publish rights on the @amritk scope (`npm whoami`
 # must succeed). The release workflow publishes through trusted publishing
@@ -28,8 +28,8 @@ set -euo pipefail
 # Single-quoted, and no backticks: inside a double-quoted bash string a backtick
 # opens a command substitution, so a message wrapping code in backticks is
 # silently truncated at the first one rather than failing loudly.
-npm deprecate '@amritk/generate-parsers@<=0.24.0' \
+npm deprecate '@amritk/generate-parsers@*' \
   'merged into @amritk/parsers — call generate(schema, name, { modes: ["types", "parse"] })'
 
-npm deprecate '@amritk/generate-validators@<=0.18.0' \
-  'merged into @amritk/parsers — call generate(schema, name, { modes: ["types", "validate"] })'
+npm deprecate '@amritk/generate-validators@*' \
+  'merged into @amritk/parsers — call generate(schema, name, { modes: ["types", "guard", "validate"] })'

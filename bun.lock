@@ -127,10 +127,20 @@
     "packages/generate-parsers": {
       "name": "@amritk/generate-parsers",
       "version": "0.24.0",
+      "dependencies": {
+        "@amritk/helpers": "workspace:*",
+        "@amritk/parsers": "workspace:*",
+        "json-schema-typed": "catalog:",
+      },
     },
     "packages/generate-validators": {
       "name": "@amritk/generate-validators",
       "version": "0.18.0",
+      "dependencies": {
+        "@amritk/helpers": "workspace:*",
+        "@amritk/parsers": "workspace:*",
+        "json-schema-typed": "catalog:",
+      },
     },
     "packages/helpers": {
       "name": "@amritk/helpers",

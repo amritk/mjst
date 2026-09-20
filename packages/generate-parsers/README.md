@@ -1,6 +1,10 @@
 # @amritk/generate-parsers
 
-> **Deprecated.** Use [`@amritk/parsers`](../parsers) instead.
+> **Deprecated.** Use [`@amritk/parsers`](https://www.npmjs.com/package/@amritk/parsers) instead.
+>
+> This release is a compatibility shim: `buildSchema` keeps its signature and emits
+> byte-identical output, so upgrading to it breaks nothing. It is the last
+> release of this package.
 
 ## What this was
 
@@ -12,12 +16,20 @@ for types only, a parser function for it.
 ## What replaces it
 
 The engine did not go away — it moved. It now lives inside
-[`@amritk/parsers`](../parsers), behind a single `generate()` call that reaches
-the same parser output plus the guard, validator, coercer and repairer modes,
-and declares the type once for all of them.
+[`@amritk/parsers`](https://github.com/amritk/mjst/tree/main/packages/parsers),
+behind a single `generate()` call that reaches every mode this package had plus
+the others, over one shared type declaration:
 
-The versions already on npm stay there, deprecated. Nothing is published from
-this directory any more.
+| mode | function | value back | tells you |
+|:---|:---|:---|:---|
+| `types` | — | — | — |
+| `guard` | `isX` | — | a boolean, stopping at the first problem |
+| `check` | `checkX` | — | the first error only |
+| `validate` | `validateX` | — | every error |
+| `coerce` | `coerceX` | coerced | every error |
+| `repair` | `repairX` | repaired | the repairs it made, and any errors left |
+| `parse` | `parseX` | repaired | nothing; never fails |
+| `parseStrict` | `parseX` | as given | throws on the first problem |
 
 ## Before / after
 
@@ -32,17 +44,14 @@ const files = await buildSchema(schema, 'Document')
 // after
 import { generate } from '@amritk/parsers'
 
-const files = await generate(schema, 'Document', { modes: ['parse'] })
+const files = await generate(schema, 'Document', { modes: ['types', 'parse'] })
 ```
 
 Both hand back `{ filename, content }[]`. The positional arguments become named
-options, and the three shapes `buildSchema` chose between are now modes:
+options — see the
+[`@amritk/parsers` README](https://github.com/amritk/mjst/tree/main/packages/parsers#readme)
+for the full table.
 
-| before | after |
-|:---|:---|
-| default (coercing parser) | `modes: ['parse']` |
-| `strict: true` | `modes: ['parseStrict']` |
-| `typesOnly: true` | `modes: ['types']` |
-
-See the [`@amritk/parsers` README](../parsers/README.md) for the full mode table
-and options.
+The three shapes `buildSchema` chose between are now modes: the default coercing
+parser is `'parse'`, `strict: true` is `'parseStrict'`, and `typesOnly: true` is
+`'types'` on its own.
