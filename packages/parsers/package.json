@@ -1,0 +1,93 @@
+{
+  "name": "@amritk/parsers",
+  "version": "0.1.0",
+  "description": "One generator surface over mjst's types, validators, coercers, repairers and parsers.",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "author": "amritk",
+  "keywords": [
+    "json-schema",
+    "typescript",
+    "validator",
+    "parser",
+    "code-generation",
+    "mjst"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amritk/mjst.git",
+    "directory": "packages/parsers"
+  },
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/parsers#readme",
+  "bugs": {
+    "url": "https://github.com/amritk/mjst/issues"
+  },
+  "files": [
+    "dist",
+    "AI.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
+    "prepublishOnly": "node ../../scripts/check-publishable.mjs",
+    "types:check": "tsgo -p . --noEmit",
+    "test": "NODE_ENV=production vitest run --root ../.. packages/parsers/",
+    "prebench": "bun run --filter='@amritk/helpers' build",
+    "bench": "bun --conditions development ./bench/compare.ts",
+    "prebench:parsers": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:parsers": "bun --conditions development ./bench/parsers/run.ts",
+    "prebench:parsers:node": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:parsers:node": "node ./bench/parsers/run.ts",
+    "bench:parsers:moltar": "bun --conditions development ./bench/parsers/moltar.ts",
+    "prebench:validators": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:validators": "bun --conditions development ./bench/validators/run.ts",
+    "prebench:validators:node": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:validators:node": "node ./bench/validators/run.ts",
+    "prebench:validators:check": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:validators:check": "bun --conditions development ./bench/validators/check.ts",
+    "prebench:validators:coerce": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:validators:coerce": "bun --conditions development ./bench/validators/coerce.ts",
+    "prebench:validators:coerce:node": "bun run --filter='@amritk/helpers' build && bun run build",
+    "bench:validators:coerce:node": "node ./bench/validators/coerce.ts",
+    "bench:validators:moltar": "bun --conditions development ./bench/validators/moltar.ts",
+    "bench:validators:moltar:leaderboard": "bun --conditions development ./bench/validators/moltar-leaderboard.ts"
+  },
+  "imports": {
+    "#internal/*": "./src/*.ts",
+    "#parsers/*": "./src/parsers/*.ts",
+    "#validators/*": "./src/validators/*.ts"
+  },
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@amritk/helpers": "workspace:*",
+    "json-schema-typed": "catalog:"
+  },
+  "devDependencies": {
+    "@amritk/runtime-validators": "workspace:*",
+    "@ryoppippi/unplugin-typia": "^2.6.5",
+    "@scalar/openapi-parser": "^0.26.1",
+    "@sinclair/typebox": "^0.34.49",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "benny": "^3.7.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.3",
+    "typia": "^12.1.1",
+    "zod": "^4.4.3"
+  }
+}

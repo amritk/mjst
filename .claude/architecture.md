@@ -12,8 +12,7 @@ mjst/
 │   ├── cli/                   # @amritk/mjst — command-line interface (generate + lint)
 │   ├── api/                   # @amritk/api — contract-first HTTP API layer (routes, validation, OpenAPI, typed client)
 │   ├── lint/                  # @amritk/lint — format-agnostic JSON/YAML style-guide linter
-│   ├── generate-parsers/      # @amritk/generate-parsers — parser + type generator
-│   ├── generate-validators/   # @amritk/generate-validators — predicate validator generator
+│   ├── parsers/               # @amritk/parsers — one generator surface: types, guards, validators, coercers, repairers, parsers
 │   ├── runtime-validators/    # @amritk/runtime-validators — eval-free runtime schema interpreter
 │   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — schema → markdown docs (README table + prose reference)
@@ -34,7 +33,7 @@ mjst/
 
 Command-line entry point. Reads CLI flags and/or a JSON config file, loads a schema, runs the generator, and writes TypeScript output. It also carries a `lint` subcommand (`mjst lint <files>`) that lints JSON/YAML documents via `@amritk/lint` and prints a compact `file:line:col` report.
 
-- **Depends on:** `@amritk/generate-parsers`, `@amritk/lint` (`@amritk/generate-markdown` is a **dev** dependency — only `scripts/generate-readme.ts` uses it, and that script is not published)
+- **Depends on:** `@amritk/parsers`, `@amritk/lint`, and `@amritk/generate-markdown` (which the `markdown` subcommand and `scripts/generate-readme.ts` both use)
 - **Bin:** `mjst` → `dist/cli.js` (built for the Node target)
 - **Config schema:** `config.schema.json` — also drives the CLI README table via `@amritk/generate-markdown`. The `lint` subcommand has its own independent flags (see the CLI README).
 
@@ -59,28 +58,25 @@ A fast, **format-agnostic** JSON/YAML style-guide linter — the library behind 
 - **Entry points:** `lintDocument(input, options?)` → `IDiagnostic[]`; `lintDocumentWithResult` (adds a plugin's rewritten `output`); `fixDocument` (applies a `FixerRegistry` to a fixpoint, then re-lints); `createRuleset` / `resolveNamedRuleset` (normalize a definition, layer built-in functions, resolve `extends`).
 - **Rendering is the caller's job:** `lintDocument` returns structured findings only — the library ships no output "formatter" layer, and the CLI supplies its own `file:line:col` report.
 
-### `@amritk/generate-parsers` (`packages/generate-parsers`)
+### `@amritk/parsers` (`packages/parsers`)
 
-Core code generator. Given a `JSONSchema` and a root type name, produces an array of `GeneratedFile` objects — TypeScript type definitions plus optional runtime parser functions that validate and coerce unknown input.
+The one generator surface. Given a `JSONSchema` and a root type name, `generate(schema, typeName, options?)` returns an array of `GeneratedFile` objects carrying whichever entry points the `modes` option asks for: `types`, `guard` (`isFoo`), `validate` (`validateFoo`, every error), `check` (the first error, same result type), `coerce` (`coerceFoo`), `repair` (`repairFoo`), and `parse` / `parseStrict` (`parseFoo`). The default is `['types', 'guard', 'validate']` — nothing that rewrites a document is on unless asked for.
 
-- **Depends on:** `@amritk/helpers`, `json-schema-typed` (`@amritk/generate-markdown` is a **dev** dependency — only `scripts/generate-readme.ts` uses it, and that script is not published)
-- **Subpath imports:**
-  - `#generators/*` → `./src/generators/*.ts`
-  - `#helpers/*` → `./src/helpers/*.ts`
-  - `#types/*` → `./src/types/*.ts`
-- **Key entry point:** `src/generators/build-schema.ts` — traverses the root schema and its `$ref` / `$dynamicRef` graph recursively.
+Underneath are **two** generator engines, which shipped as `@amritk/generate-parsers` and `@amritk/generate-validators` until this package absorbed them:
 
-### `@amritk/generate-validators` (`packages/generate-validators`)
+- `src/parsers/` — the parser and type engine. Key entry point `src/parsers/generators/build-schema.ts`, reached through the `#parsers/*` subpath import. A parser fuses building the output value with checking it, which is what makes it fast and what stops it reporting.
+- `src/validators/` — the validator, coercer and repairer engine. Key entry point `src/validators/generators/build-schema.ts`, reached through `#validators/*`. It keeps the passes apart, so it can say what was wrong. `repair` reads the same fallback table as the parser engine, hoisted into `@amritk/helpers` as `get-default-value` so the two cannot land on different repaired documents.
 
-Generates lightweight predicate-style validators: each schema becomes a `validateFoo(input, _path?): ValidationResult` function. No coercion, just shape checks plus structured error paths.
+Both are kept because neither subsumes the other. `generate` composes them into one output directory, which works because both derive the TypeScript type from the same `@amritk/helpers/generate-type-definition` — so the type is declared once and every emitted function talks about it. A single-mode build is byte-identical to the engine that owns that mode, pinned per mode by `src/emits-what-it-composes.test.ts`.
 
 - **Depends on:** `@amritk/helpers`, `json-schema-typed`
-- **Subpath imports:** `#generators/*` → `./src/generators/*.ts`
-- **Key entry point:** `src/generators/build-schema.ts`
+- **Subpath imports:** `#internal/*` → `./src/*.ts`, `#parsers/*` → `./src/parsers/*.ts`, `#validators/*` → `./src/validators/*.ts`
+- **Public API:** `generate`, `ALL_MODES`, `GeneratedFile`, `GenerateOptions`, `Mode`, `ImportExtension` — the `.` entry and nothing else. The engines are internal; there is no supported way to reach one directly from outside the package.
+- **Retired predecessors:** `packages/generate-parsers` and `packages/generate-validators` are private, source-free directories kept only to carry their published CHANGELOGs and a deprecation notice.
 
 ### `@amritk/runtime-validators` (`packages/runtime-validators`)
 
-The runtime counterpart to `generate-validators`. Instead of writing validator source files at build time, it validates a JSON Schema discovered **at runtime** (a plugin config, a user-supplied schema). It is an **eval-free interpreter** — it walks the schema directly, with no `new Function` and no compile step — so it has zero startup cost and runs anywhere `eval` is forbidden (strict CSP, Cloudflare Workers, React Native/Hermes). The trade-off vs Ajv is deliberate: it wins the cold one-shot path (validate a few values per schema) by ~100–730× on Bun and ~80–400× on Node, and loses steady-state throughput (one schema, many values) by ~2.4–11× (except the wide-object case on Node, where the guard is ~1.2× ahead) — use the build-time `generate-validators` for that.
+The runtime counterpart to the validator engine in `@amritk/parsers`. Instead of writing validator source files at build time, it validates a JSON Schema discovered **at runtime** (a plugin config, a user-supplied schema). It is an **eval-free interpreter** — it walks the schema directly, with no `new Function` and no compile step — so it has zero startup cost and runs anywhere `eval` is forbidden (strict CSP, Cloudflare Workers, React Native/Hermes). The trade-off vs Ajv is deliberate: it wins the cold one-shot path (validate a few values per schema) by ~100–730× on Bun and ~80–400× on Node, and loses steady-state throughput (one schema, many values) by ~2.4–11× (except the wide-object case on Node, where the guard is ~1.2× ahead) — use the build-time validator generator in `@amritk/parsers` for that.
 
 - **Depends on:** `json-schema-typed` (types only). Deliberately self-contained — no `@amritk/helpers` — so the runtime stays slim. `ajv` / `ajv-formats` are dev-only, for the benchmark suite and the differential fuzz test.
 - **Consumed by:** `@amritk/lint` — its built-in `schema` rule function validates a matched node against an arbitrary runtime-supplied JSON Schema through this interpreter.
@@ -147,12 +143,12 @@ Categories:
 - **Schema traversal:** `extract-refs`, `resolve-ref`, `build-dynamic-ref-map`, `resolve-dynamic-refs`, `extract-dynamic-anchor-defs`, `upgrade-draft07-schema`, `ref-to-filename`, `ref-to-name`, `schema-guards`, `walk-ref-graph`
 - **Codegen utilities:** `generate-type-definition`, `generate-index-barrel`, `parse-documentation`, `safe-accessor`
 - **Shared keyword semantics (emitters both generators call, so a rule has one home):** `multiple-of-check`, `numeric-bound-check`, `escape-regex-pattern`. These exist because the same JSON Schema rule is otherwise restated per emitter and drifts — `multipleOf`'s tolerance and the numeric bounds each diverged from the interpreter at least once. `runtime-validators` cannot import them (it takes no `@amritk/*` dependency by design), so the interpreter restates them and *parity tests* pin the restatement: `keyword-set-parity.test.ts` here for the keyword sets, and an `interpreter-parity.test.ts` in each generator for the verdicts, run over values a JSON conformance corpus cannot hold (`NaN`, `±Infinity`) — which is exactly why the drift went unnoticed.
-- **Runtime helpers (referenced from generated output):** `is-object`, `validate-array`, `validate-record`, `has-ref`. In `--helpers=embedded` mode (default when `@amritk/helpers` is not resolvable from `outDir`), `@amritk/generate-parsers` reads these sources **at generation time, off disk**: `src/generators/build-schema.ts` locates the installed package with `createRequire(import.meta.url).resolve('@amritk/helpers/package.json')` and reads `src/<helper>.ts` from it (falling back to `dist/<helper>.js`), then emits the content into `outDir/_helpers/` so the generated output is self-contained. Nothing is snapshotted into the generator at build time — which is why `@amritk/helpers`' `files` must keep shipping those four `src/*.ts` files.
+- **Runtime helpers (referenced from generated output):** `is-object`, `validate-array`, `validate-record`, `has-ref`. In `--helpers=embedded` mode (default when `@amritk/helpers` is not resolvable from `outDir`), `@amritk/parsers` reads these sources **at generation time, off disk**: `src/parsers/generators/build-schema.ts` locates the installed package with `createRequire(import.meta.url).resolve('@amritk/helpers/package.json')` and reads `src/<helper>.ts` from it (falling back to `dist/<helper>.js`), then emits the content into `outDir/_helpers/` so the generated output is self-contained. Nothing is snapshotted into the generator at build time — which is why `@amritk/helpers`' `files` must keep shipping those four `src/*.ts` files.
 
 ## Import Conventions
 
 - **Within a package:** use `#` subpath imports declared in that package's `package.json` (e.g. `import { foo } from '#helpers/foo'`).
-- **Cross-package:** use the published package name (e.g. `import { buildSchema } from '@amritk/generate-parsers'`, `import { resolveRef } from '@amritk/helpers/resolve-ref'`).
+- **Cross-package:** use the published package name (e.g. `import { generate } from '@amritk/parsers'`, `import { resolveRef } from '@amritk/helpers/resolve-ref'`).
 - **Same directory:** use relative `./` imports.
 
 ## Generation Pipeline
@@ -164,12 +160,15 @@ JSON Schema file
   @amritk/mjst (src/cli.ts)
        │  parses CLI args / config, loads schema
        ▼
-  buildSchema()                    ← generate-parsers/src/generators/build-schema.ts
+  generate()                       ← parsers/src/generate.ts
+       │  runs each engine the requested modes need
+       ▼
+  buildSchema()                    ← parsers/src/parsers/generators/build-schema.ts
        │  traverses $ref graph
        │  resolves $dynamicRef via @amritk/helpers
        │  applies schema extensions
        ▼
-  generateFiles()                  ← generate-parsers/src/generators/generate-files.ts
+  generateFiles()                  ← parsers/src/parsers/generators/generate-files.ts
   (per schema node)
        ├─ generateTypeDefinition() ← TypeScript type shape
        ├─ generateParserFunction() ← runtime coercion/validation (skipped with --types-only)
@@ -191,7 +190,7 @@ JSON Schema file
 - **Conformance suites:** the packages that implement a spec are measured against
   that spec's official test suite, with an expected-failure list naming every case
   they do not pass and why — `packages/yaml` against the YAML test suite, and
-  `runtime-validators` / `generate-parsers` / `generate-validators` /
+  `runtime-validators` / `parsers` (both engines) /
   `resolve-refs` against the vendored JSON Schema Test Suite
   (`fixtures/json-schema-test-suite`). Each fails when a case moves in *either*
   direction, so a boundary can never move silently.
@@ -207,7 +206,7 @@ bun run test
 Run tests for a specific package or file:
 
 ```sh
-bun run test packages/generate-parsers
+bun run test packages/parsers
 ```
 
 ## Design Principles

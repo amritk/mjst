@@ -17,7 +17,7 @@
 
 ## Overview
 
-[`@amritk/generate-validators`](../generate-validators) writes validator **source files** at build time from a schema you already have. This package is its runtime sibling: it validates against a schema **you only discover at runtime** — a plugin config, a user-supplied schema, an OpenAPI fragment.
+[`@amritk/parsers`](../parsers) writes validator **source files** at build time from a schema you already have. This package is its runtime sibling: it validates against a schema **you only discover at runtime** — a plugin config, a user-supplied schema, an OpenAPI fragment.
 
 It is an **eval-free interpreter**: it reads the schema itself, with **no `new Function`, no code generation, and no build step**. Each schema node is specialized into a closure the first time a validation actually reaches it — a tree of ordinary functions, not generated source — so the keyword dispatch happens once per node rather than once per value. That buys two things. First, **zero startup cost** — there is nothing to compile up front, so building a validator is essentially free and you only pay for the part of the schema your data actually reaches. Second, it **runs anywhere** — under a strict `Content-Security-Policy` (no `unsafe-eval`), on Cloudflare Workers, in React Native/Hermes, and in any sandbox that forbids `eval`/`new Function`, all of which rule out a code-generating validator.
 
@@ -158,9 +158,9 @@ wins: on Bun it runs `validate` about **2.3–6.7×** faster per call, on Node
 schema, where this interpreter is about **1.2×** *faster* than Ajv's compiled
 function. If you validate the same schema against a high-throughput stream,
 compile it once with Ajv (or use this repo's build-time
-[`@amritk/generate-validators`](../generate-validators)) — nothing that stops
-short of emitting a function will match generated straight-line code, and this
-package does not pretend otherwise.
+[`@amritk/parsers`](../parsers)) — nothing that stops short of emitting a
+function will match generated straight-line code, and this package does not
+pretend otherwise.
 
 `validate` and `validateGuard` now cost within a few percent of each other,
 because `validate` *is* the guard until something fails — see the hot/cold split
@@ -173,7 +173,7 @@ ahead of time**.
 
 What keeps the interpreter lean:
 
-- **A hot/cold split.** Collecting errors is not free even when there are none: the error-mode step carries the path string it would need to report a failure and cannot short-circuit, because a later failure is another error to name. So `validate` and `assert` run the boolean guard first and only fall through to the error-collecting half once something has actually failed — the same split [`@amritk/generate-validators`](../generate-validators) emits. Valid input is 1.75–2.4× faster than collecting outright; invalid input pays a second walk, which is the right way round for a validator that says "yes" far more often than "no". The error-collecting half is built on first use, so a validator never handed anything invalid never builds one.
+- **A hot/cold split.** Collecting errors is not free even when there are none: the error-mode step carries the path string it would need to report a failure and cannot short-circuit, because a later failure is another error to name. So `validate` and `assert` run the boolean guard first and only fall through to the error-collecting half once something has actually failed — the same split [`@amritk/parsers`](../parsers) emits. Valid input is 1.75–2.4× faster than collecting outright; invalid input pays a second walk, which is the right way round for a validator that says "yes" far more often than "no". The error-collecting half is built on first use, so a validator never handed anything invalid never builds one.
 - **No compile step up front.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up. A node is specialized the first time a validation reaches it, so a one-shot check never pays for the `$defs` it does not touch. A `pattern` is the exception: every one in the document is compiled and screened when the validator is built, so `pattern: "("` is named there rather than thrown out of a validation months later.
 - **Every per-node question answered once.** Which keywords a node carries, its property key list, its `required` set, its compiled `pattern`s, which type-specific checks can possibly apply — all of it is settled when the node is specialized and closed over by its step, instead of being rediscovered on every value.
 - **Lazy, reused caches.** The one thing a node cannot settle is where a `$ref` points when the document declares `$id`s, because that depends on the base URI in scope at call time. Those targets are memoized the first time they are followed and reused on later calls.
@@ -217,8 +217,8 @@ printable: branch on `keyword` to tell a missing field from a malformed one,
 group by it, or rebuild the message from `params` in your own language rather
 than in JSON Schema's. Both are always present — a keyword with nothing to add
 carries an empty `params` — and the names follow Ajv's, so an error-rendering or
-translation table written for Ajv works unchanged. `@amritk/generate-validators`
-emits the identical shape.
+translation table written for Ajv works unchanged. `@amritk/parsers` emits the
+identical shape.
 
 A failing `anyOf` / `oneOf` says more than the combinator's own error when it
 can. If every branch but one was rejected on the value's *identity* — a `const`
@@ -570,8 +570,7 @@ Either way the split holds: `resolve-refs` owns the network and its policy,
 ## Related packages
 
 - [`@amritk/resolve-refs`](../resolve-refs) — inline cross-file and remote `$ref`s before validating
-- [`@amritk/generate-validators`](../generate-validators) — generate validator source files at build time
-- [`@amritk/generate-parsers`](../generate-parsers) — the build-time counterpart to `/parse`: type definitions plus parser source files
+- [`@amritk/parsers`](../parsers) — the build-time counterpart: generated validator and parser source files, plus the type definitions
 - [`@amritk/mjst`](../cli) — CLI wrapper around the generators
 
 ---

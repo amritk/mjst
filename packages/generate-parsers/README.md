@@ -1,483 +1,57 @@
-<div align="center">
-
 # @amritk/generate-parsers
 
-**Programmatic API for generating TypeScript parsers and type definitions from JSON Schemas.**
+> **Deprecated.** Use [`@amritk/parsers`](https://www.npmjs.com/package/@amritk/parsers) instead.
+>
+> This release is a compatibility shim: `buildSchema` keeps its signature and emits
+> byte-identical output, so upgrading to it breaks nothing. It is the last
+> release of this package.
 
-![status](https://img.shields.io/badge/status-pre--alpha-ef4444?style=flat-square)&nbsp;
-![version](https://img.shields.io/npm/v/@amritk/generate-parsers?style=flat-square&logo=npm&logoColor=white&label=version&color=6366f1)&nbsp;
-![license](https://img.shields.io/badge/license-MIT-22c55e?style=flat-square)&nbsp;
-![JSON Schema](https://img.shields.io/badge/JSON%20Schema-2020--12-f97316?style=flat-square)&nbsp;
-![node](https://img.shields.io/badge/node-%E2%89%A520-339933?style=flat-square&logo=node.js&logoColor=white)&nbsp;
-![vibe coded](https://img.shields.io/badge/vibe-coded-a855f7?style=flat-square)
+## What this was
 
-</div>
+The programmatic parser and type generator: given a JSON Schema (Draft 2020-12),
+`buildSchema(rootSchema, rootTypeName, …options)` returned an array of
+`{ filename, content }` records carrying a TypeScript type and, unless you asked
+for types only, a parser function for it.
 
----
+## What replaces it
 
-## Overview
+The engine did not go away — it moved. It now lives inside
+[`@amritk/parsers`](https://github.com/amritk/mjst/tree/main/packages/parsers),
+behind a single `generate()` call that reaches every mode this package had plus
+the others, over one shared type declaration:
 
-`@amritk/generate-parsers` is the core code-generation engine behind [mjst](../../README.md). Given a JSON Schema (Draft 2020-12), it produces an array of `{ filename, content }` records — TypeScript type definitions plus optional runtime parser functions that validate and coerce unknown input.
+| mode | function | value back | tells you |
+|:---|:---|:---|:---|
+| `types` | — | — | — |
+| `guard` | `isX` | — | a boolean, stopping at the first problem |
+| `check` | `checkX` | — | the first error only |
+| `validate` | `validateX` | — | every error |
+| `coerce` | `coerceX` | coerced | every error |
+| `repair` | `repairX` | repaired | the repairs it made, and any errors left |
+| `parse` | `parseX` | repaired | nothing; never fails |
+| `parseStrict` | `parseX` | as given | throws on the first problem |
 
-If you want a CLI, use [`@amritk/mjst`](../cli). Use this package directly when you want to embed schema-to-TypeScript generation inside another build step or tool.
-
----
-
-## Installation
-
-```bash
-npm install @amritk/generate-parsers
-# or
-pnpm add @amritk/generate-parsers
-# or
-yarn add @amritk/generate-parsers
-# or
-bun add @amritk/generate-parsers
-```
-
----
-
-## Usage
+## Before / after
 
 ```ts
+// before
 import { buildSchema } from '@amritk/generate-parsers'
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-
-const schema: JSONSchema = {
-  type: 'object',
-  properties: {
-    info: { $ref: '#/$defs/info' },
-  },
-  $defs: {
-    info: {
-      type: 'object',
-      properties: { title: { type: 'string' } },
-    },
-  },
-}
 
 const files = await buildSchema(schema, 'Document')
-// → [{ filename: 'document.ts', content: '...' }, { filename: 'info.ts', content: '...' }, ...]
 ```
-
-Each entry in `files` is a `GeneratedFile`:
 
 ```ts
-type GeneratedFile = {
-  filename: string
-  content: string
-}
+// after
+import { generate } from '@amritk/parsers'
+
+const files = await generate(schema, 'Document', { modes: ['types', 'parse'] })
 ```
 
-Write them to disk however you like.
-
----
-
-## API
-
-### `buildSchema(rootSchema, rootTypeName, …options)`
-
-Every option after the first two is **positional** — pass them in this order:
-
-| # | Parameter | Type | Default | Description |
-|--:|:---|:---|:---|:---|
-| 1 | `rootSchema` | `JSONSchema` | — | The root schema to traverse. `$ref` and `$dynamicRef` are resolved recursively. |
-| 2 | `rootTypeName` | `string` | — | Name used for the root type (e.g. `"Document"`). Must be a TypeScript identifier: it is emitted verbatim as `export type <name>` and, lowercased, becomes the output filename, so a name derived from an untrusted document is refused rather than written outside your output directory. `@amritk/helpers`' `deriveRootTypeName` always produces one. |
-| 3 | `extensions` | `SchemaExtensions` | — | Map of definition name → extra optional properties to merge in before generation. |
-| 4 | `typesOnly` | `boolean` | — | Only emit `.ts` type definitions — skip parser functions and runtime helpers. |
-| 5 | `logWarnings` | `boolean` | — | Generated parsers emit a `console.warn` for every input key not declared in the schema's properties. |
-| 6 | `strict` | `boolean` | — | Generated parsers throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. |
-| 7 | `helpersMode` | `'package' \| 'embedded'` | `'package'` | `'package'` imports runtime helpers from `@amritk/helpers`; `'embedded'` emits them alongside the output so it is self-contained. |
-| 8 | `helpersImportPrefix` | `string` | `'./'` | Prefix the generated files use when importing embedded helpers. |
-| 9 | `readonly` | `boolean` | `false` | Emit every property, array, and record in the type definitions as `readonly`. |
-| 10 | `stripUnknown` | `boolean` | `false` | Build each result from the declared properties only, dropping undeclared input keys at every level (zod's `.strip()`). |
-| 11 | `typeSuffix` | `string` | `''` | Suffix appended to every `$ref`-derived type name (`'Object'` turns `Contact` into `ContactObject`). The root type name is unaffected. |
-| 12 | `importExt` | `'js' \| 'ts'` | `'js'` | Extension emitted on relative import specifiers. `'js'` is the NodeNext form for output you compile; `'ts'` emits the literal on-disk paths so the sources run unbuilt. |
-| 13 | `caseInsensitive` | `boolean` | `false` | Normalize a mis-cased string to the exact casing of an enum/const member it matches case-insensitively. Coerce mode only. |
-| 14 | `schemas` | `Record<string, unknown>` | — | Documents you have **already loaded**, keyed by the absolute URI a `$ref` names them by. See below. |
-| 15 | `unknownKeys` | `'count-keys' \| 'count-enumerable'` | `'count-keys'` | How a fast path proves a closed object (`additionalProperties: false`, or a `stripUnknown` build) has no undeclared key: a prototype-guarded `Object.keys(input).length` (fastest on Bun) or a `for…in` count (fastest on Node). See [Counting keys on the fast path](#counting-keys-on-the-fast-path). |
-
-Returns: `Promise<GeneratedFile[]>`.
-
-#### Referencing another document
-
-A `$ref` to a URI is resolvable once you hand over the document behind it — pass
-it as the 14th argument:
-
-```typescript
-const files = await buildSchema(
-  { $ref: 'https://example.com/user.json' },
-  'Document',
-  undefined, false, false, true, 'embedded', './', false, false, '', 'js', false,
-  { 'https://example.com/user.json': userSchema },
-)
-```
-
-Each registered document becomes a resource of the generated document: its `$id`,
-its `$anchor`s and `$dynamicAnchor`s and its own embedded resources all resolve, a
-`$ref` from one registered document into another resolves, and each definition
-reached gets a file, a type and a parser like any other. A document with no `$id`
-resolves its relative `$ref`s against the URI you registered it under; one whose
-`$id` disagrees answers to both.
-
-Nothing is fetched — you cannot pass a URL, only a document — so generation stays
-a pure function of its inputs. Loading is yours to do, or
-[`@amritk/resolve-refs`](../resolve-refs)'. Registering more than the schema uses
-costs nothing: only the documents actually reached are emitted. A `$ref` to a URI
-nobody registered still stops the build, with a message naming the ref.
-
-> [!NOTE]
-> `importExt` defaults to `'js'` here, whereas the [`mjst` CLI](../cli) defaults it to
-> `'ts'`. The example above therefore emits `./info.js` specifiers; pass `'ts'` for
-> output meant to run without a build step.
-
----
-
-## Options
-
-<!-- config-table-start -->
-<table>
-<thead>
-<tr>
-<th>Property</th>
-<th>Type</th>
-<th align="center">Default</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>🏷️ <code>typesOnly</code></td>
-<td><code>boolean</code></td>
-<td align="center"><code>false</code></td>
-</tr>
-<tr>
-<td colspan="3">Generate only TypeScript type definitions without parser functions. Runtime helper files (validators, isObject) are also omitted since they are only needed for parsers.</td>
-</tr>
-<tr>
-<td>⚠️ <code>logWarnings</code></td>
-<td><code>boolean</code></td>
-<td align="center"><code>false</code></td>
-</tr>
-<tr>
-<td colspan="3">Emit a console.warn in the generated parsers for every input key that is not declared in the schema's properties. Useful for detecting schema drift or unexpected data shapes at runtime.</td>
-</tr>
-<tr>
-<td>🚫 <code>strict</code></td>
-<td><code>boolean</code></td>
-<td align="center"><code>false</code></td>
-</tr>
-<tr>
-<td colspan="3">Generate parsers that throw on type/shape mismatches (wrong type, missing required property, enum/pattern/min/max violations) instead of coercing invalid input to default values. When a schema sets additionalProperties: false, undeclared keys throw too; otherwise they are still allowed.</td>
-</tr>
-<tr>
-<td>🧹 <code>stripUnknown</code></td>
-<td><code>boolean</code></td>
-<td align="center"><code>false</code></td>
-</tr>
-<tr>
-<td colspan="3">Build each parser's result from the schema's declared properties only, silently dropping undeclared input keys at every nesting level (zod's .strip()). Extras are never a validation error, so this composes with strict (which still throws on wrong types and missing required properties) and yields to additionalProperties: false, which rejects rather than strips in strict mode.</td>
-</tr>
-<tr>
-<td>🔡 <code>caseInsensitive</code></td>
-<td><code>boolean</code></td>
-<td align="center"><code>false</code></td>
-</tr>
-<tr>
-<td colspan="3">Normalize a mis-cased string to the exact casing of a declared enum/const member it matches case-insensitively (e.g. hElLo → hello) instead of coercing to the default. Coerce mode only — strict parsers still reject a casing mismatch. Correctly-cased input keeps the exact-match fast path, so the hot path is unaffected.</td>
-</tr>
-<tr>
-<td>🔢 <code>unknownKeys</code></td>
-<td><code>string</code></td>
-<td align="center"><code>"count-keys"</code></td>
-</tr>
-<tr>
-<td colspan="3">How a fast path proves a closed object (additionalProperties: false, or a stripUnknown build) carries no undeclared key. 'count-keys' is a prototype-guarded Object.keys(input).length comparison, the faster form on JavaScriptCore (Bun); 'count-enumerable' is a for…in count that allocates nothing; it was the faster form on Node 22, but on Node 26 'count-keys' ties or wins there too. Keep the default unless you are pinned to an older V8 and have measured your own shapes; nothing detects the runtime at runtime.<br><strong>Allowed:</strong> <code>"count-enumerable"</code>, <code>"count-keys"</code></td>
-</tr>
-</tbody>
-</table>
-<!-- config-table-end -->
-
-The generator handles:
-
-- `$ref` and `$dynamicRef` resolution, including JSON Schema 2020-12 `$dynamicAnchor` and a recursive root (`$ref: "#"`)
-- Discriminated and non-discriminated unions (`oneOf` / `anyOf`)
-- Enums and `const` values
-- Nested objects, arrays, records, and tuples (`prefixItems`, and the draft-07 array form of `items`)
-- Multi-type schemas (`type: ["string", "null"]`) and the OpenAPI 3.0 `nullable: true` spelling
-- Composition alongside a declared shape — `allOf` members and sibling unions are intersected into the type, not dropped
-- Pattern-based default values
-
-### Strict-mode validation coverage
-
-A `strict` parser throws on any document the schema rejects, and its accept /
-reject decision is held against [Ajv](https://ajv.js.org) (2020-12) by a set of
-differential fuzz suites. The whole Draft 2020-12 assertion vocabulary is
-enforced:
-
-| family | keywords |
-|:--|:--|
-| types | `type` (single and array form), `enum`, `const` (compared structurally) |
-| numbers | `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf` |
-| strings | `minLength`, `maxLength` (counted in Unicode **code points**), `pattern` |
-| arrays | `items`, `prefixItems`, `additionalItems`, `minItems`, `maxItems`, `uniqueItems`, `contains`, `minContains`, `maxContains` |
-| objects | `properties`, `required`, `patternProperties`, `additionalProperties`, `propertyNames`, `minProperties`, `maxProperties`, `dependentRequired`, `dependentSchemas` |
-| composition | `allOf`, `anyOf`, `oneOf`, `not`, `if` / `then` / `else`, `$ref` (with its 2020-12 siblings), boolean schemas |
-| annotations | `unevaluatedProperties`, `unevaluatedItems` — including the keys and indices an `allOf` member, a `$ref` target, a matching `anyOf` / `oneOf` branch, an `if` / `then` / `else` arm, or a triggered `dependentSchemas` entry evaluated |
-
-Constraints bind their own family, with or without a declared `type`:
-`{ minimum: 5 }` rejects `4` and accepts `"anything"`, exactly as JSON Schema
-(and Ajv) specify.
-
-Three deliberate departures:
-
-- **`format` is an annotation**, not an assertion — matching Ajv's own default
-  (`ajv-formats` is opt-in there). Use
-  [`@amritk/runtime-validators`](../runtime-validators), whose `formats` option
-  asserts them.
-- **`multipleOf` compares within a magnitude-scaled tolerance** for a fractional
-  divisor, rather than Ajv's exact `x / m` integer test, so `0.3` satisfies
-  `multipleOf: 0.1` here and fails there. IEEE-754 makes the exact test reject
-  values every author intends as valid. An integer divisor takes the exact `%`
-  path, which needs no tolerance. Both branches are emitted from
-  `@amritk/helpers/multiple-of-check`, which mirrors the runtime interpreter's
-  own check — so parsers, validators, and the interpreter cannot disagree about
-  a document.
-- **A type-less schema that declares `properties` still requires an object.**
-  Ajv accepts `"a string"` against `{ properties: { a: {} } }`; a parser has to
-  return the type it declares, and the declared type is an object.
-
-If a strict parser cannot enforce something — a `$ref` cycle inside a subschema it
-has to match inline (`contains`, `not`, `propertyNames`, `dependentSchemas`, or an
-`unevaluated*` backstop), which the inline matcher will not unroll; a subschema
-using a keyword it cannot prove — generation **fails with an error naming the keyword** rather than
-emitting a parser that quietly accepts what the schema forbids. Coercing
-(non-strict) parsers are documented to repair rather than reject, so they ignore
-the rejecting keywords by design.
-
-### How a coercing parser repairs a boolean
-
-`type: 'boolean'` is repaired from a table of spellings, not from JavaScript
-truthiness. `Boolean("false")` is `true` — as is `Boolean("no")`, `Boolean("0")`
-and `Boolean(2)` — so a truthiness test read every conventional way of writing
-*off* as *on*, which is precisely the input a coercing parser gets from
-environment variables, query strings and hand-written config.
-
-The accepted spellings are matched with surrounding whitespace trimmed and case
-folded, so `FALSE` and ` No ` land with `false` and `no`:
-
-| Input | Result |
-| --- | --- |
-| `true`, `yes`, `y`, `on`, `1`, the number `1` | `true` |
-| `false`, `no`, `n`, `off`, `0`, `""`, the number `0` | `false` |
-| anything else (`2`, `"maybe"`, an object, `null`) | the schema's `default`, else `false` |
-
-The last row is the same rule the other scalars follow: a value that does not
-denote a boolean is not repaired into a guess, it falls back to the default. This
-is wider than Ajv's `coerceTypes`, which takes `"true"` / `"false"`, the numbers
-`1` / `0`, and `null` (as `false`), and rejects the rest — including `"0"`,
-`"1"` and `""`. A coercing parser has no "reject", so its choice is between a
-default and a wrong answer. `null` is the one value both answer for and answer
-differently: Ajv says `false`, a coercing parser says whatever the schema's
-`default` is.
-
-### How a coercing parser repairs a union
-
-A coercing parser's contract is that whatever it returns is a valid instance of
-the schema that produced it, and
-`src/generators/coerced-output-validity.differential.test.ts` fuzzes exactly that
-property against Ajv.
-
-A union is the hard case, because "repair this value" first has to answer "toward
-which branch?". The generated parser answers it in two steps:
-
-1. **Recognition.** Every branch's shape predicate runs first. A value already in
-   a branch's shape takes that branch's parser and comes back unchanged, so valid
-   input costs one predicate call and is never rebuilt.
-2. **Scoring.** A value matching no branch is scored against each branch and
-   repaired toward the best fit. A `const` tag is near-decisive — a matching tag
-   names the branch, a present-but-wrong one rules it out. Below that, a present
-   required property is strong evidence and a present, well-typed declared
-   property is weak evidence. Ties keep the earliest branch, which is `anyOf`'s
-   own order.
-
-Scoring is why `{ name, folder }` is repaired toward the branch that declares
-`folder`, rather than toward whichever branch happens to be written first —
-which would invent a `sidebar` and discard the `folder` the author wrote. Every
-term is decided at build time, so the emitted code is a handful of property
-reads and no schema walking, and none of it runs for input that already matches.
-
-Every union position is dispatched: a definition, a `$ref`, an array's `items`
-(including a recursive one, where a branch's parser calls back into the
-dispatcher), and a union written directly as a property value. Measured over
-4000 mutated documents of the published Scalar configuration schema, **every
-coerced output is a valid instance of its own schema**, and each of the 2514
-documents Ajv rejects is repaired into one Ajv accepts.
-
-Two limits are worth stating. A union carrying its *own* keywords alongside its
-branches (`{ anyOf: […], required: […] }`) keeps the general coercion path,
-because the dispatcher expresses the branches and not the siblings. And a union
-of bare scalars in property position is left to that same path, since scoring
-reads keys: with no object branch there is nothing to discriminate on, every
-branch ties, and the first one wins — which is what the general path already
-does.
-
-### Conformance, measured
-
-The coverage above is not a claim — it is checked against the corpus every
-validator in every language is judged on.
-`src/generators/json-schema-conformance.test.ts` generates a strict parser for
-each schema in the official
-[JSON Schema Test Suite](https://github.com/json-schema-org/JSON-Schema-Test-Suite)
-(the required Draft 2020-12 tests — 1281 cases), links the emitted files in
-memory, and runs the suite's instances through the real generated code:
-
-**1242 / 1281 cases pass (97.0%).**
-
-A case passes only if the parser throws exactly when the spec says invalid *and*
-returns an accepted document unchanged — strict mode does not coerce, so a parser
-that quietly rewrites a valid document fails here too.
-
-The suite's `remotes/` documents and the 2020-12 dialect metaschema are supplied
-through the `schemas` option, which is how the suite intends a generator that does
-no I/O to answer the retrieval step. Everything else — applying the base URIs,
-walking anchors across documents, emitting a parser per definition and an import
-graph that links — the generator still has to do.
-
-Of the 39 that do not, **18** follow from the third departure above — the
-`ignores a non-object` cases plus three `ref.json` cases where a recursive `$ref`
-lands on a root that declares `properties` — and **12** are a keyword strict mode will not
-approximate (a cyclic `$ref` with siblings, a cyclic `unevaluatedProperties`) —
-those cost a build error naming the cause, never a wrong verdict. The rest: **8**
-`$dynamicRef`s whose binding depends on the evaluation path (a generator emits one
-function per definition, shared by every path that reaches it), and one
-`$vocabulary` case.
-
-Every one is listed in
-`src/generators/json-schema-conformance-expected-failures.test-utils.ts` with the
-reason, and the test fails if a case moves in *either* direction — a regression
-breaks the build, and so does a case that starts passing without its entry being
-removed. The corpus is vendored under
-[`fixtures/json-schema-test-suite`](../../fixtures/json-schema-test-suite); none
-of it is published.
-
----
-
-## Benchmarks
-
-Generated parsers are plain, straight-line TypeScript — no schema walking and no
-generic dispatch at runtime, because the schema was already spent at build time.
-Each parser reads the exact keys it declares, coerces or asserts them inline, and
-returns a fresh typed object, so on valid input it runs several times faster than
-libraries that interpret a schema (or a schema-shaped object graph) on every
-call. The `bench/` suite replicates the `parseSafe` (assert + strip undeclared
-keys) and `parseStrict` (assert + reject undeclared keys) halves of
-[`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks)
-against the other *pure* parsers — the ones that return a new typed value rather
-than mutating in place — [zod](https://zod.dev) and
-[TypeBox](https://github.com/sinclairzx81/typebox).
-
-Both runtimes were measured together on one machine (Linux x64, a 4-vCPU cloud
-box, Bun 1.4.0 and Node 26.8.1 — the same machine and runtimes as every table in
-this repo), each cell the median of three separate runs of the whole suite.
-Within one sitting a cell repeats to within a few percent; the same suite
-measured hours later moved ~60% across every case at once, so read the ratios
-and treat the absolutes as a property of that box.
-
-Parsing valid input at steady state:
-
-| case | mode | Bun: mjst | Bun: zod | Bun: typebox | Node: mjst | Node: zod | Node: typebox |
-|:--|:--|--:|--:|--:|--:|--:|--:|
-| user (4 fields) | parseSafe | **~163M** | ~3.3M | ~1.7M | **~88M** | ~4.0M | ~0.67M |
-| order (nested + array) | parseSafe | **~7.7M** | ~0.60M | ~0.26M | **~8.2M** | ~0.64M | ~0.15M |
-| assert (moltar shape) | parseSafe | **~120M** | ~3.5M | ~0.87M | **~66M** | ~5.3M | ~0.35M |
-| user (4 fields) | parseStrict | **~43M** | ~1.9M | ~2.2M | **~55M** | ~2.7M | ~1.5M |
-| order (nested + array) | parseStrict | **~13M** | ~0.36M | ~0.43M | **~8.7M** | ~0.55M | ~0.25M |
-| assert (moltar shape) | parseStrict | **~44M** | ~1.4M | ~1.2M | **~34M** | ~3.5M | ~0.80M |
-
-<sub>ops/s, higher is better.</sub>
-
-Unlike the validator suite — where TypeBox's compiled checker takes the loose
-moltar shape on V8 — the generated parser leads every case on both engines:
-~12–49× over zod on Bun and ~13–22× on Node. The two `user`/`assert` safe cells
-are the ones to read as ratios rather than absolutes: stripping to four declared
-keys builds one small object and nothing else, which is fast enough that the
-engine's inlining, not the parser, sets the number.
-
-What is replicated upstream is the *cases* — the two parse modes and their
-shapes — not the harness. These numbers come from this repo's own measurement
-core (direct calls over a pool of distinct inputs, median of many trials) and
-are not comparable with the public leaderboard, which measures every operation
-through benny and reports something an order of magnitude smaller for the same
-function. `@amritk/generate-validators` carries the side-by-side and a
-reproducible run of both harnesses:
-[Against the moltar harness](../generate-validators#against-the-moltar-harness).
-
-The trade is a one-shot **prepare** cost that only mjst pays — generating the
-parser source — which measures **~0.20–0.74 ms** per schema on Bun and
-**~0.16–0.72 ms** on Node (zod and TypeBox author or interpret their parsers
-with no separate build step, so there is nothing to time). That is trivially amortized: you generate once at build time
-and run the emitted code forever.
-
-Every library is checked for agreement — same stripped/rejected output, same
-throws on bad input — before it is timed, and each is timed in its own isolated
-process over a pool of distinct inputs, reporting the median of many trials, so
-the optimiser can't hoist the work away. Micro-benchmark figures vary by machine
-and runtime — reproduce with:
-
-```bash
-bun run bench        # Bun / JavaScriptCore
-bun run bench:node   # Node / V8 (builds the package first, then runs it under node)
-```
-
-### Counting keys on the fast path
-
-A closed object whose declared properties are all required proves "no undeclared
-key" by counting: the typed checks ahead of the count have already proven every
-declared key present, so exactly *n* keys means no extra. `unknownKeys` (the 15th
-positional argument, `--unknown-keys` on the CLI) picks how the count is spelled,
-because the two spellings trade places between the engines:
-
-- **`'count-keys'`** (default) — `Object.getPrototypeOf(input) === Object.prototype
-  && Object.keys(input).length === n`, one more term of the fast-path guard. The
-  prototype guard keeps an own-key count sound: a crafted prototype could satisfy
-  the typed checks through an inherited declared key while an own extra kept the
-  count at *n*, so a non-plain object takes the cold path instead, whose `for…in`
-  rejection sees the inherited key.
-- **`'count-enumerable'`** — `let c = 0; for (const k in input) c++`, as
-  statements behind the guard. It allocates nothing and needs no prototype guard
-  (the count sees inherited keys too), and on V8 it is answered from the enum
-  cache. On JavaScriptCore a `for…in` over a non-extensible object is the engine's
-  slow path, and the strict parse runs at half speed.
-
-A nested object's shape is proven on the parent's fast path by the same checks
-its own shape validator makes, spelled out over the cached local rather than
-called — `typeof _nested === "object" && … && Object.keys(_nested).length === n`
-— one level deep and within a size budget, because a call was the one thing
-left on the strict fast path that JavaScriptCore would not see through. Under
-the moltar harness (each case alone in its own process) `parseStrict` reaches
-the harness floor on Bun 1.4.0 (~360M ops/s, the call eliminated) with
-`count-keys` against ~22M with `count-enumerable`.
-
-On Node the answer has moved with the engine. On Node 22 the two spellings were
-level (~14M either way, which is where the advice to flip it came from); on
-Node 26.8.1 `count-keys` measures ~29M against `count-enumerable`'s ~26M, so the
-default now ties or wins on both engines. Keep the default unless you are
-pinned to an older V8 and have measured your own shapes. See
-[Choosing how keys are counted](../generate-validators#choosing-how-keys-are-counted)
-in the sister package for the validator numbers and the full trade-off. Whichever
-you pick, every verdict on a value that could have come from JSON is the same.
-
----
-
-## Related packages
-
-- [`@amritk/mjst`](../cli) — CLI wrapping this generator
-- [`@amritk/generate-validators`](../generate-validators) — predicate-style validators (sister package)
-- [`@amritk/generate-markdown`](../generate-markdown) — markdown documentation generator
-- [`@amritk/helpers`](../helpers) — shared schema-traversal utilities
-
----
-
-## License
-
-[MIT](../../LICENSE)
+Both hand back `{ filename, content }[]`. The positional arguments become named
+options — see the
+[`@amritk/parsers` README](https://github.com/amritk/mjst/tree/main/packages/parsers#readme)
+for the full table.
+
+The three shapes `buildSchema` chose between are now modes: the default coercing
+parser is `'parse'`, `strict: true` is `'parseStrict'`, and `typesOnly: true` is
+`'types'` on its own.

@@ -1,13 +1,6 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "paths": {
-      "@/*": ["./src/*"],
-      "#generators/*": ["./src/generators/*"],
-      "#helpers/*": ["./src/helpers/*"],
-      "#types/*": ["./src/types/*"]
-    }
-  },
+  "compilerOptions": {},
   "include": ["src/**/*.ts"],
   "exclude": ["**/*.test.ts"]
 }

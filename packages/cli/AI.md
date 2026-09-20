@@ -8,7 +8,7 @@ reference is [README.md](./README.md); config options are in
 
 > Pre-alpha: generated output and flags change without notice pre-1.0. This
 > package ships **only a `mjst` binary** — there are no JS exports. For the
-> programmatic API import `@amritk/generate-parsers` etc. instead.
+> programmatic API import `@amritk/parsers` etc. instead.
 
 ## The four commands
 

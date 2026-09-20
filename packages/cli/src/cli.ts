@@ -5,8 +5,6 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { ExtractionIssue } from '@amritk/asyncapi'
 import { extractAsyncApi, listMessageSchemas } from '@amritk/asyncapi'
-import { buildSchema } from '@amritk/generate-parsers'
-import { buildValidatorSchema } from '@amritk/generate-validators'
 import { deriveRootTypeName } from '@amritk/helpers/derive-root-type-name'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -19,6 +17,7 @@ import { detectHelpersMode } from './detect-helpers-mode'
 import { emitExamples } from './emit-examples'
 import { CONTRACTS_DIR, CONTRACTS_PEER, emitMessageContracts } from './emit-message-contracts'
 import { ensureOutputDir } from './ensure-output-dir'
+import { generateFiles } from './generate-files'
 import { HELP_TEXT } from './help-text'
 import { isDependencyDeclared } from './is-dependency-declared'
 import { loadAsyncApiDocument } from './load-asyncapi-document'
@@ -27,7 +26,6 @@ import { loadSchema } from './load-schema'
 import { parseCliArgs } from './parse-cli-args'
 import { parseMetaRequest } from './parse-meta-request'
 import { readVersion } from './read-version'
-import { resolveImportExt } from './resolve-import-ext'
 
 /**
  * A valid TypeScript identifier. `rootType` becomes both a `export type <name>`
@@ -243,42 +241,6 @@ const findJsonSchemas = async (dir: string): Promise<string[]> => {
   return results
 }
 
-/**
- * Stages validator files (`validateX` / `isX`) for one schema into `validatorsSubDir`
- * (a path relative to the writer's root). The validators carry the same schema-derived
- * filenames as the parsers, so they live in their own subdirectory to avoid
- * colliding. Returns the staged `.ts` paths so the caller can fold them into a
- * `--build` compilation.
- */
-const runValidators = async (
-  config: Partial<CliConfig>,
-  schema: unknown,
-  rootTypeName: string,
-  writer: OutputWriter,
-  validatorsSubDir: string,
-): Promise<string[]> => {
-  const files = await buildValidatorSchema(
-    schema as JSONSchema,
-    rootTypeName,
-    config.typeSuffix,
-    undefined,
-    config.unknownKeys,
-    config.formats,
-    config.coerce === true,
-    config.branchErrors === true,
-  )
-  const staged: string[] = []
-
-  for (const file of files) {
-    const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
-    const relFilename = join(validatorsSubDir, file.filename)
-    await writer.stage(relFilename, content)
-    staged.push(relFilename)
-  }
-
-  return staged
-}
-
 /** Generates parsers for a single schema (the original one-schema-in, one-outDir-out flow). */
 const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputDir: string): Promise<void> => {
   const schema = await loadSchema(config, schemaPath)
@@ -290,23 +252,7 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
   const rootTypeName = config.rootType ?? deriveRootTypeName(schema, schemaBaseName(schemaPath))
   console.log(`Root type: ${rootTypeName}`)
 
-  const files = await buildSchema(
-    schema as JSONSchema,
-    rootTypeName,
-    undefined,
-    config.typesOnly,
-    config.logWarnings,
-    config.strict,
-    helpersMode,
-    undefined,
-    config.readonly,
-    config.stripUnknown,
-    config.typeSuffix,
-    resolveImportExt(config),
-    config.caseInsensitive,
-    undefined,
-    config.unknownKeys,
-  )
+  const files = await generateFiles(config, schema as JSONSchema, rootTypeName, { mode: helpersMode })
 
   const writer = await createOutputWriter(outputDir)
   const written = await commitOrDiscard(writer, async () => {
@@ -315,8 +261,6 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
       const content = config.banner && !isHelper ? resolveBanner(config.banner) + file.content : file.content
       await writer.stage(file.filename, content)
     }
-
-    if (config.validators) await runValidators(config, schema, rootTypeName, writer, 'validators')
   })
 
   for (const filename of written) console.log(`Generated: ${filename}`)
@@ -351,23 +295,9 @@ const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, out
   const rootTypeName = config.rootType ?? deriveRootTypeName(schema, schemaBaseName(schemaPath))
   console.log(`Root type: ${rootTypeName}`)
 
-  const files = await buildSchema(
-    schema as JSONSchema,
-    rootTypeName,
-    undefined,
-    config.typesOnly,
-    config.logWarnings,
-    config.strict,
-    config.helpers ?? 'package',
-    undefined,
-    config.readonly,
-    config.stripUnknown,
-    config.typeSuffix,
-    resolveImportExt(config),
-    config.caseInsensitive,
-    undefined,
-    config.unknownKeys,
-  )
+  const files = await generateFiles(config, schema as JSONSchema, rootTypeName, {
+    mode: config.helpers ?? 'package',
+  })
 
   const combined = combineGeneratedFiles(files)
 
@@ -436,23 +366,10 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
       const rootTypeName = deriveRootTypeName(schema, schemaBaseName(schemaFile))
       console.log(`\n${relPath} → ${relNoExt}/ (root type: ${rootTypeName})`)
 
-      const files = await buildSchema(
-        schema as JSONSchema,
-        rootTypeName,
-        undefined,
-        config.typesOnly,
-        config.logWarnings,
-        config.strict,
-        helpersMode,
-        helpersImportPrefix,
-        config.readonly,
-        config.stripUnknown,
-        config.typeSuffix,
-        resolveImportExt(config),
-        config.caseInsensitive,
-        undefined,
-        config.unknownKeys,
-      )
+      const files = await generateFiles(config, schema as JSONSchema, rootTypeName, {
+        mode: helpersMode,
+        importPrefix: helpersImportPrefix,
+      })
 
       for (const file of files) {
         if (file.filename.startsWith('_helpers/')) {
@@ -462,13 +379,6 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
 
         const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
         await writer.stage(join(relNoExt, file.filename), content)
-      }
-
-      if (config.validators) {
-        // Mirror the parser layout under a top-level `validators/` tree so each
-        // schema's validators sit beside their parser counterparts without sharing
-        // a filename.
-        await runValidators(config, schema, rootTypeName, writer, join('validators', relNoExt))
       }
 
       if (config.examples) exampleTasks.push({ schema, rootTypeName, subDir: relNoExt })
@@ -569,21 +479,10 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
       const helpersImportPrefix = '../'.repeat(depth)
       console.log(`\n${subDir}/ (root type: ${rootTypeName})`)
 
-      const files = await buildSchema(
-        schema as JSONSchema,
-        rootTypeName,
-        undefined,
-        config.typesOnly,
-        config.logWarnings,
-        config.strict,
-        helpersMode,
-        helpersImportPrefix,
-        config.readonly,
-        config.stripUnknown,
-        config.typeSuffix,
-        resolveImportExt(config),
-        config.caseInsensitive,
-      )
+      const files = await generateFiles(config, schema as JSONSchema, rootTypeName, {
+        mode: helpersMode,
+        importPrefix: helpersImportPrefix,
+      })
 
       for (const file of files) {
         if (file.filename.startsWith('_helpers/')) {
@@ -593,10 +492,6 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
 
         const content = config.banner ? resolveBanner(config.banner) + file.content : file.content
         await writer.stage(join(subDir, file.filename), content)
-      }
-
-      if (config.validators) {
-        await runValidators(config, schema, rootTypeName, writer, join('validators', subDir))
       }
 
       if (config.examples) exampleTasks.push({ schema, rootTypeName, subDir })
@@ -734,6 +629,16 @@ const run = async (): Promise<void> => {
   // saying so.
   if (config.coerce && !config.validators) {
     console.error('Error: --coerce shapes the generated validators, so it needs --validators too.')
+    process.exit(1)
+  }
+
+  if (config.repair && !config.validators) {
+    console.error('Error: --repair shapes the generated validators, so it needs --validators too.')
+    process.exit(1)
+  }
+
+  if (config.check && !config.validators) {
+    console.error('Error: --check shapes the generated validators, so it needs --validators too.')
     process.exit(1)
   }
 

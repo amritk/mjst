@@ -1,4 +1,4 @@
-import type { GeneratedFile } from '@amritk/generate-parsers'
+import type { GeneratedFile } from '@amritk/parsers'
 import { describe, expect, it } from 'vitest'
 
 import { combineGeneratedFiles } from './combine-files'

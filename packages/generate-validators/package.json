@@ -1,25 +1,9 @@
 {
   "name": "@amritk/generate-validators",
   "version": "0.18.0",
-  "description": "Generate TypeScript validation functions from JSON Schemas.",
-  "main": "./dist/index.js",
-  "module": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "type": "module",
-  "sideEffects": false,
-  "engines": {
-    "node": ">=20"
-  },
+  "description": "Deprecated \u2014 merged into @amritk/parsers. Kept as a compatibility shim; use `generate` instead.",
   "license": "MIT",
   "author": "amritk",
-  "keywords": [
-    "json-schema",
-    "typescript",
-    "validator",
-    "validation",
-    "code-generation",
-    "mjst"
-  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/amritk/mjst.git",
@@ -29,9 +13,16 @@
   "bugs": {
     "url": "https://github.com/amritk/mjst/issues"
   },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "engines": {
+    "node": ">=20"
+  },
   "files": [
-    "dist",
-    "AI.md"
+    "dist"
   ],
   "publishConfig": {
     "access": "public"
@@ -40,16 +31,7 @@
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
-    "test": "NODE_ENV=production vitest run --root ../.. generate-validators",
-    "prebench": "bun run --filter='@amritk/helpers' build && bun run build",
-    "bench": "bun --conditions development ./bench/run.ts",
-    "prebench:node": "bun run --filter='@amritk/helpers' build && bun run build",
-    "bench:node": "node ./bench/run.ts",
-    "bench:moltar": "bun --conditions development ./bench/moltar.ts",
-    "bench:moltar:leaderboard": "bun --conditions development ./bench/moltar-leaderboard.ts"
-  },
-  "imports": {
-    "#generators/*": "./src/generators/*.ts"
+    "test": "NODE_ENV=production vitest run --root ../.. packages/generate-validators/"
   },
   "exports": {
     ".": {
@@ -59,19 +41,8 @@
     }
   },
   "dependencies": {
-    "json-schema-typed": "catalog:",
-    "@amritk/helpers": "workspace:*"
-  },
-  "devDependencies": {
-    "@amritk/generate-parsers": "workspace:*",
-    "@amritk/runtime-validators": "workspace:*",
-    "@ryoppippi/unplugin-typia": "^2.6.5",
-    "@scalar/openapi-parser": "^0.26.1",
-    "@sinclair/typebox": "^0.34.49",
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
-    "benny": "^3.7.1",
-    "typia": "^12.1.1",
-    "zod": "^4.4.3"
+    "@amritk/helpers": "workspace:*",
+    "@amritk/parsers": "workspace:*",
+    "json-schema-typed": "catalog:"
   }
 }

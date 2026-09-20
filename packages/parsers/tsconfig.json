@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "#internal/*": ["./src/*"],
+      "#parsers/*": ["./src/parsers/*"],
+      "#validators/*": ["./src/validators/*"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}

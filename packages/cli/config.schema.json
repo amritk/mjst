@@ -82,7 +82,14 @@
       "x-cli-flag": "--validators",
       "x-icon": "\u2705",
       "default": false,
-      "description": "Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. The files land in a validators/ subdirectory of the output so they never collide with the parser files, which share the same schema-derived names. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code."
+      "description": "Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. They share one directory and one declaration of X with the parser: the type and the validators land in x.ts, and the parser moves to x.parse.ts beside them, importing the type from there. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code."
+    },
+    "check": {
+      "type": "boolean",
+      "x-cli-flag": "--check",
+      "x-icon": "\ud83d\udd0e",
+      "default": false,
+      "description": "Also emit a checkX alongside each validateX. It is the same ValidationResult, carrying the one error that stopped it: where validateX walks the whole document to collect every violation, checkX gives up at the first and costs a single error object. Reach for it when a failure has to be reported but only the first thing wrong matters \u2014 a service refusing to boot on a bad config does not need the other nine. When nothing has to be reported at all, isX is cheaper still, since it builds no error object. validateX and isX are unchanged either way. Requires validators."
     },
     "coerce": {
       "type": "boolean",
@@ -90,6 +97,13 @@
       "x-icon": "\ud83e\uddea",
       "default": false,
       "description": "Also emit a coerceX alongside each validateX. It moves scalars toward the type the schema declares and then runs the very same validateX over the result, so a config value written the YAML way reads the same whether it came from a config file or an extension. The input is never modified and nothing is substituted: a value that cannot be coerced into a valid one reaches the validator untouched, so the error names what the caller actually wrote, with the keyword and params that rejected it. The table is Ajv's coerceTypes minus the cells where Ajv guesses \u2014 no whitespace-to-zero, no hex or Infinity strings, and nothing coerced to or from null \u2014 so every value this coerces, Ajv coerces to the same value, and the rest become errors rather than silent repairs. At a union it coerces only when exactly one of the offered types can take the value, and leaves a value that is already one of them alone, so the answer does not depend on the order the union was written in. Requires validators."
+    },
+    "repair": {
+      "type": "boolean",
+      "x-cli-flag": "--repair",
+      "x-icon": "\ud83d\udd27",
+      "default": false,
+      "description": "Also emit a repairX alongside each validateX. It coerces, runs the very same validateX, and then repairs each position the validator rejected to a value the schema itself supplies \u2014 a default, a const, the first enum member, or a fallback built to satisfy that position's own bounds \u2014 re-validating until the document is accepted or nothing further can be repaired. The repairs it reports are the validator's own errors, the ones a repair was found for, so a caller logs the same path, keyword and params it would have been rejected with and the two can never drift apart. A document needing nothing comes back valid with an empty repairs list; one fully repaired comes back valid with a non-empty one, leaving the caller to decide whether that is acceptable; one that could not be fully repaired comes back invalid carrying both the repairs applied and the errors still outstanding. The input is never modified and everything the repair did not touch is shared. Implies coerce, so a value merely written in the wrong type is right before the validator sees it and never counts as a repair. Requires validators."
     },
     "branchErrors": {
       "type": "boolean",

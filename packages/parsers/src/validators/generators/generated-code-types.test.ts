@@ -1,0 +1,660 @@
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+import ts from 'typescript'
+import { describe, expect, it } from 'vitest'
+
+import { buildValidatorSchema } from './build-schema'
+
+/**
+ * The sibling `generated-code-syntax` suite proves the output *parses*; this one
+ * proves it *type-checks* — under the flags this repo actually holds itself to,
+ * not a bare `strict`.
+ *
+ * The package had no equivalent suite at all, which is a real gap: every line the
+ * generator emits is string concatenation, so the type definition and the
+ * validator built from it can drift apart (a property accessor that no longer
+ * type-checks against `Record<string, unknown>`, a guard narrowing that stops
+ * being legal, a runtime helper referenced without an import). None of those are
+ * syntax errors — they only surface when a consumer compiles the output.
+ *
+ * Every case is generated into its own virtual directory and the whole set is
+ * checked in one `ts.Program`: spinning one up loads the default lib files from
+ * disk, and doing that per case is what makes compile suites slow.
+ */
+const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
+  ['scalars', { type: 'object', properties: { a: { type: 'string' }, b: { type: 'number' } }, required: ['a'] }],
+  ['nullable', { type: 'object', properties: { a: { type: ['string', 'null'] } }, required: ['a'] }],
+  ['openapi-nullable', { type: 'object', properties: { a: { type: 'string', nullable: true } } }],
+  ['nested-object', { type: 'object', properties: { o: { type: 'object', properties: { b: { type: 'string' } } } } }],
+  ['strict-keys', { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false }],
+  ['pattern-properties', { type: 'object', patternProperties: { '^x-': { type: 'number' } } }],
+  ['additional-properties-schema', { type: 'object', additionalProperties: { type: 'integer' } }],
+  ['property-names', { type: 'object', propertyNames: { pattern: '^[a-z]+$', maxLength: 8 } }],
+  ['dependent-required', { type: 'object', properties: { a: { type: 'string' } }, dependentRequired: { a: ['b'] } }],
+  [
+    'dependent-schemas',
+    { type: 'object', properties: { a: { type: 'string' } }, dependentSchemas: { a: { required: ['b'] } } },
+  ],
+  ['min-max-properties', { type: 'object', minProperties: 1, maxProperties: 4 }],
+  ['scalar-root', { type: 'string', pattern: '^[a-z]+$', minLength: 2, maxLength: 8 }],
+  ['number-root', { type: 'number', minimum: 0, exclusiveMaximum: 10, multipleOf: 2 }],
+  ['array-root', { type: 'array', items: { type: 'string' }, minItems: 1, uniqueItems: true }],
+  ['array-of-objects', { type: 'array', items: { type: 'object', properties: { a: { type: 'number' } } } }],
+  // `uniqueItems` over non-scalar items and a structural `const` are the two
+  // shapes that reach for the `valuesEqual` / `allUnique` runtime helpers, so
+  // they prove the conditional import in generate-files actually lands.
+  ['structural-unique-items', { type: 'array', uniqueItems: true, items: { type: 'object' } }],
+  ['structural-const', { type: 'object', properties: { meta: { const: { a: 1, b: [2, 3] } } } }],
+  ['enum-with-object-members', { enum: [{ a: 1 }, ['b'], 'c', null] }],
+  ['enum-property', { type: 'object', properties: { e: { enum: ['a', 'b'] } }, required: ['e'] }],
+  ['tuple-closed', { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }], items: false }],
+  ['tuple-open', { type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' }, minItems: 1 }],
+  ['contains', { type: 'array', contains: { type: 'number' }, minContains: 1, maxContains: 3 }],
+  ['combinators', { anyOf: [{ type: 'string' }, { type: 'number' }], not: { const: 'x' } }],
+  ['one-of', { oneOf: [{ type: 'string' }, { type: 'number' }] }],
+  [
+    'if-then-else',
+    {
+      type: 'object',
+      properties: { kind: { enum: ['a', 'b'] }, value: { type: 'integer' } },
+      if: { properties: { kind: { const: 'a' } }, required: ['kind'] },
+      then: { required: ['value'] },
+      else: { required: ['kind'] },
+    },
+  ],
+  [
+    'refs',
+    {
+      type: 'object',
+      properties: { contact: { $ref: '#/$defs/contact' } },
+      required: ['contact'],
+      $defs: { contact: { type: 'object', properties: { email: { type: 'string' } }, required: ['email'] } },
+    },
+  ],
+  ['quoted-keys', { type: 'object', properties: { 'x-linkedin': { type: 'string' }, "it's": { type: 'number' } } }],
+  // Property names that collide with `Object.prototype` members: these read
+  // through an own-property guard rather than a plain accessor, and TypeScript
+  // has its own opinions about a member called `constructor` or `toString`.
+  [
+    'prototype-member-properties',
+    {
+      type: 'object',
+      properties: { constructor: { type: 'string' }, toString: { type: 'string' }, ok: { type: 'string' } },
+      required: ['toString'],
+    },
+  ],
+  // The `unevaluated*` output is the densest expression the generator emits — a
+  // `.every` arrow over a cast accessor, branch conditions bound to locals, and a
+  // match IIFE nested inside — so it is exactly the shape most likely to stop
+  // compiling under `noUncheckedIndexedAccess` and friends.
+  [
+    'unevaluated-properties',
+    {
+      properties: { foo: { type: 'string' } },
+      patternProperties: { '^x-': { type: 'number' } },
+      allOf: [{ properties: { bar: { type: 'boolean' } } }],
+      anyOf: [{ required: ['baz'], properties: { baz: { type: 'string' } } }],
+      dependentSchemas: { foo: { properties: { dep: { type: 'string' } } } },
+      unevaluatedProperties: { type: 'string' },
+    },
+  ],
+  [
+    'unevaluated-items',
+    {
+      prefixItems: [{ type: 'string' }],
+      contains: { type: 'number' },
+      if: { minItems: 2 },
+      then: { allOf: [{ prefixItems: [true, true] }] },
+      unevaluatedItems: false,
+    },
+  ],
+  [
+    'unevaluated-through-ref',
+    {
+      $ref: '#/$defs/base',
+      properties: { own: { type: 'string' } },
+      unevaluatedProperties: false,
+      $defs: { base: { properties: { inherited: { type: 'string' } } } },
+    },
+  ],
+  // A nested object with a *constrained* leaf: the guard's member access reads
+  // through a cast (`(obj.a as Record<string, unknown>).b`), and TypeScript will
+  // not carry a `typeof` narrowing across two spellings of the same cast — so
+  // `…b.length >= 2` came out as `Object is of type 'unknown'` and the emitted
+  // file did not compile. Every earlier nested case had a bare-typed leaf, which
+  // needs no narrowing, so nothing here noticed.
+  [
+    'nested-object-constrained-leaf',
+    {
+      type: 'object',
+      properties: {
+        s: { type: 'object', properties: { b: { type: 'string', minLength: 2, pattern: '^a' } }, required: ['b'] },
+        n: { type: 'object', properties: { b: { type: 'number', minimum: 1, multipleOf: 2 } }, required: ['b'] },
+        a: { type: 'object', properties: { b: { type: 'array', items: { type: 'string' }, minItems: 1 } } },
+      },
+      required: ['s', 'n'],
+    },
+  ],
+  // A `dependentSchemas` / `dependencies` subschema applies to the *object*, and
+  // the object variable is typed `Record<string, unknown>` — so a string or
+  // number keyword in one compiled to `typeof obj === 'string'`, which narrows to
+  // `never` and takes the check behind it down with it (`TS2367` + `TS2339`).
+  [
+    'dependent-schemas-cross-family',
+    { type: 'object', dependentSchemas: { t: { minLength: 2, minimum: 1, minItems: 1 } } },
+  ],
+  ['dependencies-cross-family', { type: 'object', dependencies: { t: { const: 'x', maxLength: 2 } } }],
+  // Draft-07 spellings: an array `items` is the tuple and `additionalItems` its
+  // tail. Both used to emit nothing at all.
+  ['draft07-tuple', { type: 'array', items: [{ type: 'string' }, { type: 'number' }], additionalItems: false }],
+  ['draft07-tuple-tail', { type: 'array', items: [{ type: 'string' }], additionalItems: { type: 'number' } }],
+  ['empty-array', { type: 'array', items: false }],
+  // Combinator branches TypeScript can decide statically. Emitting the branch
+  // anyway left code it proves unreachable (`TS7027`, and the repo compiles this
+  // output with `allowUnreachableCode: false`) — 58 of them across the two
+  // vendored corpora.
+  ['anyof-with-always-matching-branch', { anyOf: [{ type: 'string' }, true] }],
+  ['anyof-with-empty-branch', { anyOf: [{ type: 'string' }, {}] }],
+  ['if-true', { if: true, then: { type: 'string' }, else: { type: 'number' } }],
+  ['if-false', { if: false, then: { type: 'string' }, else: { type: 'number' } }],
+  ['not-false', { not: false }],
+  ['not-true', { type: 'string', not: true }],
+  // A `type: "object"` root whose combinator branches belong to another family.
+  // The object validator read them against the narrowed `Record<string, unknown>`
+  // (later `object`), so `x === "auto"` was `TS2367` plus a cascade on `never`.
+  [
+    'object-root-with-cross-family-oneof',
+    {
+      type: 'object',
+      oneOf: [
+        { type: 'string', enum: ['auto'] },
+        { type: 'object', required: ['x'] },
+      ],
+    },
+  ],
+  // `unevaluatedProperties` reads each leftover key through a cast, which no
+  // `typeof` in front of it can narrow — so a *constrained* subschema emitted
+  // `.length` on `unknown`.
+  [
+    'unevaluated-properties-constrained',
+    {
+      type: 'object',
+      properties: { foo: { type: 'string' } },
+      unevaluatedProperties: { type: 'string', maxLength: 2 },
+    },
+  ],
+  [
+    'unevaluated-items-constrained',
+    { type: 'array', prefixItems: [{ type: 'string' }], unevaluatedItems: { type: 'number', minimum: 2 } },
+  ],
+  // The leftover key is read inside the `.every` callback, and a narrowing only
+  // survives into a function expression when what was narrowed is a plain
+  // binding. At the root the accessor is the `input` parameter and it does; one
+  // level down it is `obj.a`, a property read, and `Array.isArray(obj.a)` in
+  // front of the callback says nothing inside it. Every array position below
+  // reaches its element through such an accessor.
+  [
+    'unevaluated-properties-constrained-in-tuple',
+    {
+      type: 'object',
+      properties: { a: { type: 'array', prefixItems: [{ unevaluatedProperties: { type: 'string' } }] } },
+    },
+  ],
+  [
+    'unevaluated-properties-constrained-in-draft07-tuple',
+    { type: 'object', properties: { a: { type: 'array', items: [{ unevaluatedProperties: { type: 'string' } }] } } },
+  ],
+  [
+    'unevaluated-properties-constrained-under-dynamic-key',
+    {
+      type: 'object',
+      patternProperties: { '^a': { type: 'array', items: [{ unevaluatedProperties: { type: 'string' } }] } },
+    },
+  ],
+  // An `enum` whose members are not all of the declared `type`: the guard puts
+  // membership behind a `typeof` that narrows the accessor, so a member of
+  // another type is a comparison TypeScript rejects (`TS2367`).
+  ['mixed-type-enum', { type: 'integer', enum: [1, 2, 'unlimited'] }],
+  [
+    'mixed-type-enum-property',
+    { type: 'object', properties: { a: { type: 'number', enum: [1, 'x'] } }, required: ['a'] },
+  ],
+  ['mixed-type-enum-item', { type: 'array', items: { type: 'boolean', enum: [true, 'x'] } }],
+  // Shapes whose emitted output used to fail to compile, each for its own reason:
+  // an always-matching `not` (a bare report ASI-fused onto the line above it), a
+  // `minLength: 0` (`&& false`), a `type` contradicted by an other-family sibling
+  // (`.length` on `never`), and an always-matching `contains` next to
+  // `unevaluatedItems` (`true || (…)`).
+  ['always-matching-not', { type: 'object', not: {} }],
+  ['always-matching-not-in-items', { type: 'array', items: { not: true } }],
+  ['min-length-zero', { type: 'string', minLength: 0 }],
+  ['contradicted-type', { type: 'number', minLength: 2 }],
+  ['contradicted-type-null', { type: 'null', maxItems: 1 }],
+  ['always-matching-contains-unevaluated', { type: 'array', contains: {}, unevaluatedItems: { type: 'string' } }],
+  // A `$ref` sitting next to a branch the *validator* folds away. Each emitted
+  // import carries the type as well as the validator, and the type generator does
+  // not fold — it still unions every `anyOf` branch — so deciding the import list
+  // from the validator's view alone stranded the type name (`TS2304`). Same for
+  // the one array position the type reads and the validator does not: a tuple's
+  // rest comes from `additionalItems` whenever `items` is an array, even when
+  // `prefixItems` won the positions.
+  ['ref-beside-a-folded-anyof-branch', { anyOf: [{ $ref: '#/$defs/a' }, true], $defs: { a: { type: 'string' } } }],
+  [
+    'ref-beside-an-annotation-only-anyof-branch',
+    { anyOf: [{ $ref: '#/$defs/a' }, { description: 'anything' }], $defs: { a: { type: 'string' } } },
+  ],
+  [
+    'ref-in-a-dropped-if-arm',
+    {
+      if: false,
+      then: { $ref: '#/$defs/a' },
+      else: { $ref: '#/$defs/b' },
+      $defs: { a: { type: 'string' }, b: { type: 'number' } },
+    },
+  ],
+  [
+    'ref-in-a-type-only-additionalItems',
+    {
+      type: 'array',
+      prefixItems: [{ type: 'string' }],
+      items: [{ type: 'number' }],
+      additionalItems: { $ref: '#/$defs/b' },
+      $defs: { b: { type: 'number' } },
+    },
+  ],
+  [
+    'proto-property',
+    JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string","minLength":3}},"required":["__proto__"]}',
+    ) as JSONSchema,
+  ],
+]
+
+/**
+ * The repo's own flags. `strict` alone is not the bar the generated output has to
+ * clear — `exactOptionalPropertyTypes` and `noUncheckedIndexedAccess` are on in
+ * the root `tsconfig.json`, so they are what a consumer compiles this with.
+ */
+const OPTIONS: ts.CompilerOptions = {
+  strict: true,
+  // On, and every case above holds to them. They used to be off: the output
+  // carried unused symbols by design — the type half of an `if`-arm import, the
+  // validator half of a type-only one, a `const` bound for a check that turned
+  // out to look at nothing — and pinning that would have pinned a gap rather than
+  // guarded anything. Each of those is now decided from the emitted text, so the
+  // flags a consumer actually compiles with are the flags this suite uses.
+  noUnusedLocals: true,
+  noUnusedParameters: true,
+  exactOptionalPropertyTypes: true,
+  noUncheckedIndexedAccess: true,
+  noImplicitOverride: true,
+  noFallthroughCasesInSwitch: true,
+  useUnknownInCatchVariables: true,
+  allowUnusedLabels: false,
+  allowUnreachableCode: false,
+  noImplicitReturns: true,
+  noEmit: true,
+  target: ts.ScriptTarget.ESNext,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  skipLibCheck: true,
+}
+
+/** Joins a relative import specifier onto its importer's directory. */
+const resolveVirtualPath = (fromFile: string, specifier: string): string => {
+  const segments = fromFile.slice(1).split('/').slice(0, -1)
+  for (const part of specifier.replace(/\.js$/, '.ts').split('/')) {
+    if (part === '.' || part === '') continue
+    if (part === '..') segments.pop()
+    else segments.push(part)
+  }
+  return `/${segments.join('/')}`
+}
+
+const typeErrors = (sources: ReadonlyMap<string, string>, extra: ts.CompilerOptions = {}): string[] => {
+  const options = { ...OPTIONS, ...extra }
+  const host = ts.createCompilerHost(options)
+  const readFile = host.readFile.bind(host)
+  const fileExists = host.fileExists.bind(host)
+  const getSourceFile = host.getSourceFile.bind(host)
+
+  host.readFile = (fileName) => sources.get(fileName) ?? readFile(fileName)
+  host.fileExists = (fileName) => sources.has(fileName) || fileExists(fileName)
+  host.getSourceFile = (fileName, languageVersion, onError, shouldCreate) => {
+    const content = sources.get(fileName)
+    return content !== undefined
+      ? ts.createSourceFile(fileName, content, languageVersion, true)
+      : getSourceFile(fileName, languageVersion, onError, shouldCreate)
+  }
+  // The files exist only in this map, so the compiler's disk-backed resolution
+  // finds nothing — every relative import has to be resolved by hand.
+  host.resolveModuleNameLiterals = (moduleLiterals, containingFile) =>
+    moduleLiterals.map((literal) => {
+      const resolved = resolveVirtualPath(containingFile, literal.text)
+      return sources.has(resolved)
+        ? { resolvedModule: { resolvedFileName: resolved, extension: ts.Extension.Ts } }
+        : { resolvedModule: undefined }
+    })
+
+  const program = ts.createProgram([...sources.keys()], options, host)
+  return ts
+    .getPreEmitDiagnostics(program)
+    .filter((diagnostic) => diagnostic.file !== undefined)
+    .map(
+      (diagnostic) => `${diagnostic.file?.fileName}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}`,
+    )
+}
+
+/**
+ * A `$ref` in every position the schema language offers, swept rather than
+ * hand-picked.
+ *
+ * Each emitted import is combined — `import { type A, validateA }` — so the
+ * import list has to cover what the *type* names as well as what the validator
+ * calls, and the two generators fold differently. Deciding that list from the
+ * validator's side alone stranded a type name in 150 of 150 shapes, and the
+ * hand-picked cases above had no example of it. This sweep does: a missed ref is
+ * a `TS2304`, and the position it came from is in the case name.
+ */
+const REF = { $ref: '#/$defs/target' } as const
+const REF_DEFS = { $defs: { target: { type: 'string' } } } as const
+
+const REF_POSITIONS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+  ['root', { ...REF }],
+  ['root-with-sibling', { ...REF, minLength: 2 }],
+  ['properties', { type: 'object', properties: { p: REF } }],
+  ['properties-required', { type: 'object', properties: { p: REF }, required: ['p'] }],
+  ['pattern-properties', { type: 'object', patternProperties: { '^p': REF } }],
+  ['additional-properties', { type: 'object', additionalProperties: REF }],
+  ['property-names', { type: 'object', propertyNames: REF }],
+  ['dependent-schemas', { type: 'object', dependentSchemas: { t: REF } }],
+  ['dependencies', { type: 'object', dependencies: { t: REF } }],
+  ['items', { type: 'array', items: REF }],
+  ['prefix-items', { type: 'array', prefixItems: [REF] }],
+  ['array-items-draft07', { type: 'array', items: [REF] }],
+  ['additional-items', { type: 'array', items: [{ type: 'number' }], additionalItems: REF }],
+  [
+    'prefix-items-plus-array-items-plus-additional-items',
+    { type: 'array', prefixItems: [{ type: 'number' }], items: [{ type: 'number' }], additionalItems: REF },
+  ],
+  ['contains', { type: 'array', contains: REF }],
+  ['all-of', { allOf: [REF] }],
+  ['all-of-with-true', { allOf: [REF, true] }],
+  ['any-of', { anyOf: [REF] }],
+  ['any-of-with-true', { anyOf: [REF, true] }],
+  ['any-of-with-empty', { anyOf: [REF, {}] }],
+  ['any-of-with-annotation', { anyOf: [REF, { description: 'x' }] }],
+  ['any-of-with-nullable', { anyOf: [REF, { nullable: true }] }],
+  ['one-of', { oneOf: [REF, { type: 'number' }] }],
+  ['one-of-with-true', { oneOf: [REF, true] }],
+  ['not', { not: REF }],
+  ['if', { if: REF, then: { type: 'string' } }],
+  ['then', { if: { type: 'string' }, then: REF }],
+  ['else', { if: { type: 'string' }, else: REF }],
+  ['then-if-empty', { if: {}, then: REF }],
+  ['else-if-empty', { if: {}, else: REF }],
+  ['then-if-false', { if: false, then: REF }],
+  ['else-if-false', { if: false, else: REF }],
+  ['then-if-true', { if: true, then: REF }],
+  ['else-if-true', { if: true, else: REF }],
+  ['unevaluated-properties', { type: 'object', properties: { a: {} }, unevaluatedProperties: REF }],
+  ['unevaluated-items', { type: 'array', prefixItems: [{}], unevaluatedItems: REF }],
+  ['nested-in-properties', { type: 'object', properties: { a: { type: 'object', properties: { b: REF } } } }],
+  ['nested-in-items', { type: 'array', items: { type: 'array', items: REF } }],
+  ['inside-a-folded-any-of-branch', { anyOf: [{ type: 'object', properties: { p: REF } }, true] }],
+  ['inside-a-dropped-if-arm', { if: false, then: { type: 'object', properties: { p: REF } } }],
+  ['nullable-beside-a-ref', { ...REF, nullable: true }],
+  ['ref-beside-properties', { ...REF, properties: { p: { type: 'string' } } }],
+]
+
+describe('generated-code-types', () => {
+  it('emits type-correct validator files under the repo strict flags', { timeout: 120_000 }, async () => {
+    const sources = new Map<string, string>()
+    for (const [name, schema] of CASES) {
+      const files = await buildValidatorSchema(schema, 'Doc')
+      for (const file of files) sources.set(`/${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // The coercing half is emitted from a different generator, so it can drift from
+  // the type definition and the validator on its own: an accessor that stops
+  // type-checking against `Record<string, unknown>`, a `CoercionResult` or
+  // `coerceScalar` referenced without an import, a `$ref` walk named but never
+  // brought in. None of those are syntax errors — they surface in the consumer's
+  // build, which is the one place this package must never be the cause.
+  it('emits type-correct coercing validator files too', { timeout: 120_000 }, async () => {
+    const sources = new Map<string, string>()
+    for (const [name, schema] of CASES) {
+      const files = await buildValidatorSchema(schema, 'Doc', '', undefined, undefined, undefined, true)
+      for (const file of files) sources.set(`/coerce-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // The fail-fast half is the same generator emitting a different shape, and the
+  // shape is the risk: every report is a `return`, so a value the schema settles
+  // on its own terms — an `allOf: [false]`, an always-matching `not` — would leave
+  // the rest of the body unreachable, and an early `return` narrows the value for
+  // every sibling keyword behind it, which is how `{ type: 'number', minLength: 2 }`
+  // comes to read `.length` off `never`. Neither is a syntax error and neither
+  // shows up at runtime; both stop the consumer's build. The extra shapes below
+  // are exactly those two hazards, since nothing in `CASES` is contradictory
+  // enough to provoke them.
+  it('emits type-correct fail-fast validator files too', { timeout: 120_000 }, async () => {
+    const unsatisfiable: ReadonlyArray<readonly [string, JSONSchema]> = [
+      ['false-in-all-of', { type: 'object', properties: { a: { allOf: [false] } }, required: ['a'] }],
+      ['false-required-property', { type: 'object', properties: { b: false, c: { type: 'string' } }, required: ['b'] }],
+      ['false-both-arms', { if: { type: 'string' }, then: false, else: false }],
+      ['always-matching-not', { type: 'object', properties: { a: { not: {} } }, required: ['a'] }],
+      ['any-of-all-unsatisfiable', { type: 'object', properties: { a: { anyOf: [false, false] } }, required: ['a'] }],
+      ['one-of-all-unsatisfiable', { type: 'object', properties: { a: { oneOf: [false, false] } }, required: ['a'] }],
+      ['empty-enum', { type: 'object', properties: { a: { enum: [] } }, required: ['a'] }],
+      ['false-pattern-property', { type: 'object', patternProperties: { '^x-': false } }],
+      ['false-property-names', { type: 'object', propertyNames: false, minProperties: 1 }],
+      // A `type` beside a keyword from another family: nonsense as a schema,
+      // ordinary as something a consumer has in a file somewhere.
+      ['string-keyword-on-a-number', { type: 'object', properties: { a: { type: 'number', minLength: 2 } } }],
+      ['array-keyword-on-a-string', { type: 'object', properties: { a: { type: 'string', minItems: 1 } } }],
+      ['object-keyword-on-a-string', { type: 'string', properties: { a: { type: 'string' } }, required: ['a'] }],
+      ['number-keyword-on-an-array-root', { type: 'array', minimum: 3, minLength: 2 }],
+      ['cross-family-under-a-multi-type', { type: ['string', 'number'], minItems: 1, items: { type: 'string' } }],
+      ['cross-family-in-an-array-item', { type: 'array', items: { type: 'boolean', minLength: 1 } }],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema] of [...CASES, ...unsatisfiable]) {
+      const files = await buildValidatorSchema(
+        schema,
+        'Doc',
+        '',
+        undefined,
+        undefined,
+        undefined,
+        false,
+        false,
+        false,
+        'js',
+        true,
+      )
+      for (const file of files) sources.set(`/check-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // The repairing half is a third generator on the same file, and the one most
+  // able to emit something the consumer's build rejects: it inlines a fallback
+  // *literal* per position, so a schema whose default does not type-check against
+  // the property it repairs is a `TS2322` in the consumer's build and nowhere
+  // else. It also names `RepairResult`, `RepairLookup`, `applyRepairs` and
+  // `MAX_REPAIR_PASSES`, each of which has to be imported by the same
+  // asked-of-the-emitted-text rule the other halves use.
+  it('emits type-correct repairing validator files too', { timeout: 120_000 }, async () => {
+    const sources = new Map<string, string>()
+    for (const [name, schema] of CASES) {
+      const files = await buildValidatorSchema(schema, 'Doc', '', undefined, undefined, undefined, false, false, true)
+      for (const file of files) sources.set(`/repair-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // The unused-symbol flags are exactly what the hoist pruning exists to satisfy,
+  // and the corpora are no help: 3 of their 4,242 generated files hoist anything
+  // at all, so "both corpora byte-identical" says almost nothing about a change
+  // here. These shapes hoist.
+  it('emits no unused local for a shape that hoists a declaration', { timeout: 120_000 }, async () => {
+    const wide = Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`w${i}`, { type: 'string' as const }]))
+    const strictPatterns: JSONSchema = {
+      type: 'object',
+      additionalProperties: false,
+      patternProperties: { '^x-': { type: 'string' } },
+      properties: { b: { type: 'string' } },
+    }
+    const strictWide: JSONSchema = { type: 'object', additionalProperties: false, properties: wide }
+
+    const hoisting: ReadonlyArray<readonly [string, JSONSchema]> = [
+      // Live: the declaration is read, so it has to be emitted.
+      ['live-patterns', strictPatterns],
+      ['live-known-keys', strictWide],
+      ['live-both', { ...strictWide, patternProperties: { '^x-': { type: 'string' } } }],
+      ['live-nested', { type: 'object', properties: { inner: strictPatterns } }],
+      // Dead: the branch that hoisted it is folded away, so it must not be.
+      ['folded-patterns', { anyOf: [strictPatterns, true] }],
+      ['folded-known-keys', { anyOf: [strictWide, true] }],
+      // Dead, with the schema's own text imitating a read of the hoisted name.
+      [
+        'folded-patterns-forged',
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: { _patterns0: { type: 'string', minLength: 2 } },
+          anyOf: [strictPatterns, true],
+        },
+      ],
+      [
+        'folded-known-keys-forged',
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: { _knownKeys0: { type: 'string', minLength: 2 } },
+          anyOf: [strictWide, true],
+        },
+      ],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema] of hoisting) {
+      const files = await buildValidatorSchema(schema, 'Doc')
+      for (const file of files) sources.set(`/hoist-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // The other two symbols a file can declare and not read, both found by
+  // compiling the vendored OpenAPI corpus under the real flags rather than
+  // reasoned about: `ValidationError`, which only a body that *accumulates*
+  // errors names — a scalar root answers with one inline `return { valid: false,
+  // errors: [ … ] }` and never declares the array — and the `const obj`
+  // narrowing, which a node with no property to read never touches. Both are as
+  // ordinary as a schema gets: `{ "type": "string" }` is the commonest shape in
+  // an OpenAPI document, and `{ "type": "object", "properties": {} }` is in
+  // `openai.yaml` today.
+  it('emits no unused local for a shape that reads neither errors nor obj', { timeout: 120_000 }, async () => {
+    const unused: ReadonlyArray<readonly [string, JSONSchema]> = [
+      ['scalar-root', { type: 'string' }],
+      ['boolean-root', { type: 'boolean' }],
+      ['scalar-root-annotated', { type: 'string', title: 'Text', description: 'A text input.' }],
+      ['delegating-ref-root', { $ref: '#/$defs/a', $defs: { a: { type: 'string' } } }],
+      ['const-root', { const: 'x' }],
+      ['enum-root', { enum: ['a', 'b'] }],
+      ['true-root', true],
+      ['false-root', false],
+      // No property to read, so neither guard touches the narrowing — while the
+      // cold body, which does declare `errors`, keeps `ValidationError`.
+      ['empty-object-root', { type: 'object', properties: {}, required: [] }],
+      ['bare-object-root', { type: 'object' }],
+      // The other direction: both symbols are read, so both have to survive.
+      ['reads-both', { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema] of unused) {
+      const files = await buildValidatorSchema(schema, 'Doc')
+      for (const file of files) sources.set(`/unused-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // The two halves of a `$ref` import come apart in both directions, and a half
+  // nothing reads is `TS6133` under the flags above. Each shape here reads a
+  // different set of them.
+  it('imports only the halves of a $ref the emitted file reads', { timeout: 120_000 }, async () => {
+    const defs = { $defs: { a: { type: 'string' as const }, b: { type: 'number' as const } } }
+    const shapes: ReadonlyArray<readonly [string, JSONSchema, (content: string) => boolean]> = [
+      // Called and named: an ordinary property.
+      [
+        'both',
+        { type: 'object', properties: { p: { $ref: '#/$defs/a' } }, ...defs },
+        (content) => content.includes("import { type A, validateA } from './a.js'"),
+      ],
+      // Called, never named: the type generator types an `if`-carrying node
+      // `unknown` and names neither arm.
+      [
+        'validator-only',
+        { if: { type: 'string' }, then: { $ref: '#/$defs/a' }, ...defs },
+        (content) => content.includes("import { validateA } from './a.js'"),
+      ],
+      // Named, never called. With `prefixItems` present the array `items` beside
+      // it is ignored and `additionalItems` describes no position the emitter
+      // validates — but `renderTuple` still takes the tuple's rest from it, so the
+      // type names `B` and nothing calls `validateB`.
+      [
+        'type-only',
+        {
+          type: 'array',
+          prefixItems: [{ type: 'string' }],
+          items: [{ type: 'string' }],
+          additionalItems: { $ref: '#/$defs/b' },
+          ...defs,
+        },
+        (content) => content.includes("import type { B } from './b.js'"),
+      ],
+      // An `anyOf` with an unconstrained branch accepts everything, so both
+      // emitters answer `unknown`: the validator folds its check away and the
+      // type collapses (`X | unknown` *is* `unknown`). Neither names the ref, so
+      // neither half is imported — where the type generator used to emit
+      // `{ p?: A } | unknown`, which reads as though the branch still said
+      // something and kept an import for it.
+      [
+        'both-halves-go-when-the-branch-folds',
+        { anyOf: [{ type: 'object', properties: { p: { $ref: '#/$defs/a' } } }, true], ...defs },
+        (content) => !content.includes("from './a.js'"),
+      ],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema, expectation] of shapes) {
+      const files = await buildValidatorSchema(schema, 'Doc')
+      const doc = files.find((file) => file.filename === 'doc.ts')?.content ?? ''
+      expect(expectation(doc), `${name} imported the wrong halves:\n${doc}`).toBe(true)
+      for (const file of files) sources.set(`/halves-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  it('imports every $ref the emitted file names, from any position', { timeout: 120_000 }, async () => {
+    const sources = new Map<string, string>()
+    for (const [name, shape] of REF_POSITIONS) {
+      const files = await buildValidatorSchema({ ...shape, ...REF_DEFS } as JSONSchema, 'Doc')
+      for (const file of files) sources.set(`/ref-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+})

@@ -1,8 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { buildSchema } from '@amritk/generate-parsers'
-import { buildValidatorSchema } from '@amritk/generate-validators'
+import { generate } from '@amritk/parsers'
 import { buildSync } from 'esbuild'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import ts from 'typescript'
@@ -195,14 +194,18 @@ const OPTIONS: ts.CompilerOptions = {
 /** Every generated file for one case, keyed by its path under the case directory. */
 type Generated = ReadonlyMap<string, string>
 
-const generate = async ({ schema }: Case): Promise<Generated> => {
+const generateCase = async ({ schema }: Case): Promise<Generated> => {
   const files = new Map<string, string>()
   const add = (dir: string, generated: readonly { filename: string; content: string }[]): void => {
     for (const file of generated) files.set(`${dir}/${file.filename}`, file.content)
   }
-  add('validators', await buildValidatorSchema(schema, 'Doc'))
-  add('strict', await buildSchema(schema, 'Doc', undefined, false, false, true, 'embedded', './'))
-  add('coerce', await buildSchema(schema, 'Doc', undefined, false, false, false, 'embedded', './'))
+  // Three separate directories on purpose: the point of the suite is to watch
+  // the validator, the strict parser and the coercing one reach the same verdict
+  // from their own readings of the schema, and `parse` and `parseStrict` cannot
+  // share one output — they are the same function name under two contracts.
+  add('validators', await generate(schema, 'Doc'))
+  add('strict', await generate(schema, 'Doc', { modes: ['types', 'parseStrict'], helpersMode: 'embedded' }))
+  add('coerce', await generate(schema, 'Doc', { modes: ['types', 'parse'], helpersMode: 'embedded' }))
   return files
 }
 
@@ -304,7 +307,7 @@ beforeAll(async () => {
   workspace = await mkdtemp(join(tmpdir(), 'mjst-conditional-'))
   for (const testCase of CASES) {
     const root = join(workspace, testCase.name)
-    const sources = new Map([...(await generate(testCase)), ['probe.ts', probe(testCase)]])
+    const sources = new Map([...(await generateCase(testCase)), ['probe.ts', probe(testCase)]])
     for (const [name, content] of sources) {
       await mkdir(dirname(join(root, name)), { recursive: true })
       await writeFile(join(root, name), content)

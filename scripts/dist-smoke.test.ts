@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { CLI_BIN, ROOT, runCommand, runNode } from './e2e-helpers'
@@ -58,9 +59,9 @@ const collectDistModules = async (): Promise<string[]> => collectDistFiles(['.js
 const SUBPATH_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(['"])(#[^'"]*)\1/g
 
 /**
- * The helper sources `@amritk/generate-parsers` reads out of an *installed*
+ * The helper sources `@amritk/parsers` reads out of an *installed*
  * `@amritk/helpers` in `--helpers=embedded` mode. Mirrors `RuntimeHelperName`
- * in `packages/generate-parsers/src/helpers/collect-helpers.ts`; keep in sync.
+ * in `packages/parsers/src/parsers/helpers/collect-helpers.ts`; keep in sync.
  */
 const RUNTIME_HELPER_SOURCES = ['has-ref', 'is-object', 'validate-array', 'validate-record'].map(
   (helper) => `src/${helper}.ts`,
@@ -95,9 +96,9 @@ describe('dist-smoke', () => {
   })
 
   it('no `#` subpath-import specifier survives into dist', async () => {
-    // generate-parsers, generate-validators and generate-examples declare
-    // `imports: { "#generators/*": "./src/generators/*.ts" }` and publish that
-    // map, but their `files` ships no `src/` — so any `#` specifier that
+    // parsers and generate-examples declare `imports` maps such as
+    // `{ "#generators/*": "./src/generators/*.ts" }` and publish them, but
+    // their `files` ships no `src/` — so any `#` specifier that
     // reached dist would resolve to a path missing from the tarball. tsc-alias
     // rewrites all of them today; this pins that, because the failure mode
     // (ERR_MODULE_NOT_FOUND only for installed consumers) is invisible to the
@@ -148,6 +149,49 @@ describe('dist-smoke', () => {
       }
     `
     await runNode(['--input-type=module', '-e', loader])
+  })
+
+  it('the built @amritk/parsers still rehomes a $ref import', async () => {
+    // A behavioural assertion on the *built* artifact, because this exact bug
+    // shipped invisibly: `tsc-alias -f` rewrote the string literal `"from './"`
+    // inside `rehome-parser-file.ts` into `"from './index.js"`, a predicate that
+    // is never true, so the rehoming step silently stopped running. Every other
+    // test in this repo aliases workspace packages to `src`, where the literal is
+    // intact — so the whole suite stayed green while the shipped package emitted
+    // parser files importing names from the validator file that does not export
+    // them. Only running the built code catches it.
+    const { generate } = (await import(pathToFileURL(join(ROOT, 'packages/parsers/dist/index.js')).href)) as {
+      generate: (
+        schema: unknown,
+        name: string,
+        options: Record<string, unknown>,
+      ) => Promise<{ filename: string; content: string }[]>
+    }
+
+    const schema = {
+      type: 'object',
+      properties: { r: { $ref: '#/$defs/inner' } },
+      required: ['r'],
+      $defs: { inner: { type: 'object', properties: { x: { type: 'string' } }, required: ['x'] } },
+    }
+    const files = await generate(schema, 'Doc', {
+      modes: ['types', 'validate', 'parse'],
+      helpersMode: 'embedded',
+    })
+
+    const parserHalf = files.find((file) => file.filename === 'doc.parse.ts')?.content ?? ''
+
+    // The value half of the `$ref` import has to point at the *parser* sibling.
+    expect(parserHalf).toContain("from './inner.parse.js'")
+    expect(parserHalf).not.toMatch(/import \{[^}]*\bparseInner\b[^}]*\} from '\.\/inner\.js'/)
+    // And every relative specifier must name a file this same build emitted.
+    const emitted = new Set(files.map((file) => file.filename))
+    const dangling = files.flatMap((file) =>
+      [...file.content.matchAll(/from '(\.\/[^']*)'/g)]
+        .map((match) => (match[1] as string).replace(/^\.\//, '').replace(/\.js$/, '.ts'))
+        .filter((target) => !emitted.has(target)),
+    )
+    expect(dangling).toEqual([])
   })
 
   it('the built CLI starts and reports its version', async () => {

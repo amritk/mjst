@@ -1,6 +1,6 @@
 /**
  * Async counterpart to the measurement core in
- * `packages/generate-parsers/bench/measure.ts`, for timing the request
+ * `packages/parsers/bench/parsers/measure.ts`, for timing the request
  * pipeline — `api.handle` and compiled fetch handlers are async, so the sync
  * `measure` over there cannot time them. Same protocol, same statistics:
  * untimed warmup so the JIT settles, many independent timed trials, the

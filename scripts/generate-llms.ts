@@ -24,8 +24,7 @@ const ORDER = [
   'cli',
   'api',
   'lint',
-  'generate-parsers',
-  'generate-validators',
+  'parsers',
   'generate-examples',
   'generate-markdown',
   'runtime-validators',
@@ -38,6 +37,9 @@ const ORDER = [
 
 type Pkg = { dir: string; name: string; description: string; aiDoc: string | null }
 
+/** The part of a package manifest this index reads. */
+type Manifest = { name: string; description?: string; private?: boolean }
+
 const readPackages = (): Pkg[] => {
   const dirs = readdirSync(join(ROOT, 'packages'))
   const byOrder = (a: string, b: string): number => {
@@ -48,16 +50,29 @@ const readPackages = (): Pkg[] => {
     if (bi === -1) return -1
     return ai - bi
   }
-  return dirs.sort(byOrder).map((dir) => {
-    const manifest = JSON.parse(readFileSync(join(ROOT, 'packages', dir, 'package.json'), 'utf8'))
-    let aiDoc: string | null = null
-    try {
-      aiDoc = readFileSync(join(ROOT, 'packages', dir, 'AI.md'), 'utf8').trim()
-    } catch {
-      aiDoc = null
-    }
-    return { dir, name: manifest.name as string, description: (manifest.description ?? '') as string, aiDoc }
-  })
+  return (
+    dirs
+      .sort(byOrder)
+      .map((dir) => ({
+        dir,
+        manifest: JSON.parse(readFileSync(join(ROOT, 'packages', dir, 'package.json'), 'utf8')) as Manifest,
+      }))
+      // A private package is not on npm, so there is nothing here for a reader of
+      // this index to install. The retired `generate-parsers` and
+      // `generate-validators` directories are private and source-free, kept only
+      // for their published CHANGELOGs and a deprecation notice, and listing them
+      // would advertise packages this repository no longer publishes.
+      .filter(({ manifest }) => manifest.private !== true)
+      .map(({ dir, manifest }) => {
+        let aiDoc: string | null = null
+        try {
+          aiDoc = readFileSync(join(ROOT, 'packages', dir, 'AI.md'), 'utf8').trim()
+        } catch {
+          aiDoc = null
+        }
+        return { dir, name: manifest.name, description: manifest.description ?? '', aiDoc }
+      })
+  )
 }
 
 /** First-sentence-ish trim so the index stays scannable even when a description is a paragraph. */

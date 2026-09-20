@@ -1,4 +1,4 @@
-import { buildSchema } from '@amritk/generate-parsers'
+import { generate } from '@amritk/parsers'
 import { describe, expect, it, vi } from 'vitest'
 
 import { avroToJsonSchema } from './avro-to-json-schema'
@@ -672,7 +672,7 @@ describe('avro-to-json-schema', () => {
       ],
     })
 
-    const files = (await buildSchema(schema as never, 'User')) as { filename: string; content: string }[]
+    const files = await generate(schema as never, 'User')
     const user = files.find((file) => file.filename === 'com.example.user.ts')
 
     expect(user?.content).toContain('export type ComExampleUser = {')

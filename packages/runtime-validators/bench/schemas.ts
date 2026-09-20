@@ -170,7 +170,7 @@ const deepInvalid = {
  * It is here because it is the shape this package gets compared on, and because
  * it exercises something the three cases above do not: a schema that is almost
  * entirely per-property dispatch over a small, fully-present object, where fixed
- * per-node overhead is the whole cost. `packages/generate-validators/bench` runs
+ * per-node overhead is the whole cost. `packages/parsers/bench/validators` runs
  * the same shape against the generated validators, so the two tables read as a
  * direct interpret-versus-codegen comparison on identical input.
  *

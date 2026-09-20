@@ -1,7 +1,8 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { statsOf } from '../packages/generate-parsers/bench/measure.ts'
+import { statsOf } from '../packages/parsers/bench/parsers/measure.ts'
 
 /**
  * One isolated codegen measurement for `bench-compare.ts`: times `buildSchema`
@@ -19,7 +20,20 @@ import { statsOf } from '../packages/generate-parsers/bench/measure.ts'
 
 const [tree, mode, schemaJson] = process.argv.slice(2) as [string, string, string]
 
-const { buildSchema } = (await import(pathToFileURL(join(tree, 'packages/generate-parsers/src/index.ts')).href)) as {
+/**
+ * Where the parser engine lives, newest home first. It moved into
+ * `@amritk/parsers` when `@amritk/generate-parsers` was retired, and a baseline
+ * checkout can predate that move, so the tree being timed decides which path is
+ * real rather than this script assuming one.
+ */
+const ENGINE_MODULES = ['packages/parsers/src/parsers/index.ts', 'packages/generate-parsers/src/index.ts'] as const
+
+const enginePath = ENGINE_MODULES.map((module) => join(tree, module)).find((path) => existsSync(path))
+if (enginePath === undefined) {
+  throw new Error(`no parser engine found in ${tree} — looked for ${ENGINE_MODULES.join(' and ')}`)
+}
+
+const { buildSchema } = (await import(pathToFileURL(enginePath).href)) as {
   buildSchema: (...args: unknown[]) => Promise<unknown>
 }
 const schema = JSON.parse(schemaJson) as unknown

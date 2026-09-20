@@ -1,6 +1,6 @@
 /**
  * One isolated measurement, mirroring the worker protocol of the
- * generate-parsers/generate-validators benches: the orchestrator
+ * parser and validator benches in `@amritk/parsers`: the orchestrator
  * (`scripts/bench-compare.ts`) spawns a fresh process per (tree, case) so the
  * two checkouts never share JIT state, and reads a single JSON line from
  * stdout in the `{ valid: Stats }` shape its delta table consumes.

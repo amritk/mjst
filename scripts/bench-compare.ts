@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { fmtOps, NOISY_SPREAD } from '../packages/generate-parsers/bench/measure.ts'
+import { fmtOps, NOISY_SPREAD } from '../packages/parsers/bench/parsers/measure.ts'
 import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
 
 /**
@@ -23,8 +23,8 @@ import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
  * one-off interference spike costs a rerun instead of a false regression.
  *
  * Compared surfaces:
- *   - generate-parsers  — parse throughput (ops/s) per PARSE_CASE
- *   - generate-validators — validate throughput (ops/s, valid + invalid input)
+ *   - parsers — parse throughput (ops/s) per PARSE_CASE
+ *   - validators — validate throughput (ops/s, valid + invalid input)
  *   - api — request throughput (req/s) through the runtime and compiled
  *     engines, per API_BENCH_CASES
  *   - codegen — buildSchema time per parser (ms), timed in-process per tree
@@ -140,8 +140,12 @@ const gitSha = (tree: string): string => {
 
 /**
  * Spawns one isolated mjst measurement using the given tree's own bench
- * worker, exactly as that tree's `bench/run.ts` would. Returns null when the
- * worker fails — most commonly a case name that doesn't exist in that tree.
+ * worker, exactly as that tree's `bench/run.ts` would. `benchPath` is the bench
+ * directory relative to `packages/`, because the parser and validator benches
+ * now share one package and so are no longer a package name plus `bench`.
+ * Returns null when the worker fails — most commonly a case name that doesn't
+ * exist in that tree (including a baseline checked out from before this move,
+ * where the directory itself is somewhere else).
  *
  * `developConditions: false` drops `--conditions development`, so workspace
  * dependencies resolve to their built `dist` instead of TypeScript sources.
@@ -150,8 +154,8 @@ const gitSha = (tree: string): string => {
  * the compiled artifact is what consumers experience anyway. The workflow
  * builds that package in both trees before benching.
  */
-const runWorker = (tree: string, pkg: string, caseName: string, developConditions = true): WorkerRun => {
-  const benchDir = join(tree, 'packages', pkg, 'bench')
+const runWorker = (tree: string, benchPath: string, caseName: string, developConditions = true): WorkerRun => {
+  const benchDir = join(tree, 'packages', benchPath)
   const worker = join(benchDir, 'worker.ts')
   if (!existsSync(worker)) return null
   try {
@@ -169,7 +173,7 @@ const runWorker = (tree: string, pkg: string, caseName: string, developCondition
     const detail = error instanceof Error ? `${error.message}\n${(error as { stderr?: string }).stderr ?? ''}` : ''
     if (detail.includes('unknown parse case') || detail.includes('unknown bench case')) return null
     sawWorkerFailure = true
-    console.error(`worker failed: ${pkg} · ${caseName} · ${tree}\n${detail.trim()}`)
+    console.error(`worker failed: ${benchPath} · ${caseName} · ${tree}\n${detail.trim()}`)
     return 'failed'
   }
 }
@@ -203,8 +207,8 @@ const abbaPair = <T>(runOn: (tree: string) => T, better: (a: T, b: T) => T): { b
   return { base: better(base1, base2), head: better(head1, head2) }
 }
 
-const runPair = (pkg: string, caseName: string): { base: WorkerRun; head: WorkerRun } =>
-  abbaPair((tree) => runWorker(tree, pkg, caseName), betterOps)
+const runPair = (benchPath: string, caseName: string): { base: WorkerRun; head: WorkerRun } =>
+  abbaPair((tree) => runWorker(tree, benchPath, caseName), betterOps)
 
 /**
  * Times a tree's `buildSchema` (parser codegen) for one case in a fresh
@@ -277,14 +281,14 @@ const run = async (): Promise<void> => {
   // is in scope, so a yaml-only run never loads the api or validator benches.
   const needsParseCases = suites.has('parsers') || suites.has('codegen')
   const parsersSchemas = needsParseCases
-    ? ((await import(pathToFileURL(join(head, 'packages/generate-parsers/bench/schemas.ts')).href)) as {
+    ? ((await import(pathToFileURL(join(head, 'packages/parsers/bench/parsers/schemas.ts')).href)) as {
         PARSE_CASES: readonly { name: string; mode: string; schema: unknown }[]
       })
     : { PARSE_CASES: [] }
 
-  if (suites.has('parsers')) console.error('generate-parsers (parse ops/s)…')
+  if (suites.has('parsers')) console.error('parsers (parse ops/s)…')
   for (const parseCase of suites.has('parsers') ? parsersSchemas.PARSE_CASES : []) {
-    const { base: baseResult, head: headResult } = runPair('generate-parsers', parseCase.name)
+    const { base: baseResult, head: headResult } = runPair('parsers/bench/parsers', parseCase.name)
     progress({
       suite: 'parsers',
       caseName: parseCase.name,
@@ -297,14 +301,14 @@ const run = async (): Promise<void> => {
   }
 
   const validatorsSchemas = suites.has('validators')
-    ? ((await import(pathToFileURL(join(head, 'packages/generate-validators/bench/schemas.ts')).href)) as {
+    ? ((await import(pathToFileURL(join(head, 'packages/parsers/bench/validators/schemas.ts')).href)) as {
         BENCH_CASES: readonly { name: string }[]
       })
     : { BENCH_CASES: [] }
 
-  if (suites.has('validators')) console.error('generate-validators (validate ops/s)…')
+  if (suites.has('validators')) console.error('validators (validate ops/s)…')
   for (const benchCase of suites.has('validators') ? validatorsSchemas.BENCH_CASES : []) {
-    const { base: baseResult, head: headResult } = runPair('generate-validators', benchCase.name)
+    const { base: baseResult, head: headResult } = runPair('parsers/bench/validators', benchCase.name)
     for (const metric of ['valid', 'invalid'] as const) {
       progress({
         suite: 'validators',
@@ -329,7 +333,7 @@ const run = async (): Promise<void> => {
   if (suites.has('api')) console.error('api (request req/s)…')
   for (const benchCase of suites.has('api') ? apiCases.API_BENCH_CASES : []) {
     const { base: baseResult, head: headResult } = abbaPair(
-      (tree) => runWorker(tree, 'api', benchCase.name, false),
+      (tree) => runWorker(tree, 'api/bench', benchCase.name, false),
       betterOps,
     )
     progress({
@@ -364,7 +368,7 @@ const run = async (): Promise<void> => {
 
   if (suites.has('yaml')) console.error('yaml (parse ops/s)…')
   for (const benchCase of yamlCases.YAML_BENCH_CASES) {
-    const { base: baseResult, head: headResult } = runPair('yaml', benchCase.name)
+    const { base: baseResult, head: headResult } = runPair('yaml/bench', benchCase.name)
     progress({
       suite: 'yaml',
       caseName: benchCase.name,
@@ -391,7 +395,7 @@ const run = async (): Promise<void> => {
     // invisible. Same reason the api workers above take `false`, and the
     // bench workflow already builds this one package in both trees for them.
     const { base: baseResult, head: headResult } = abbaPair(
-      (tree) => runWorker(tree, 'runtime-validators', benchCase.name, false),
+      (tree) => runWorker(tree, 'runtime-validators/bench', benchCase.name, false),
       betterOps,
     )
     for (const metric of ['valid', 'invalid'] as const) {

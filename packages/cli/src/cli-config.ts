@@ -46,12 +46,32 @@ export type CliConfig = {
    * When true, also emit validation functions alongside the parsers. For every
    * generated type `X` the CLI writes a `validateX` (returning a rich
    * `ValidationResult` with JSON-Pointer error paths) and an `isX` boolean type
-   * guard. The files land in a `validators/` subdirectory of the output so they
-   * never collide with the parser files, which share the same schema-derived
-   * names. Works with both `schema` and `schemaDir`. Incompatible with
-   * `typesOnly` and `outFile`, which produce no runtime code.
+   * guard.
+   *
+   * They share one directory and one declaration of `X` with the parser: the
+   * type and the validators land in `x.ts`, and the parser moves to `x.parse.ts`
+   * beside them, importing the type from there. Both halves are then talking
+   * about the same type, which two side-by-side trees could only promise.
+   *
+   * Works with both `schema` and `schemaDir`. Incompatible with `typesOnly` and
+   * `outFile`, which produce no runtime code.
    */
   readonly validators?: boolean
+  /**
+   * When true, generated validators also get a `checkX`: the same
+   * `ValidationResult` `validateX` returns, carrying the one error that stopped
+   * it. It gives up at the first violation instead of walking on to collect the
+   * rest, so it costs a single error object where `validateX` costs however many
+   * the document earns.
+   *
+   * Reach for it when a failure has to be reported but only the first thing
+   * wrong matters — a service refusing to boot on a bad config does not need the
+   * other nine. When nothing has to be reported at all, `isX` is cheaper still:
+   * it builds no error object.
+   *
+   * Requires `validators`. `validateX` and `isX` are unchanged either way.
+   */
+  readonly check?: boolean
   /**
    * When true, generated validators also get a `coerceX`: it moves scalars
    * toward what the schema asks for and then runs the very same `validateX` over
@@ -76,6 +96,26 @@ export type CliConfig = {
    * Requires `validators`. `validateX` and `isX` are unchanged either way.
    */
   readonly coerce?: boolean
+  /**
+   * When true, generated validators also get a `repairX`: it coerces, validates,
+   * and then repairs each position the validator rejected to a value the schema
+   * itself supplies — a `default`, a `const`, the first `enum` member, or a
+   * fallback built to satisfy the position's own bounds. The result carries the
+   * repaired value together with `repairs`, which *are* the errors `validateX`
+   * produced for the positions that were repaired, so a caller logs the same
+   * path, keyword and params it would have been rejected with.
+   *
+   * A document needing no repair comes back valid with an empty `repairs`; one
+   * fully repaired comes back valid with a non-empty one, leaving the caller to
+   * decide whether that is acceptable; one that could not be fully repaired
+   * comes back invalid carrying both the repairs applied and the errors still
+   * outstanding.
+   *
+   * Implies `coerce` — repairing runs after coercion, so a value merely written
+   * in the wrong type is right before the validator sees it and never counts as
+   * a repair. Requires `validators`.
+   */
+  readonly repair?: boolean
   /**
    * When true, a failing `anyOf` / `oneOf` in a generated validator also reports
    * the errors of the branch it meant, instead of the bare "must match a schema

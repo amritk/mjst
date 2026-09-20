@@ -21,7 +21,7 @@
   "author": "amritk",
   "license": "MIT",
   "scripts": {
-    "generate-readmes": "(cd packages/cli && bun run generate-readme) && (cd packages/generate-parsers && bun run generate-readme) && bun run generate-llms",
+    "generate-readmes": "(cd packages/cli && bun run generate-readme) && bun run generate-llms",
     "generate-llms": "bun run scripts/generate-llms.ts",
     "prebuild": "bun run --filter='@amritk/runtime-validators' build",
     "build": "bun run --workspaces build",

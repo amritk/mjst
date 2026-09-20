@@ -724,7 +724,7 @@ export type CompiledValidation = {
 /**
  * Turns a JSON Schema into a {@link CompiledValidation}. The default compiler
  * interprets the schema with `@amritk/runtime-validators`; supply your own to
- * plug in generated validators from `@amritk/generate-validators` (or any other
+ * plug in generated validators from `@amritk/parsers` (or any other
  * engine) for maximum steady-state throughput.
  */
 export type ValidatorCompiler = (schema: unknown) => CompiledValidation
