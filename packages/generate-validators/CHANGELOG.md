@@ -1,5 +1,43 @@
 # @amritk/generate-validators
 
+## 0.19.0
+
+### Minor Changes
+
+- 9b6325e: Deprecated. This package is now a compatibility shim over
+  [`@amritk/parsers`](https://github.com/amritk/mjst/tree/main/packages/parsers),
+  which owns the engine that used to live here and reaches every mode it had —
+  plus `check`, `coerce` and `repair` — through one `generate()` call.
+
+  Nothing breaks on upgrade: the exported function keeps its signature and emits
+  byte-identical output, verified across every positional option against the real
+  engine at the point it moved. But this is the last release, so migrate:
+
+  ```ts
+  // before
+  import { buildValidatorSchema } from "@amritk/generate-validators";
+
+  // after
+  import { generate } from "@amritk/parsers";
+  const files = await generate(schema, "Document", {
+    modes: ["types", "guard", "validate"],
+  });
+  ```
+
+### Patch Changes
+
+- Updated dependencies [9b0fb68]
+- Updated dependencies [fcb615d]
+- Updated dependencies [cacfeae]
+- Updated dependencies [e786470]
+- Updated dependencies [5c0f50f]
+- Updated dependencies [9a1260e]
+- Updated dependencies [f699039]
+- Updated dependencies [3a26591]
+- Updated dependencies [3670138]
+  - @amritk/parsers@0.2.0
+  - @amritk/helpers@0.23.0
+
 ## 0.18.0
 
 ### Minor Changes

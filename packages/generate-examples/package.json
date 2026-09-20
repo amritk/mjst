@@ -1,6 +1,6 @@
 {
   "name": "@amritk/generate-examples",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Generate fast-check arbitraries and example values from JSON Schemas.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

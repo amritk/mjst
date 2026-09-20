@@ -1,5 +1,12 @@
 # @amritk/api
 
+## 0.16.5
+
+### Patch Changes
+
+- Updated dependencies [fcb615d]
+  - @amritk/runtime-validators@0.15.0
+
 ## 0.16.4
 
 ### Patch Changes

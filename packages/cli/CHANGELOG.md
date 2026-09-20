@@ -1,5 +1,198 @@
 # @amritk/mjst
 
+## 0.22.0
+
+### Minor Changes
+
+- fcb615d: Explain a failing `anyOf` / `oneOf` with the errors of the branch that was
+  plainly the one meant. In generated validators this is `--branch-errors`, off by
+  default; the interpreter does it always, on the cold path it already had.
+
+  "must match a schema in anyOf" names no field and no reason. The branch errors
+  are computed anyway to answer the yes/no question, and generated validators threw
+  all of them away — so a typo in one field of a union-rooted definition pointed at
+  the whole object rather than at the field.
+
+  Both now select a branch by the same rule. Branches that rejected the value's
+  _kind_ are dropped first: a branch wanting a string has nothing to say about an
+  object, which leaves a `string | { … }` union — the commonest shape in a
+  hand-written config schema — with the one branch that was talking about this
+  value. When several survive they all describe the same kind of value, and the tie
+  is broken the way a discriminated union reads from the outside. Nothing extra is
+  reported when no branch stands out; "the branch with the fewest errors" would
+  answer here too, and answers wrongly on `oneOf: [aReference, theActualThing]`.
+
+  **Why it is a flag.** Collecting branch errors costs about 30% of the throughput
+  of a _valid_ instance against a union-rooted schema, because each branch is
+  handed a collector it closes over. Off, the generated code is exactly what it
+  would be without the option — no buffer, no collector, byte for byte. On, the
+  buffer is created by the first branch that has something to put in it, so a value
+  matching the first branch still allocates nothing; an eagerly-created one cost
+  40% rather than 30%.
+
+  The combinator's own error still comes first, so code matching on `keyword ===
+'anyOf'` is unaffected. Errors a reported branch produces now carry their real
+  instance path.
+
+- 667df39: `--validators` now emits one directory instead of two, and there is a new
+  `--check`.
+
+  **What changes for you.** A run with `--validators` used to produce two trees:
+  the parsers at the output root, and a parallel `validators/` subtree holding
+  `validateX` / `isX`. It produced two of everything, including two declarations of
+  the same `X` — structurally identical, but two things to keep in step, and two
+  import paths to remember. There is now one tree:
+
+  ```
+  workflow.ts         export type Workflow, plus isWorkflow / validateWorkflow
+  workflow.parse.ts   parseWorkflow, importing the type from ./workflow
+  validation-result.ts
+  index.ts            a barrel over all of it
+  ```
+
+  So `import { validateWorkflow } from './generated/validators/index.js'` becomes
+  `import { validateWorkflow } from './generated/index.js'`, and the parser half
+  moves from `workflow.ts` to `workflow.parse.ts`. Under `--schema-dir` and
+  `--input asyncapi` the same thing happens per schema: each schema's own
+  subdirectory carries both halves, and the top-level `validators/` mirror is gone.
+  Importing from the generated `index` — which is what the README has always shown
+  — you will not notice the move at all; a deep import into `validators/…` needs
+  the path updated.
+
+  Only runs asking for validators change shape. `mjst generate --out-dir …` on its
+  own, with `--types-only`, or with `--strict`, emits exactly the files and names it
+  emitted before: with no validator half there is nothing to collide with, so the
+  parser keeps `workflow.ts` and its own type, and no `validation-result.ts` is
+  written.
+
+  The point of it is that there is now exactly one `export type Workflow` in the
+  output, and the guard, the validator and the parser are all talking about it. Two
+  trees could only promise that; one directory means it.
+
+  **`--check`.** A new flag, gated behind `--validators` like `--coerce` and
+  `--repair`, emitting `checkX` beside `validateX`. It returns the same
+  `ValidationResult`, carrying only the error that stopped it: where `validateX`
+  walks the whole document to collect every violation, `checkX` gives up at the
+  first and costs a single error object. Reach for it when a failure has to be
+  reported but only the first thing wrong matters — a service refusing to boot on a
+  bad config does not need the other nine. When nothing has to be reported at all,
+  `isX` is cheaper still, since it builds no error object.
+
+  Under the hood the CLI now drives `@amritk/parsers` — one call, one options
+  object — instead of calling `@amritk/generate-parsers` and
+  `@amritk/generate-validators` positionally and stitching their output together.
+  One consequence worth naming: `--unknown-keys` reached the validators but was
+  silently dropped for the parsers on the `--input asyncapi` path. It now reaches
+  both.
+
+- 3a26591: Add `--repair`: validators that coerce, validate, and then repair — reporting the
+  errors they repaired.
+
+  `--coerce` moves a value that is already right but written in the wrong type, and
+  substitutes nothing. A coercing parser substitutes freely and reports nothing. The
+  gap between them is the common case: a document you want to accept as far as it
+  can be accepted, while still being told what you had to accept it _despite_.
+
+  `repairX(input)` returns `RepairResult<T>` — `{ valid: true, value, repairs }`, or
+  `{ valid: false, value, errors, repairs }` when something could not be repaired. It
+  coerces, runs the very same `validateX`, repairs each rejected position to a value
+  the schema itself supplies — a `default`, a `const`, the first `enum` member, or a
+  fallback built to satisfy that position's own bounds — and re-validates, until the
+  document is accepted or nothing further can be repaired.
+
+  **The repairs are the validator's own errors.** Not a parallel account of what went
+  wrong, but the same objects, with the same `path`, `keyword` and `params` the value
+  would have been rejected with. That is the point of driving repair from the errors
+  rather than threading a collector through the emitters: a caller logging a repair
+  logs exactly what a rejection would have said, and the two cannot drift apart
+  because there is only one of them.
+
+  Read the verdict by the tolerance you want. A document needing nothing is `valid:
+true` with an empty `repairs`. One fully repaired is `valid: true` with a non-empty
+  one, so `valid` alone does not tell you the input was clean — check `repairs.length`
+  when that matters. One that could not be fully repaired is `valid: false` carrying
+  both what was repaired and what is still wrong with the value handed back.
+
+  **How much it will substitute.** Everything `@amritk/generate-parsers` substitutes in
+  its coercing mode, down to fabricating an `"xxx"` for a `minLength: 3` and building a
+  whole object for a root that arrived as `"nope"`. A differential test pins that: the
+  same schema and the same document through both engines produce the same result. They
+  can, because `getDefaultValue` and `generateDefaultFromPattern` moved into
+  `@amritk/helpers` and both now read one table rather than two that agree today. The
+  one deliberate difference is `minItems`, where a short array is padded here and left
+  short by the parser — so the parser can hand back a document its own schema rejects
+  and this cannot.
+
+  The input is never modified, everything a repair did not touch is shared rather than
+  copied, a position is repaired at most once so an unsatisfiable schema reports rather
+  than spins, and whatever comes back `valid: true` is a value `validateX` accepts.
+
+  Off by default; on the CLI it is `--repair`, which implies `--coerce` and needs
+  `--validators`. Also documents `coerce` and `branchErrors` in the
+  `buildValidatorSchema` signature, which the README and AI.md had not caught up with.
+
+- 3670138: Add `--coerce`: generated validators that coerce scalars toward what the schema
+  declares, and then validate.
+
+  For every type `X`, a `coerceX(input) => { valid: true, value } | { valid:
+false, errors }` is emitted alongside the existing `validateX` and `isX`, which
+  are unchanged. Off by default and free when off.
+
+  **Nothing is substituted.** A value that cannot be coerced into a valid one
+  reaches the validator untouched, so the error names what the caller actually
+  wrote, with the keyword and params that rejected it. `maxRetries: "many"` is an
+  error, not a `0`. And the constraint keywords run on the coerced value, so `"3"`
+  against `{ type: 'integer', minimum: 5 }` becomes `3` and _then_ fails
+  `minimum` — an answer neither a strict parser nor a repairing one can give.
+
+  **The input is never modified.** `value` is the input itself when nothing needed
+  coercing, and otherwise a copy sharing everything the coercion did not touch, so
+  callers do not pay for the defensive clone an in-place coercer forces.
+
+  **More precise than Ajv, in the safe direction.** The table is Ajv's
+  `coerceTypes` minus the cells where Ajv guesses: no whitespace-to-zero
+  (`Number(" ")` is `0`), no `0x`/`Infinity` strings, no trailing-point numerals,
+  and nothing coerced to or from `null` — `null` is a JSON value in its own right
+  and usually means "not set". Every value this coerces, Ajv coerces to the same
+  value, which is pinned as a property over the whole table and structurally over
+  a fuzz: a migration off Ajv never changes a value, it turns some of Ajv's silent
+  repairs into errors instead. Leading zeros and exponents stay, both being
+  ordinary ways to write a number in a YAML file.
+
+  **Unions are coerced when the answer is forced.** At a position offering several
+  scalar types — an array-form `type`, or a union of scalar branches — the value is
+  coerced only if exactly one of them can take it, so `string | { … }` turns `7`
+  into `"7"` while `number | string` leaves `true` alone and lets the validator
+  say what is wrong with it. A value that is already one of the offered types is
+  left alone. Ajv instead walks its own coercion list in order, which makes `"1"` a
+  number under `["number", "string"]` and a string under `["string", "number"]`;
+  the answer should not depend on the order the union was written in.
+
+### Patch Changes
+
+- eb52b44: Stop warning about `--force` on every run. The flag has been a no-op since
+  0.21.0 and stays one — but it is in the old docs, so everyone who followed them
+  got a line of noise on every build for a flag that now merely describes the
+  default. It is still accepted, and the help text still says it is deprecated,
+  which is where someone looks when they are ready to clean a script up.
+- Updated dependencies [9b0fb68]
+- Updated dependencies [fcb615d]
+- Updated dependencies [cacfeae]
+- Updated dependencies [e786470]
+- Updated dependencies [5c0f50f]
+- Updated dependencies [9a1260e]
+- Updated dependencies [f699039]
+- Updated dependencies [3a26591]
+- Updated dependencies [3670138]
+  - @amritk/parsers@0.2.0
+  - @amritk/helpers@0.23.0
+  - @amritk/adapters@0.6.4
+  - @amritk/api@0.16.5
+  - @amritk/generate-examples@0.8.6
+  - @amritk/lint@0.6.1
+  - @amritk/resolve-refs@0.7.1
+  - @amritk/asyncapi@0.3.2
+
 ## 0.21.1
 
 ### Patch Changes
