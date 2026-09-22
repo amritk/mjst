@@ -28,6 +28,17 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
   ['tuple-closed', { type: 'array', prefixItems: [{ type: 'string' }, { type: 'number' }], items: false }],
   ['tuple-open', { type: 'array', prefixItems: [{ type: 'string' }], items: { type: 'number' }, minItems: 1 }],
   ['tuple-draft07', { type: 'array', items: [{ type: 'string' }, { type: 'number' }], additionalItems: false }],
+  // `examples` is documentation, and documentation drifts out of step with the
+  // schema it documents. A `type: 'integer'` property whose examples were left
+  // behind as strings took the first one as its fallback literal, and the parser
+  // returns that literal *uncast* on the non-object path — `TS2322` against the
+  // `number` the type generator emits. `default` is guarded against exactly this;
+  // examples are the likelier source of it, being illustrative rather than
+  // load-bearing. The second, well-typed example is the one that should be taken.
+  [
+    'mistyped-examples',
+    { type: 'object', properties: { n: { type: 'integer', examples: ['abc', 7] } }, required: ['n'] },
+  ],
   [
     'index-signature',
     {
