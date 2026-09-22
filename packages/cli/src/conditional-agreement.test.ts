@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { generate } from '@amritk/parsers'
+import { generate } from '@amritk/validation'
 import { buildSync } from 'esbuild'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import ts from 'typescript'

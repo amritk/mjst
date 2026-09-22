@@ -16,7 +16,7 @@ export default defineConfig({
       { find: /^@amritk\/helpers\/(.*)$/, replacement: resolve(root, 'packages/helpers/src/$1.ts') },
       { find: /^@amritk\/generate-examples$/, replacement: resolve(root, 'packages/generate-examples/src/index.ts') },
       { find: /^@amritk\/generate-markdown$/, replacement: resolve(root, 'packages/generate-markdown/src/index.ts') },
-      { find: /^@amritk\/parsers$/, replacement: resolve(root, 'packages/parsers/src/index.ts') },
+      { find: /^@amritk\/parsers$/, replacement: resolve(root, 'packages/validation/src/index.ts') },
       // Consumed from its built dist (not src): runtime-validators uses `@/` path
       // aliases internally, which only resolve once `tsc-alias` has rewritten them
       // to relative paths in `dist`. Requires a prior build (see root `pretest`).

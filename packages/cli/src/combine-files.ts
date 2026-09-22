@@ -1,4 +1,4 @@
-import type { GeneratedFile } from '@amritk/parsers'
+import type { GeneratedFile } from '@amritk/validation'
 
 // Require whitespace after `import` so a property literally named `import` (e.g.
 // `import?: string`) is not mistaken for an import statement.

@@ -78,7 +78,7 @@
   bad config does not need the other nine. When nothing has to be reported at all,
   `isX` is cheaper still, since it builds no error object.
 
-  Under the hood the CLI now drives `@amritk/parsers` — one call, one options
+  Under the hood the CLI now drives `@amritk/validation` — one call, one options
   object — instead of calling `@amritk/generate-parsers` and
   `@amritk/generate-validators` positionally and stitching their output together.
   One consequence worth naming: `--unknown-keys` reached the validators but was
@@ -184,7 +184,7 @@ false, errors }` is emitted alongside the existing `validateX` and `isX`, which
 - Updated dependencies [f699039]
 - Updated dependencies [3a26591]
 - Updated dependencies [3670138]
-  - @amritk/parsers@0.2.0
+  - @amritk/validation@0.2.0
   - @amritk/helpers@0.23.0
   - @amritk/adapters@0.6.4
   - @amritk/api@0.16.5

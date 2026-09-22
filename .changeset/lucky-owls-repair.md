@@ -1,6 +1,6 @@
 ---
 '@amritk/helpers': patch
-'@amritk/parsers': patch
+'@amritk/validation': patch
 ---
 
 Take the first `examples` entry that is an instance of the declared type, rather

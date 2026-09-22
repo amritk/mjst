@@ -14,7 +14,7 @@ reference is [README.md](./README.md); config options are in
 
 > Pre-alpha: generated output and flags change without notice pre-1.0. This
 > package ships **only a `mjst` binary** — there are no JS exports. For the
-> programmatic API import `@amritk/parsers` etc. instead.
+> programmatic API import `@amritk/validation` etc. instead.
 
 ## The four commands
 
@@ -63,11 +63,19 @@ mjst markdown ./config.schema.json --table --readme ./README.md
    `--discriminator <prop>` when the document tags frames with something other
    than `type`; a channel carrying `x-mjst: { discriminator }` keeps its own.
 
+## Picking what gets emitted
+
+Every run emits the type. `--types-only` stops there. A bare run adds a parser;
+`--validators` adds `isX`/`validateX` beside it; `--validators-only` emits those
+*without* a parser, which is the shape to reach for when the generated code only
+ever judges input it did not produce. `--check`, `--coerce` and `--repair` each
+add one more entry point to the validator half and work under either flag.
+
 ## Common flags
 
 `--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
-`--validators`, `--examples`, `--message-contracts`, `--discriminator`,
-`--types-only`, `--build`, `--strict`, `--strip-unknown`,
+`--validators` / `--validators-only`, `--examples`, `--message-contracts`,
+`--discriminator`, `--types-only`, `--build`, `--strict`, `--strip-unknown`,
 `--unknown-keys count-keys|count-enumerable`, `--readonly`,
 `--import-ext ts|js`, `--config <path>`, `--resolve-remote` /
 `--allowed-hosts` (SSRF-guarded remote `$ref`s).
@@ -462,84 +470,6 @@ Install: `bun add @amritk/lint`.
 
 ---
 
-# @amritk/parsers — notes for AI coding agents
-
-One generator surface over mjst's types, guards, validators, coercers, repairers
-and parsers. It owns both generator engines: the validator/coercer/repairer one
-and the parser/type one, which used to ship as `@amritk/generate-validators` and
-`@amritk/generate-parsers` and are now internal modules here.
-
-> Pre-alpha: APIs and generated output change pre-1.0.
-
-## Minimal example
-
-```ts
-import { generate } from '@amritk/parsers'
-import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
-
-const schema: JSONSchema = {
-  type: 'object',
-  properties: { title: { type: 'string' } },
-  required: ['title'],
-}
-
-const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'validate', 'repair'] })
-// → document.ts, validation-result.ts, index.ts
-```
-
-## The modes
-
-| mode | emits | value back | tells you | stops at |
-|:---|:---|:---|:---|:---|
-| `types` | `X` | — | — | — |
-| `guard` | `isX` | — | a boolean | first problem |
-| `validate` | `validateX` | — | every error | the end |
-| `check` | `checkX` | — | the first error | first problem |
-| `coerce` | `coerceX` | coerced | every error | the end |
-| `repair` | `repairX` | repaired | repairs **and** errors | the end |
-| `parse` | `parseX` | repaired | nothing (total) | never |
-| `parseStrict` | `parseX` | as given | throws the first | first problem |
-
-## Gotchas — where agents fail
-
-1. **Options object, not positional booleans.** `generate(schema, typeName, options)`.
-   The two engines underneath take long positional argument lists; this is the
-   only entry point, and they are not reachable from outside the package.
-2. **The default is `['types', 'guard', 'validate']`** — read-only. Anything that
-   rewrites a document (`coerce`, `repair`, `parse`) is opt-in.
-3. **`parse` and `parseStrict` are mutually exclusive** and `generate` throws if
-   you ask for both: they are one function name under two contracts.
-4. **One type, two files.** The type is declared once, in `x.ts`, alongside the
-   validator half. The parser half lands in `x.parse.ts` and imports the type. Do
-   not expect `parseX` in `x.ts`, and do not expect a second `export type X`
-   anywhere — there is exactly one.
-5. **`repairX` reports `valid: true` for a *fully repaired* document**, with a
-   non-empty `repairs`. `result.valid` alone does not mean the input was clean;
-   check `repairs.length` when that matters.
-6. **`guard` is the fail-fast mode and it is much cheaper on bad input** — it
-   short-circuits and builds no error object. It is also, counter-intuitively,
-   *not* faster than `validateX` on input that is valid, where both must check
-   everything. Pick `guard` when the answer is a branch, `validate` when someone
-   has to be told what to fix.
-7. **`check` is the middle of those two, and it returns `validateX`'s type.**
-   `checkX` hands back the same `true | { valid: false, errors }`, with exactly
-   one error in it — the one `validateX` would have reported first, same `path`,
-   `keyword` and `params` — so error-handling code is shared between the two.
-   Pick it when a failure has to be reported but only the first thing wrong
-   matters. Do not build it by hand out of the other two: `isX(v) ? true :
-   validateX(v)` pays for both passes and is no faster than `validateX`.
-
-8. **It emits each engine's exact bytes.** A single-mode build is byte-identical
-   to what that engine emitted when it was its own package, so there is no runtime
-   difference to reason about and no speedup to claim — do not tell a user this is
-   faster. What it changes is that the whole matrix comes out as one type instead
-   of two, and that a build asking for no validator mode ships no
-   `validation-result.ts`.
-
-Only the `.` entry. Install: `bun add @amritk/parsers`.
-
----
-
 # @amritk/generate-examples — notes for AI coding agents
 
 Programmatic API: turn a JSON Schema into test data — a fast-check arbitrary
@@ -750,7 +680,7 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    enforced by registering them — they need no second mention in `formats`.
 5. **Write the schema `as const`** for type inference. Wrong regime: this is a
    cold/few-values interpreter; for one schema × millions of values, use Ajv (or
-   `@amritk/parsers` for generated straight-line code).
+   `@amritk/validation` for generated straight-line code).
 6. **A bad *schema* is silent unless you ask.** `{ required: 'name' }` requires
    nothing and `{ maxlength: 5 }` bounds nothing — both are legal JSON Schema and
    both enforce nothing. Pass `{ strict: true }` to refuse such a schema
@@ -1112,3 +1042,98 @@ if (node && isObjectSchema(node) && hasProperties(node)) {
 Notable subpaths: `/resolve-ref`, `/extract-refs`, `/schema-guards`,
 `/ref-to-name`, `/ref-to-filename`, `/upgrade-draft07-schema`,
 `/walk-ref-graph`, `/generate-type-definition`, `/is-object`. Install: `bun add @amritk/helpers`.
+
+---
+
+# @amritk/validation — notes for AI coding agents
+
+One generator surface over mjst's types, guards, validators, coercers, repairers
+and parsers. It owns both generator engines: the validator/coercer/repairer one
+and the parser/type one, which used to ship as `@amritk/generate-validators` and
+`@amritk/generate-parsers` and are now internal modules here.
+
+> Pre-alpha: APIs and generated output change pre-1.0.
+
+## Minimal example
+
+```ts
+import { generate } from '@amritk/validation'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
+
+const schema: JSONSchema = {
+  type: 'object',
+  properties: { title: { type: 'string' } },
+  required: ['title'],
+}
+
+const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'validate', 'repair'] })
+// → document.ts, validation-result.ts, index.ts
+```
+
+## The modes
+
+| mode | emits | value back | tells you | stops at |
+|:---|:---|:---|:---|:---|
+| `types` | `X` | — | — | — |
+| `guard` | `isX` | — | a boolean | first problem |
+| `validate` | `validateX` | — | every error | the end |
+| `check` | `checkX` | — | the first error | first problem |
+| `coerce` | `coerceX` | coerced | every error | the end |
+| `repair` | `repairX` | repaired | repairs **and** errors | the end |
+| `parse` | `parseX` | repaired | nothing (total) | never |
+| `parseStrict` | `parseX` | as given | throws the first | first problem |
+
+## The same modes from the CLI
+
+Every mode is reachable from `mjst` without dropping to the programmatic API:
+
+| mode | flags |
+|:---|:---|
+| `types` | `--types-only` (alone), otherwise always emitted |
+| `guard`, `validate` | `--validators`, or `--validators-only` for no parser |
+| `check` | `--check` |
+| `coerce` | `--coerce` |
+| `repair` | `--repair` (emits `coerceX` too) |
+| `parse` | the default on any run that is not `--types-only`/`--validators-only` |
+| `parseStrict` | `--strict` |
+
+`--validators-only` is this package's own default (`['types', 'guard', 'validate']`)
+spelled as a flag: everything that judges a document, nothing that builds one.
+
+## Gotchas — where agents fail
+
+1. **Options object, not positional booleans.** `generate(schema, typeName, options)`.
+   The two engines underneath take long positional argument lists; this is the
+   only entry point, and they are not reachable from outside the package.
+2. **The default is `['types', 'guard', 'validate']`** — read-only. Anything that
+   rewrites a document (`coerce`, `repair`, `parse`) is opt-in.
+3. **`parse` and `parseStrict` are mutually exclusive** and `generate` throws if
+   you ask for both: they are one function name under two contracts.
+4. **One type, two files.** The type is declared once, in `x.ts`, alongside the
+   validator half. The parser half lands in `x.parse.ts` and imports the type. Do
+   not expect `parseX` in `x.ts`, and do not expect a second `export type X`
+   anywhere — there is exactly one.
+5. **`repairX` reports `valid: true` for a *fully repaired* document**, with a
+   non-empty `repairs`. `result.valid` alone does not mean the input was clean;
+   check `repairs.length` when that matters.
+6. **`guard` is the fail-fast mode and it is much cheaper on bad input** — it
+   short-circuits and builds no error object. It is also, counter-intuitively,
+   *not* faster than `validateX` on input that is valid, where both must check
+   everything. Pick `guard` when the answer is a branch, `validate` when someone
+   has to be told what to fix.
+7. **`check` is the middle of those two, and it returns `validateX`'s type.**
+   `checkX` hands back the same `true | { valid: false, errors }`, with exactly
+   one error in it — the one `validateX` would have reported first, same `path`,
+   `keyword` and `params` — so error-handling code is shared between the two.
+   Pick it when a failure has to be reported but only the first thing wrong
+   matters. Do not build it by hand out of the other two: `isX(v) ? true :
+   validateX(v)` pays for both passes and is no faster than `validateX`.
+
+8. **It emits each engine's exact bytes.** A single-mode build is byte-identical
+   to what that engine emitted when it was its own package, so there is no runtime
+   difference to reason about and no speedup to claim — do not tell a user this is
+   faster. What it changes is that the whole matrix comes out as one type instead
+   of two, and that a build asking for no validator mode ships no
+   `validation-result.ts`.
+
+Only the `.` entry. Install: `bun add @amritk/validation`.

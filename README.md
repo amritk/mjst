@@ -50,7 +50,7 @@ The CLI (`mjst`) is the primary entry point; everything above is also published 
 | [`@amritk/mjst`](./packages/cli) | CLI — generates parsers, validators, types, and test data from a schema; lints JSON/YAML (`mjst lint`); compiles API contracts (`mjst compile-api`); renders schema docs (`mjst markdown`) |
 | [`@amritk/api`](./packages/api) | Contract-first, framework-agnostic API layer — typed routes, request/response validation, OpenAPI 3.2, typed client |
 | [`@amritk/lint`](./packages/lint) | Format-agnostic JSON/YAML style-guide linter — JSON Schema + custom rules, with exact `line:column` findings |
-| [`@amritk/parsers`](./packages/parsers) | Programmatic API for type, guard, validator, coercer, repairer and parser generation |
+| [`@amritk/validation`](./packages/validation) | Programmatic API for type, guard, validator, coercer, repairer and parser generation |
 | [`@amritk/runtime-validators`](./packages/runtime-validators) | Runtime JSON Schema validation for schemas not known ahead of time |
 | [`@amritk/generate-examples`](./packages/generate-examples) | Programmatic API for fast-check arbitraries + example data generation |
 | [`@amritk/generate-markdown`](./packages/generate-markdown) | Renders a config schema as documentation — a README table, or a multi-page prose reference |
@@ -99,7 +99,7 @@ Each schema also generates a boolean type-guard `isX(input): input is X` — a s
 | assert-strict | Bun | **~171M** ops/s | ~58M | ~23M | ~45M | ~1.4M |
 | assert-strict | Node | ~37M ops/s | n/a | ~25M | **~37M** | ~3.6M |
 
-The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks) — they are not that project's numbers, and they are not comparable with its leaderboard. The shape is shared; the harness is not, and the harness is worth an order of magnitude. Every operation on the leaderboard goes through benny (benchmark.js) into a class-property call, around a single frozen module-level fixture whose verdict is discarded. Running the same generated functions under that harness (`bun run bench:validators:moltar` in `packages/parsers`, one run on Linux x64, Bun 1.4.0 / Node 26.8.1):
+The `assert-loose` / `assert-strict` rows use the same *shape* as [`moltar/typescript-runtime-type-benchmarks`](https://github.com/moltar/typescript-runtime-type-benchmarks) — they are not that project's numbers, and they are not comparable with its leaderboard. The shape is shared; the harness is not, and the harness is worth an order of magnitude. Every operation on the leaderboard goes through benny (benchmark.js) into a class-property call, around a single frozen module-level fixture whose verdict is discarded. Running the same generated functions under that harness (`bun run bench:validators:moltar` in `packages/validation`, one run on Linux x64, Bun 1.4.0 / Node 26.8.1):
 
 | harness | runtime | assert-loose | assert-strict |
 |:--|:--|--:|--:|
@@ -133,7 +133,7 @@ On Bun 1.3 everything converged because everything was paying the same engine sl
 | order | Bun | ~0.66 ms | ~13 ms | ~0.23 ms | n/a — authored in code |
 | order | Node | ~0.58 ms | ~6.4 ms | ~0.11 ms | n/a — authored in code |
 
-<sub>Measured on Bun 1.4.0 and Node 26.8.1 (Linux x64, a 4-vCPU cloud box — every table in this repo comes from the same machine and runtimes), each cell the median of three runs. Absolutes drift between sittings on that box: the same suite, same commit, read ~60% faster an hour later across every case at once, so the ratios are the durable part. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/parsers && bun run bench:validators`.</sub>
+<sub>Measured on Bun 1.4.0 and Node 26.8.1 (Linux x64, a 4-vCPU cloud box — every table in this repo comes from the same machine and runtimes), each cell the median of three runs. Absolutes drift between sittings on that box: the same suite, same commit, read ~60% faster an hour later across every case at once, so the ratios are the durable part. Each library is timed in an isolated process over a pool of distinct inputs, reporting the median of many trials (so the optimiser can't hoist or eliminate the work). Every library agrees on each valid/invalid verdict — parity is asserted before timing — and TypeBox is given uuid/email format checkers so every library does the same work. Reproduce with `cd packages/validation && bun run bench:validators`.</sub>
 
 **Parsing** replicates both parse modes of the same benchmark — its modes and
 its shapes, under this repo's harness rather than the leaderboard's, with the
@@ -159,7 +159,7 @@ and **rejects** undeclared keys (zod's `.strict()`):
 | assert (moltar shape) | Bun | **~44M** ops/s | ~1.4M ops/s | ~1.2M ops/s |
 | assert (moltar shape) | Node | **~34M** ops/s | ~3.5M ops/s | ~0.80M ops/s |
 
-<sub>mjst parses in `strict` mode throughout (throwing on a type mismatch like the others), adding `stripUnknown` for parseSafe and `additionalProperties: false` for parseStrict; zod uses `.object`/`.strictObject` and TypeBox a `Clean+Assert`/`Assert` pipeline. Parity — identical parsed output, and rejection of every wrong-typed (and, in strict mode, extra-keyed) sample — is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/parsers && bun run bench:parsers` (Bun) or `bun run bench:parsers:node` (Node). Unlike the validator table, the generated parser leads every case on both engines. ³ A strip parse of four declared keys builds one small object and nothing else, which is fast enough that the engine's inlining rather than the parser sets the number — read those cells as ratios.</sub>
+<sub>mjst parses in `strict` mode throughout (throwing on a type mismatch like the others), adding `stripUnknown` for parseSafe and `additionalProperties: false` for parseStrict; zod uses `.object`/`.strictObject` and TypeBox a `Clean+Assert`/`Assert` pipeline. Parity — identical parsed output, and rejection of every wrong-typed (and, in strict mode, extra-keyed) sample — is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/validation && bun run bench:parsers` (Bun) or `bun run bench:parsers:node` (Node). Unlike the validator table, the generated parser leads every case on both engines. ³ A strip parse of four declared keys builds one small object and nothing else, which is fast enough that the engine's inlining rather than the parser sets the number — read those cells as ratios.</sub>
 
 ---
 

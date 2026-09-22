@@ -1,17 +1,17 @@
-# @amritk/parsers
+# @amritk/validation
 
 ## 0.2.0
 
 ### Minor Changes
 
-- 9b0fb68: Close the parity gaps that stood between `@amritk/parsers` and retiring the two
+- 9b0fb68: Close the parity gaps that stood between `@amritk/validation` and retiring the two
   generators it composes, and give generated validators an `importExt`.
 
   Three options had no route through the facade — `importExt` and `logWarnings`
   from the parser generator, and, underneath that, the validator generator had no
   `importExt` at all: it hardcoded `.js` on every emitted specifier. That was
   survivable while the CLI kept the two outputs in separate trees. It is not
-  survivable in one shared directory, which is what `@amritk/parsers` emits: asking
+  survivable in one shared directory, which is what `@amritk/validation` emits: asking
   for `importExt: 'ts'` would have produced parser files saying `.ts` beside
   validator files saying `.js`, a set that resolves under neither Node's type
   stripping nor a compiled build. `buildValidatorSchema` now takes `importExt` as a
@@ -58,26 +58,26 @@
 'anyOf'` is unaffected. Errors a reported branch produces now carry their real
   instance path.
 
-- cacfeae: Move both generator engines into `@amritk/parsers` as internal modules.
+- cacfeae: Move both generator engines into `@amritk/validation` as internal modules.
 
   The parser/type engine now lives at `src/parsers/` and the validator/coercer/
   repairer engine at `src/validators/`, reached through the `#parsers/*` and
-  `#validators/*` subpath imports. `@amritk/parsers` no longer depends on
+  `#validators/*` subpath imports. `@amritk/validation` no longer depends on
   `@amritk/generate-parsers` or `@amritk/generate-validators`; it owns the code
   those packages used to hold.
 
-  Nothing changes for consumers of `@amritk/parsers`: `generate`, `ALL_MODES`,
+  Nothing changes for consumers of `@amritk/validation`: `generate`, `ALL_MODES`,
   `GeneratedFile`, `GenerateOptions`, `Mode` and `ImportExtension` are the same,
   and the generated output is byte-identical.
 
   `@amritk/generate-parsers` and `@amritk/generate-validators` keep their public
   API — `buildSchema` and `buildValidatorSchema` behave exactly as before — but
   are now thin forwarding shims over the moved engines, re-exported through the
-  new `@amritk/parsers/internal/parsers` and `@amritk/parsers/internal/validators`
-  entry points. Both packages are being retired; import `@amritk/parsers`
+  new `@amritk/validation/internal/parsers` and `@amritk/validation/internal/validators`
+  entry points. Both packages are being retired; import `@amritk/validation`
   instead.
 
-- e786470: New package: `@amritk/parsers`, one surface over every mode mjst can generate.
+- e786470: New package: `@amritk/validation`, one surface over every mode mjst can generate.
 
   Until now the matrix was split across two packages with two long positional
   argument lists, and reaching a given cell meant knowing which package owned it.
@@ -149,7 +149,7 @@
   purpose: a caller that already renders a `ValidationResult` renders this one
   with the code it has. Reach it with a trailing `check` argument to
   `buildValidatorSchema` (default `false`, nothing existing moves) or the new
-  `'check'` mode on `@amritk/parsers`.
+  `'check'` mode on `@amritk/validation`.
 
   On the bench corpus it is 2.5x to 4.7x the throughput of `validateX` on invalid
   input, and a wash on valid input where there is nothing to skip. A handful of
@@ -163,15 +163,15 @@
 - f699039: Retire `@amritk/generate-parsers` and `@amritk/generate-validators`, and drop the
   two internal subpath exports that existed only for them.
 
-  Both engines moved into `@amritk/parsers` in the previous change, leaving those
+  Both engines moved into `@amritk/validation` in the previous change, leaving those
   packages as forwarding shims. The shims are gone: both directories are now
   private and hold nothing but their published `CHANGELOG.md`, a deprecation
-  notice pointing at `@amritk/parsers`, and the manifest needed to run
+  notice pointing at `@amritk/validation`, and the manifest needed to run
   `npm deprecate` against the versions already on npm. Nothing new is published
   from either.
 
-  **Breaking, for anyone who found them:** `@amritk/parsers/internal/parsers` and
-  `@amritk/parsers/internal/validators` are removed. They were never a supported
+  **Breaking, for anyone who found them:** `@amritk/validation/internal/parsers` and
+  `@amritk/validation/internal/validators` are removed. They were never a supported
   entry point — they existed so the shims could reach the engines through the
   package boundary — and with the shims retired there is nothing left to reach
   them. The engines stay internal, reached through `#parsers/*` and
@@ -189,7 +189,7 @@
   const files = await buildSchema(schema, "Document");
 
   // after
-  import { generate } from "@amritk/parsers";
+  import { generate } from "@amritk/validation";
   const files = await generate(schema, "Document", { modes: ["parse"] });
   ```
 
@@ -199,7 +199,7 @@
   const files = await buildValidatorSchema(schema, "Document");
 
   // after
-  import { generate } from "@amritk/parsers";
+  import { generate } from "@amritk/validation";
   const files = await generate(schema, "Document"); // types + guard + validate
   ```
 

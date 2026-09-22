@@ -1,19 +1,19 @@
 # AGENTS.md — the validator engine
 
 Contributor guide for AI agents editing **this directory**, the validator,
-coercer and repairer engine inside `@amritk/parsers`. Repo-wide rules:
+coercer and repairer engine inside `@amritk/validation`. Repo-wide rules:
 [`../../../../AGENTS.md`](../../../../AGENTS.md). Consuming the package? See
 [`AI.md`](../../AI.md).
 
 Generates lightweight predicate validators (`validateFoo`) + types from a JSON
-Schema. It is internal: nothing outside `@amritk/parsers` imports it, and
+Schema. It is internal: nothing outside `@amritk/validation` imports it, and
 `src/generate.ts` is its only caller.
 
 ## Commands
 
 ```bash
-bun run --filter='@amritk/parsers' test
-bun run --filter='@amritk/parsers' types:check
+bun run --filter='@amritk/validation' test
+bun run --filter='@amritk/validation' types:check
 ```
 
 ## Invariants — do not break these

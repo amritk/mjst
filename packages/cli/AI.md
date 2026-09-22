@@ -8,7 +8,7 @@ reference is [README.md](./README.md); config options are in
 
 > Pre-alpha: generated output and flags change without notice pre-1.0. This
 > package ships **only a `mjst` binary** — there are no JS exports. For the
-> programmatic API import `@amritk/parsers` etc. instead.
+> programmatic API import `@amritk/validation` etc. instead.
 
 ## The four commands
 
@@ -57,11 +57,19 @@ mjst markdown ./config.schema.json --table --readme ./README.md
    `--discriminator <prop>` when the document tags frames with something other
    than `type`; a channel carrying `x-mjst: { discriminator }` keeps its own.
 
+## Picking what gets emitted
+
+Every run emits the type. `--types-only` stops there. A bare run adds a parser;
+`--validators` adds `isX`/`validateX` beside it; `--validators-only` emits those
+*without* a parser, which is the shape to reach for when the generated code only
+ever judges input it did not produce. `--check`, `--coerce` and `--repair` each
+add one more entry point to the validator half and work under either flag.
+
 ## Common flags
 
 `--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
-`--validators`, `--examples`, `--message-contracts`, `--discriminator`,
-`--types-only`, `--build`, `--strict`, `--strip-unknown`,
+`--validators` / `--validators-only`, `--examples`, `--message-contracts`,
+`--discriminator`, `--types-only`, `--build`, `--strict`, `--strip-unknown`,
 `--unknown-keys count-keys|count-enumerable`, `--readonly`,
 `--import-ext ts|js`, `--config <path>`, `--resolve-remote` /
 `--allowed-hosts` (SSRF-guarded remote `$ref`s).

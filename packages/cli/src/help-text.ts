@@ -4,7 +4,7 @@
  * documents these flags (config.schema.json) is not shipped in the published
  * package; the help-text test cross-checks that every flag is listed.
  */
-export const HELP_TEXT = `mjst — generate TypeScript parsers and type definitions from JSON Schemas
+export const HELP_TEXT = `mjst — generate TypeScript types, validators and parsers from JSON Schemas
 
 Usage:
   mjst --schema <path> --out-dir <dir> [options]
@@ -29,6 +29,9 @@ Output:
   --types-only          Generate type definitions only, without parser functions
   --validators          Also emit validateX/isX validators beside the parsers, over one
                         shared declaration of each generated type
+  --validators-only     Emit the validator half and no parser: the type, isX, validateX and
+                        whichever of checkX/coerceX/repairX were asked for (implies
+                        --validators; the mirror of --types-only)
   --check               Also emit checkX, the same result as validateX but stopped at the
                         first violation (requires --validators)
   --coerce              Also emit coerceX, which coerces scalars the way Ajv's coerceTypes

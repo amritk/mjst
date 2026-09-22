@@ -1,4 +1,4 @@
-import { generate } from '@amritk/parsers'
+import { generate } from '@amritk/validation'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 

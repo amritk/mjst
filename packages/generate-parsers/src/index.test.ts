@@ -1,11 +1,11 @@
-import { generate } from '@amritk/parsers'
+import { generate } from '@amritk/validation'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
 import { buildSchema } from './index'
 
 /**
- * This package is a compatibility shim over `@amritk/parsers`, so the only thing
+ * This package is a compatibility shim over `@amritk/validation`, so the only thing
  * it can get wrong is the mapping: which positional argument becomes which
  * option, and which flags choose which modes.
  *

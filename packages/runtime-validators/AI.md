@@ -41,7 +41,7 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    enforced by registering them — they need no second mention in `formats`.
 5. **Write the schema `as const`** for type inference. Wrong regime: this is a
    cold/few-values interpreter; for one schema × millions of values, use Ajv (or
-   `@amritk/parsers` for generated straight-line code).
+   `@amritk/validation` for generated straight-line code).
 6. **A bad *schema* is silent unless you ask.** `{ required: 'name' }` requires
    nothing and `{ maxlength: 5 }` bounds nothing — both are legal JSON Schema and
    both enforce nothing. Pass `{ strict: true }` to refuse such a schema

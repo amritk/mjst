@@ -112,7 +112,7 @@ Most helpers have a colocated test file (`*.test.ts`) — read those for canonic
 
 ## Related packages
 
-- [`@amritk/parsers`](../parsers) — primary consumer
+- [`@amritk/validation`](../parsers) — primary consumer
 - [`@amritk/mjst`](../cli) — the CLI surface
 
 ---

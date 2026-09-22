@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { fmtOps, NOISY_SPREAD } from '../packages/parsers/bench/parsers/measure.ts'
+import { fmtOps, NOISY_SPREAD } from '../packages/validation/bench/parsers/measure.ts'
 import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
 
 /**
@@ -281,7 +281,7 @@ const run = async (): Promise<void> => {
   // is in scope, so a yaml-only run never loads the api or validator benches.
   const needsParseCases = suites.has('parsers') || suites.has('codegen')
   const parsersSchemas = needsParseCases
-    ? ((await import(pathToFileURL(join(head, 'packages/parsers/bench/parsers/schemas.ts')).href)) as {
+    ? ((await import(pathToFileURL(join(head, 'packages/validation/bench/parsers/schemas.ts')).href)) as {
         PARSE_CASES: readonly { name: string; mode: string; schema: unknown }[]
       })
     : { PARSE_CASES: [] }
@@ -301,7 +301,7 @@ const run = async (): Promise<void> => {
   }
 
   const validatorsSchemas = suites.has('validators')
-    ? ((await import(pathToFileURL(join(head, 'packages/parsers/bench/validators/schemas.ts')).href)) as {
+    ? ((await import(pathToFileURL(join(head, 'packages/validation/bench/validators/schemas.ts')).href)) as {
         BENCH_CASES: readonly { name: string }[]
       })
     : { BENCH_CASES: [] }

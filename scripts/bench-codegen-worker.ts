@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { statsOf } from '../packages/parsers/bench/parsers/measure.ts'
+import { statsOf } from '../packages/validation/bench/parsers/measure.ts'
 
 /**
  * One isolated codegen measurement for `bench-compare.ts`: times `buildSchema`
@@ -22,11 +22,11 @@ const [tree, mode, schemaJson] = process.argv.slice(2) as [string, string, strin
 
 /**
  * Where the parser engine lives, newest home first. It moved into
- * `@amritk/parsers` when `@amritk/generate-parsers` was retired, and a baseline
+ * `@amritk/validation` when `@amritk/generate-parsers` was retired, and a baseline
  * checkout can predate that move, so the tree being timed decides which path is
  * real rather than this script assuming one.
  */
-const ENGINE_MODULES = ['packages/parsers/src/parsers/index.ts', 'packages/generate-parsers/src/index.ts'] as const
+const ENGINE_MODULES = ['packages/validation/src/parsers/index.ts', 'packages/generate-parsers/src/index.ts'] as const
 
 const enginePath = ENGINE_MODULES.map((module) => join(tree, module)).find((path) => existsSync(path))
 if (enginePath === undefined) {
