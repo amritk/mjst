@@ -64,21 +64,13 @@ describe('run', () => {
         },
       },
     })
-    const { code, stderr } = await run([
-      schema,
-      '--out-dir',
-      dir,
-      '--required-style',
-      'split',
-      '--type-column',
-      'never',
-    ])
+    const { code, stderr } = await run([schema, '--out-dir', dir, '--required-first', '--type-column', 'never'])
     expect(stderr).toBe('')
     expect(code).toBe(0)
     const page = readFileSync(join(dir, 'index.md'), 'utf-8')
-    expect(page).toContain('**Required**')
-    expect(page).toContain('**Optional**')
     expect(page).toContain('| Property | Description |')
+    expect(page).toContain('| `host` _required_ | The host to bind. |')
+    expect(page.indexOf('`host`')).toBeLessThan(page.indexOf('`port`'))
   })
 
   // --table is the other shape the package renders: one HTML table spliced into
@@ -137,9 +129,9 @@ describe('run', () => {
   // A page flag under --table would be a silently ignored option, and the user
   // would sit waiting for pages that were never going to be written.
   it('rejects a page flag combined with --table', async () => {
-    const styled = await run(['config.schema.json', '--table', '--required-style', 'split'])
+    const styled = await run(['config.schema.json', '--table', '--required-first'])
     expect(styled.code).toBe(2)
-    expect(styled.stderr).toContain('--required-style')
+    expect(styled.stderr).toContain('--required-first')
     const { code, stderr } = await run(['config.schema.json', '--table', '--out-dir', 'docs'])
     expect(code).toBe(2)
     expect(stderr).toContain('--out-dir')

@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/schemas/split-table-config.schema.json",
+  "$id": "https://example.com/schemas/deploy-config.schema.json",
   "title": "Deploy configuration",
-  "description": "The same renderer with a different root `x-doc.table`: the required options in a table of their own, and no **Type** column anywhere.\n\nA reference whose readers are writing YAML rather than TypeScript often has nothing to say with a type column — and a reader skimming for what they *must* fill in should not have to read every row to find it.",
+  "description": "The same renderer under a different root `x-doc.table`: the options you have to fill in at the top of every table, and no **Type** column anywhere.\n\nA reference whose readers are writing YAML rather than TypeScript often has nothing to say with a type column — and a reader skimming for what is required should not have to read every row to find it.",
   "type": "object",
   "x-doc": {
     "file": "configuration.md",
     "language": "json",
     "layout": "table",
-    "table": { "type": "never", "required": "split" },
+    "table": { "type": "never", "requiredFirst": true },
     "example": {
       "caption": "A minimal config:",
       "value": {

@@ -52,9 +52,16 @@ describe('parse-markdown-args', () => {
         '--default-column',
         'always',
         '--required-style',
-        'split',
+        'column',
+        '--required-first',
       ]),
-    ).toEqual({ schema: 's.json', typeColumn: 'never', defaultColumn: 'always', requiredStyle: 'split' })
+    ).toEqual({
+      schema: 's.json',
+      typeColumn: 'never',
+      defaultColumn: 'always',
+      requiredStyle: 'column',
+      requiredFirst: true,
+    })
   })
 
   // Same reason a typo in --layout is an error: the renderer reads an unknown
@@ -66,6 +73,8 @@ describe('parse-markdown-args', () => {
     expect(() => parseMarkdownArgs(['s.json', '--required-style', 'badge'])).toThrow(
       /Invalid --required-style value "badge"/,
     )
+    // A switch that took a value would be a value silently thrown away.
+    expect(() => parseMarkdownArgs(['s.json', '--required-first=true'])).toThrow(/takes no value/)
   })
 
   it('reads the table flags', () => {

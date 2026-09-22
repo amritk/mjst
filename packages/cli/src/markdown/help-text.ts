@@ -29,8 +29,8 @@ Property table options (the root x-doc.table, for every table on every page):
   --type-column <when>     Render the Type column: auto (default), always, or never
   --default-column <when>  Render the Default column: auto (default), always, or never
   --required-style <how>   Say which properties are required: marker (default, beside
-                           the name), column (a Required column), or split (a Required
-                           table then an Optional one)
+                           the name) or column (a Required column)
+  --required-first         List the required properties at the top of every table
 
 Table options:
   --table              Render the HTML config table instead of the prose pages

@@ -23,6 +23,7 @@ const PAGE_FLAGS = [
   'typeColumn',
   'defaultColumn',
   'requiredStyle',
+  'requiredFirst',
 ] as const
 
 /**
@@ -96,7 +97,12 @@ export const run = async (argv: string[]): Promise<RunResult> => {
     headingLevel: args.headingLevel,
     // Always passed: every member is optional, so the schema's own
     // `x-doc.table` still decides whatever the flags left alone.
-    table: { type: args.typeColumn, default: args.defaultColumn, required: args.requiredStyle },
+    table: {
+      type: args.typeColumn,
+      default: args.defaultColumn,
+      required: args.requiredStyle,
+      requiredFirst: args.requiredFirst,
+    },
   }
 
   let files: Awaited<ReturnType<typeof generateDocs>>

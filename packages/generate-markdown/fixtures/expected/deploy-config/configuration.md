@@ -1,8 +1,8 @@
 # Deploy configuration
 
-The same renderer with a different root `x-doc.table`: the required options in a table of their own, and no **Type** column anywhere.
+The same renderer under a different root `x-doc.table`: the options you have to fill in at the top of every table, and no **Type** column anywhere.
 
-A reference whose readers are writing YAML rather than TypeScript often has nothing to say with a type column — and a reader skimming for what they *must* fill in should not have to read every row to find it.
+A reference whose readers are writing YAML rather than TypeScript often has nothing to say with a type column — and a reader skimming for what is required should not have to read every row to find it.
 
 A minimal config:
 
@@ -22,16 +22,9 @@ A minimal config:
 
 How the service is built before it is deployed.
 
-**Required**
-
 | Property | Default | Description |
 | --- | --- | --- |
-| [`command`](#command) |  | Command that produces the build output. |
-
-**Optional**
-
-| Property | Default | Description |
-| --- | --- | --- |
+| [`command`](#command) _required_ |  | Command that produces the build output. |
 | `outDir` | `"dist"` | Directory the build writes to. |
 | `cache` | `true` | Reuse the dependency cache between builds. |
 
@@ -49,17 +42,10 @@ Environment variables every instance is started with.
 
 What is deployed, and where it lands.
 
-**Required**
-
 | Property | Default | Description |
 | --- | --- | --- |
-| [`service`](#service-1) |  | Name the deployment is published under. It has to be unique within the account. |
-| `region` |  | Region the service runs in. |
-
-**Optional**
-
-| Property | Default | Description |
-| --- | --- | --- |
+| [`service`](#service-1) _required_ |  | Name the deployment is published under. It has to be unique within the account. |
+| `region` _required_ |  | Region the service runs in. |
 | [`domain`](#domain) |  | Custom domain to route to the service. |
 | [`replicas`](#replicas) | `1` | How many instances to run. |
 

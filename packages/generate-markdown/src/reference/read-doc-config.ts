@@ -31,7 +31,7 @@ const DEFAULT_LANGUAGE = 'json'
 const LAYOUTS: readonly DocLayout[] = ['headings', 'table', 'none']
 const SORTS: readonly DocSort[] = ['schema', 'alphabetical']
 const TABLE_COLUMNS: readonly DocTableColumn[] = ['auto', 'always', 'never']
-const TABLE_REQUIRED: readonly DocTableRequired[] = ['marker', 'column', 'split']
+const TABLE_REQUIRED: readonly DocTableRequired[] = ['marker', 'column']
 
 /**
  * The table layout every page renders with: the caller's choice, then the
@@ -47,6 +47,10 @@ const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable
     type: options.type ?? asOneOf(table['type'], TABLE_COLUMNS) ?? 'auto',
     default: options.default ?? asOneOf(table['default'], TABLE_COLUMNS) ?? 'auto',
     required: options.required ?? asOneOf(table['required'], TABLE_REQUIRED) ?? 'marker',
+    // `=== true` rather than truthiness: the schema is parsed JSON, and a
+    // `"requiredFirst": "no"` that reordered every table would be a surprising
+    // way to read a string.
+    requiredFirst: options.requiredFirst ?? table['requiredFirst'] === true,
   }
 }
 

@@ -1650,12 +1650,12 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('| `arrayFormat` | How arrays are encoded. |')
   })
 
-  // The blocks under a table follow their rows down the page, so a split has to
-  // carry the order through to them.
-  it('splits a table in two and orders the blocks below it to match', () => {
+  // The blocks under a table follow their rows down the page, so a reordered
+  // table has to carry the order through to them.
+  it('lists the required properties first and orders the blocks below to match', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table', table: { required: 'split' } },
+        'x-doc': { layout: 'table', table: { requiredFirst: true } },
         properties: {
           server: {
             type: 'object',
@@ -1668,14 +1668,12 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('**Required**')
-    expect(content).toContain('**Optional**')
-    expect(content.indexOf('**Required**')).toBeLessThan(content.indexOf('**Optional**'))
-    expect(content).toContain('| [`host`](#host) | `string` | Host. |')
+    // One table: the required property is simply the row above, still marked.
+    expect(content).toContain('| [`host`](#host) _required_ | `string` | Host. |')
     expect(content).toContain('| [`port`](#port) | `integer` | Port. |')
+    expect(content.match(/^\| Property \|/gm)).toHaveLength(1)
+    expect(content.indexOf('`host`')).toBeLessThan(content.indexOf('`port`'))
     expect(content.indexOf('### host')).toBeLessThan(content.indexOf('### port'))
-    // The table the row is in has already said it.
-    expect(content).not.toContain('_required_')
   })
 
   // The row above carries the shape; everything a row cannot hold still has to
@@ -4839,11 +4837,11 @@ describe('generate-markdown-files', () => {
   })
 
   // The same renderer under a different root `x-doc.table`: the required
-  // options in a table of their own, and no type column anywhere.
-  it('matches the checked-in docs for the split-table fixture', () => {
-    const files = generateMarkdownFiles(fixture('split-table-config'))
+  // options at the top of every table, and no type column anywhere.
+  it('matches the checked-in docs for the deploy fixture', () => {
+    const files = generateMarkdownFiles(fixture('deploy-config'))
     expect(files.map((file) => file.filename)).toEqual(['configuration.md'])
-    expect(files[0]?.content).toBe(golden('split-table-config', 'configuration.md'))
+    expect(files[0]?.content).toBe(golden('deploy-config', 'configuration.md'))
   })
 
   // A golden left behind by a page that no longer exists would otherwise sit
@@ -4852,7 +4850,7 @@ describe('generate-markdown-files', () => {
   // page that stops being emitted, or one that appears from nowhere, leaves
   // both of them green.
   it('emits exactly the set of golden pages that is checked in', () => {
-    for (const name of ['api-reference-config', 'sdk-config', 'split-table-config'] as const) {
+    for (const name of ['api-reference-config', 'sdk-config', 'deploy-config'] as const) {
       const generated = generateMarkdownFiles(fixture(name))
         .map((file) => file.filename)
         .sort()

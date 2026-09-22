@@ -17,6 +17,7 @@ describe('help-text', () => {
       '--type-column',
       '--default-column',
       '--required-style',
+      '--required-first',
       '--table',
       '--readme',
       '--help',

@@ -13,7 +13,7 @@ const section = (id: string, overrides: Partial<DocSection> = {}): DocSection =>
 })
 
 /** The built-in table layout, which most of these tests render with. */
-const DEFAULT_TABLE: DocTable = { type: 'auto', default: 'auto', required: 'marker' }
+const DEFAULT_TABLE: DocTable = { type: 'auto', default: 'auto', required: 'marker', requiredFirst: false }
 
 const context = (overrides: Partial<RenderContext> = {}): RenderContext => ({
   language: 'json',
@@ -280,72 +280,67 @@ describe('render-property-table', () => {
     )
   })
 
-  it('splits the table in two, required first', () => {
+  // One table, with the properties a reader has to fill in at the top of it.
+  it('lists the required properties first when the schema asks it to', () => {
     const table = renderPropertyTable(
       [
         entry('slug', { type: 'string', description: 'Optional slug.' }),
         entry('name', { type: 'string', description: 'The name.' }, true),
+        entry('url', { type: 'string', description: 'Where it lives.' }, true),
       ],
-      styled({ required: 'split' }),
+      styled({ requiredFirst: true }),
     )
     expect(table).toBe(
       [
-        '**Required**',
-        '',
         '| Property | Type | Description |',
         '| --- | --- | --- |',
-        '| `name` | `string` | The name. |',
-        '',
-        '**Optional**',
-        '',
-        '| Property | Type | Description |',
-        '| --- | --- | --- |',
+        '| `name` _required_ | `string` | The name. |',
+        '| `url` _required_ | `string` | Where it lives. |',
         '| `slug` | `string` | Optional slug. |',
       ].join('\n'),
     )
   })
 
-  // The grouping is the statement, so the row does not make it twice.
-  it('drops the marker from a split table', () => {
+  // The order groups them; the marker is still what says which group a row is
+  // in, so a reader never has to find the boundary.
+  it('keeps the marker on a required-first table', () => {
     const table = renderPropertyTable(
       [entry('name', { type: 'string' }, true), entry('slug', { type: 'string' })],
-      styled({ required: 'split' }),
+      styled({ requiredFirst: true }),
     )
-    expect(table).not.toContain(REQUIRED_MARKER_TEXT)
+    expect(table).toContain(`| \`name\` ${REQUIRED_MARKER_TEXT} |`)
   })
 
-  // The caption is what says the table is the required half.
-  it('captions a split table of nothing but required properties', () => {
-    const table = renderPropertyTable([entry('name', { type: 'string' }, true)], styled({ required: 'split' }))
-    expect(table.startsWith('**Required**\n\n')).toBe(true)
-    expect(table).not.toContain('**Optional**')
-  })
-
-  // **Optional** is the absence of that statement rather than one of its own:
-  // with no required half above it, the table is just the table.
-  it('leaves a split table of nothing but optional properties uncaptioned', () => {
-    const table = renderPropertyTable([entry('slug', { type: 'string' })], styled({ required: 'split' }))
-    expect(table).not.toContain('**Optional**')
-    expect(table).not.toContain('**Required**')
-  })
-
-  // Two tables in a row whose headers disagree read as two unrelated tables.
-  it('gives both halves of a split the same columns', () => {
+  // The two are separate choices: where requiredness is said, and what order
+  // the rows are in.
+  it('combines required-first with the required column', () => {
     const table = renderPropertyTable(
-      [entry('name', { type: 'string' }, true), entry('port', { type: 'integer', default: 80 })],
-      styled({ required: 'split' }),
+      [entry('slug', { type: 'string' }), entry('name', { type: 'string' }, true)],
+      styled({ required: 'column', requiredFirst: true }),
     )
-    expect(table.match(/\| Property \| Type \| Default \| Description \|/g)).toHaveLength(2)
+    expect(table).toBe(
+      [
+        '| Property | Type | Required | Description |',
+        '| --- | --- | --- | --- |',
+        '| `name` | `string` | ✅ |  |',
+        '| `slug` | `string` |  |  |',
+      ].join('\n'),
+    )
+  })
+
+  it('leaves a table of entirely optional properties in its own order', () => {
+    const entries = [entry('slug', { type: 'string' }), entry('title', { type: 'string' })]
+    expect(renderPropertyTable(entries, styled({ requiredFirst: true }))).toBe(renderPropertyTable(entries, context()))
   })
 
   // The blocks a caller renders under the table follow their rows, so it needs
   // the same order the rows are in.
-  it('orders entries required-first only for a split table', () => {
+  it('orders entries required-first only when the schema asked for it', () => {
     const required = entry('name', { type: 'string' }, true)
     const optional = entry('slug', { type: 'string' })
     const entries = [optional, required]
     expect(tableOrder(entries, DEFAULT_TABLE)).toEqual(entries)
-    expect(tableOrder(entries, { ...DEFAULT_TABLE, required: 'split' })).toEqual([required, optional])
+    expect(tableOrder(entries, { ...DEFAULT_TABLE, requiredFirst: true })).toEqual([required, optional])
   })
 
   // A row is one line and its columns are split on unescaped pipes.

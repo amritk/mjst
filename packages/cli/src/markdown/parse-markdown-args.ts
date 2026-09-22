@@ -24,6 +24,8 @@ export type MarkdownArgs = {
   defaultColumn?: DocTableColumn
   /** How property tables say which properties are required (`--required-style`). */
   requiredStyle?: DocTableRequired
+  /** True when `--required-first` was passed: required properties head every table. */
+  requiredFirst?: boolean
   /** True when `--table` was passed: render the HTML table instead of the pages. */
   table?: boolean
   /** Markdown file the table is spliced into (`--readme`). */
@@ -46,7 +48,7 @@ const VALUE_KEYS = new Set([
   'readme',
 ])
 
-const BOOLEAN_KEYS = new Set(['table'])
+const BOOLEAN_KEYS = new Set(['table', 'requiredFirst'])
 
 const LAYOUTS = ['headings', 'table', 'none'] as const
 
@@ -54,7 +56,7 @@ const SORTS = ['schema', 'alphabetical'] as const
 
 const TABLE_COLUMNS = ['auto', 'always', 'never'] as const
 
-const REQUIRED_STYLES = ['marker', 'column', 'split'] as const
+const REQUIRED_STYLES = ['marker', 'column'] as const
 
 /** Normalizes a flag name so both `--out-dir` and `--outDir` map to the same key. */
 const toCamelCase = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
@@ -166,7 +168,9 @@ export const parseMarkdownArgs = (argv: readonly string[]): MarkdownArgs => {
     const key = toCamelCase(flagName)
 
     if (BOOLEAN_KEYS.has(key)) {
-      args.table = true
+      // Switched on by name, so a new switch cannot quietly set `--table`.
+      if (key === 'requiredFirst') args.requiredFirst = true
+      else args.table = true
       continue
     }
 

@@ -61,11 +61,8 @@ export type DocTableColumn = 'auto' | 'always' | 'never'
  *   of blanks.
  * - `column` — a **Required** column with a ✅ in it, rendered only when some
  *   row fills it. The shape this package rendered before `marker`.
- * - `split` — two tables, the required properties first under a **Required**
- *   caption and the rest under **Optional**. The grouping is the statement, so
- *   no row carries a marker.
  */
-export type DocTableRequired = 'marker' | 'column' | 'split'
+export type DocTableRequired = 'marker' | 'column'
 
 /**
  * How every property table on every page is laid out. Declared once on the root
@@ -76,6 +73,16 @@ export type DocTable = {
   readonly type: DocTableColumn
   readonly default: DocTableColumn
   readonly required: DocTableRequired
+  /**
+   * Lists the required properties at the top of the table, the rest under them,
+   * for a reader skimming for what they have to fill in. One table still: the
+   * order groups them, and the marker (or the column) still says which is
+   * which, so nothing has to be read twice.
+   *
+   * A stable partition over whatever order the properties were already in, so
+   * `sort` and `x-doc.order` still decide the rest.
+   */
+  readonly requiredFirst: boolean
 }
 
 /**
@@ -196,6 +203,7 @@ export type MarkdownTableOptions = {
   readonly type?: DocTableColumn | undefined
   readonly default?: DocTableColumn | undefined
   readonly required?: DocTableRequired | undefined
+  readonly requiredFirst?: boolean | undefined
 }
 
 /**

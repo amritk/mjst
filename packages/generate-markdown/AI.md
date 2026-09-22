@@ -83,15 +83,16 @@ or `mjst markdown <schema> --table --readme <file>`.
    and scalar values only (a string, number, or boolean; anything else leaves
    the cell empty).
 9. **A property table's shape is the root `x-doc.table`'s, not the renderer's.**
-   `{ type, default, required }`: the two columns take
+   `{ type, default, required, requiredFirst }`: the two columns take
    `'auto' | 'always' | 'never'` and default to `auto` — rendered only when a
    row fills them with something a reader could act on, so a table whose every
    row says `object` has no **Type** column. `required` takes `'marker'`
-   (default, `` `name` _required_ `` beside the name), `'column'` (a **Required**
-   column with ✅) or `'split'` (a **Required** table, then an **Optional** one,
-   with no markers). Root only — per-property and per-section tables all follow
-   it — and `MarkdownOptions.table` / the CLI's `--type-column`,
-   `--default-column`, `--required-style` override it per member.
+   (default, `` `name` _required_ `` beside the name) or `'column'` (a
+   **Required** column with ✅), and `requiredFirst` heads each table with the
+   required properties, still as one table. Root only — per-property and
+   per-section tables all follow it — and `MarkdownOptions.table` / the CLI's
+   `--type-column`, `--default-column`, `--required-style`, `--required-first`
+   override it per member.
 10. **Table rows link to the headings below them, and the anchors are not
    hand-written.** A row links to the property's own heading when it has one, on
    this page (`#packagename`) or the page it moved to
