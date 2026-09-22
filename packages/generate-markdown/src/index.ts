@@ -7,6 +7,8 @@ export { renderConfigTable } from '#table/render-config-table'
 export type {
   DocConfig,
   DocExample,
+  DocHeadings,
+  DocHeadingType,
   DocLayout,
   DocMeta,
   DocPage,
@@ -16,6 +18,7 @@ export type {
   DocTableColumn,
   DocTableRequired,
   GeneratedFile,
+  MarkdownHeadingsOptions,
   MarkdownOptions,
   MarkdownTableOptions,
 } from '#types/doc'

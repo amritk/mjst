@@ -632,7 +632,9 @@ Set it to `none` to hide the download button.
 
 Two things there are worth pointing at. The **Type:** of an `enum` is the
 literal union, because the allowed values *are* the type a reader needs — so
-there is no separate "Allowed values" line repeating them. And neither property
+there is no separate "Allowed values" line repeating them — unless the label
+is not on the page, in which case the line is back (see
+[What a heading holds](#what-a-heading-holds)). And neither property
 declares a code example: both were derived from `examples`, wrapped back into
 the shape of the config file. A property nested at `targets.typescript.packageName`
 derives `{ targets: { typescript: { packageName: '@acme/api' } } }`, which is
@@ -654,6 +656,7 @@ On the **root schema**:
 | `layout` | `'headings' \| 'table' \| 'none'` | Default layout for nested properties. Defaults to `headings`. |
 | `sort` | `'schema' \| 'alphabetical'` | Default property order. Defaults to `schema`. |
 | `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
+| `headings` | `{ type? }` | How every property rendered as a heading is laid out — `type` takes `'auto' \| 'never'`. See [What a heading holds](#what-a-heading-holds). Root only, like `table` |
 | `table` | `{ type?, default?, required?, requiredFirst? }` | How every property table on every page is laid out — `type` and `default` take `'auto' \| 'always' \| 'never'`, `required` takes `'marker' \| 'column'`, and `requiredFirst` heads each table with the properties that have to be filled in. See [What a property table holds](#what-a-property-table-holds). Root only: a reference whose tables disagree about which columns exist reads as several references stapled together |
 | `sections` | `{ id, title?, description?, page?, layout?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. Its `layout` takes the same `'headings' \| 'table' \| 'none'` vocabulary a property's does, and defaults to `headings` — the root `layout` is the default for a property's *children*, not for a section. |
 | `example` / `examples` | see below | Code blocks under the page title. |
@@ -766,7 +769,33 @@ and every table on every page follows it:
 | `requiredFirst` | `false` (default), `true` | Lists the required properties at the top of the table and the rest under them, for a reader skimming for what they have to fill in. Still one table: the order groups them and the marker (or the column) still says which is which, so nothing is read twice. A stable partition, so `sort` and `x-doc.order` decide the order within each group — and the blocks below the table follow their rows, so they are reordered with them |
 
 All of this is the table's shape only. A property rendered as a heading still
-gets its **Type:** and **Required** lines, which are prose rather than columns.
+gets its **Type:** and **Required** lines, which are prose rather than columns —
+see below.
+
+Under `type: 'never'` a row no longer spells out an enum, so the property gets a
+block below its row listing its **Allowed values:**, and the row links to it.
+Under `auto` the column always stays for an enum (its label is never
+uninformative), so the values are not repeated.
+
+### What a heading holds
+
+The root `x-doc.headings` does for headings what `x-doc.table` does for tables:
+one declaration, and every property heading on every page follows it.
+
+```json
+{
+  "x-doc": {
+    "headings": { "type": "never" }
+  }
+}
+```
+
+| Member | Values | What it decides |
+| --- | --- | --- |
+| `type` | `auto` (default), `never` | The **Type:** line under a property's heading. `auto` prints it whenever the schema states a type. `never` is for a reference whose readers do not think in types, where the line under every heading is noise. An `enum` then gets its **Allowed values:** line back, because the label was the only other place its values appeared. **Required** stays either way, since requiredness is not a type |
+
+`never` is the only way to hide the line: an empty `x-doc.type` on a property
+counts as unset and falls back to the label the schema implies.
 
 A row links to the property's own heading wherever that heading is: the section
 rendered below the table (`#packagename`), or the page the property moved to

@@ -182,4 +182,22 @@ describe('read-doc-config', () => {
       requiredFirst: false,
     })
   })
+
+  it('labels every heading with its type unless told otherwise', () => {
+    expect(readDocConfig({}).headings).toEqual({ type: 'auto' })
+  })
+
+  it('reads the heading layout the schema declares, and lets the caller override it', () => {
+    expect(readDocConfig({ 'x-doc': { headings: { type: 'never' } } }).headings).toEqual({ type: 'never' })
+    expect(
+      readDocConfig({ 'x-doc': { headings: { type: 'never' } } }, { headings: { type: 'auto' } }).headings,
+    ).toEqual({ type: 'auto' })
+  })
+
+  // `always` is a table-column word: a heading with no type to state has
+  // nothing to print, so it is not a value this member takes.
+  it('ignores a heading member it does not understand', () => {
+    expect(readDocConfig({ 'x-doc': { headings: { type: 'always' } } }).headings).toEqual({ type: 'auto' })
+    expect(readDocConfig({ 'x-doc': { headings: { type: false } } }).headings).toEqual({ type: 'auto' })
+  })
 })

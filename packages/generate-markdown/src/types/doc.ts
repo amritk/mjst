@@ -86,6 +86,25 @@ export type DocTable = {
 }
 
 /**
+ * When a property rendered as a heading gets its **Type:** line:
+ *
+ * - `auto` — whenever the schema states a type, which is most properties.
+ * - `never` — a reference whose readers do not think in types, where the line
+ *   under every heading is noise. An `enum` then gets its **Allowed values:**
+ *   line back, since the label was the only other place the values appeared.
+ */
+export type DocHeadingType = 'auto' | 'never'
+
+/**
+ * How every property rendered as a heading is laid out. Declared once on the
+ * root `x-doc.headings`, for the same reason {@link DocTable} is: a reference
+ * that labels its types on one page and not the next reads as two references.
+ */
+export type DocHeadings = {
+  readonly type: DocHeadingType
+}
+
+/**
  * The normalized `x-doc` keyword of a single property. Everything here is
  * documentation-only: none of it changes what the schema validates, which is
  * why it lives under one vendor extension instead of leaking into the standard
@@ -193,6 +212,13 @@ export type MarkdownOptions = {
   readonly headingLevel?: number | undefined
   /** Property table layout. Each member defaults to the schema's, then to the built-in. */
   readonly table?: MarkdownTableOptions | undefined
+  /** Heading layout. Each member defaults to the schema's, then to the built-in. */
+  readonly headings?: MarkdownHeadingsOptions | undefined
+}
+
+/** The caller's half of {@link DocHeadings}: every member optional. */
+export type MarkdownHeadingsOptions = {
+  readonly type?: DocHeadingType | undefined
 }
 
 /**
@@ -222,4 +248,6 @@ export type DocConfig = {
   readonly headingLevel: number
   /** How every property table is laid out. */
   readonly table: DocTable
+  /** How every property rendered as a heading is laid out. */
+  readonly headings: DocHeadings
 }

@@ -41,9 +41,9 @@ describe('parse-markdown-args', () => {
     })
   })
 
-  // The property table's shape, which the schema usually owns — these are for a
-  // build that renders the same schema two ways.
-  it('reads the property table flags', () => {
+  // The shape of the property tables and headings, which the schema usually
+  // owns — these are for a build that renders the same schema two ways.
+  it('reads the property table and heading flags', () => {
     expect(
       parseMarkdownArgs([
         's.json',
@@ -54,6 +54,8 @@ describe('parse-markdown-args', () => {
         '--required-style',
         'column',
         '--required-first',
+        '--type-label',
+        'never',
       ]),
     ).toEqual({
       schema: 's.json',
@@ -61,6 +63,7 @@ describe('parse-markdown-args', () => {
       defaultColumn: 'always',
       requiredStyle: 'column',
       requiredFirst: true,
+      typeLabel: 'never',
     })
   })
 
@@ -70,6 +73,8 @@ describe('parse-markdown-args', () => {
     expect(() => parseMarkdownArgs(['s.json', '--type-column', 'sometimes'])).toThrow(
       /Invalid --type-column value "sometimes"/,
     )
+    // `always` is a column word: a heading has no blank cell to line up.
+    expect(() => parseMarkdownArgs(['s.json', '--type-label', 'always'])).toThrow(/Invalid --type-label value "always"/)
     expect(() => parseMarkdownArgs(['s.json', '--required-style', 'badge'])).toThrow(
       /Invalid --required-style value "badge"/,
     )

@@ -735,6 +735,12 @@ or `mjst markdown <schema> --table --readme <file>`.
    per-section tables all follow it — and `MarkdownOptions.table` / the CLI's
    `--type-column`, `--default-column`, `--required-style`, `--required-first`
    override it per member.
+   The root `x-doc.headings.type` (`'auto' | 'never'`, CLI `--type-label`) does
+   the same for the **Type:** line under a heading. An enum spelled out by a
+   label the reader can see gets no **Allowed values:** line; once the label is
+   gone (`headings.type: 'never'`, or `table.type: 'never'` for a block under a
+   row) the values are listed. An empty `x-doc.type` counts as unset, so it
+   does not hide the line.
 10. **Table rows link to the headings below them, and the anchors are not
    hand-written.** A row links to the property's own heading when it has one, on
    this page (`#packagename`) or the page it moved to

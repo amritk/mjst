@@ -20,6 +20,7 @@ const PAGE_FLAGS = [
   'layout',
   'sort',
   'headingLevel',
+  'typeLabel',
   'typeColumn',
   'defaultColumn',
   'requiredStyle',
@@ -103,6 +104,7 @@ export const run = async (argv: string[]): Promise<RunResult> => {
       required: args.requiredStyle,
       requiredFirst: args.requiredFirst,
     },
+    headings: { type: args.typeLabel },
   }
 
   let files: Awaited<ReturnType<typeof generateDocs>>

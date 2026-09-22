@@ -169,6 +169,33 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('**Allowed values:** `"json"`, `"yaml"`')
   })
 
+  // The label was the only place the values appeared, so turning it off must
+  // not take them with it.
+  it('drops the type line from every heading when the schema asks it to, and lists the values instead', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { headings: { type: 'never' } },
+        required: ['failOn'],
+        properties: {
+          failOn: { enum: ['error', 'warn'], description: 'Lowest severity that fails the run.' },
+          retries: { type: 'integer', default: 3 },
+        },
+      }),
+    )
+    expect(content).not.toContain('**Type:**')
+    expect(content).toContain('## failOn\n\n**Required**\n\nLowest severity that fails the run.')
+    expect(content).toContain('**Allowed values:** `"error"`, `"warn"`')
+    expect(content).toContain('## retries\n\n**Default:** `3`')
+  })
+
+  it('lets the caller drop the type line the schema would print', () => {
+    const content = only(
+      generateMarkdownFiles({ properties: { mode: { enum: ['json', 'yaml'] } } }, { headings: { type: 'never' } }),
+    )
+    expect(content).not.toContain('**Type:**')
+    expect(content).toContain('**Allowed values:** `"json"`, `"yaml"`')
+  })
+
   it('lists the examples the derived block did not use', () => {
     const content = only(generateMarkdownFiles({ properties: { name: { type: 'string', examples: ['a', 'b', 'c'] } } }))
     expect(content).toContain('**Examples:** `"b"`, `"c"`')
@@ -1647,7 +1674,24 @@ describe('generate-markdown-files', () => {
     )
     expect(content).toContain('| Property | Description |')
     expect(content).not.toContain('| Property | Type | Description |')
-    expect(content).toContain('| `arrayFormat` | How arrays are encoded. |')
+    // The row no longer spells the enum, so the values go in the block below
+    // it — and the row links there.
+    expect(content).toContain('| [`arrayFormat`](#arrayformat) | How arrays are encoded. |')
+    expect(content).toContain('### arrayFormat\n\n**Allowed values:** `"comma"`, `"brackets"`')
+  })
+
+  // `auto` always keeps the column for an enum, so the row still spells it.
+  it('does not repeat an enum under a row whose type column spells it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          options: { type: 'object', properties: { nestedFormat: { enum: ['dots', 'brackets'] } } },
+        },
+      }),
+    )
+    expect(content).toContain('| `nestedFormat` | `"dots" \\| "brackets"` |')
+    expect(content).not.toContain('**Allowed values:**')
   })
 
   // The blocks under a table follow their rows down the page, so a reordered

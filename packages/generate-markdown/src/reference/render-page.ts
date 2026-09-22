@@ -24,6 +24,7 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
     layout: config.layout,
     sort: config.sort,
     table: config.table,
+    headings: config.headings,
     file: model.page.file,
     page: model.page.id,
     pageFiles,

@@ -60,7 +60,8 @@ const codeList = (values: readonly unknown[], language: string): string =>
  *
  * 1. the heading, then a **Deprecated** callout when the schema says so,
  * 2. the **Type:** label and a **Required** marker — what the reader needs
- *    before the prose can mean anything,
+ *    before the prose can mean anything (the label unless the root
+ *    `x-doc.headings.type` is `never`),
  * 3. the description, verbatim markdown, so a schema can carry lists and links,
  * 4. **Default:**, **Allowed values:**, **Examples:** and **Constraints:** —
  *    the facts the prose should not have to repeat,
@@ -91,11 +92,14 @@ export const renderProperty = (
   if (prop.deprecated === true) blocks.push('> **Deprecated**')
   // `summarised` means a table row directly above already states the shape, so
   // repeating it here would print the same three facts twice.
-  if (meta.heading && !options.summarised) {
+  const labelled = meta.heading && !options.summarised
+  // `never` drops the label and nothing else: requiredness is not a type, and a
+  // reader who does not think in types still has to know what to fill in.
+  if (labelled && context.headings.type !== 'never') {
     const type = referenceType(prop, context.language)
     if (type.length > 0) blocks.push(`**Type:** ${code(type)}`)
-    if (required) blocks.push('**Required**')
   }
+  if (labelled && required) blocks.push('**Required**')
 
   // Under a row, only the paragraph the row could hold is a restatement. The
   // rest of the description has appeared nowhere else, and dropping it lost
@@ -111,10 +115,17 @@ export const renderProperty = (
   }
 
   const values = asArray(prop.enum)
-  // The type label already spells out an enum, so repeating it here would be
-  // the same sentence twice — unless `x-doc.type` replaced the label, or there
-  // is no label at all because this property renders without a heading.
-  if (values.length > 0 && (!meta.heading || !typeShowsEnum(prop))) {
+  // A type label that spells out an enum already said this, so repeating it
+  // here would be the same sentence twice. Only a label the reader can see
+  // counts: `x-doc.type` may have replaced it, the property may render without
+  // a heading, and a schema may have turned the label off — on its headings
+  // (`x-doc.headings.type`) or, under a row, on its tables (`x-doc.table.type`,
+  // whose `auto` always keeps the column for an enum). Any of those left the
+  // values printed nowhere at all.
+  const typeShown = options.summarised
+    ? context.table.type !== 'never'
+    : meta.heading && context.headings.type !== 'never'
+  if (values.length > 0 && !(typeShown && typeShowsEnum(prop))) {
     blocks.push(`**Allowed values:** ${codeList(values, context.language)}`)
   }
 
