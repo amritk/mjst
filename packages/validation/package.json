@@ -1,6 +1,6 @@
 {
   "name": "@amritk/validation",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One generator surface over mjst's types, validators, coercers, repairers and parsers.",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
