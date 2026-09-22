@@ -5,7 +5,7 @@
 ### Minor Changes
 
 - 9b6325e: Deprecated. This package is now a compatibility shim over
-  [`@amritk/parsers`](https://github.com/amritk/mjst/tree/main/packages/parsers),
+  [`@amritk/validation`](https://github.com/amritk/mjst/tree/main/packages/validation),
   which owns the engine that used to live here and reaches every mode it had —
   plus `check`, `coerce` and `repair` — through one `generate()` call.
 
@@ -18,7 +18,7 @@
   import { buildSchema } from "@amritk/generate-parsers";
 
   // after
-  import { generate } from "@amritk/parsers";
+  import { generate } from "@amritk/validation";
   const files = await generate(schema, "Document", {
     modes: ["types", "parse"],
   });
@@ -35,7 +35,7 @@
 - Updated dependencies [f699039]
 - Updated dependencies [3a26591]
 - Updated dependencies [3670138]
-  - @amritk/parsers@0.2.0
+  - @amritk/validation@0.2.0
   - @amritk/helpers@0.23.0
 
 ## 0.24.0

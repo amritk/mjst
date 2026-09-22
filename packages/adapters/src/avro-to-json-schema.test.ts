@@ -1,4 +1,4 @@
-import { generate } from '@amritk/parsers'
+import { generate } from '@amritk/validation'
 import { describe, expect, it, vi } from 'vitest'
 
 import { avroToJsonSchema } from './avro-to-json-schema'

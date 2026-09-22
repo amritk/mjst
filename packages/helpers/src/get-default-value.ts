@@ -198,7 +198,9 @@ const numberFallback = (schema: JSONSchema, integer: boolean): string => {
 
 /**
  * Returns the default value for a JSON Schema property.
- * Priority order: explicit default > first enum value > first example > union first schema > pattern-based > type-based.
+ * Priority order: explicit default > const > first enum value > first example >
+ * union first schema > pattern-based > type-based. `default` and `examples` are
+ * taken only when they are instances of the declared type; see below.
  * These defaults ensure that parsing never fails, even with missing data.
  */
 export const getDefaultValue = (schema: JSONSchema): string => {
@@ -226,9 +228,26 @@ export const getDefaultValue = (schema: JSONSchema): string => {
     return JSON.stringify(schema.enum[0])
   }
 
-  // Use first example if available
-  if (hasExamples(schema) && schema.examples.length > 0) {
-    return JSON.stringify(schema.examples[0])
+  // Use the first example that is an instance of the declared type.
+  //
+  // `examples` is documentation, and documentation drifts: a `type: 'integer'`
+  // property whose examples were left behind as strings would otherwise repair a
+  // missing value to a string — invalid against its own schema, and not
+  // assignable to the `number` this generator emits for the property, so the
+  // generated file failed to compile with `TS2322`. That is the same failure
+  // `default` is guarded against above, and examples are the likelier source of
+  // it, being illustrative rather than load-bearing.
+  //
+  // `const` and `enum` are deliberately not guarded this way. They *drive* the
+  // emitted type — `{ type: 'integer', const: 'abc' }` emits `'abc'`, not
+  // `number` — so their value agrees with the type by construction, and falling
+  // through to a type-based fallback would produce the mismatch rather than
+  // avoid it.
+  if (hasExamples(schema)) {
+    const usable = schema.examples.findIndex((example) => defaultMatchesType(example, schema))
+    if (usable !== -1) {
+      return JSON.stringify(schema.examples[usable])
+    }
   }
 
   // Handle union types - use first schema's default

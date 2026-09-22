@@ -84,6 +84,13 @@
       "default": false,
       "description": "Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. They share one directory and one declaration of X with the parser: the type and the validators land in x.ts, and the parser moves to x.parse.ts beside them, importing the type from there. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code."
     },
+    "validatorsOnly": {
+      "type": "boolean",
+      "x-cli-flag": "--validators-only",
+      "x-icon": "\ud83d\udee1\ufe0f",
+      "default": false,
+      "description": "Emit the validator half and no parser: the type, isX, validateX, and whichever of checkX, coerceX and repairX were asked for. Implies validators, so it does not need it as well. This is the mirror of typesOnly at the other end of the ladder \u2014 one run with nothing that rewrites a document, the other with nothing that executes at all \u2014 and it is what to reach for when the generated code only ever judges input it did not produce. Without it every run carries a parser. Incompatible with typesOnly and outFile."
+    },
     "check": {
       "type": "boolean",
       "x-cli-flag": "--check",

@@ -56,7 +56,7 @@
     "@amritk/generate-markdown": "workspace:*",
     "@amritk/helpers": "workspace:*",
     "@amritk/lint": "workspace:*",
-    "@amritk/parsers": "workspace:*",
+    "@amritk/validation": "workspace:*",
     "@amritk/resolve-refs": "workspace:*",
     "@amritk/yaml": "workspace:*",
     "fast-glob": "^3.3.2",

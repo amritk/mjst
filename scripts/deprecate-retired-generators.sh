@@ -4,7 +4,7 @@
 #
 # RUN THIS AFTER the final release of both packages has published, not before.
 #
-# Both engines now ship inside @amritk/parsers. The last release of each package
+# Both engines now ship inside @amritk/validation. The last release of each package
 # is a compatibility shim over it, published for one reason: npm serves the
 # README of the *latest* version, so the signpost pointing at the replacement
 # only reaches npmjs.com by shipping it. Deprecating before that publish would
@@ -29,7 +29,7 @@ set -euo pipefail
 # opens a command substitution, so a message wrapping code in backticks is
 # silently truncated at the first one rather than failing loudly.
 npm deprecate '@amritk/generate-parsers@*' \
-  'merged into @amritk/parsers — call generate(schema, name, { modes: ["types", "parse"] })'
+  'merged into @amritk/validation — call generate(schema, name, { modes: ["types", "parse"] })'
 
 npm deprecate '@amritk/generate-validators@*' \
-  'merged into @amritk/parsers — call generate(schema, name, { modes: ["types", "guard", "validate"] })'
+  'merged into @amritk/validation — call generate(schema, name, { modes: ["types", "guard", "validate"] })'

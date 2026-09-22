@@ -13,7 +13,7 @@ type GeneratedFile = { filename: string; content: string }
 
 /**
  * The two ways to reach a mode: through the packages as they were before
- * `@amritk/parsers` existed, and through `@amritk/parsers`.
+ * `@amritk/validation` existed, and through `@amritk/validation`.
  *
  * "Before" is not a strawman. It is exactly what a consumer wrote: pick the
  * package that owns the mode, and call it with the positional arguments it takes.
@@ -25,7 +25,7 @@ export type WayId = (typeof WAY_IDS)[number]
 
 export const WAY_LABELS: Record<WayId, string> = {
   before: 'before (direct)',
-  after: 'after (@amritk/parsers)',
+  after: 'after (@amritk/validation)',
 }
 
 /** How each mode was reached before this package existed. */
@@ -45,7 +45,7 @@ const before = async (mode: ModeId): Promise<GeneratedFile[]> => {
   }
 }
 
-/** The modes `@amritk/parsers` emits to serve one mode, types included. */
+/** The modes `@amritk/validation` emits to serve one mode, types included. */
 const MODE_REQUEST: Record<ModeId, Mode[]> = {
   guard: ['types', 'guard'],
   validate: ['types', 'validate'],

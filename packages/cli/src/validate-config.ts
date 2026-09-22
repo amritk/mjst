@@ -35,6 +35,7 @@ export const CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   outDir: { type: 'string' },
   outFile: { type: 'string' },
   typesOnly: { type: 'boolean' },
+  validatorsOnly: { type: 'boolean' },
   validators: { type: 'boolean' },
   check: { type: 'boolean' },
   coerce: { type: 'boolean' },

@@ -56,6 +56,7 @@ export const loadConfig = async (configPath: string): Promise<Partial<CliConfig>
     ...(typeof obj['export'] === 'string' && { export: obj['export'] }),
     ...(typeof obj['validators'] === 'boolean' && { validators: obj['validators'] }),
     ...(typeof obj['typesOnly'] === 'boolean' && { typesOnly: obj['typesOnly'] }),
+    ...(typeof obj['validatorsOnly'] === 'boolean' && { validatorsOnly: obj['validatorsOnly'] }),
     ...(typeof obj['examples'] === 'boolean' && { examples: obj['examples'] }),
     ...(typeof obj['messageContracts'] === 'boolean' && { messageContracts: obj['messageContracts'] }),
     ...(typeof obj['discriminator'] === 'string' && { discriminator: obj['discriminator'] }),

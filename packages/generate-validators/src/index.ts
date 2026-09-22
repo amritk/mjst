@@ -1,5 +1,5 @@
 import type { UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
-import { type GeneratedFile, generate, type ImportExtension, type Mode } from '@amritk/parsers'
+import { type GeneratedFile, generate, type ImportExtension, type Mode } from '@amritk/validation'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 export type { GeneratedFile }
@@ -8,17 +8,17 @@ export type { GeneratedFile }
  * A compatibility shim, kept only so this package can be retired without
  * breaking anyone mid-upgrade.
  *
- * The validator engine moved into `@amritk/parsers`, which reaches it — and
+ * The validator engine moved into `@amritk/validation`, which reaches it — and
  * every other mode — through one `generate()` call. Rather than re-export an
  * internal module across the package boundary, this maps the old positional
- * signature onto the public API, so `@amritk/parsers` keeps exactly one public
+ * signature onto the public API, so `@amritk/validation` keeps exactly one public
  * entry point and the engine stays an implementation detail of it.
  *
  * The output is byte-identical to what this package emitted before, barrel
  * included, which `index.test.ts` pins against the real pre-retirement engine
  * rather than against this shim's own idea of the answer.
  *
- * @deprecated Use `generate` from `@amritk/parsers`:
+ * @deprecated Use `generate` from `@amritk/validation`:
  * `generate(schema, name, { modes: ['types', 'validate'] })`.
  */
 export const buildValidatorSchema = async (

@@ -627,22 +627,24 @@ const run = async (): Promise<void> => {
   // `--coerce` shapes the validators; on its own it has nothing to act on, and
   // silently generating no coercion for a run that asked for it is worse than
   // saying so.
-  if (config.coerce && !config.validators) {
+  const wantsValidators = config.validators === true || config.validatorsOnly === true
+
+  if (config.coerce && !wantsValidators) {
     console.error('Error: --coerce shapes the generated validators, so it needs --validators too.')
     process.exit(1)
   }
 
-  if (config.repair && !config.validators) {
+  if (config.repair && !wantsValidators) {
     console.error('Error: --repair shapes the generated validators, so it needs --validators too.')
     process.exit(1)
   }
 
-  if (config.check && !config.validators) {
+  if (config.check && !wantsValidators) {
     console.error('Error: --check shapes the generated validators, so it needs --validators too.')
     process.exit(1)
   }
 
-  if (config.branchErrors && !config.validators) {
+  if (config.branchErrors && !wantsValidators) {
     console.error('Error: --branch-errors shapes the generated validators, so it needs --validators too.')
     process.exit(1)
   }
@@ -693,8 +695,22 @@ const run = async (): Promise<void> => {
     process.exit(1)
   }
 
+  // The two "only" flags name opposite ends of the same ladder, so asking for
+  // both is asking for a run with nothing in it.
+  if (config.validatorsOnly && config.typesOnly) {
+    console.error(
+      'Error: --validators-only cannot be combined with --types-only. Pick the one end you want: types alone, or types and validators.',
+    )
+    process.exit(1)
+  }
+
   if (config.validators && config.outFile) {
     console.error('Error: --validators cannot be combined with --out-file. Use --out-dir to emit validator files.')
+    process.exit(1)
+  }
+
+  if (config.validatorsOnly && config.outFile) {
+    console.error('Error: --validators-only cannot be combined with --out-file. Use --out-dir to emit validator files.')
     process.exit(1)
   }
 

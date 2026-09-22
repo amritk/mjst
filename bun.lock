@@ -31,14 +31,14 @@
     },
     "packages/adapters": {
       "name": "@amritk/adapters",
-      "version": "0.6.3",
+      "version": "0.6.4",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
       },
       "devDependencies": {
-        "@amritk/parsers": "workspace:*",
         "@amritk/runtime-validators": "workspace:*",
+        "@amritk/validation": "workspace:*",
       },
       "peerDependencies": {
         "@valibot/to-json-schema": ">=1",
@@ -57,7 +57,7 @@
     },
     "packages/api": {
       "name": "@amritk/api",
-      "version": "0.16.4",
+      "version": "0.16.5",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
       },
@@ -71,7 +71,7 @@
     },
     "packages/asyncapi": {
       "name": "@amritk/asyncapi",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "dependencies": {
         "@amritk/adapters": "workspace:*",
         "@amritk/helpers": "workspace:*",
@@ -79,7 +79,7 @@
     },
     "packages/cli": {
       "name": "@amritk/mjst",
-      "version": "0.21.1",
+      "version": "0.22.0",
       "bin": {
         "mjst": "./dist/cli.js",
       },
@@ -91,8 +91,8 @@
         "@amritk/generate-markdown": "workspace:*",
         "@amritk/helpers": "workspace:*",
         "@amritk/lint": "workspace:*",
-        "@amritk/parsers": "workspace:*",
         "@amritk/resolve-refs": "workspace:*",
+        "@amritk/validation": "workspace:*",
         "@amritk/yaml": "workspace:*",
         "fast-glob": "^3.3.2",
         "json-schema-typed": "catalog:",
@@ -104,7 +104,7 @@
     },
     "packages/generate-examples": {
       "name": "@amritk/generate-examples",
-      "version": "0.8.5",
+      "version": "0.8.6",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "@amritk/runtime-validators": "workspace:*",
@@ -126,32 +126,32 @@
     },
     "packages/generate-parsers": {
       "name": "@amritk/generate-parsers",
-      "version": "0.24.0",
+      "version": "0.25.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
-        "@amritk/parsers": "workspace:*",
+        "@amritk/validation": "workspace:*",
         "json-schema-typed": "catalog:",
       },
     },
     "packages/generate-validators": {
       "name": "@amritk/generate-validators",
-      "version": "0.18.0",
+      "version": "0.19.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
-        "@amritk/parsers": "workspace:*",
+        "@amritk/validation": "workspace:*",
         "json-schema-typed": "catalog:",
       },
     },
     "packages/helpers": {
       "name": "@amritk/helpers",
-      "version": "0.22.0",
+      "version": "0.23.0",
       "dependencies": {
         "json-schema-typed": "catalog:",
       },
     },
     "packages/lint": {
       "name": "@amritk/lint",
-      "version": "0.6.0",
+      "version": "0.6.1",
       "dependencies": {
         "@amritk/runtime-validators": "workspace:*",
         "@amritk/yaml": "workspace:*",
@@ -164,9 +164,25 @@
         "@stoplight/spectral-rulesets": "^1.22.7",
       },
     },
-    "packages/parsers": {
-      "name": "@amritk/parsers",
-      "version": "0.1.0",
+    "packages/resolve-refs": {
+      "name": "@amritk/resolve-refs",
+      "version": "0.7.1",
+      "devDependencies": {
+        "@amritk/runtime-validators": "workspace:*",
+      },
+    },
+    "packages/runtime-validators": {
+      "name": "@amritk/runtime-validators",
+      "version": "0.15.0",
+      "devDependencies": {
+        "@amritk/helpers": "workspace:*",
+        "ajv": "^8.17.1",
+        "ajv-formats": "^3.0.1",
+      },
+    },
+    "packages/validation": {
+      "name": "@amritk/validation",
+      "version": "0.2.0",
       "dependencies": {
         "@amritk/helpers": "workspace:*",
         "json-schema-typed": "catalog:",
@@ -183,22 +199,6 @@
         "typescript": "^5.9.3",
         "typia": "^12.1.1",
         "zod": "^4.4.3",
-      },
-    },
-    "packages/resolve-refs": {
-      "name": "@amritk/resolve-refs",
-      "version": "0.7.1",
-      "devDependencies": {
-        "@amritk/runtime-validators": "workspace:*",
-      },
-    },
-    "packages/runtime-validators": {
-      "name": "@amritk/runtime-validators",
-      "version": "0.14.0",
-      "devDependencies": {
-        "@amritk/helpers": "workspace:*",
-        "ajv": "^8.17.1",
-        "ajv-formats": "^3.0.1",
       },
     },
     "packages/yaml": {
@@ -243,11 +243,11 @@
 
     "@amritk/mjst": ["@amritk/mjst@workspace:packages/cli"],
 
-    "@amritk/parsers": ["@amritk/parsers@workspace:packages/parsers"],
-
     "@amritk/resolve-refs": ["@amritk/resolve-refs@workspace:packages/resolve-refs"],
 
     "@amritk/runtime-validators": ["@amritk/runtime-validators@workspace:packages/runtime-validators"],
+
+    "@amritk/validation": ["@amritk/validation@workspace:packages/validation"],
 
     "@amritk/yaml": ["@amritk/yaml@workspace:packages/yaml"],
 

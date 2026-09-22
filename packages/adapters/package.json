@@ -47,7 +47,7 @@
     "@amritk/helpers": "workspace:*"
   },
   "devDependencies": {
-    "@amritk/parsers": "workspace:*",
+    "@amritk/validation": "workspace:*",
     "@amritk/runtime-validators": "workspace:*"
   },
   "exports": {

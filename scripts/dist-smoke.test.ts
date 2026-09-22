@@ -59,9 +59,9 @@ const collectDistModules = async (): Promise<string[]> => collectDistFiles(['.js
 const SUBPATH_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(['"])(#[^'"]*)\1/g
 
 /**
- * The helper sources `@amritk/parsers` reads out of an *installed*
+ * The helper sources `@amritk/validation` reads out of an *installed*
  * `@amritk/helpers` in `--helpers=embedded` mode. Mirrors `RuntimeHelperName`
- * in `packages/parsers/src/parsers/helpers/collect-helpers.ts`; keep in sync.
+ * in `packages/validation/src/parsers/helpers/collect-helpers.ts`; keep in sync.
  */
 const RUNTIME_HELPER_SOURCES = ['has-ref', 'is-object', 'validate-array', 'validate-record'].map(
   (helper) => `src/${helper}.ts`,
@@ -151,7 +151,7 @@ describe('dist-smoke', () => {
     await runNode(['--input-type=module', '-e', loader])
   })
 
-  it('the built @amritk/parsers still rehomes a $ref import', async () => {
+  it('the built @amritk/validation still rehomes a $ref import', async () => {
     // A behavioural assertion on the *built* artifact, because this exact bug
     // shipped invisibly: `tsc-alias -f` rewrote the string literal `"from './"`
     // inside `rehome-parser-file.ts` into `"from './index.js"`, a predicate that
@@ -160,7 +160,7 @@ describe('dist-smoke', () => {
     // intact — so the whole suite stayed green while the shipped package emitted
     // parser files importing names from the validator file that does not export
     // them. Only running the built code catches it.
-    const { generate } = (await import(pathToFileURL(join(ROOT, 'packages/parsers/dist/index.js')).href)) as {
+    const { generate } = (await import(pathToFileURL(join(ROOT, 'packages/validation/dist/index.js')).href)) as {
       generate: (
         schema: unknown,
         name: string,

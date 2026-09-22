@@ -1,6 +1,6 @@
 # @amritk/generate-validators
 
-> **Deprecated.** Use [`@amritk/parsers`](https://www.npmjs.com/package/@amritk/parsers) instead.
+> **Deprecated.** Use [`@amritk/validation`](https://www.npmjs.com/package/@amritk/validation) instead.
 >
 > This release is a compatibility shim: `buildValidatorSchema` keeps its signature and emits
 > byte-identical output, so upgrading to it breaks nothing. It is the last
@@ -16,7 +16,7 @@ The predicate validator generator: given a JSON Schema (Draft 2020-12),
 ## What replaces it
 
 The engine did not go away — it moved. It now lives inside
-[`@amritk/parsers`](https://github.com/amritk/mjst/tree/main/packages/parsers),
+[`@amritk/validation`](https://github.com/amritk/mjst/tree/main/packages/validation),
 behind a single `generate()` call that reaches every mode this package had plus
 the others, over one shared type declaration:
 
@@ -42,12 +42,12 @@ const files = await buildValidatorSchema(schema, 'Document')
 
 ```ts
 // after
-import { generate } from '@amritk/parsers'
+import { generate } from '@amritk/validation'
 
 const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'validate'] })
 ```
 
 Both hand back `{ filename, content }[]`. The positional arguments become named
 options — see the
-[`@amritk/parsers` README](https://github.com/amritk/mjst/tree/main/packages/parsers#readme)
+[`@amritk/validation` README](https://github.com/amritk/mjst/tree/main/packages/validation#readme)
 for the full table.
