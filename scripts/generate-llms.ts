@@ -24,7 +24,7 @@ const ORDER = [
   'cli',
   'api',
   'lint',
-  'parsers',
+  'validation',
   'generate-examples',
   'generate-markdown',
   'runtime-validators',
