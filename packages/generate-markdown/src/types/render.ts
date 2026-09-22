@@ -1,4 +1,4 @@
-import type { DocLayout, DocPage, DocSection, DocSort, DocTable } from '#types/doc'
+import type { DocHeadings, DocLayout, DocPage, DocSection, DocSort, DocTable } from '#types/doc'
 import type { SchemaProperty } from '#types/schema'
 
 /**
@@ -14,6 +14,8 @@ export type RenderContext = {
   readonly sort: DocSort
   /** How every property table on this page lays its columns and rows out. */
   readonly table: DocTable
+  /** How every property heading on this page is laid out. */
+  readonly headings: DocHeadings
   /** Output path of the page being rendered — the base for cross-page links. */
   readonly file: string
   /** Page id → output path, so a property documented elsewhere can be linked. */

@@ -73,6 +73,17 @@ describe('run', () => {
     expect(page.indexOf('`host`')).toBeLessThan(page.indexOf('`port`'))
   })
 
+  it('passes the heading options through to the generator', async () => {
+    const dir = tmp('markdown-type-label-')
+    const schema = writeSchema(dir, { properties: { failOn: { enum: ['error', 'warn'] } } })
+    const { code, stderr } = await run([schema, '--out-dir', dir, '--type-label', 'never'])
+    expect(stderr).toBe('')
+    expect(code).toBe(0)
+    const page = readFileSync(join(dir, 'index.md'), 'utf-8')
+    expect(page).not.toContain('**Type:**')
+    expect(page).toContain('**Allowed values:** `"error"`, `"warn"`')
+  })
+
   // --table is the other shape the package renders: one HTML table spliced into
   // a file that keeps everything outside the markers.
   it('splices the config table into the readme under --table', async () => {

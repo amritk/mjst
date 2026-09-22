@@ -1,4 +1,4 @@
-import type { DocLayout, DocSort, DocTableColumn, DocTableRequired } from '@amritk/generate-markdown'
+import type { DocHeadingType, DocLayout, DocSort, DocTableColumn, DocTableRequired } from '@amritk/generate-markdown'
 
 /** The flags and positional the `markdown` subcommand understands. */
 export type MarkdownArgs = {
@@ -18,6 +18,8 @@ export type MarkdownArgs = {
   sort?: DocSort
   /** Heading level of the page title (`--heading-level`). */
   headingLevel?: number
+  /** Whether a property heading gets its **Type:** line (`--type-label`). */
+  typeLabel?: DocHeadingType
   /** When property tables render their Type column (`--type-column`). */
   typeColumn?: DocTableColumn
   /** When property tables render their Default column (`--default-column`). */
@@ -42,6 +44,7 @@ const VALUE_KEYS = new Set([
   'layout',
   'sort',
   'headingLevel',
+  'typeLabel',
   'typeColumn',
   'defaultColumn',
   'requiredStyle',
@@ -53,6 +56,8 @@ const BOOLEAN_KEYS = new Set(['table', 'requiredFirst'])
 const LAYOUTS = ['headings', 'table', 'none'] as const
 
 const SORTS = ['schema', 'alphabetical'] as const
+
+const HEADING_TYPES = ['auto', 'never'] as const
 
 const TABLE_COLUMNS = ['auto', 'always', 'never'] as const
 
@@ -106,6 +111,9 @@ const assignValue = (args: MarkdownArgs, key: string, value: string): void => {
       return
     case 'headingLevel':
       args.headingLevel = parseHeadingLevel(value)
+      return
+    case 'typeLabel':
+      args.typeLabel = parseChoice('type-label', value, HEADING_TYPES)
       return
     case 'typeColumn':
       args.typeColumn = parseChoice('type-column', value, TABLE_COLUMNS)

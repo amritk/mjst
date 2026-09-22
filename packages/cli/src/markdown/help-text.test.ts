@@ -14,6 +14,7 @@ describe('help-text', () => {
       '--layout',
       '--sort',
       '--heading-level',
+      '--type-label',
       '--type-column',
       '--default-column',
       '--required-style',

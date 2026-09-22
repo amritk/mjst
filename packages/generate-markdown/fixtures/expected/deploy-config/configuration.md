@@ -45,13 +45,17 @@ What is deployed, and where it lands.
 | Property | Default | Description |
 | --- | --- | --- |
 | [`service`](#service-1) _required_ |  | Name the deployment is published under. It has to be unique within the account. |
-| `region` _required_ |  | Region the service runs in. |
+| [`region`](#region) _required_ |  | Region the service runs in. |
 | [`domain`](#domain) |  | Custom domain to route to the service. |
 | [`replicas`](#replicas) | `1` | How many instances to run. |
 
 ### service
 
 **Examples:** `"acme-web"`
+
+### region
+
+**Allowed values:** `"us-east-1"`, `"eu-west-1"`, `"ap-south-1"`
 
 ### domain
 

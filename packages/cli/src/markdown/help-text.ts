@@ -24,6 +24,8 @@ Prose reference options:
   --layout <mode>      Default layout for nested properties: headings (default), table, or none
   --sort <order>       Property order: schema (default) or alphabetical
   --heading-level <n>  Heading level of the page title, 1-6 (default: 1)
+  --type-label <when>  Give every property heading its Type: line: auto (default) or
+                       never (an enum then lists its allowed values instead)
 
 Property table options (the root x-doc.table, for every table on every page):
   --type-column <when>     Render the Type column: auto (default), always, or never

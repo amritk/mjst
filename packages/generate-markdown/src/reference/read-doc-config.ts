@@ -3,6 +3,8 @@ import { normalizeDocPath } from '#helpers/normalize-doc-path'
 import { asExamples, DOC_KEY, readDescription } from '#helpers/read-doc-meta'
 import type {
   DocConfig,
+  DocHeadings,
+  DocHeadingType,
   DocLayout,
   DocPage,
   DocSection,
@@ -10,6 +12,7 @@ import type {
   DocTable,
   DocTableColumn,
   DocTableRequired,
+  MarkdownHeadingsOptions,
   MarkdownOptions,
   MarkdownTableOptions,
 } from '#types/doc'
@@ -32,6 +35,7 @@ const LAYOUTS: readonly DocLayout[] = ['headings', 'table', 'none']
 const SORTS: readonly DocSort[] = ['schema', 'alphabetical']
 const TABLE_COLUMNS: readonly DocTableColumn[] = ['auto', 'always', 'never']
 const TABLE_REQUIRED: readonly DocTableRequired[] = ['marker', 'column']
+const HEADING_TYPES: readonly DocHeadingType[] = ['auto', 'never']
 
 /**
  * The table layout every page renders with: the caller's choice, then the
@@ -52,6 +56,15 @@ const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable
     // way to read a string.
     requiredFirst: options.requiredFirst ?? table['requiredFirst'] === true,
   }
+}
+
+/**
+ * The heading layout every page renders with: the caller's choice, then the
+ * schema's, then the built-in — which labels every heading with its type.
+ */
+const readHeadings = (value: unknown, options: MarkdownHeadingsOptions = {}): DocHeadings => {
+  const headings = isObject(value) ? value : {}
+  return { type: options.type ?? asOneOf(headings['type'], HEADING_TYPES) ?? 'auto' }
 }
 
 const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined =>
@@ -149,5 +162,6 @@ export const readDocConfig = (schema: ConfigSchema, options: MarkdownOptions = {
     sections: readSections(doc['sections']),
     headingLevel: Number.isFinite(headingLevel) ? Math.max(1, Math.trunc(headingLevel)) : 1,
     table: readTable(doc['table'], options.table),
+    headings: readHeadings(doc['headings'], options.headings),
   }
 }
