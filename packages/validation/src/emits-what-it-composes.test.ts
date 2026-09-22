@@ -60,7 +60,7 @@ const V = (coerce: boolean, repair: boolean, check = false): Promise<GeneratedFi
 const P = (strict: boolean): Promise<GeneratedFile[]> =>
   buildSchema(schema, 'Order', undefined, false, false, strict, 'embedded', './', false, false)
 
-describe('@amritk/parsers emits what it composes', () => {
+describe('@amritk/validation emits what it composes', () => {
   it.each([
     ['guard', ['types', 'guard'] as Mode[], () => V(false, false)],
     ['validate', ['types', 'validate'] as Mode[], () => V(false, false)],

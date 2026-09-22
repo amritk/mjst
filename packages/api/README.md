@@ -1841,7 +1841,7 @@ through their `request`, so a 404 logger can still label the tenant.
 
 The `compile` hook accepts any engine that can produce a boolean guard and an
 error collector per schema. To trade startup codegen for maximum steady-state
-throughput, generate validators with `@amritk/parsers` at build time and route
+throughput, generate validators with `@amritk/validation` at build time and route
 the hot schemas to them:
 
 ```ts

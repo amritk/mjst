@@ -28,7 +28,7 @@ export type Suite = {
 
 /**
  * Every suite `bench-compare.ts` can run, in table order. `codegen` shares
- * @amritk/parsers with `parsers`: it times `buildSchema` (compile time)
+ * @amritk/validation with `parsers`: it times `buildSchema` (compile time)
  * rather than the parser it emits (run time). `validators` sits in the same
  * package now that both generator engines live there.
  *
@@ -39,10 +39,13 @@ export type Suite = {
  * even though @amritk/lint runs those keywords on every schema rule.
  */
 export const SUITES: readonly Suite[] = [
-  { name: 'parsers', pkgDir: 'parsers' },
-  { name: 'validators', pkgDir: 'parsers' },
+  // The suite names are the benches' own, and outlive the directory: `parsers`
+  // still times emitted parsers even though the package holding them is now
+  // `validation`.
+  { name: 'parsers', pkgDir: 'validation' },
+  { name: 'validators', pkgDir: 'validation' },
   { name: 'api', pkgDir: 'api' },
-  { name: 'codegen', pkgDir: 'parsers' },
+  { name: 'codegen', pkgDir: 'validation' },
   { name: 'yaml', pkgDir: 'yaml' },
   { name: 'runtime', pkgDir: 'runtime-validators' },
 ]

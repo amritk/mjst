@@ -7,7 +7,7 @@ import { generateWay, WAY_IDS, WAY_LABELS, type WayId, wholeMatrix } from './eng
 import { opsCell } from './measure.ts'
 
 /**
- * `@amritk/parsers` against the packages it composes, mode by mode.
+ * `@amritk/validation` against the packages it composes, mode by mode.
  *
  * The question this answers is narrow and worth stating plainly: a facade over
  * two generators should cost *nothing at runtime*, because it emits their code
@@ -66,7 +66,7 @@ const delta = (after: number, before: number): string => {
 }
 
 const run = async (): Promise<void> => {
-  console.log('\n=== @amritk/parsers vs reaching each mode directly ===\n')
+  console.log('\n=== @amritk/validation vs reaching each mode directly ===\n')
   console.log(`Node/Bun: ${IS_BUN ? `Bun ${Bun.version}` : process.version}`)
   console.log('Each (mode, way) pair is timed in an isolated process; ±n% is the coefficient of variation,')
   console.log('and ~ flags a sample whose CV exceeded 10%.')

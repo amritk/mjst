@@ -127,6 +127,33 @@ describe('get-default-value', () => {
     expect(getDefaultValue(schema)).toBe('"myExample"')
   })
 
+  it('skips an example that is not an instance of the declared type', () => {
+    // Examples are illustrative and drift: honouring a string example on an
+    // `integer` property repaired a missing value into a string, which is
+    // invalid against the schema and not assignable to the emitted `number`.
+    expect(getDefaultValue({ type: 'integer', examples: ['abc'] })).toBe('0')
+  })
+
+  it('takes the first example that does match, rather than giving up on the list', () => {
+    expect(getDefaultValue({ type: 'integer', examples: ['abc', 7, 9] })).toBe('7')
+  })
+
+  it('falls back to the type when no example matches', () => {
+    expect(getDefaultValue({ type: 'string', minLength: 2, examples: [1, 2] })).toBe('"xx"')
+  })
+
+  it('takes an example at face value when the schema declares no type', () => {
+    expect(getDefaultValue({ examples: ['hi'] })).toBe('"hi"')
+  })
+
+  it('keeps const and enum unguarded, because they drive the emitted type', () => {
+    // `{ type: 'integer', const: 'abc' }` emits `'abc'` as the property's type,
+    // not `number`, so the literal agrees with the type by construction and
+    // falling through to a type-based fallback would create the mismatch.
+    expect(getDefaultValue({ type: 'integer', const: 'abc' })).toBe('"abc"')
+    expect(getDefaultValue({ type: 'integer', enum: ['abc'] })).toBe('"abc"')
+  })
+
   it('handles empty enum array and falls back', () => {
     expect(getDefaultValue({ enum: [], type: 'string' })).toBe('""')
   })

@@ -1,6 +1,6 @@
 <div align="center">
 
-# @amritk/parsers
+# @amritk/validation
 
 **One generator surface over mjst's types, guards, validators, coercers, repairers and parsers.**
 
@@ -10,7 +10,7 @@
 
 ## Overview
 
-`@amritk/parsers` is the front door. Given a JSON Schema (Draft 2020-12) it emits
+`@amritk/validation` is the front door. Given a JSON Schema (Draft 2020-12) it emits
 one coherent set of TypeScript files carrying whichever runtime entry points you
 ask for — from a bare type, through a boolean guard and a full error report, to a
 coercer, a repairer and a total parser.
@@ -33,7 +33,7 @@ from the same `@amritk/helpers/generate-type-definition`, so the type is declare
 ## Installation
 
 ```bash
-bun add @amritk/parsers
+bun add @amritk/validation
 ```
 
 ---
@@ -41,7 +41,7 @@ bun add @amritk/parsers
 ## Usage
 
 ```typescript
-import { generate } from '@amritk/parsers'
+import { generate } from '@amritk/validation'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const schema: JSONSchema = {

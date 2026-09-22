@@ -133,6 +133,11 @@ describe('parse-cli-args', () => {
     expect(parseCliArgs(['--validators'])).toEqual({ validators: true })
   })
 
+  it('parses --validators-only boolean flag', () => {
+    expect(parseCliArgs(['--validators-only', '--schema', 's.json']).validatorsOnly).toBe(true)
+    expect(parseCliArgs(['--validators-only=false', '--schema', 's.json']).validatorsOnly).toBe(false)
+  })
+
   it('parses --coerce boolean flag', () => {
     expect(parseCliArgs(['--coerce'])).toEqual({ coerce: true })
     expect(parseCliArgs(['--coerce=false'])).toEqual({ coerce: false })

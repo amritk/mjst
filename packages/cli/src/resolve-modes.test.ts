@@ -28,6 +28,33 @@ describe('resolve-modes', () => {
     expect(resolveModes({ validators: true, repair: true })).toEqual(['types', 'guard', 'validate', 'repair', 'parse'])
   })
 
+  it('--validators-only emits everything that judges a document and nothing that builds one', () => {
+    // The library's own default, which had no spelling on the CLI before: every
+    // other run carries a parser whether or not anything asked for one.
+    expect(resolveModes({ validatorsOnly: true })).toEqual(['types', 'guard', 'validate'])
+  })
+
+  it('--validators-only implies --validators, so it needs no second flag', () => {
+    expect(resolveModes({ validatorsOnly: true, validators: true })).toEqual(['types', 'guard', 'validate'])
+  })
+
+  it('--validators-only still takes the flags that shape the validator half', () => {
+    expect(resolveModes({ validatorsOnly: true, check: true, coerce: true, repair: true })).toEqual([
+      'types',
+      'guard',
+      'validate',
+      'check',
+      'coerce',
+      'repair',
+    ])
+  })
+
+  it('--validators-only wins over --strict, which only ever picked a parser contract', () => {
+    // `--strict` chooses between the two parse contracts; with no parser in the
+    // output there is nothing for it to choose, and it must not smuggle one in.
+    expect(resolveModes({ validatorsOnly: true, strict: true })).toEqual(['types', 'guard', 'validate'])
+  })
+
   it('the validator flags mean nothing without --validators', () => {
     // The CLI exits before it gets here, so this is the belt to that braces: a
     // stray `coerce: true` in a config file must not smuggle a coercer in.

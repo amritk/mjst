@@ -180,7 +180,7 @@ avroToJsonSchema(avro, { encoding: 'avro-json' })
 
 The `default` column is not a stylistic choice. Avro has **no optional fields** — every declared field is present in the encoding, and a `default` is only consulted during schema resolution, when reading data written against a *different* schema. So `'avro-json'` marks every field required, because that is what is on the wire, while `'json'` treats a defaulted field as optional, because that is the shape application code deals with.
 
-The default **value** is translated too, not just copied, because Avro writes it in neither encoding exactly. Avro states a union's default as a *bare* value of the union's **first** branch, so under `'avro-json'` it is wrapped to match the branch tagging the data uses (`null` stays bare, in both the `"null"` and `{"type": "null"}` spellings). Under `'json'` a byte default is in the wrong alphabet — Avro writes it latin-1, the idiomatic shape is base64 — so it is dropped rather than mistranslated. Both rules apply at any depth: a union nested inside a record, array, or map default is tagged the same way, and a byte value anywhere inside a default drops the whole thing, since a half-translated default is worse than none. This matters more than a stray annotation would, because `@amritk/parsers` coerces with `default`.
+The default **value** is translated too, not just copied, because Avro writes it in neither encoding exactly. Avro states a union's default as a *bare* value of the union's **first** branch, so under `'avro-json'` it is wrapped to match the branch tagging the data uses (`null` stays bare, in both the `"null"` and `{"type": "null"}` spellings). Under `'json'` a byte default is in the wrong alphabet — Avro writes it latin-1, the idiomatic shape is base64 — so it is dropped rather than mistranslated. Both rules apply at any depth: a union nested inside a record, array, or map default is tagged the same way, and a byte value anywhere inside a default drops the whole thing, since a half-translated default is worse than none. This matters more than a stray annotation would, because `@amritk/validation` coerces with `default`.
 
 #### What deliberately does not get refined
 
@@ -234,7 +234,7 @@ string literal in generated output); an unsafe name is ignored.
 
 Both schema→type paths honour the brand identically:
 
-- the **code generators** (`@amritk/parsers` etc.) emit it into `.d.ts`;
+- the **code generators** (`@amritk/validation` etc.) emit it into `.d.ts`;
 - the type-level [`FromSchema`](../runtime-validators) reads it too, so anything
   typed from a live schema literal — most notably `@amritk/api` route
   `params` / `query` / `body` — carries the brand into your handler. Declaring a
@@ -291,7 +291,7 @@ So: want a generated `Date`? Author `Schema.DateFromSelf`. Want a string that Ef
 ## Related packages
 
 - [`@amritk/mjst`](../cli) — CLI that ingests these formats via `--input <format>`
-- [`@amritk/parsers`](../parsers) · [`@amritk/generate-markdown`](../generate-markdown) · [`@amritk/generate-examples`](../generate-examples) — the generators these adapters feed
+- [`@amritk/validation`](../parsers) · [`@amritk/generate-markdown`](../generate-markdown) · [`@amritk/generate-examples`](../generate-examples) — the generators these adapters feed
 - [`@amritk/helpers`](../helpers) — defines the shared `x-mjst` extension
 
 ---

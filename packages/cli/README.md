@@ -412,6 +412,15 @@ Under `--table` only the content between `<!-- config-table-start -->
 <td colspan="4">Also emit validation functions alongside the parsers. For every generated type X the CLI writes a validateX (returning a rich ValidationResult with JSON-Pointer error paths) and an isX boolean type guard. They share one directory and one declaration of X with the parser: the type and the validators land in x.ts, and the parser moves to x.parse.ts beside them, importing the type from there. Works with both schema and schemaDir. Incompatible with typesOnly and outFile, which produce no runtime code.</td>
 </tr>
 <tr>
+<td>🛡️ <code>validatorsOnly</code></td>
+<td><code>--validators-only</code></td>
+<td><code>boolean</code></td>
+<td align="center"><code>false</code></td>
+</tr>
+<tr>
+<td colspan="4">Emit the validator half and no parser: the type, isX, validateX, and whichever of checkX, coerceX and repairX were asked for. Implies validators, so it does not need it as well. This is the mirror of typesOnly at the other end of the ladder — one run with nothing that rewrites a document, the other with nothing that executes at all — and it is what to reach for when the generated code only ever judges input it did not produce. Without it every run carries a parser. Incompatible with typesOnly and outFile.</td>
+</tr>
+<tr>
 <td>🔎 <code>check</code></td>
 <td><code>--check</code></td>
 <td><code>boolean</code></td>

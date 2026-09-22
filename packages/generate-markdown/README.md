@@ -885,7 +885,7 @@ do before rendering.
 ## Related packages
 
 - [`@amritk/mjst`](../cli) — uses this package to keep its README's flag table in sync with `config.schema.json`
-- [`@amritk/parsers`](../parsers) — sibling generator for TypeScript types, validators and parsers
+- [`@amritk/validation`](../parsers) — sibling generator for TypeScript types, validators and parsers
 
 ---
 

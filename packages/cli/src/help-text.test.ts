@@ -15,6 +15,7 @@ describe('help-text', () => {
       '--out-file',
       '--types-only',
       '--validators',
+      '--validators-only',
       '--check',
       '--coerce',
       '--repair',

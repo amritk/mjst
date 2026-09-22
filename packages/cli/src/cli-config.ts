@@ -43,6 +43,17 @@ export type CliConfig = {
    */
   readonly typesOnly?: boolean
   /**
+   * When true, emit the validator half and no parser: the type, `isX`,
+   * `validateX`, and whichever of `checkX`/`coerceX`/`repairX` were asked for.
+   *
+   * Implies `validators`, and is the mirror of `typesOnly` at the other end of
+   * the ladder — one run with nothing that rewrites a document, the other with
+   * nothing that executes at all. Without it every run carries a parser, so the
+   * library's own default (a type and its validators, nothing that builds a
+   * value) had no spelling here.
+   */
+  readonly validatorsOnly?: boolean
+  /**
    * When true, also emit validation functions alongside the parsers. For every
    * generated type `X` the CLI writes a `validateX` (returning a rich
    * `ValidationResult` with JSON-Pointer error paths) and an `isX` boolean type

@@ -1,4 +1,4 @@
-# @amritk/parsers — notes for AI coding agents
+# @amritk/validation — notes for AI coding agents
 
 One generator surface over mjst's types, guards, validators, coercers, repairers
 and parsers. It owns both generator engines: the validator/coercer/repairer one
@@ -10,7 +10,7 @@ and the parser/type one, which used to ship as `@amritk/generate-validators` and
 ## Minimal example
 
 ```ts
-import { generate } from '@amritk/parsers'
+import { generate } from '@amritk/validation'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const schema: JSONSchema = {
@@ -35,6 +35,23 @@ const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'va
 | `repair` | `repairX` | repaired | repairs **and** errors | the end |
 | `parse` | `parseX` | repaired | nothing (total) | never |
 | `parseStrict` | `parseX` | as given | throws the first | first problem |
+
+## The same modes from the CLI
+
+Every mode is reachable from `mjst` without dropping to the programmatic API:
+
+| mode | flags |
+|:---|:---|
+| `types` | `--types-only` (alone), otherwise always emitted |
+| `guard`, `validate` | `--validators`, or `--validators-only` for no parser |
+| `check` | `--check` |
+| `coerce` | `--coerce` |
+| `repair` | `--repair` (emits `coerceX` too) |
+| `parse` | the default on any run that is not `--types-only`/`--validators-only` |
+| `parseStrict` | `--strict` |
+
+`--validators-only` is this package's own default (`['types', 'guard', 'validate']`)
+spelled as a flag: everything that judges a document, nothing that builds one.
 
 ## Gotchas — where agents fail
 
@@ -72,4 +89,4 @@ const files = await generate(schema, 'Document', { modes: ['types', 'guard', 'va
    of two, and that a build asking for no validator mode ships no
    `validation-result.ts`.
 
-Only the `.` entry. Install: `bun add @amritk/parsers`.
+Only the `.` entry. Install: `bun add @amritk/validation`.

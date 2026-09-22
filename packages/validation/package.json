@@ -1,5 +1,5 @@
 {
-  "name": "@amritk/parsers",
+  "name": "@amritk/validation",
   "version": "0.2.0",
   "description": "One generator surface over mjst's types, validators, coercers, repairers and parsers.",
   "main": "./dist/index.js",
@@ -23,9 +23,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/amritk/mjst.git",
-    "directory": "packages/parsers"
+    "directory": "packages/validation"
   },
-  "homepage": "https://github.com/amritk/mjst/tree/main/packages/parsers#readme",
+  "homepage": "https://github.com/amritk/mjst/tree/main/packages/validation#readme",
   "bugs": {
     "url": "https://github.com/amritk/mjst/issues"
   },
@@ -40,7 +40,7 @@
     "build": "tsgo -p tsconfig.build.json && tsc-alias -p tsconfig.build.json -f && node ../../scripts/strip-comments.mjs",
     "prepublishOnly": "node ../../scripts/check-publishable.mjs",
     "types:check": "tsgo -p . --noEmit",
-    "test": "NODE_ENV=production vitest run --root ../.. packages/parsers/",
+    "test": "NODE_ENV=production vitest run --root ../.. packages/validation/",
     "prebench": "bun run --filter='@amritk/helpers' build",
     "bench": "bun --conditions development ./bench/compare.ts",
     "prebench:parsers": "bun run --filter='@amritk/helpers' build && bun run build",

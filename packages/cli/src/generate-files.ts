@@ -1,4 +1,4 @@
-import { type GeneratedFile, generate } from '@amritk/parsers'
+import { type GeneratedFile, generate } from '@amritk/validation'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import type { CliConfig } from './cli-config'
@@ -19,7 +19,7 @@ export type HelpersPlacement = {
 
 /**
  * Generates one schema's files, translating the CLI's flags into the single
- * options object `@amritk/parsers` takes.
+ * options object `@amritk/validation` takes.
  *
  * All four generation flows come through here so none of them can quietly hold a
  * different opinion about what a flag means — which is exactly what happened

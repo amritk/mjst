@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { fmtOps, NOISY_SPREAD } from '../packages/parsers/bench/parsers/measure.ts'
+import { fmtOps, NOISY_SPREAD } from '../packages/validation/bench/parsers/measure.ts'
 import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
 
 /**
@@ -154,10 +154,33 @@ const gitSha = (tree: string): string => {
  * the compiled artifact is what consumers experience anyway. The workflow
  * builds that package in both trees before benching.
  */
+/**
+ * Directory renames this harness has to see across, newest spelling first. A
+ * comparison always straddles two checkouts, so for one cycle after a rename the
+ * baseline still holds the old directory — without this the whole suite reports
+ * `n/a` against `main` and the rename itself goes unmeasured, which is exactly
+ * the change worth measuring.
+ *
+ * An entry can go once no baseline anyone benches against predates the rename.
+ */
+const BENCH_DIR_RENAMES: ReadonlyArray<readonly [current: string, former: string]> = [['validation/', 'parsers/']]
+
+/** The bench directory in `tree`, falling back through {@link BENCH_DIR_RENAMES}, or null when that tree has none. */
+const resolveBenchDir = (tree: string, benchPath: string): string | null => {
+  const direct = join(tree, 'packages', benchPath)
+  if (existsSync(join(direct, 'worker.ts'))) return direct
+  for (const [current, former] of BENCH_DIR_RENAMES) {
+    if (!benchPath.startsWith(current)) continue
+    const former_ = join(tree, 'packages', `${former}${benchPath.slice(current.length)}`)
+    if (existsSync(join(former_, 'worker.ts'))) return former_
+  }
+  return null
+}
+
 const runWorker = (tree: string, benchPath: string, caseName: string, developConditions = true): WorkerRun => {
-  const benchDir = join(tree, 'packages', benchPath)
+  const benchDir = resolveBenchDir(tree, benchPath)
+  if (benchDir === null) return null
   const worker = join(benchDir, 'worker.ts')
-  if (!existsSync(worker)) return null
   try {
     const conditions = developConditions ? ['--conditions', 'development'] : []
     const stdout = execFileSync(process.execPath, [...conditions, worker, caseName, 'mjst'], {
@@ -281,14 +304,14 @@ const run = async (): Promise<void> => {
   // is in scope, so a yaml-only run never loads the api or validator benches.
   const needsParseCases = suites.has('parsers') || suites.has('codegen')
   const parsersSchemas = needsParseCases
-    ? ((await import(pathToFileURL(join(head, 'packages/parsers/bench/parsers/schemas.ts')).href)) as {
+    ? ((await import(pathToFileURL(join(head, 'packages/validation/bench/parsers/schemas.ts')).href)) as {
         PARSE_CASES: readonly { name: string; mode: string; schema: unknown }[]
       })
     : { PARSE_CASES: [] }
 
   if (suites.has('parsers')) console.error('parsers (parse ops/s)…')
   for (const parseCase of suites.has('parsers') ? parsersSchemas.PARSE_CASES : []) {
-    const { base: baseResult, head: headResult } = runPair('parsers/bench/parsers', parseCase.name)
+    const { base: baseResult, head: headResult } = runPair('validation/bench/parsers', parseCase.name)
     progress({
       suite: 'parsers',
       caseName: parseCase.name,
@@ -301,14 +324,14 @@ const run = async (): Promise<void> => {
   }
 
   const validatorsSchemas = suites.has('validators')
-    ? ((await import(pathToFileURL(join(head, 'packages/parsers/bench/validators/schemas.ts')).href)) as {
+    ? ((await import(pathToFileURL(join(head, 'packages/validation/bench/validators/schemas.ts')).href)) as {
         BENCH_CASES: readonly { name: string }[]
       })
     : { BENCH_CASES: [] }
 
   if (suites.has('validators')) console.error('validators (validate ops/s)…')
   for (const benchCase of suites.has('validators') ? validatorsSchemas.BENCH_CASES : []) {
-    const { base: baseResult, head: headResult } = runPair('parsers/bench/validators', benchCase.name)
+    const { base: baseResult, head: headResult } = runPair('validation/bench/validators', benchCase.name)
     for (const metric of ['valid', 'invalid'] as const) {
       progress({
         suite: 'validators',
