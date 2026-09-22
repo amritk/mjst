@@ -1,5 +1,64 @@
 # @amritk/validation
 
+## 0.3.0
+
+### Minor Changes
+
+- 6453b6d: Rename `@amritk/parsers` to `@amritk/validation`.
+
+  The package composes two engines and reaches seven modes — `types`, `guard`,
+  `validate`, `check`, `coerce`, `repair`, `parse` — and `parsers` named the one of
+  them its dominant engine cannot express. Six of the seven come from the validator
+  engine; the parser engine supplies `parse` alone, and the package's own default
+  (`['types', 'guard', 'validate']`) emits no parser at all, so the name described
+  a mode that is absent from a default build.
+
+  Nothing moves but the name. No export, option, mode or emitted byte changes, and
+  `@amritk/parsers` never reached npm — the release that would have published it
+  failed on that package alone, so there is no deprecation to follow and no
+  version of it for anyone to be holding.
+
+### Patch Changes
+
+- 845f625: Take the first `examples` entry that is an instance of the declared type, rather
+  than the first one outright.
+
+  `getDefaultValue` is the single table both engines repair toward, and its
+  `default` branch has long been guarded: a `default` left over from an earlier
+  shape is ignored unless it matches the type the schema declares, because
+  honouring one repairs a missing value into something the schema itself rejects.
+  The `examples` branch had no such guard, and examples are the likelier source of
+  the problem — they are illustrative rather than load-bearing, so they drift out
+  of step with the schema they document, and OpenAPI descriptions are full of them.
+
+  The visible failure is a generated file that does not compile. `examples` does
+  not drive the emitted type, so `{ type: 'integer', examples: ['abc'] }` still
+  emits `n: number` while the fallback literal becomes `"abc"`, and the parser
+  returns that literal uncast on its non-object path:
+
+  ```
+  doc.ts: Type 'string' is not assignable to type 'number'. (TS2322)
+  ```
+
+  The repairing validator does not fail to compile — it inlines the same literal in
+  a position typed loosely enough to accept it — but it returns `valid: false` with
+  the mistyped value in hand, declining a repair that the type-based fallback would
+  have completed.
+
+  A list is now scanned for the first usable entry instead of being abandoned at a
+  bad first one, so `examples: ['abc', 7]` repairs to `7`.
+
+  `const` and `enum` are deliberately left unguarded. They _drive_ the emitted type
+  — `{ type: 'integer', const: 'abc' }` emits `'abc'`, not `number` — so their value
+  agrees with the type by construction, and falling through to a type-based
+  fallback would create the mismatch rather than avoid it.
+
+  Pinned by the parser suite's type-check pass, which compiles the emitted files
+  under the repo's own strict flags and fails on the `TS2322` without the fix.
+
+- Updated dependencies [845f625]
+  - @amritk/helpers@0.23.1
+
 ## 0.2.0
 
 ### Minor Changes

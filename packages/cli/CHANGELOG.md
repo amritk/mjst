@@ -1,5 +1,121 @@
 # @amritk/mjst
 
+## 0.23.0
+
+### Minor Changes
+
+- 3a1eb80: The property table a `layout: 'table'` renders is now the schema's to shape,
+  through a root `x-doc.table`, and its defaults changed. Every page generated
+  with a table looks different afterwards, so regenerate and read the diff.
+
+  ```json
+  {
+    "x-doc": {
+      "table": { "type": "never", "requiredFirst": true }
+    }
+  }
+  ```
+
+  | Member          | Values                              | What it decides                                |
+  | --------------- | ----------------------------------- | ---------------------------------------------- |
+  | `type`          | `auto` (default), `always`, `never` | The **Type** column                            |
+  | `default`       | `auto` (default), `always`, `never` | The **Default** column                         |
+  | `required`      | `marker` (default), `column`        | Where requiredness is said                     |
+  | `requiredFirst` | `false` (default), `true`           | Whether the required properties head the table |
+
+  Root only, so every table on every page agrees;
+  `generateMarkdownFiles(schema, { table })` and `mjst markdown`'s
+  `--type-column`, `--default-column`, `--required-style` and `--required-first`
+  override it per member.
+
+  **`auto` is new, and it is the default for both columns.** A column is rendered
+  when a row fills it with something the reader could act on — **Default**
+  already worked that way, and **Type** now does too. A table whose every row
+  would say `object`, or state no type at all, drops the column; one with enums,
+  arrays or maps (`"comma" | "brackets"`, `string[]`, `Record<string, Target>`)
+  keeps it, and so does one where every row is `string`, that being a fact about
+  the options rather than the absence of one.
+
+  **Requiredness defaults to `marker`**, so the `Required` column is gone unless
+  a schema asks for it back with `"required": "column"`:
+
+  ```md
+  | `organization` _required_ | Identity of the organization publishing the SDKs… |
+  ```
+
+  On a real page five rows in twenty are required, so the column carried one bit
+  and a lot of blanks, and on a narrow viewport it took the width from
+  **Description**.
+
+  **`requiredFirst` heads each table with the properties that have to be filled
+  in**, for a reader skimming for exactly that. It stays one table — the order
+  groups them and the marker (or the column) still says which is which — and it
+  is a stable partition, so `sort` and `x-doc.order` decide the order within each
+  group. The blocks below a table follow their rows, so they are reordered with
+  them.
+
+  **A row now links to the property's own section on the same page.** Linking was
+  already there but gated on the page differing, so a property with a `###`
+  section directly below the table — its example, its notes, its own nested table
+  — was left an inert code span, and a reader had to scroll and search for it. It
+  is a link now (`[`organization`](#organization)`), and a property whose
+  section lives on another page gets the anchor as well
+  (`configuration/typescript.md#packagename`) rather than just the file.
+
+  Only the properties that actually have a heading are linked. Most rows in a
+  table say everything they have to say and get no section at all, and a link to
+  an anchor no heading answers takes the reader nowhere with nothing in the
+  markdown that looks wrong — so the heading itself claims the anchor as it
+  renders, and the row reads back what it claimed. Anchors follow GitHub's rules,
+  slugged from the text the heading renders as rather than its markdown, and a
+  page that carries a name twice numbers the second `#name-1`. A cross-page anchor
+  is the one that is not numbered: a page's anchors are that page's to hand out.
+
+- 6453b6d: Add `--validators-only`: emit the validator half and no parser.
+
+  Every run that was not `--types-only` carried a parser, whether or not anything
+  asked for one. `--validators` added `isX`/`validateX` _beside_ a parser rather
+  than instead of one, so the library's own default — a type and the functions that
+  judge it, nothing that builds a value — had no spelling on the CLI. Generating
+  code that only ever judges input it did not produce meant taking a parser along
+  and ignoring it.
+
+  `--validators-only` is the mirror of `--types-only` at the other end of the
+  ladder: one run with nothing that rewrites a document, the other with nothing
+  that executes at all. It implies `--validators`, so it does not need it as well,
+  and `--check`, `--coerce` and `--repair` shape its output exactly as they shape
+  `--validators`. It is rejected alongside `--types-only` and `--out-file`, for the
+  same reasons `--validators` already was.
+
+  `--validators` itself is unchanged and still emits a parser, so nothing existing
+  moves.
+
+### Patch Changes
+
+- 6453b6d: Rename `@amritk/parsers` to `@amritk/validation`.
+
+  The package composes two engines and reaches seven modes — `types`, `guard`,
+  `validate`, `check`, `coerce`, `repair`, `parse` — and `parsers` named the one of
+  them its dominant engine cannot express. Six of the seven come from the validator
+  engine; the parser engine supplies `parse` alone, and the package's own default
+  (`['types', 'guard', 'validate']`) emits no parser at all, so the name described
+  a mode that is absent from a default build.
+
+  Nothing moves but the name. No export, option, mode or emitted byte changes, and
+  `@amritk/parsers` never reached npm — the release that would have published it
+  failed on that package alone, so there is no deprecation to follow and no
+  version of it for anyone to be holding.
+
+- Updated dependencies [845f625]
+- Updated dependencies [3a1eb80]
+- Updated dependencies [6453b6d]
+  - @amritk/helpers@0.23.1
+  - @amritk/validation@0.3.0
+  - @amritk/generate-markdown@0.9.0
+  - @amritk/adapters@0.6.5
+  - @amritk/asyncapi@0.3.3
+  - @amritk/generate-examples@0.8.7
+
 ## 0.22.0
 
 ### Minor Changes
