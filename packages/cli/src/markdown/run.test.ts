@@ -46,6 +46,33 @@ describe('run', () => {
     expect(readFileSync(join(dir, 'config.md'), 'utf-8')).toContain('# Options')
   })
 
+  // The property tables' shape reaches the renderer from the CLI as well as from
+  // the schema, for a build that renders one schema two ways.
+  it('passes the property table options through to the generator', async () => {
+    const dir = tmp('markdown-table-style-')
+    const schema = writeSchema(dir, {
+      title: 'Config',
+      'x-doc': { layout: 'table' },
+      properties: {
+        server: {
+          type: 'object',
+          required: ['host'],
+          properties: {
+            host: { type: 'string', description: 'The host to bind.' },
+            port: { type: 'number', description: 'The port to bind.' },
+          },
+        },
+      },
+    })
+    const { code, stderr } = await run([schema, '--out-dir', dir, '--required-first', '--type-column', 'never'])
+    expect(stderr).toBe('')
+    expect(code).toBe(0)
+    const page = readFileSync(join(dir, 'index.md'), 'utf-8')
+    expect(page).toContain('| Property | Description |')
+    expect(page).toContain('| `host` _required_ | The host to bind. |')
+    expect(page.indexOf('`host`')).toBeLessThan(page.indexOf('`port`'))
+  })
+
   // --table is the other shape the package renders: one HTML table spliced into
   // a file that keeps everything outside the markers.
   it('splices the config table into the readme under --table', async () => {
@@ -102,6 +129,9 @@ describe('run', () => {
   // A page flag under --table would be a silently ignored option, and the user
   // would sit waiting for pages that were never going to be written.
   it('rejects a page flag combined with --table', async () => {
+    const styled = await run(['config.schema.json', '--table', '--required-first'])
+    expect(styled.code).toBe(2)
+    expect(styled.stderr).toContain('--required-first')
     const { code, stderr } = await run(['config.schema.json', '--table', '--out-dir', 'docs'])
     expect(code).toBe(2)
     expect(stderr).toContain('--out-dir')

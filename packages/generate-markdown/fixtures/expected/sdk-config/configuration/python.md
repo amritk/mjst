@@ -15,11 +15,11 @@ Python SDK target config.
 }
 ```
 
-| Property | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `packageName` | `string` | ✅ |  | Importable module name for the generated Python package. |
-| `projectName` | `string` | ✅ |  | Distribution name published to PyPI. |
-| `skip` | `boolean` |  | `false` | Keep the config in place without generating this target. |
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| [`packageName`](#packagename) _required_ | `string` |  | Importable module name for the generated Python package. |
+| [`projectName`](#projectname) _required_ | `string` |  | Distribution name published to PyPI. |
+| `skip` | `boolean` | `false` | Keep the config in place without generating this target. |
 
 ## packageName
 

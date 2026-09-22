@@ -1,4 +1,4 @@
-import type { DocLayout, DocSort } from '@amritk/generate-markdown'
+import type { DocLayout, DocSort, DocTableColumn, DocTableRequired } from '@amritk/generate-markdown'
 
 /** The flags and positional the `markdown` subcommand understands. */
 export type MarkdownArgs = {
@@ -18,6 +18,14 @@ export type MarkdownArgs = {
   sort?: DocSort
   /** Heading level of the page title (`--heading-level`). */
   headingLevel?: number
+  /** When property tables render their Type column (`--type-column`). */
+  typeColumn?: DocTableColumn
+  /** When property tables render their Default column (`--default-column`). */
+  defaultColumn?: DocTableColumn
+  /** How property tables say which properties are required (`--required-style`). */
+  requiredStyle?: DocTableRequired
+  /** True when `--required-first` was passed: required properties head every table. */
+  requiredFirst?: boolean
   /** True when `--table` was passed: render the HTML table instead of the pages. */
   table?: boolean
   /** Markdown file the table is spliced into (`--readme`). */
@@ -26,13 +34,29 @@ export type MarkdownArgs = {
   help?: boolean
 }
 
-const VALUE_KEYS = new Set(['outDir', 'file', 'title', 'language', 'layout', 'sort', 'headingLevel', 'readme'])
+const VALUE_KEYS = new Set([
+  'outDir',
+  'file',
+  'title',
+  'language',
+  'layout',
+  'sort',
+  'headingLevel',
+  'typeColumn',
+  'defaultColumn',
+  'requiredStyle',
+  'readme',
+])
 
-const BOOLEAN_KEYS = new Set(['table'])
+const BOOLEAN_KEYS = new Set(['table', 'requiredFirst'])
 
 const LAYOUTS = ['headings', 'table', 'none'] as const
 
 const SORTS = ['schema', 'alphabetical'] as const
+
+const TABLE_COLUMNS = ['auto', 'always', 'never'] as const
+
+const REQUIRED_STYLES = ['marker', 'column'] as const
 
 /** Normalizes a flag name so both `--out-dir` and `--outDir` map to the same key. */
 const toCamelCase = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
@@ -82,6 +106,15 @@ const assignValue = (args: MarkdownArgs, key: string, value: string): void => {
       return
     case 'headingLevel':
       args.headingLevel = parseHeadingLevel(value)
+      return
+    case 'typeColumn':
+      args.typeColumn = parseChoice('type-column', value, TABLE_COLUMNS)
+      return
+    case 'defaultColumn':
+      args.defaultColumn = parseChoice('default-column', value, TABLE_COLUMNS)
+      return
+    case 'requiredStyle':
+      args.requiredStyle = parseChoice('required-style', value, REQUIRED_STYLES)
       return
     case 'readme':
       args.readme = value
@@ -135,7 +168,9 @@ export const parseMarkdownArgs = (argv: readonly string[]): MarkdownArgs => {
     const key = toCamelCase(flagName)
 
     if (BOOLEAN_KEYS.has(key)) {
-      args.table = true
+      // Switched on by name, so a new switch cannot quietly set `--table`.
+      if (key === 'requiredFirst') args.requiredFirst = true
+      else args.table = true
       continue
     }
 

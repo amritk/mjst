@@ -41,6 +41,42 @@ describe('parse-markdown-args', () => {
     })
   })
 
+  // The property table's shape, which the schema usually owns — these are for a
+  // build that renders the same schema two ways.
+  it('reads the property table flags', () => {
+    expect(
+      parseMarkdownArgs([
+        's.json',
+        '--type-column',
+        'never',
+        '--default-column',
+        'always',
+        '--required-style',
+        'column',
+        '--required-first',
+      ]),
+    ).toEqual({
+      schema: 's.json',
+      typeColumn: 'never',
+      defaultColumn: 'always',
+      requiredStyle: 'column',
+      requiredFirst: true,
+    })
+  })
+
+  // Same reason a typo in --layout is an error: the renderer reads an unknown
+  // value as "not set" and lays the pages out the way nobody asked for.
+  it('rejects a table flag value it does not know', () => {
+    expect(() => parseMarkdownArgs(['s.json', '--type-column', 'sometimes'])).toThrow(
+      /Invalid --type-column value "sometimes"/,
+    )
+    expect(() => parseMarkdownArgs(['s.json', '--required-style', 'badge'])).toThrow(
+      /Invalid --required-style value "badge"/,
+    )
+    // A switch that took a value would be a value silently thrown away.
+    expect(() => parseMarkdownArgs(['s.json', '--required-first=true'])).toThrow(/takes no value/)
+  })
+
   it('reads the table flags', () => {
     expect(parseMarkdownArgs(['s.json', '--table', '--readme', 'docs/config.md'])).toEqual({
       schema: 's.json',

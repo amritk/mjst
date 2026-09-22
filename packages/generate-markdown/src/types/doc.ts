@@ -41,6 +41,51 @@ export type DocLayout = 'headings' | 'table' | 'none'
 export type DocSort = 'schema' | 'alphabetical'
 
 /**
+ * When a property table renders one of its optional columns:
+ *
+ * - `auto` — only when a row fills it with something a reader could act on.
+ *   A **Type** column of twenty `object`s, or a **Default** column no property
+ *   fills, is width taken from the description and given to nothing.
+ * - `always` — even when every cell would be blank, for a docs site whose
+ *   tables all have to line up.
+ * - `never` — a schema whose readers do not think in types, or one whose types
+ *   are already in the prose.
+ */
+export type DocTableColumn = 'auto' | 'always' | 'never'
+
+/**
+ * How a property table says which of its properties are required:
+ *
+ * - `marker` — `` `name` _required_ `` in the **Property** cell. Five rows in
+ *   twenty are required on a real page, so a column carried one bit and a lot
+ *   of blanks.
+ * - `column` — a **Required** column with a ✅ in it, rendered only when some
+ *   row fills it. The shape this package rendered before `marker`.
+ */
+export type DocTableRequired = 'marker' | 'column'
+
+/**
+ * How every property table on every page is laid out. Declared once on the root
+ * `x-doc.table`, because a reference whose tables disagree about which columns
+ * exist reads as several references stapled together.
+ */
+export type DocTable = {
+  readonly type: DocTableColumn
+  readonly default: DocTableColumn
+  readonly required: DocTableRequired
+  /**
+   * Lists the required properties at the top of the table, the rest under them,
+   * for a reader skimming for what they have to fill in. One table still: the
+   * order groups them, and the marker (or the column) still says which is
+   * which, so nothing has to be read twice.
+   *
+   * A stable partition over whatever order the properties were already in, so
+   * `sort` and `x-doc.order` still decide the rest.
+   */
+  readonly requiredFirst: boolean
+}
+
+/**
  * The normalized `x-doc` keyword of a single property. Everything here is
  * documentation-only: none of it changes what the schema validates, which is
  * why it lives under one vendor extension instead of leaking into the standard
@@ -146,6 +191,19 @@ export type MarkdownOptions = {
   readonly sort?: DocSort | undefined
   /** Heading level of the page title. Defaults to `1` (`#`). */
   readonly headingLevel?: number | undefined
+  /** Property table layout. Each member defaults to the schema's, then to the built-in. */
+  readonly table?: MarkdownTableOptions | undefined
+}
+
+/**
+ * The caller's half of {@link DocTable}: every member optional, so a build can
+ * turn the **Type** column off without restating the rest.
+ */
+export type MarkdownTableOptions = {
+  readonly type?: DocTableColumn | undefined
+  readonly default?: DocTableColumn | undefined
+  readonly required?: DocTableRequired | undefined
+  readonly requiredFirst?: boolean | undefined
 }
 
 /**
@@ -162,4 +220,6 @@ export type DocConfig = {
   readonly sections: readonly DocSection[]
   /** Heading level of a page title. */
   readonly headingLevel: number
+  /** How every property table is laid out. */
+  readonly table: DocTable
 }

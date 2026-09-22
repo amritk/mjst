@@ -20,13 +20,13 @@ TypeScript SDK target config.
 }
 ```
 
-| Property | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `packageName` | `string` | ✅ |  | Import and package name for the generated TypeScript package. |
-| `packageManager` | `"npm" \| "pnpm" \| "yarn" \| "bun"` |  | `"npm"` | Package manager preference for generated package metadata. |
-| `skip` | `boolean` |  | `false` | Keep the config in place without generating this target. |
-| `options` | `object` |  |  | TypeScript emitter options. |
-| `destinations` | `object` |  |  | GitHub destinations for generated output. |
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| [`packageName`](#packagename) _required_ | `string` |  | Import and package name for the generated TypeScript package. |
+| `packageManager` | `"npm" \| "pnpm" \| "yarn" \| "bun"` | `"npm"` | Package manager preference for generated package metadata. |
+| `skip` | `boolean` | `false` | Keep the config in place without generating this target. |
+| `options` | `object` |  | TypeScript emitter options. |
+| [`destinations`](#destinations) | `object` |  | GitHub destinations for generated output. |
 
 ## packageName
 
@@ -34,9 +34,9 @@ TypeScript SDK target config.
 
 ## destinations
 
-| Property | Type | Description |
-| --- | --- | --- |
-| `production` | `object` | Push generated output to a GitHub repository. |
+| Property | Description |
+| --- | --- |
+| `production` | Push generated output to a GitHub repository. |
 
 ## Emitter Options
 
@@ -56,10 +56,10 @@ Use `destinations.production` to push generated output to a GitHub repository.
 
 Push generated output to a GitHub repository.
 
-| Property | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `repo` | `string` | ✅ |  | GitHub repository in `owner/name` form. |
-| `branch` | `string` |  | `"main"` | Default branch releases are promoted to. Generated output itself always goes to the fixed `scalar-generated` branch. |
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| [`repo`](#repo) _required_ | `string` |  | GitHub repository in `owner/name` form. |
+| `branch` | `string` | `"main"` | Default branch releases are promoted to. Generated output itself always goes to the fixed `scalar-generated` branch. |
 
 ### repo
 

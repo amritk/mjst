@@ -409,10 +409,10 @@ describe('generate-markdown-files', () => {
         '',
         '## Required properties',
         '',
-        '| Property | Type | Required | Description |',
-        '| --- | --- | --- | --- |',
-        '| `organization` | `string` | ✅ | Identity of the organization publishing the SDKs. |',
-        '| `resources` | `string` |  | Resource tree that drives the generated client shape. |',
+        '| Property | Type | Description |',
+        '| --- | --- | --- |',
+        '| `organization` _required_ | `string` | Identity of the organization publishing the SDKs. |',
+        '| `resources` | `string` | Resource tree that drives the generated client shape. |',
         '',
       ].join('\n'),
     )
@@ -440,7 +440,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `organization` | `object` | Who is publishing. |')
+    expect(content).toContain('| [`organization`](#organization) | `object` | Who is publishing. |')
     // The first paragraph is the row's; the rest of the prose, the note and the
     // children have appeared nowhere else.
     expect(content).toContain('### organization')
@@ -483,8 +483,8 @@ describe('generate-markdown-files', () => {
       },
     })
     expect(files.map((file) => file.filename)).toEqual(['index.md', 'targets/typescript.md'])
-    expect(files[0]?.content).toContain('| `targets` | `object` | What to generate. |')
-    expect(files[0]?.content).toContain('| [`typescript`](targets/typescript.md) | `object` | TypeScript target. |')
+    expect(files[0]?.content).toContain('| [`targets`](#targets) | What to generate. |')
+    expect(files[0]?.content).toContain('| [`typescript`](targets/typescript.md#typescript) | TypeScript target. |')
     expect(files[1]?.content).toContain('# TypeScript')
   })
 
@@ -549,9 +549,7 @@ describe('generate-markdown-files', () => {
     })
     expect(files.map((file) => file.filename)).toEqual(['configuration.md', 'configuration/typescript.md'])
     // The index keeps a row for the moved property, linked across to its page.
-    expect(files[0]?.content).toContain(
-      '| [`typescript`](configuration/typescript.md) | `object` | TypeScript target. |',
-    )
+    expect(files[0]?.content).toContain('| [`typescript`](configuration/typescript.md) | TypeScript target. |')
     expect(files[0]?.content).not.toContain('packageName')
     expect(files[1]?.content).toContain('# TypeScript')
     expect(files[1]?.content).toContain('packageName')
@@ -829,7 +827,7 @@ describe('generate-markdown-files', () => {
       'x-doc': { layout: 'table', pages: [{ id: 'other', file: 'my docs (v2).md', title: 'O' }] },
       properties: { outer: { type: 'object', properties: { a: { type: 'string', 'x-doc': { page: 'other' } } } } },
     })
-    expect(files[0]?.content).toContain('[`a`](my%20docs%20%28v2%29.md)')
+    expect(files[0]?.content).toContain('[`a`](my%20docs%20%28v2%29.md#a)')
   })
 
   it('marks a deprecated property that renders without a heading', () => {
@@ -943,7 +941,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `b` | `object` | B. |')
+    expect(content).toContain('| [`b`](#b) | B. |')
     expect(content).toContain('| `c` | `string` | C. |')
   })
 
@@ -1536,9 +1534,146 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `b` | `object` | B. |')
+    expect(content).toContain('| [`b`](#b) | B. |')
     expect(content.match(/B\./g)).toHaveLength(1)
     expect(content).toContain('| `c` | `string` | C. |')
+  })
+
+  // A column of one word repeated twenty times is width taken from the
+  // description, which is the column a reader came for.
+  it('drops the type column when every row in a table is an object', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          targets: {
+            type: 'object',
+            properties: {
+              typescript: { type: 'object', description: 'TS.' },
+              python: { type: 'object', description: 'Py.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| Property | Description |')
+    expect(content).not.toContain('| Property | Type |')
+    expect(content).toContain('| `typescript` | TS. |')
+  })
+
+  // The same column says something worth the width as soon as one row does.
+  it('keeps the type column for a table of enums and arrays', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          options: {
+            type: 'object',
+            properties: {
+              arrayFormat: { enum: ['comma', 'brackets'], description: 'How arrays are encoded.' },
+              environmentOrder: { type: 'array', items: { type: 'string' }, description: 'Order to try.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| Property | Type | Description |')
+    expect(content).toContain('| `arrayFormat` | `"comma" \\| "brackets"` | How arrays are encoded. |')
+    expect(content).toContain('| `environmentOrder` | `string[]` | Order to try. |')
+  })
+
+  // A reader who wants the detail should land on it rather than at the top of a
+  // page they then have to search — but only where there is something to land
+  // on, and most rows say everything they have to say.
+  it('links a row to the section below it, and only when there is one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          server: {
+            type: 'object',
+            properties: {
+              tls: { type: 'object', description: 'TLS settings.', properties: { ca: { type: 'string' } } },
+              port: { type: 'integer', description: 'Port.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| [`tls`](#tls) | `object` | TLS settings. |')
+    expect(content).toContain('| `port` | `integer` | Port. |')
+    expect(content).toContain('### tls')
+    expect(content).not.toContain('### port')
+  })
+
+  // Two `name` headings on one page is ordinary — the SDK's own name and the
+  // `name` of a pagination scheme nested under it — and a docs site tells them
+  // apart by numbering the second. A row that ignored that sent every reader to
+  // the first.
+  it('links to the numbered anchor a repeated heading gets', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table' },
+        properties: {
+          name: { type: 'string', description: 'The SDK name.' },
+          pagination: {
+            type: 'object',
+            properties: { name: { type: 'string', description: 'Scheme name.\n\nMethods reference it.' } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('[`name`](#name-1)')
+    expect(content).toContain('## name')
+    expect(content).toContain('### name')
+  })
+
+  // The root `x-doc.table` is the whole reference's, so every table on every
+  // page drops the column at once.
+  it('drops the type column from every table when the schema asks it to', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table', table: { type: 'never' } },
+        properties: {
+          options: {
+            type: 'object',
+            properties: {
+              arrayFormat: { enum: ['comma', 'brackets'], description: 'How arrays are encoded.' },
+              retries: { type: 'integer', description: 'How many times.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| Property | Description |')
+    expect(content).not.toContain('| Property | Type | Description |')
+    expect(content).toContain('| `arrayFormat` | How arrays are encoded. |')
+  })
+
+  // The blocks under a table follow their rows down the page, so a reordered
+  // table has to carry the order through to them.
+  it('lists the required properties first and orders the blocks below to match', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table', table: { requiredFirst: true } },
+        properties: {
+          server: {
+            type: 'object',
+            required: ['host'],
+            properties: {
+              port: { type: 'integer', description: 'Port.\n\nDefaults to the scheme.' },
+              host: { type: 'string', description: 'Host.\n\nAn IP address works too.' },
+            },
+          },
+        },
+      }),
+    )
+    // One table: the required property is simply the row above, still marked.
+    expect(content).toContain('| [`host`](#host) _required_ | `string` | Host. |')
+    expect(content).toContain('| [`port`](#port) | `integer` | Port. |')
+    expect(content.match(/^\| Property \|/gm)).toHaveLength(1)
+    expect(content.indexOf('`host`')).toBeLessThan(content.indexOf('`port`'))
+    expect(content.indexOf('### host')).toBeLessThan(content.indexOf('### port'))
   })
 
   // The row above carries the shape; everything a row cannot hold still has to
@@ -1567,7 +1702,7 @@ describe('generate-markdown-files', () => {
       }),
     )
     // In the row, not repeated below it.
-    expect(content).toContain('| `child` | `ChildShape` | `{"a": 1}` |')
+    expect(content).toContain('| [`child`](#child) | `ChildShape` | `{"a": 1}` |  |')
     expect(content.match(/\*\*Default:\*\*/g)).toBeNull()
     // Below the row, because no row could carry them.
     expect(content).toContain('> **Deprecated**')
@@ -1791,7 +1926,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `tls` | `object` | TLS settings. |')
+    expect(content).toContain('| [`tls`](#tls) | TLS settings. |')
     expect(content).toContain('Certificates are read once at start-up.')
     expect(content).toContain('**Default:** `null`')
     // The first paragraph is in the row and is not repeated below it.
@@ -1893,7 +2028,7 @@ describe('generate-markdown-files', () => {
     // The whole sample stays in the cell it belongs to. Counting fences proves
     // nothing — cut or uncut there are two runs of backticks; what matters is
     // that neither half leaked out of the row into the page.
-    const row = content.split('\n').find((line) => line.startsWith('| `theme`')) ?? ''
+    const row = content.split('\n').find((line) => line.startsWith('| [`theme`]')) ?? ''
     expect(row).toContain('"dark": true')
     expect(row).toContain('"accent": "red"')
     expect(content).toContain('| `dark` | `boolean` | Dark. |')
@@ -1922,7 +2057,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `port` | `integer` | Port. |')
+    expect(content).toContain('| [`port`](#port) | `integer` | Port. |')
     expect(content).toContain('> **Deprecated**')
     expect(content).toContain('Use `listen` instead.')
     expect(content).toContain('**Constraints:** `minimum: 1`')
@@ -2023,7 +2158,7 @@ describe('generate-markdown-files', () => {
       }),
     )
     // The column exists because `b` fills it; `a`'s null belongs below, not in it.
-    expect(content).toContain('| `a` | `string` |  |')
+    expect(content).toContain('| [`a`](#a) | `string` |  |  |')
     expect(content).toContain('| `b` | `string` | `"x"` |')
     expect(content).toContain('**Default:** `null`')
   })
@@ -2757,10 +2892,10 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    const row = content.split('\n').find((line) => line.startsWith('| `sample'))
+    const row = content.split('\n').find((line) => line.startsWith('| [`sample'))
     // Named first: a negative assertion about a row that never rendered would
     // pass for the wrong reason, and so would the block below it.
-    expect(row).toBe('| `sample` | `string` | Wrap the value in     the same shape |')
+    expect(row).toBe('| [`sample`](#sample) | `string` | Wrap the value in     the same shape |')
     expect(content).toContain('    <b>literal</b>')
   })
 
@@ -2987,7 +3122,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `template` | `string` | Paste it verbatim. |')
+    expect(content).toContain('| [`template`](#template) | `string` | Paste it verbatim. |')
     expect(content).toContain('\n    <div class="x">sample</div>')
   })
 
@@ -3511,20 +3646,24 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| `t` | `string` |  |')
+    expect(content).toContain('| [`t`](#t) | `string` |  |')
     expect(content).toContain('\n    <div>only</div>')
   })
 
   // A property with nothing to say about its type gets an empty cell, not an
-  // empty code span.
+  // empty code span — in a table that has the column at all, which is one where
+  // some other row says something with it.
   it('leaves the type cell empty rather than rendering an empty code span', () => {
     const content = only(
       generateMarkdownFiles({
         'x-doc': { layout: 'table' },
-        properties: { group: { type: 'object', properties: { t: { description: 'D.' } } } },
+        properties: {
+          group: { type: 'object', properties: { t: { description: 'D.' }, u: { type: 'string', description: 'U.' } } },
+        },
       }),
     )
     expect(content).toContain('| `t` |  | D. |')
+    expect(content).toContain('| `u` | `string` | U. |')
   })
 
   // RFC 6901 unescapes `~1` before `~0`, so `~01` addresses the definition
@@ -3685,7 +3824,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('| ` trail  ` | `string` | Trailing space name. |')
+    expect(content).toContain('| [` trail  `](#trail) | `string` | Trailing space name. |')
     expect(content).toContain('### ` trail  `')
   })
 
@@ -4697,13 +4836,21 @@ describe('generate-markdown-files', () => {
     }
   })
 
+  // The same renderer under a different root `x-doc.table`: the required
+  // options at the top of every table, and no type column anywhere.
+  it('matches the checked-in docs for the deploy fixture', () => {
+    const files = generateMarkdownFiles(fixture('deploy-config'))
+    expect(files.map((file) => file.filename)).toEqual(['configuration.md'])
+    expect(files[0]?.content).toBe(golden('deploy-config', 'configuration.md'))
+  })
+
   // A golden left behind by a page that no longer exists would otherwise sit
   // there looking like documentation somebody still generates.
   // The page *set*, which the two content comparisons above do not check: a
   // page that stops being emitted, or one that appears from nowhere, leaves
   // both of them green.
   it('emits exactly the set of golden pages that is checked in', () => {
-    for (const name of ['api-reference-config', 'sdk-config'] as const) {
+    for (const name of ['api-reference-config', 'sdk-config', 'deploy-config'] as const) {
       const generated = generateMarkdownFiles(fixture(name))
         .map((file) => file.filename)
         .sort()
