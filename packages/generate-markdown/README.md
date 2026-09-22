@@ -742,6 +742,37 @@ options at the top of it. Every property in it still gets the block a row cannot
 hold below the table — the rest of its prose, its notes, examples and children —
 and a section with `layout: 'none'` renders its prose and examples alone.
 
+### What a property table holds
+
+Every column has to earn its width, because the column a reader came for is
+**Description** and a narrow viewport gives it whatever the others leave:
+
+| Column | When it is rendered |
+| --- | --- |
+| **Property** | Always. A required property is marked `_required_` beside its name rather than in a column of its own: five rows in twenty are required on a real page, so the column carried one bit and a lot of blanks. The word is the marker, so the table needs no legend under it |
+| **Type** | When at least one row says something with it. A table whose every row is `object` — or states no type at all — drops it; one with enums, arrays or maps keeps it. Every row being `string` keeps it too: that is a fact about the options rather than the absence of one |
+| **Default** | When at least one row has one. A `null` default is the absence of a value, so it prints below the table instead of in it |
+
+A row links to the property's own heading wherever that heading is: the section
+rendered below the table (`#packagename`), or the page the property moved to
+(`configuration/typescript.md#packagename`). Most rows have no heading to link
+to — a property whose whole content is its description says everything in the
+row itself and gets no section — and those rows stay plain code spans. A link to
+an anchor no heading answers takes the reader nowhere, and nothing in the
+markdown looks wrong. So does a row whose property is pulled up into a `##`
+section further down the same page: that heading has not claimed its anchor by
+the time the table is rendered, and a guess at what it will be is the kind of
+link this is careful not to write.
+
+Anchors follow GitHub's rules: lowercased, punctuation dropped, spaces
+hyphenated. They are slugged from the text a heading *renders* as rather than
+its markdown, so ``### `foo.bar` `` and `### foo.bar` both answer `#foobar`, and
+a page that carries the same heading twice numbers the second one `#name-1` —
+an option called `name` and the `name` of a scheme nested under it is an
+ordinary page, not a contrived one. A cross-page anchor is the one that is not
+numbered: a page's anchors are that page's to hand out, so a link into a page
+that repeats a name lands on the first of them.
+
 ### Splitting across files
 
 A property assigned to a page is documented there and nowhere else. In a table

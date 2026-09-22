@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { headingText } from '#helpers/heading-text'
+import { headingText, propertyHeading } from '#helpers/heading-text'
 
 describe('heading-text', () => {
   it('leaves an ordinary property name alone, so the anchor stays readable', () => {
@@ -56,5 +56,29 @@ describe('heading-text', () => {
   it('wraps a name that starts with something markdown would read', () => {
     expect(headingText('-flag')).toBe('`-flag`')
     expect(headingText('2fa')).toBe('2fa')
+  })
+
+  // The markdown and the text are handed out together so a link into the page
+  // cannot name an anchor the heading above it does not have.
+  it('gives a property heading both the markdown to print and the text a reader sees', () => {
+    expect(propertyHeading('base_url', undefined)).toEqual({ markdown: 'base_url', text: 'base_url' })
+    // The code span is markup: a reader is left with the name itself.
+    expect(propertyHeading('-flag', undefined)).toEqual({ markdown: '`-flag`', text: '-flag' })
+  })
+
+  it('lets an x-doc title replace both of them', () => {
+    expect(propertyHeading('targets', 'SDK targets')).toEqual({ markdown: 'SDK targets', text: 'SDK targets' })
+  })
+
+  // A title of whitespace is not a title: honouring it left an empty heading
+  // where the property's name should be.
+  it('falls back to the name when the title is blank', () => {
+    expect(propertyHeading('targets', '   ').markdown).toBe('targets')
+  })
+
+  // The escape keeps the title prose; the reader still sees the `#`, and the
+  // anchor is slugged from what they see.
+  it('escapes the closing hashes of a title without carrying them into the text', () => {
+    expect(propertyHeading('a', 'Advanced #')).toEqual({ markdown: 'Advanced \\#', text: 'Advanced #' })
   })
 })

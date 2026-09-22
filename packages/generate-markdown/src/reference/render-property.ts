@@ -1,14 +1,14 @@
 import { remainingParagraphs, trimDescription } from '#helpers/first-paragraph'
 import { formatInlineLiteral } from '#helpers/format-literal'
 import { asArray } from '#helpers/guards'
-import { heading } from '#helpers/heading'
-import { headingProse, headingText } from '#helpers/heading-text'
+import { propertyHeading } from '#helpers/heading-text'
 import { inlineCode } from '#helpers/inline-code'
 import { readConstraints } from '#helpers/read-constraints'
 import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
 import { referenceType, typeShowsEnum } from '#helpers/reference-type'
 import { childEntries } from '#reference/child-entries'
 import { deriveExample } from '#reference/derive-example'
+import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderPropertyTable } from '#reference/render-property-table'
 import type { DocEntry, RenderContext } from '#types/render'
@@ -81,10 +81,10 @@ export const renderProperty = (
   const blocks: string[] = []
 
   const titled = meta.heading || options.summarised === true
-  // A title of whitespace is not a title: honouring it left an empty heading
-  // where the property's name should be.
-  const title = meta.title?.trim() === '' ? undefined : meta.title
-  if (titled) blocks.push(heading(level, title === undefined ? headingText(name) : headingProse(title)))
+  // Through `propertyHeading` rather than built here, so the anchor this
+  // heading claims is slugged from the very text it renders — and through
+  // `renderHeading`, so the row above knows where the property landed.
+  if (titled) blocks.push(renderHeading(level, propertyHeading(name, meta.title), context, entry))
   // Never inside the heading guard: `heading: false` drops the property's own
   // name and shape because the page or section above already carries them, and
   // neither of those says the property is on its way out.
@@ -157,27 +157,61 @@ export const renderProperty = (
   if (children.length === 0) return blocks
 
   if (layout === 'table') {
-    blocks.push(renderPropertyTable(children, context))
     // A table row says a child is an object; it cannot say what is in it. Any
     // child with a shape of its own gets its own table below, or a whole
     // subtree would be documented as the word `object` and nothing else.
-    for (const child of children) {
-      if (documentedElsewhere(child, context)) continue
-      // Emitted whenever the child has anything the row could not carry — its
-      // own children, but also a Deprecated callout, constraints, examples,
-      // notes or the rest of its prose. Gating on children alone lost all of
-      // those for every leaf option in a table.
-      // Compared against the child's own heading, not against one: a child with
-      // `heading: false` pushes none, so counting one dropped its whole block —
-      // table and all.
-      // Always labelled, so the gate is always "more than the heading".
-      const sub = renderProperty(child, childLevelBase, context, { summarised: true })
-      if (sub.length > 1) blocks.push(...sub)
+    //
+    // Worked out before the table rather than after it, because the rows link
+    // to the headings these blocks carry: one pass over `summarisedBlocks`
+    // answers both questions, and the row and the block below it can never
+    // disagree about whether there is a heading between them.
+    const summaries = new Map(
+      children
+        .filter((child) => !documentedElsewhere(child, context))
+        .map((child) => [child, summarisedBlocks(child, childLevelBase, context)] as const),
+    )
+    // A child documented elsewhere has no block here to consult, so the block it
+    // gets there is rendered and thrown away — only whether it holds anything is
+    // being asked, and that is a fact about the property rather than about the
+    // page it lands on. Against a registry of its own, because this page must
+    // not number an anchor for a heading it does not print.
+    const summarised = (child: DocEntry): boolean => {
+      const otherPage = { ...context, anchors: pageAnchors() }
+      return (summaries.get(child) ?? summarisedBlocks(child, childLevelBase, otherPage)).length > 0
     }
+    blocks.push(renderPropertyTable(children, context, { summarised }))
+    for (const child of children) blocks.push(...(summaries.get(child) ?? []))
     return blocks
   }
   // With no heading of its own this property occupies its parent's level, so
   // its children stay where they would have been.
   for (const child of children) blocks.push(...renderProperty(child, childLevelBase, context))
   return blocks
+}
+
+/**
+ * The block a property gets under its own table row — the part of it a row
+ * cannot hold: the rest of its prose, its Deprecated callout, its constraints,
+ * examples and notes, and its own children. Empty when the row already says
+ * everything, which is most properties in most tables.
+ *
+ * That emptiness is a decision two renderers make together, so it is made in
+ * one place: the caller reads it as "there is nothing to print", and the table
+ * above reads the anchor a printed block claimed. Deciding it twice would drift
+ * apart, and the page would end up with rows linking to anchors no heading on
+ * it answers — a broken link with nothing in the markdown that looks wrong.
+ *
+ * A summarised block is always labelled, so "more than the heading" is the
+ * whole test. Counting the child's own heading rather than assuming one matters
+ * for a child with `heading: false`: it pushes none, and counting one dropped
+ * its whole block — table and all.
+ */
+export const summarisedBlocks = (entry: DocEntry, level: number, context: RenderContext): readonly string[] => {
+  const blocks = renderProperty(entry, level, context, { summarised: true })
+  if (blocks.length > 1) return blocks
+  // The heading claimed an anchor on the way in and is not going to be printed,
+  // so the claim goes back: it is the only one this render made, a block with
+  // anything under it being a block worth printing.
+  context.anchors.undoClaim()
+  return []
 }

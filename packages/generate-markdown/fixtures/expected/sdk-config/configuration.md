@@ -97,17 +97,17 @@ Per-language packaging, publishing, and emitter options keyed by target id. Add 
 
 Set `skip: true` on a target to keep its config in place without generating it.
 
-| Property | Type | Description |
-| --- | --- | --- |
-| [`typescript`](configuration/typescript.md) | `object` | TypeScript SDK target config. |
-| [`python`](configuration/python.md) | `object` | Python SDK target config. |
-| `go` | `object` | Go SDK target config. |
+| Property | Description |
+| --- | --- |
+| [`typescript`](configuration/typescript.md) | TypeScript SDK target config. |
+| [`python`](configuration/python.md) | Python SDK target config. |
+| [`go`](#go) | Go SDK target config. |
 
 #### go
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `packageName` | `string` |  | Import and package name for the generated package. |
+| [`packageName`](#packagename) | `string` |  | Import and package name for the generated package. |
 | `skip` | `boolean` | `false` | Keep the config in place without generating this target. |
 
 ##### packageName
@@ -148,10 +148,10 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `defaultClientName` | `string` |  | Class name of the generated client. |
-| `defaultTimeout` | `number` | `30000` | Request timeout in milliseconds. |
+| [`defaultClientName`](#defaultclientname) | `string` |  | Class name of the generated client. |
+| [`defaultTimeout`](#defaulttimeout) | `number` | `30000` | Request timeout in milliseconds. |
 | `defaultHeaders` | `Record<string, string>` |  | Headers every generated request sends. |
-| `defaultRetries` | `object` |  | Retry policy the generated runtime applies to failed requests. |
+| [`defaultRetries`](#defaultretries) | `object` |  | Retry policy the generated runtime applies to failed requests. |
 
 #### defaultClientName
 
@@ -165,7 +165,7 @@ SDK-wide client constructor settings for auth, retries, timeouts, and headers.
 
 | Property | Type | Default | Description |
 | --- | --- | --- | --- |
-| `maxRetries` | `integer` | `2` | Attempts after the first failure. |
+| [`maxRetries`](#maxretries) | `integer` | `2` | Attempts after the first failure. |
 | `initialDelaySeconds` | `number` | `1` | Delay before the first retry. |
 | `maxDelaySeconds` | `number` | `10` | Ceiling for the backoff delay. |
 
@@ -225,10 +225,10 @@ Named base URLs the generated client can switch between.
 
 Named pagination schemes referenced by method-level pagination settings.
 
-| Property | Type | Required | Description |
-| --- | --- | --- | --- |
-| `name` | `string` | ✅ | Name methods reference this scheme by. |
-| `type` | `"cursor" \| "cursorId" \| "cursorUrl" \| "offset" \| "pageNumber"` | ✅ | Which pagination strategy the generated helper implements. |
+| Property | Type | Description |
+| --- | --- | --- |
+| [`name`](#name-1) _required_ | `string` | Name methods reference this scheme by. |
+| `type` _required_ | `"cursor" \| "cursorId" \| "cursorUrl" \| "offset" \| "pageNumber"` | Which pagination strategy the generated helper implements. |
 
 #### name
 

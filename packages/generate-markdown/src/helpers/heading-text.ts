@@ -29,18 +29,59 @@ export const headingText = (name: string): string => {
 }
 
 /**
+ * The text a reader sees for an author's heading override. Its line endings are
+ * collapsed, because one would end the heading and let the rest of the title
+ * open a heading, a list or a fence of its own, and its trailing whitespace
+ * goes because an ATX heading drops it anyway.
+ */
+const proseText = (title: string): string => collapseLineEndings(title).replace(/\s+$/, '')
+
+/**
  * Renders an author's heading override — `x-doc.title`, a section title, a page
  * title. Prose, not a key: it has no row to be checked against, so it is not
- * held to a property name's spelling rules. Only its line endings are
- * collapsed, because one would end the heading and let the rest of the title
- * open a heading, a list or a fence of its own.
+ * held to a property name's spelling rules.
  */
 export const headingProse = (title: string): string => {
-  const collapsed = collapseLineEndings(title).replace(/\s+$/, '')
+  const collapsed = proseText(title)
   // The other way an ATX heading rewrites its own text: a trailing run of `#`
   // is its closing sequence, so `Advanced #` was headed `Advanced` and a title
   // of `#` produced an empty heading — a property missing from every table of
   // contents, with nothing in the markdown that looks wrong. Escaping the run
   // keeps the title prose, which is the point of rendering it this way at all.
   return collapsed.replace(/#+$/, (run) => `\\${run}`)
+}
+
+/**
+ * A heading in both the forms a page needs it: the `markdown` to print, and the
+ * `text` a reader is left with once that markdown is rendered — which is what
+ * an anchor is slugged from.
+ *
+ * The two are handed out together on purpose. A row that linked to an anchor it
+ * derived from the raw property name would disagree with the heading the moment
+ * that name needed a code span, and a page whose links point at anchors it does
+ * not carry is worse than one with no links at all: nothing in the markdown
+ * looks wrong.
+ */
+export type RenderedHeading = {
+  readonly markdown: string
+  readonly text: string
+}
+
+/** A page or section title, ready to render and to be linked to. */
+export const proseHeading = (title: string): RenderedHeading => ({
+  markdown: headingProse(title),
+  text: proseText(title),
+})
+
+/** A property's heading — its `x-doc.title` when it has one, and its name otherwise. */
+export const propertyHeading = (name: string, title: string | undefined): RenderedHeading => {
+  // A title of whitespace is not a title: honouring it left an empty heading
+  // where the property's name should be.
+  if (title === undefined || title.trim() === '') {
+    // Both spellings `headingText` chooses between render as the same words: a
+    // code span's backticks are markup, and the one padding space each side is
+    // stripped before the reader (or the anchor) ever sees the content.
+    return { markdown: headingText(name), text: collapseLineEndings(name) }
+  }
+  return { markdown: headingProse(title), text: proseText(title) }
 }
