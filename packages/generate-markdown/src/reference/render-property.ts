@@ -10,7 +10,7 @@ import { childEntries } from '#reference/child-entries'
 import { deriveExample } from '#reference/derive-example'
 import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
-import { renderPropertyTable } from '#reference/render-property-table'
+import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
 import type { DocEntry, RenderContext } from '#types/render'
 
 /**
@@ -165,8 +165,12 @@ export const renderProperty = (
     // to the headings these blocks carry: one pass over `summarisedBlocks`
     // answers both questions, and the row and the block below it can never
     // disagree about whether there is a heading between them.
+    // In the table's own row order, which a split table reshuffles: the blocks
+    // follow their rows down the page, and the anchors are numbered in the
+    // order the headings print.
+    const ordered = tableOrder(children, context.table)
     const summaries = new Map(
-      children
+      ordered
         .filter((child) => !documentedElsewhere(child, context))
         .map((child) => [child, summarisedBlocks(child, childLevelBase, context)] as const),
     )
@@ -179,8 +183,8 @@ export const renderProperty = (
       const otherPage = { ...context, anchors: pageAnchors() }
       return (summaries.get(child) ?? summarisedBlocks(child, childLevelBase, otherPage)).length > 0
     }
-    blocks.push(renderPropertyTable(children, context, { summarised }))
-    for (const child of children) blocks.push(...(summaries.get(child) ?? []))
+    blocks.push(renderPropertyTable(ordered, context, { summarised }))
+    for (const child of ordered) blocks.push(...(summaries.get(child) ?? []))
     return blocks
   }
   // With no heading of its own this property occupies its parent's level, so

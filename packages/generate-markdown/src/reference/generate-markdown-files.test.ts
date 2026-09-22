@@ -1628,6 +1628,56 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('### name')
   })
 
+  // The root `x-doc.table` is the whole reference's, so every table on every
+  // page drops the column at once.
+  it('drops the type column from every table when the schema asks it to', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table', table: { type: 'never' } },
+        properties: {
+          options: {
+            type: 'object',
+            properties: {
+              arrayFormat: { enum: ['comma', 'brackets'], description: 'How arrays are encoded.' },
+              retries: { type: 'integer', description: 'How many times.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| Property | Description |')
+    expect(content).not.toContain('| Property | Type | Description |')
+    expect(content).toContain('| `arrayFormat` | How arrays are encoded. |')
+  })
+
+  // The blocks under a table follow their rows down the page, so a split has to
+  // carry the order through to them.
+  it('splits a table in two and orders the blocks below it to match', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-doc': { layout: 'table', table: { required: 'split' } },
+        properties: {
+          server: {
+            type: 'object',
+            required: ['host'],
+            properties: {
+              port: { type: 'integer', description: 'Port.\n\nDefaults to the scheme.' },
+              host: { type: 'string', description: 'Host.\n\nAn IP address works too.' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('**Required**')
+    expect(content).toContain('**Optional**')
+    expect(content.indexOf('**Required**')).toBeLessThan(content.indexOf('**Optional**'))
+    expect(content).toContain('| [`host`](#host) | `string` | Host. |')
+    expect(content).toContain('| [`port`](#port) | `integer` | Port. |')
+    expect(content.indexOf('### host')).toBeLessThan(content.indexOf('### port'))
+    // The table the row is in has already said it.
+    expect(content).not.toContain('_required_')
+  })
+
   // The row above carries the shape; everything a row cannot hold still has to
   // be here, or a table layout quietly loses half of what the schema says.
   it('keeps everything a table row cannot hold in the block beneath it', () => {
@@ -4788,13 +4838,21 @@ describe('generate-markdown-files', () => {
     }
   })
 
+  // The same renderer under a different root `x-doc.table`: the required
+  // options in a table of their own, and no type column anywhere.
+  it('matches the checked-in docs for the split-table fixture', () => {
+    const files = generateMarkdownFiles(fixture('split-table-config'))
+    expect(files.map((file) => file.filename)).toEqual(['configuration.md'])
+    expect(files[0]?.content).toBe(golden('split-table-config', 'configuration.md'))
+  })
+
   // A golden left behind by a page that no longer exists would otherwise sit
   // there looking like documentation somebody still generates.
   // The page *set*, which the two content comparisons above do not check: a
   // page that stops being emitted, or one that appears from nowhere, leaves
   // both of them green.
   it('emits exactly the set of golden pages that is checked in', () => {
-    for (const name of ['api-reference-config', 'sdk-config'] as const) {
+    for (const name of ['api-reference-config', 'sdk-config', 'split-table-config'] as const) {
       const generated = generateMarkdownFiles(fixture(name))
         .map((file) => file.filename)
         .sort()

@@ -82,17 +82,24 @@ or `mjst markdown <schema> --table --readme <file>`.
    only, rendered after the built-in columns, dropped when no property fills it,
    and scalar values only (a string, number, or boolean; anything else leaves
    the cell empty).
-9. **A property table drops the columns it cannot fill, and links its rows.**
-   Under a `layout: 'table'` the columns are **Property**, **Type**,
-   **Default**, **Description** — **Type** is dropped when every row would say
-   `object` (or nothing), **Default** when no row has one, and requiredness is
-   an `_required_` marker beside the name rather than a column. A row links to
-   the property's own heading when it has one, on this page (`#packagename`) or
-   the page it moved to (`configuration/typescript.md#packagename`), and stays a
-   plain code span when the row already says everything. Do not hand-write those
-   links: the anchors are claimed by the headings as they render, numbering a
-   repeat `#name-1` the way a docs site does.
-10. **Golden output is checked in.** `fixtures/expected/` is compared by
+9. **A property table's shape is the root `x-doc.table`'s, not the renderer's.**
+   `{ type, default, required }`: the two columns take
+   `'auto' | 'always' | 'never'` and default to `auto` — rendered only when a
+   row fills them with something a reader could act on, so a table whose every
+   row says `object` has no **Type** column. `required` takes `'marker'`
+   (default, `` `name` _required_ `` beside the name), `'column'` (a **Required**
+   column with ✅) or `'split'` (a **Required** table, then an **Optional** one,
+   with no markers). Root only — per-property and per-section tables all follow
+   it — and `MarkdownOptions.table` / the CLI's `--type-column`,
+   `--default-column`, `--required-style` override it per member.
+10. **Table rows link to the headings below them, and the anchors are not
+   hand-written.** A row links to the property's own heading when it has one, on
+   this page (`#packagename`) or the page it moved to
+   (`configuration/typescript.md#packagename`), and stays a plain code span when
+   the row already says everything. The anchors are claimed by the headings as
+   they render — a repeat is numbered `#name-1` the way a docs site does — so a
+   link is never derived from a property name by hand.
+11. **Golden output is checked in.** `fixtures/expected/` is compared by
    `generate-markdown-files.test.ts`. After a deliberate renderer change run
    `bun run generate-fixtures` and read the diff — it is the review.
 

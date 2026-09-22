@@ -3,7 +3,7 @@ import { proseHeading } from '#helpers/heading-text'
 import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderProperty, summarisedBlocks } from '#reference/render-property'
-import { renderPropertyTable } from '#reference/render-property-table'
+import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
 import type { DocConfig } from '#types/doc'
 import type { PageModel, RenderContext } from '#types/render'
 
@@ -23,6 +23,7 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
     language: config.language,
     layout: config.layout,
     sort: config.sort,
+    table: config.table,
     file: model.page.file,
     page: model.page.id,
     pageFiles,
@@ -74,8 +75,13 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
       // reads the claims back. Rendering them the other way round would leave
       // every row pointing at nothing, and no second guess at which properties
       // have a heading can disagree with the headings themselves.
-      const summaries = entries.map((entry) => summarisedBlocks(entry, level + 2, context))
-      blocks.push(renderPropertyTable(entries, context))
+      //
+      // In the table's own row order, which a split table reshuffles: the
+      // blocks follow their rows down the page, and the anchors are numbered in
+      // the order the headings print.
+      const ordered = tableOrder(entries, context.table)
+      const summaries = ordered.map((entry) => summarisedBlocks(entry, level + 2, context))
+      blocks.push(renderPropertyTable(ordered, context))
       for (const summary of summaries) blocks.push(...summary)
       continue
     }

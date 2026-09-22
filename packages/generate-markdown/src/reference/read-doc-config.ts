@@ -1,7 +1,18 @@
 import { asArray, asText, isObject, stringExtension } from '#helpers/guards'
 import { normalizeDocPath } from '#helpers/normalize-doc-path'
 import { asExamples, DOC_KEY, readDescription } from '#helpers/read-doc-meta'
-import type { DocConfig, DocLayout, DocPage, DocSection, DocSort, MarkdownOptions } from '#types/doc'
+import type {
+  DocConfig,
+  DocLayout,
+  DocPage,
+  DocSection,
+  DocSort,
+  DocTable,
+  DocTableColumn,
+  DocTableRequired,
+  MarkdownOptions,
+  MarkdownTableOptions,
+} from '#types/doc'
 import type { ConfigSchema } from '#types/schema'
 
 /** Id of the page a property lands on when it does not name one. */
@@ -19,6 +30,25 @@ const DEFAULT_LANGUAGE = 'json'
 
 const LAYOUTS: readonly DocLayout[] = ['headings', 'table', 'none']
 const SORTS: readonly DocSort[] = ['schema', 'alphabetical']
+const TABLE_COLUMNS: readonly DocTableColumn[] = ['auto', 'always', 'never']
+const TABLE_REQUIRED: readonly DocTableRequired[] = ['marker', 'column', 'split']
+
+/**
+ * The table layout every page renders with: the caller's choice, then the
+ * schema's, then the built-in.
+ *
+ * The defaults are the shape a reference wants when nobody has thought about
+ * it: a column only when a row fills it, and requiredness marked beside the
+ * name rather than spending a column on one bit.
+ */
+const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable => {
+  const table = isObject(value) ? value : {}
+  return {
+    type: options.type ?? asOneOf(table['type'], TABLE_COLUMNS) ?? 'auto',
+    default: options.default ?? asOneOf(table['default'], TABLE_COLUMNS) ?? 'auto',
+    required: options.required ?? asOneOf(table['required'], TABLE_REQUIRED) ?? 'marker',
+  }
+}
 
 const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : undefined
@@ -114,5 +144,6 @@ export const readDocConfig = (schema: ConfigSchema, options: MarkdownOptions = {
     pages: [index, ...declared.filter((page) => page.id !== INDEX_PAGE_ID)],
     sections: readSections(doc['sections']),
     headingLevel: Number.isFinite(headingLevel) ? Math.max(1, Math.trunc(headingLevel)) : 1,
+    table: readTable(doc['table'], options.table),
   }
 }

@@ -654,6 +654,7 @@ On the **root schema**:
 | `layout` | `'headings' \| 'table' \| 'none'` | Default layout for nested properties. Defaults to `headings`. |
 | `sort` | `'schema' \| 'alphabetical'` | Default property order. Defaults to `schema`. |
 | `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
+| `table` | `{ type?, default?, required? }` | How every property table on every page is laid out — `type` and `default` take `'auto' \| 'always' \| 'never'`, `required` takes `'marker' \| 'column' \| 'split'`. See [What a property table holds](#what-a-property-table-holds). Root only: a reference whose tables disagree about which columns exist reads as several references stapled together |
 | `sections` | `{ id, title?, description?, page?, layout?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. Its `layout` takes the same `'headings' \| 'table' \| 'none'` vocabulary a property's does, and defaults to `headings` — the root `layout` is the default for a property's *children*, not for a section. |
 | `example` / `examples` | see below | Code blocks under the page title. |
 
@@ -745,13 +746,57 @@ and a section with `layout: 'none'` renders its prose and examples alone.
 ### What a property table holds
 
 Every column has to earn its width, because the column a reader came for is
-**Description** and a narrow viewport gives it whatever the others leave:
+**Description** and a narrow viewport gives it whatever the others leave. That
+is what the defaults do; the root `x-doc.table` is where a schema disagrees,
+and every table on every page follows it:
 
-| Column | When it is rendered |
-| --- | --- |
-| **Property** | Always. A required property is marked `_required_` beside its name rather than in a column of its own: five rows in twenty are required on a real page, so the column carried one bit and a lot of blanks. The word is the marker, so the table needs no legend under it |
-| **Type** | When at least one row says something with it. A table whose every row is `object` — or states no type at all — drops it; one with enums, arrays or maps keeps it. Every row being `string` keeps it too: that is a fact about the options rather than the absence of one |
-| **Default** | When at least one row has one. A `null` default is the absence of a value, so it prints below the table instead of in it |
+```json
+{
+  "x-doc": {
+    "table": { "type": "never", "required": "split" }
+  }
+}
+```
+
+| Member | Values | What it decides |
+| --- | --- | --- |
+| `type` | `auto` (default), `always`, `never` | The **Type** column. `auto` renders it only when a row says something with it — a table whose every row is `object`, or states no type at all, drops it, while one with enums, arrays or maps keeps it. Every row being `string` keeps it too: that is a fact about the options rather than the absence of one. `never` is for a reference whose readers do not think in types |
+| `default` | `auto` (default), `always`, `never` | The **Default** column. `auto` renders it when some property has one. A `null` default is the absence of a value, so it prints below the table instead of in it |
+| `required` | `marker` (default), `column`, `split` | How requiredness is said — see below |
+
+The three answers for `required`:
+
+```md
+`marker`   | `organization` _required_ | Identity of the organization…    |
+
+`column`   | Property       | Required | Description |
+           | `organization` | ✅       | Identity of the organization…    |
+
+`split`    **Required**
+           | `organization` | Identity of the organization…    |
+           **Optional**
+           | `slug`         | Used in the URL…                 |
+```
+
+`marker` is the default because five rows in twenty are required on a real
+page, so a column carried one bit and a lot of blanks — and the word is its own
+legend, so nothing has to be explained under the table. `column` is the shape
+this package rendered before that, kept for a reference that wants it back;
+like every other column it is dropped when no row fills it. `split` renders the
+required properties first under a **Required** caption and the rest under
+**Optional**, for a reader skimming for what they have to fill in — the
+grouping is the statement, so no row carries a marker.
+
+Both halves of a split share one set of columns, decided across every property
+in the table: two tables in a row whose headers disagree read as two unrelated
+tables. The **Required** caption stays even when every property is required,
+because it is what says the table is the required half; a table of entirely
+optional properties gets no caption at all, **Optional** being the absence of
+that statement rather than one of its own. The blocks below the table follow
+their rows, so they are reordered with them.
+
+All of this is the table's shape only. A property rendered as a heading still
+gets its **Type:** and **Required** lines, which are prose rather than columns.
 
 A row links to the property's own heading wherever that heading is: the section
 rendered below the table (`#packagename`), or the page the property moved to
@@ -823,6 +868,7 @@ Two realistic schemas and the markdown they generate are checked in:
 
 - [`fixtures/api-reference-config.schema.json`](./fixtures/api-reference-config.schema.json) → [one page](./fixtures/expected/api-reference-config/configuration.md)
 - [`fixtures/sdk-config.schema.json`](./fixtures/sdk-config.schema.json) → [three pages](./fixtures/expected/sdk-config/)
+- [`fixtures/split-table-config.schema.json`](./fixtures/split-table-config.schema.json) → [one page](./fixtures/expected/split-table-config/configuration.md), the same renderer under `x-doc.table: { "type": "never", "required": "split" }`
 
 The tests compare the generator against those files. After a deliberate change,
 `bun run generate-fixtures` refreshes them — and the diff shows exactly how
@@ -844,7 +890,8 @@ in CI or write them wherever the docs live.
 
 `options` overrides what the schema declares, for callers that want the same
 schema written somewhere else: `file`, `title`, `language`, `layout`, `sort`,
-`headingLevel`.
+`headingLevel`, and `table` (per member, so turning the **Type** column off does
+not restate the rest of the schema's choices).
 
 ### `generateDocs(options?: GenerateDocsOptions): Promise<readonly GeneratedFile[]>`
 

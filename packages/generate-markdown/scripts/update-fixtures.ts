@@ -13,7 +13,7 @@ import { generateDocs } from '#reference/generate-docs'
  * bun run generate-fixtures
  * ```
  */
-const FIXTURES = ['api-reference-config', 'sdk-config'] as const
+const FIXTURES = ['api-reference-config', 'sdk-config', 'split-table-config'] as const
 
 const root = resolve(import.meta.dirname, '..')
 

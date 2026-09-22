@@ -12,7 +12,11 @@ export type {
   DocPage,
   DocSection,
   DocSort,
+  DocTable,
+  DocTableColumn,
+  DocTableRequired,
   GeneratedFile,
   MarkdownOptions,
+  MarkdownTableOptions,
 } from '#types/doc'
 export type { ConfigSchema, SchemaProperty } from '#types/schema'

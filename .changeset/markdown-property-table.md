@@ -1,30 +1,52 @@
 ---
 '@amritk/generate-markdown': minor
+'@amritk/mjst': minor
 ---
 
-Three changes to the property table a `layout: 'table'` renders. Every page the
-prose reference generates with one looks different afterwards, so regenerate and
-read the diff — nothing needs to be turned on, and there is no flag to keep the
-old shape.
+The property table a `layout: 'table'` renders is now the schema's to shape,
+through a root `x-doc.table`, and its defaults changed. Every page generated
+with a table looks different afterwards, so regenerate and read the diff.
 
-**The `Required` column is gone**, and a required property is marked beside its
-name instead:
+```json
+{
+  "x-doc": {
+    "table": { "type": "never", "required": "split" }
+  }
+}
+```
+
+| Member | Values | What it decides |
+| --- | --- | --- |
+| `type` | `auto` (default), `always`, `never` | The **Type** column |
+| `default` | `auto` (default), `always`, `never` | The **Default** column |
+| `required` | `marker` (default), `column`, `split` | How requiredness is said |
+
+Root only, so every table on every page agrees;
+`generateMarkdownFiles(schema, { table })` and `mjst markdown`'s
+`--type-column`, `--default-column` and `--required-style` override it per
+member.
+
+**`auto` is new, and it is the default for both columns.** A column is rendered
+when a row fills it with something the reader could act on — **Default**
+already worked that way, and **Type** now does too. A table whose every row
+would say `object`, or state no type at all, drops the column; one with enums,
+arrays or maps (`"comma" | "brackets"`, `string[]`, `Record<string, Target>`)
+keeps it, and so does one where every row is `string`, that being a fact about
+the options rather than the absence of one.
+
+**Requiredness defaults to `marker`**, so the `Required` column is gone unless
+a schema asks for it back with `"required": "column"`:
 
 ```md
 | `organization` _required_ | Identity of the organization publishing the SDKs… |
 ```
 
 On a real page five rows in twenty are required, so the column carried one bit
-and a lot of blanks — and on a narrow viewport it took the width from
-**Description**. The marker is the word itself, so the table still needs no
-legend under it.
-
-**The `Type` column is dropped when no row fills it with anything actionable** —
-the same deal **Default** already had. A table whose every row would say
-`object`, or state no type at all, loses nothing by dropping it; one with enums,
-arrays or maps (`"comma" | "brackets"`, `string[]`, `Record<string, Target>`)
-keeps it. Every row being `string` keeps it too: that is a fact about the
-options rather than the absence of one.
+and a lot of blanks, and on a narrow viewport it took the width from
+**Description**. `"required": "split"` is the third answer: the required
+properties in a **Required** table and the rest under **Optional**, for a reader
+skimming for what they have to fill in. Both halves share one set of columns,
+and the blocks below the table are reordered with the rows.
 
 **A row now links to the property's own section on the same page.** Linking was
 already there but gated on the page differing, so a property with a `###`

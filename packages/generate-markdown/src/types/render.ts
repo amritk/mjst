@@ -1,4 +1,4 @@
-import type { DocLayout, DocPage, DocSection, DocSort } from '#types/doc'
+import type { DocLayout, DocPage, DocSection, DocSort, DocTable } from '#types/doc'
 import type { SchemaProperty } from '#types/schema'
 
 /**
@@ -12,6 +12,8 @@ export type RenderContext = {
   /** Default layout for nested properties, unless a property overrides it. */
   readonly layout: DocLayout
   readonly sort: DocSort
+  /** How every property table on this page lays its columns and rows out. */
+  readonly table: DocTable
   /** Output path of the page being rendered — the base for cross-page links. */
   readonly file: string
   /** Page id → output path, so a property documented elsewhere can be linked. */

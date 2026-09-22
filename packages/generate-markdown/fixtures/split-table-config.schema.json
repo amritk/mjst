@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/split-table-config.schema.json",
+  "title": "Deploy configuration",
+  "description": "The same renderer with a different root `x-doc.table`: the required options in a table of their own, and no **Type** column anywhere.\n\nA reference whose readers are writing YAML rather than TypeScript often has nothing to say with a type column — and a reader skimming for what they *must* fill in should not have to read every row to find it.",
+  "type": "object",
+  "x-doc": {
+    "file": "configuration.md",
+    "language": "json",
+    "layout": "table",
+    "table": { "type": "never", "required": "split" },
+    "example": {
+      "caption": "A minimal config:",
+      "value": {
+        "service": "acme-web",
+        "region": "us-east-1",
+        "build": { "command": "bun run build" }
+      }
+    },
+    "sections": [
+      {
+        "id": "service",
+        "title": "Service",
+        "description": "What is deployed, and where it lands.",
+        "layout": "table"
+      }
+    ]
+  },
+  "required": ["service", "region"],
+  "properties": {
+    "service": {
+      "type": "string",
+      "description": "Name the deployment is published under. It has to be unique within the account.",
+      "examples": ["acme-web"],
+      "x-doc": { "section": "service" }
+    },
+    "region": {
+      "enum": ["us-east-1", "eu-west-1", "ap-south-1"],
+      "description": "Region the service runs in.",
+      "x-doc": { "section": "service" }
+    },
+    "domain": {
+      "type": "string",
+      "description": "Custom domain to route to the service.\n\nThe certificate is issued on the first deploy, so the first one after adding a domain takes a few minutes longer.",
+      "examples": ["acme.com"],
+      "x-doc": { "section": "service" }
+    },
+    "replicas": {
+      "type": "integer",
+      "default": 1,
+      "minimum": 1,
+      "description": "How many instances to run.",
+      "x-doc": { "section": "service" }
+    },
+    "build": {
+      "type": "object",
+      "description": "How the service is built before it is deployed.",
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "Command that produces the build output.",
+          "examples": ["bun run build"]
+        },
+        "outDir": {
+          "type": "string",
+          "default": "dist",
+          "description": "Directory the build writes to."
+        },
+        "cache": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reuse the dependency cache between builds."
+        }
+      }
+    },
+    "env": {
+      "type": "object",
+      "description": "Environment variables every instance is started with.",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

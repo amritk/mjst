@@ -6,11 +6,15 @@ import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
 import { referenceType } from '#helpers/reference-type'
 import { relativeDocLink } from '#helpers/relative-doc-link'
 import { tableCell, tableCode } from '#helpers/table-cell'
-import type { DocMeta } from '#types/doc'
+import type { DocMeta, DocTable, DocTableColumn } from '#types/doc'
 import type { DocEntry, RenderContext } from '#types/render'
 
-/** How a required property is marked, now that it has no column of its own. */
+/** How a required property is marked under `x-doc.table.required: 'marker'`. */
 const REQUIRED_MARKER = '_required_'
+
+/** What names the two halves of a split table. */
+const REQUIRED_CAPTION = '**Required**'
+const OPTIONAL_CAPTION = '**Optional**'
 
 /**
  * Type labels that leave a reader no better off than a blank cell. `object` is
@@ -23,6 +27,29 @@ const REQUIRED_MARKER = '_required_'
  * the options, and the next property added to it may well not be one.
  */
 const UNINFORMATIVE_TYPES: ReadonlySet<string> = new Set(['', 'object'])
+
+/**
+ * Whether an `auto` column is worth its width, given whether any row fills it.
+ * `always` and `never` are the schema overruling the judgement — the docs site
+ * whose tables all have to line up, and the reference whose readers do not
+ * think in types.
+ */
+const showColumn = (column: DocTableColumn, filled: boolean): boolean =>
+  column === 'always' || (column === 'auto' && filled)
+
+/**
+ * The properties of a table in the order its rows appear.
+ *
+ * Only `split` reorders, and the callers need the same order for the blocks
+ * they render under the table: those follow their rows, and the anchors are
+ * numbered in the order the headings print, so a block order that disagreed
+ * with the rows would read out of sequence and number the repeats by the wrong
+ * one.
+ */
+export const tableOrder = (entries: readonly DocEntry[], table: DocTable): readonly DocEntry[] =>
+  table.required === 'split'
+    ? [...entries.filter((entry) => entry.required), ...entries.filter((entry) => !entry.required)]
+    : entries
 
 /** How a table is rendered, beyond the properties themselves. */
 export type PropertyTableOptions = {
@@ -105,50 +132,83 @@ const rowDestination = (
 }
 
 /**
- * Renders a set of properties as one markdown table — the compact layout for a
+ * Renders a set of properties as a markdown table — the compact layout for a
  * flat bag of options, where a heading each would be all ceremony and no
  * content.
  *
  * Every column has to earn its width, because the one that matters is
- * **Description** and a narrow viewport gives it what the others leave. So
- * **Type** and **Default** are dropped when no row fills them with anything the
- * reader could act on, and requiredness is a marker in the **Property** cell
- * rather than a column: on a real page five rows in twenty are required, which
- * is a column of blanks carrying one bit. The marker is the word itself, so the
- * table needs no legend under it to be read.
+ * **Description** and a narrow viewport gives it what the others leave. By
+ * default **Type** and **Default** are dropped when no row fills them with
+ * anything the reader could act on, and requiredness is a marker in the
+ * **Property** cell rather than a column: on a real page five rows in twenty
+ * are required, which is a column of blanks carrying one bit.
+ *
+ * All of that is the default rather than the rule — a schema that wants its
+ * types spelled out everywhere, or its required options in a table of their
+ * own, says so in the root `x-doc.table` and every table on every page follows
+ * it. See {@link DocTable}.
  */
 export const renderPropertyTable = (
   entries: readonly DocEntry[],
   context: RenderContext,
   options: PropertyTableOptions = {},
 ): string => {
+  const style = context.table.required
   const summarised = options.summarised ?? (() => false)
-  const properties = entries.map((entry) => ({
+  const properties = tableOrder(entries, context.table).map((entry) => ({
     entry,
     meta: readDocMeta(entry.prop),
     type: referenceType(entry.prop, context.language),
   }))
-  const showType = properties.some(({ type }) => !UNINFORMATIVE_TYPES.has(type))
-  const showDefault = entries.some((entry) => entry.prop.default !== undefined && entry.prop.default !== null)
+  const hasDefault = (entry: DocEntry): boolean => entry.prop.default !== undefined && entry.prop.default !== null
+  // Decided across every property rather than per half, so the two tables of a
+  // split have the same columns: two tables in a row whose headers disagree
+  // read as two unrelated tables.
+  const showType = showColumn(
+    context.table.type,
+    properties.some(({ type }) => !UNINFORMATIVE_TYPES.has(type)),
+  )
+  const showDefault = showColumn(context.table.default, entries.some(hasDefault))
+  // A column of blanks even under `column`: the style says where requiredness
+  // goes, not that a table of entirely optional properties should say so twice.
+  const showRequired = style === 'column' && entries.some((entry) => entry.required)
 
-  const headers = ['Property', ...(showType ? ['Type'] : []), ...(showDefault ? ['Default'] : []), 'Description']
+  const headers = [
+    'Property',
+    ...(showType ? ['Type'] : []),
+    ...(showRequired ? ['Required'] : []),
+    ...(showDefault ? ['Default'] : []),
+    'Description',
+  ]
 
-  const rows = properties.map(({ entry, meta, type }) => {
+  const row = ({ entry, meta, type }: (typeof properties)[number]): string => {
     const destination = rowDestination(entry, meta, context, summarised)
     const name = tableCode(entry.name)
     const label = destination === undefined ? name : `[${name}](${destination})`
-    const cells = [entry.required ? `${label} ${REQUIRED_MARKER}` : label]
+    // Under `split` the table the row is in has already said it, and under
+    // `column` the column has.
+    const cells = [entry.required && style === 'marker' ? `${label} ${REQUIRED_MARKER}` : label]
     if (showType) cells.push(type.length > 0 ? tableCode(type) : '')
+    if (showRequired) cells.push(entry.required ? '✅' : '')
     if (showDefault) {
-      cells.push(
-        entry.prop.default !== undefined && entry.prop.default !== null
-          ? tableCode(formatInlineLiteral(entry.prop.default, context.language))
-          : '',
-      )
+      cells.push(hasDefault(entry) ? tableCode(formatInlineLiteral(entry.prop.default, context.language)) : '')
     }
     cells.push(tableCell(readDescription(entry.prop)))
     return `| ${cells.join(' | ')} |`
-  })
+  }
 
-  return [`| ${headers.join(' | ')} |`, `| ${headers.map(() => '---').join(' | ')} |`, ...rows].join('\n')
+  const header = [`| ${headers.join(' | ')} |`, `| ${headers.map(() => '---').join(' | ')} |`]
+  const table = (group: typeof properties): string => [...header, ...group.map(row)].join('\n')
+  if (style !== 'split') return table(properties)
+
+  const required = properties.filter(({ entry }) => entry.required)
+  const optional = properties.filter(({ entry }) => !entry.required)
+  // The caption is what says a table is the required half, so the required one
+  // keeps it even when it is the only half. **Optional** is the absence of that
+  // statement rather than a statement of its own: with no **Required** table
+  // above to contrast with, a table of entirely optional properties is just the
+  // table, and captioning every one of them would be noise on most pages.
+  if (required.length === 0) return table(optional)
+  if (optional.length === 0) return [REQUIRED_CAPTION, table(required)].join('\n\n')
+  return [REQUIRED_CAPTION, table(required), OPTIONAL_CAPTION, table(optional)].join('\n\n')
 }

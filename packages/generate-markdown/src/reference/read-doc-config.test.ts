@@ -146,4 +146,28 @@ describe('read-doc-config', () => {
     expect(config.pages[0]?.title).toBe('From caller')
     expect(config.pages[0]?.file).toBe('from-caller.md')
   })
+
+  // Nobody has to think about the table shape for it to be a sensible one.
+  it('defaults the table to columns that earn their width', () => {
+    expect(readDocConfig({}).table).toEqual({ type: 'auto', default: 'auto', required: 'marker' })
+  })
+
+  it('reads the table layout the schema declares', () => {
+    const config = readDocConfig({ 'x-doc': { table: { type: 'never', default: 'always', required: 'split' } } })
+    expect(config.table).toEqual({ type: 'never', default: 'always', required: 'split' })
+  })
+
+  // Per member, so turning the type column off does not silently restate the
+  // rest of a schema's choices as the defaults.
+  it('lets the caller override one member of the table layout', () => {
+    const config = readDocConfig({ 'x-doc': { table: { required: 'split' } } }, { table: { type: 'never' } })
+    expect(config.table).toEqual({ type: 'never', default: 'auto', required: 'split' })
+  })
+
+  // The schema is parsed JSON, so a typo should leave the built-in shape rather
+  // than throw halfway through a docs build.
+  it('ignores a table member it does not understand', () => {
+    const config = readDocConfig({ 'x-doc': { table: { type: 'sometimes', required: 7 } } })
+    expect(config.table).toEqual({ type: 'auto', default: 'auto', required: 'marker' })
+  })
 })

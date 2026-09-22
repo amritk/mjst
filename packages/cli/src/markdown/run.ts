@@ -12,7 +12,18 @@ const usageError = (message: string): RunResult => ({ code: 2, stdout: '', stder
 const failure = (message: string): RunResult => ({ code: 1, stdout: '', stderr: `Error: ${message}\n` })
 
 /** The flags that only mean something for the prose reference, for the --table check below. */
-const PAGE_FLAGS = ['outDir', 'file', 'title', 'language', 'layout', 'sort', 'headingLevel'] as const
+const PAGE_FLAGS = [
+  'outDir',
+  'file',
+  'title',
+  'language',
+  'layout',
+  'sort',
+  'headingLevel',
+  'typeColumn',
+  'defaultColumn',
+  'requiredStyle',
+] as const
 
 /**
  * Runs `mjst markdown` over `argv`: renders a JSON Schema as documentation,
@@ -83,6 +94,9 @@ export const run = async (argv: string[]): Promise<RunResult> => {
     layout: args.layout,
     sort: args.sort,
     headingLevel: args.headingLevel,
+    // Always passed: every member is optional, so the schema's own
+    // `x-doc.table` still decides whatever the flags left alone.
+    table: { type: args.typeColumn, default: args.defaultColumn, required: args.requiredStyle },
   }
 
   let files: Awaited<ReturnType<typeof generateDocs>>

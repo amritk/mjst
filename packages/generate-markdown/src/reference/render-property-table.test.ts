@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { pageAnchors } from '#reference/page-anchors'
-import { renderPropertyTable } from '#reference/render-property-table'
-import type { DocSection } from '#types/doc'
+import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
+import type { DocSection, DocTable } from '#types/doc'
 import type { DocEntry, RenderContext } from '#types/render'
 import type { SchemaProperty } from '#types/schema'
 
@@ -12,10 +12,14 @@ const section = (id: string, overrides: Partial<DocSection> = {}): DocSection =>
   ...overrides,
 })
 
+/** The built-in table layout, which most of these tests render with. */
+const DEFAULT_TABLE: DocTable = { type: 'auto', default: 'auto', required: 'marker' }
+
 const context = (overrides: Partial<RenderContext> = {}): RenderContext => ({
   language: 'json',
   layout: 'table',
   sort: 'schema',
+  table: DEFAULT_TABLE,
   file: 'configuration.md',
   page: 'index',
   pageFiles: new Map([
@@ -41,6 +45,12 @@ const headed = (...headings: readonly (readonly [string, DocEntry | undefined])[
   for (const [text, target] of headings) anchors.claim(text, target)
   return context({ anchors })
 }
+
+/** A page whose root `x-doc.table` asks for something other than the default. */
+const styled = (table: Partial<DocTable>): RenderContext => context({ table: { ...DEFAULT_TABLE, ...table } })
+
+/** The marker the default style puts beside a required property's name. */
+const REQUIRED_MARKER_TEXT = '_required_'
 
 const entry = (name: string, prop: SchemaProperty, required = false): DocEntry => ({
   name,
@@ -220,6 +230,122 @@ describe('render-property-table', () => {
     const targets = entry('targets', { type: 'object', 'x-doc': { title: 'SDK targets' } })
     const table = renderPropertyTable([targets], headed(['SDK targets', targets]))
     expect(table).toContain('[`targets`](#sdk-targets)')
+  })
+
+  // A reference whose readers do not think in types, or whose types are in the
+  // prose already, turns the column off everywhere at once.
+  it('drops the type column entirely when the schema asks it to', () => {
+    const table = renderPropertyTable(
+      [entry('arrayFormat', { enum: ['comma', 'brackets'], description: 'How arrays are encoded.' })],
+      styled({ type: 'never' }),
+    )
+    expect(table).toBe(
+      ['| Property | Description |', '| --- | --- |', '| `arrayFormat` | How arrays are encoded. |'].join('\n'),
+    )
+  })
+
+  // A docs site whose tables all have to line up keeps the column, blanks and
+  // all.
+  it('keeps the type column when the schema asks it to', () => {
+    const table = renderPropertyTable([entry('targets', { type: 'object' })], styled({ type: 'always' }))
+    expect(table).toContain('| Property | Type | Description |')
+    expect(table).toContain('| `targets` | `object` |  |')
+  })
+
+  it('takes the same two answers for the default column', () => {
+    const entries = [entry('branch', { type: 'string', default: 'main' })]
+    expect(renderPropertyTable(entries, styled({ default: 'never' }))).not.toContain('Default')
+    expect(renderPropertyTable([entry('a', { type: 'string' })], styled({ default: 'always' }))).toContain(
+      '| Property | Type | Default | Description |',
+    )
+  })
+
+  // The shape this package rendered before the marker, for a reference that
+  // wants it back.
+  it('renders a required column when the schema asks for one', () => {
+    const table = renderPropertyTable(
+      [entry('a', { type: 'string' }, true), entry('b', { type: 'string' })],
+      styled({ required: 'column' }),
+    )
+    expect(table).toContain('| Property | Type | Required | Description |')
+    expect(table).toContain('| `a` | `string` | ✅ |  |')
+    expect(table).toContain('| `b` | `string` |  |  |')
+    expect(table).not.toContain(REQUIRED_MARKER_TEXT)
+  })
+
+  // A column of blanks is a column of blanks whichever style asked for it.
+  it('drops the required column when no property is required', () => {
+    expect(renderPropertyTable([entry('a', { type: 'string' })], styled({ required: 'column' }))).not.toContain(
+      'Required',
+    )
+  })
+
+  it('splits the table in two, required first', () => {
+    const table = renderPropertyTable(
+      [
+        entry('slug', { type: 'string', description: 'Optional slug.' }),
+        entry('name', { type: 'string', description: 'The name.' }, true),
+      ],
+      styled({ required: 'split' }),
+    )
+    expect(table).toBe(
+      [
+        '**Required**',
+        '',
+        '| Property | Type | Description |',
+        '| --- | --- | --- |',
+        '| `name` | `string` | The name. |',
+        '',
+        '**Optional**',
+        '',
+        '| Property | Type | Description |',
+        '| --- | --- | --- |',
+        '| `slug` | `string` | Optional slug. |',
+      ].join('\n'),
+    )
+  })
+
+  // The grouping is the statement, so the row does not make it twice.
+  it('drops the marker from a split table', () => {
+    const table = renderPropertyTable(
+      [entry('name', { type: 'string' }, true), entry('slug', { type: 'string' })],
+      styled({ required: 'split' }),
+    )
+    expect(table).not.toContain(REQUIRED_MARKER_TEXT)
+  })
+
+  // The caption is what says the table is the required half.
+  it('captions a split table of nothing but required properties', () => {
+    const table = renderPropertyTable([entry('name', { type: 'string' }, true)], styled({ required: 'split' }))
+    expect(table.startsWith('**Required**\n\n')).toBe(true)
+    expect(table).not.toContain('**Optional**')
+  })
+
+  // **Optional** is the absence of that statement rather than one of its own:
+  // with no required half above it, the table is just the table.
+  it('leaves a split table of nothing but optional properties uncaptioned', () => {
+    const table = renderPropertyTable([entry('slug', { type: 'string' })], styled({ required: 'split' }))
+    expect(table).not.toContain('**Optional**')
+    expect(table).not.toContain('**Required**')
+  })
+
+  // Two tables in a row whose headers disagree read as two unrelated tables.
+  it('gives both halves of a split the same columns', () => {
+    const table = renderPropertyTable(
+      [entry('name', { type: 'string' }, true), entry('port', { type: 'integer', default: 80 })],
+      styled({ required: 'split' }),
+    )
+    expect(table.match(/\| Property \| Type \| Default \| Description \|/g)).toHaveLength(2)
+  })
+
+  // The blocks a caller renders under the table follow their rows, so it needs
+  // the same order the rows are in.
+  it('orders entries required-first only for a split table', () => {
+    const required = entry('name', { type: 'string' }, true)
+    const optional = entry('slug', { type: 'string' })
+    const entries = [optional, required]
+    expect(tableOrder(entries, DEFAULT_TABLE)).toEqual(entries)
+    expect(tableOrder(entries, { ...DEFAULT_TABLE, required: 'split' })).toEqual([required, optional])
   })
 
   // A row is one line and its columns are split on unescaped pipes.

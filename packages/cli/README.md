@@ -321,6 +321,9 @@ npx mjst markdown ./config.schema.json --table --readme ./README.md
 | `--layout` | Default layout for nested properties: `headings` (default), `table`, or `none`. |
 | `--sort` | Property order: `schema` (default) or `alphabetical`. |
 | `--heading-level` | Heading level of the page title, 1-6 (default: `1`). |
+| `--type-column` | When a property table renders its **Type** column: `auto` (default — only when a row fills it with something a reader could act on), `always`, or `never`. |
+| `--default-column` | When a property table renders its **Default** column: `auto` (default), `always`, or `never`. |
+| `--required-style` | How a property table says which properties are required: `marker` (default — `_required_` beside the name), `column` (a **Required** column), or `split` (a **Required** table, then an **Optional** one). |
 | `--table` | Render the HTML config table instead of the prose pages. |
 | `--readme` | Markdown file the table is spliced into (default: `README.md`). Requires `--table`. |
 

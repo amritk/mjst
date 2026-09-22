@@ -8,6 +8,7 @@ const context = (anchors: PageAnchors): RenderContext => ({
   language: 'json',
   layout: 'table',
   sort: 'schema',
+  table: { type: 'auto', default: 'auto', required: 'marker' },
   file: 'configuration.md',
   page: 'index',
   pageFiles: new Map([['index', 'configuration.md']]),
