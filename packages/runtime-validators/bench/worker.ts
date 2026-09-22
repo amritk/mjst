@@ -5,7 +5,7 @@ import addFormats from 'ajv-formats'
 // lives in parsers/bench/parsers/measure.ts and the other bench packages
 // reach for it the same way. Bench code is unpublished dev tooling, so the
 // cross-package relative import is deliberate.
-import { measure, type Stats } from '../../parsers/bench/parsers/measure.ts'
+import { measure, type Stats } from '../../validation/bench/parsers/measure.ts'
 import { RUNTIME_BENCH_CASES } from './cases.ts'
 import { BENCH_CASES } from './schemas.ts'
 
