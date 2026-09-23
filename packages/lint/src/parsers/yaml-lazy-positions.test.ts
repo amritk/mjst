@@ -9,6 +9,7 @@ import {
   isSeq,
   keyText,
   parseAllDocuments,
+  type YamlMap,
   type YamlNode,
   type YamlPair,
 } from '@amritk/yaml'
@@ -18,6 +19,7 @@ import { lintDocument } from '../index'
 import { createLineMap } from './lines'
 import { DiagnosticSeverity, type IRange, type JsonPath } from './types'
 import { parseYaml } from './yaml'
+import { createYamlLocator, type YamlLocatorOptions } from './yaml-locator'
 
 /**
  * The eager position index `parseYaml` built before positions went on demand,
@@ -25,7 +27,9 @@ import { parseYaml } from './yaml'
  * lookup must agree with. It walks every node up front and writes each path's
  * range into a map keyed by path text, so its quirks — last write wins, merged
  * keys only fill unclaimed paths, the whole-stream node budget — are the
- * behaviour the lazy lookup replicates.
+ * behaviour the lazy lookup replicates. The one exception is how a merge
+ * source's keys are read (see `walkMerge`), where the index disagreed with
+ * `toJS` and the lookup now follows `toJS`.
  */
 const eagerReference = (source: string, uniqueKeys = true) => {
   const lineMap = createLineMap(source)
@@ -48,23 +52,56 @@ const eagerReference = (source: string, uniqueKeys = true) => {
   let budget = Math.max(100_000, source.length * 100)
   const isMergePair = (pair: YamlPair): boolean => isScalar(pair.key) && pair.key.source === '<<'
 
-  const walkMerge = (node: YamlNode | null | undefined, path: JsonPath): void => {
+  /** Calls `visit` with each map a `<<` value folds in, in `applyMerge` order. */
+  const forEachSource = (node: YamlNode | null | undefined, visit: (source: YamlMap) => void): void => {
     const target = node != null && isAlias(node) ? node.target : node
     if (target == null) return
     if (isSeq(target)) {
-      for (const item of target.items) walkMerge(item, path)
-      return
+      if (target.tag !== 'omap') for (const item of target.items) forEachSource(item, visit)
+    } else if (isMap(target) && target.tag !== 'set') {
+      visit(target)
     }
-    if (!isMap(target)) return
-    for (const item of target.items) {
+  }
+
+  /**
+   * The key-to-node table `toJsValue` builds a map's object from: pair by pair,
+   * an explicit key overwriting and a `<<` copying in the keys of its source's
+   * own finished table that are not there yet. Valueless keys are left out, as
+   * the index always left them out.
+   */
+  const projected = new Map<YamlMap, Map<string, YamlNode>>()
+  const projectedPairs = (map: YamlMap): Map<string, YamlNode> => {
+    const cached = projected.get(map)
+    if (cached) return cached
+    const out = new Map<string, YamlNode>()
+    projected.set(map, out)
+    for (const item of map.items) {
       if (!isPair(item)) continue
       if (isMergePair(item)) {
-        walkMerge(item.value, path)
-        continue
+        forEachSource(item.value, (source) => {
+          for (const [key, value] of projectedPairs(source)) if (!out.has(key)) out.set(key, value)
+        })
+      } else if (item.value != null) {
+        out.set(keyText(item.key), item.value)
       }
-      const childPath = [...path, keyText(item.key)]
-      if (!index.has(pathKey(childPath))) walk(item.value, childPath)
     }
+    return out
+  }
+
+  /**
+   * The one place this departs from the index as it shipped: that walked a
+   * merge source's pairs in source order, so a nested `<<` written ahead of an
+   * explicit key claimed the key first, and a duplicated key in a source
+   * resolved to its first occurrence. Both pointed at a value `toJS` drops, so
+   * the reference now walks what the source projects instead.
+   */
+  const walkMerge = (node: YamlNode | null | undefined, path: JsonPath): void => {
+    forEachSource(node, (source) => {
+      for (const [key, value] of projectedPairs(source)) {
+        const childPath = [...path, key]
+        if (!index.has(pathKey(childPath))) walk(value, childPath)
+      }
+    })
   }
 
   const walk = (node: YamlNode | null | undefined, path: JsonPath): void => {
@@ -218,8 +255,11 @@ const edgeCases: Record<string, string> = {
   'explicit key after the merge still wins': 'base: &b {a: 1, b: 2}\nx:\n  a: 3\n  <<: *b\n',
   'merge list, earlier source wins': 'a: &a {k: 1}\nb: &b {k: 2, j: 3}\nc: {<<: [*a, *b]}\n',
   'inline merge map': 'x: {<<: {a: 1, n: {deep: [1, 2]}}, b: 2}\n',
-  'nested merge claims in source order':
+  "a merge source's own keys beat what it merges":
     'm0: &m0 {k: 0}\nm1: &m1 {k2: 1, <<: *m0, k: 5}\nm2: &m2 {k: 6, <<: *m0}\nx: {<<: *m1}\ny: {<<: *m2}\n',
+  'nested merge written before the explicit key': 'b: &b {a: 2}\ns: &s {<<: *b, a: 1}\nm: {<<: *s}\n',
+  'duplicate key inside a merge source': 'x: {<<: {a: 1, a: {z: 2}}}\ny: {<<: [{a: }, {<<: {a: 3}, a: 4}]}\n',
+  'tagged merge sources project no keys': 'x: {<<: !!set {a, b}, c: 1}\ny: {<<: !!omap [{a: 1}], <<: {a: 2}}\n',
   'merge of merges': 'a: &a {k: 1}\nb: &b {<<: [*a, *a], j: 2}\nc: &c {<<: [*b, *a]}\nd: {<<: *c, e: {<<: *c}}\n',
   'merged keys with empty values':
     'base: &b {a: , c: 1}\nx: {<<: *b, a: 2}\ny: {<<: [{a: }, {a: 3}]}\nz:\n  <<: {a: 1}\n  a:\n',
@@ -292,6 +332,123 @@ const generateDocument = (random: () => number): string => {
   }
   const docs = Array.from({ length: random() < 0.2 ? 2 : 1 }, () => `root: ${value(0)}\nnext: ${value(0)}\n`)
   return docs.join('---\n')
+}
+
+/** A locator over `source` with test knobs, as `parseYaml` builds it. */
+const locatorFor = (source: string, options: YamlLocatorOptions = {}) =>
+  createYamlLocator(parseAllDocuments(source, { uniqueKeys: false }), createLineMap(source), options)
+
+/**
+ * Generates flow-style YAML made of merges: every map key is unique within its
+ * map and every value is written, so each path of the data names exactly one
+ * node. Merges come as aliases, inline maps, and lists, sit anywhere among the
+ * explicit keys (so a nested `<<` is often written before the key it collides
+ * with), and a map can hold more than one. Scalars are unique strings apart
+ * from the non-finite ones, so a scalar the lookup lands on identifies itself.
+ */
+const generateMergeDocument = (random: () => number): string => {
+  const mapAnchors: string[] = []
+  const anchors: string[] = []
+  let scalars = 0
+  const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)] as T
+  const mergeSource = (depth: number): string => {
+    const roll = random()
+    if (mapAnchors.length > 0 && roll < 0.55) return `*${pick(mapAnchors)}`
+    if (mapAnchors.length > 1 && roll < 0.75) {
+      return `[${Array.from({ length: 2 + Math.floor(random() * 2) }, () => `*${pick(mapAnchors)}`).join(', ')}]`
+    }
+    return map(depth + 1)
+  }
+  const map = (depth: number): string => {
+    // Laid out first and filled in written order, so an alias only ever names
+    // an anchor written before it.
+    const slots: (string | undefined)[] = ['a', 'b', 'c', 'd', '0'].filter(() => random() < 0.5)
+    for (let merges = Math.floor(random() * 3); merges > 0; merges--) {
+      slots.splice(Math.floor(random() * (slots.length + 1)), 0, undefined)
+    }
+    const pairs = slots.map((key) => (key === undefined ? `<<: ${mergeSource(depth)}` : `${key}: ${value(depth + 1)}`))
+    const anchor = random() < 0.5 ? `m${mapAnchors.length}` : undefined
+    if (anchor) {
+      mapAnchors.push(anchor)
+      anchors.push(anchor)
+    }
+    return `${anchor ? `&${anchor} ` : ''}{${pairs.join(', ')}}`
+  }
+  const value = (depth: number): string => {
+    const roll = random()
+    if (depth > 4 || roll < 0.3) return random() < 0.15 ? pick(['.inf', '-.inf', '.nan']) : `v${scalars++}`
+    if (roll < 0.4 && anchors.length > 0) return `*${pick(anchors)}`
+    if (roll < 0.5) {
+      const items = Array.from({ length: Math.floor(random() * 3) }, () => value(depth + 1))
+      const anchor = `s${anchors.length}`
+      anchors.push(anchor)
+      return `&${anchor} [${items.join(', ')}]`
+    }
+    return map(depth)
+  }
+  const lines: string[] = []
+  for (let i = 0; i < 6; i++) lines.push(`k${i}: ${value(0)}`)
+  return `${lines.join('\n')}\n`
+}
+
+/**
+ * The real invariant behind the lookup: for every path in the data `toJS`
+ * produced, the node the lookup lands on projects to the value at that path —
+ * the same scalar (unique in these documents), or a collection of the same
+ * kind whose own paths are checked in turn. Non-finite values are checked the
+ * same way, and the `incompatibleValues` scan must report exactly the scalars
+ * the data holds them from. Returns how many paths it checked.
+ */
+const expectLocationsMatchData = (source: string): number => {
+  const doc = parseAllDocuments(source)[0]
+  if (!doc) throw new Error('no document')
+  const lineMap = createLineMap(source)
+  const describeNode = (node: YamlNode): string =>
+    describeLocation({ range: { start: lineMap.positionAt(node.start), end: lineMap.positionAt(node.end) } })
+  // Every value node by its range, to turn a located range back into nodes.
+  const byRange = new Map<string, YamlNode[]>()
+  const index = (node: YamlNode | null | undefined): void => {
+    if (node == null) return
+    const key = describeNode(node)
+    byRange.set(key, [...(byRange.get(key) ?? []), node])
+    if (isMap(node)) for (const pair of node.items) index(pair.value)
+    else if (isSeq(node)) for (const item of node.items) index(item)
+  }
+  index(doc.contents)
+  const lookup = locatorFor(source)
+  const mismatches: string[] = []
+  const nonFinite = new Set<string>()
+  let checked = 0
+  const check = (path: JsonPath, value: unknown): void => {
+    if (checked++ > 400) return
+    const location = describeLocation(lookup(path))
+    const nodes = (byRange.get(location) ?? []).map((node) => (isAlias(node) ? node.target : node))
+    const matches = nodes.some((node) => {
+      if (node == null) return false
+      if (Array.isArray(value)) return isSeq(node)
+      if (value !== null && typeof value === 'object') return isMap(node)
+      return isScalar(node) && Object.is(node.value, value)
+    })
+    if (!matches && mismatches.length < 5) mismatches.push(`${JSON.stringify(path)} -> ${location}, data ${value}`)
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      for (const node of nodes) if (node != null && isScalar(node)) nonFinite.add(describeNode(node))
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => {
+        check([...path, i], item)
+      })
+    } else if (value !== null && typeof value === 'object') {
+      for (const [key, item] of Object.entries(value)) check([...path, key], item)
+    }
+  }
+  check([], doc.toJS())
+  expect(mismatches, source).toEqual([])
+  // Only comparable when every path was walked, since the cap skips some.
+  if (checked <= 400) {
+    const reported = reportedNonFinite(source).map((range) => describeLocation({ range }))
+    expect(new Set(reported), source).toEqual(nonFinite)
+  }
+  return checked
 }
 
 describe('yaml-lazy-positions', () => {
@@ -386,14 +543,109 @@ describe('yaml-lazy-positions', () => {
 
   it('bounds a lookup through duplicate keys that multiply at every level', () => {
     // Each level holds its key twice, both aliasing the level below, so the
-    // candidates double per segment: 2^40 without the per-lookup budget.
+    // candidates double per segment: 2^40 if every copy were followed.
     const lines = ['l0: &l0 {k: 1}']
     for (let level = 1; level <= 40; level++) lines.push(`l${level}: &l${level} {k: *l${level - 1}, k: *l${level - 1}}`)
-    const { getLocationForJsonPath } = parseYaml(`${lines.join('\n')}\n`, { duplicateKeys: 'off' })
-    const started = performance.now()
-    const location = getLocationForJsonPath(['l40', ...Array(40).fill('k')], true)
-    expect(performance.now() - started).toBeLessThan(1_000)
-    expect(location).toBeDefined()
+    const source = `${lines.join('\n')}\n`
+    const path = ['l40', ...Array(40).fill('k')]
+    // `l40` followed by forty `k`s is `l1`'s second `*l0`: the value the data
+    // holds, and the last write of the eager index.
+    const expected = { start: { line: 1, character: 20 }, end: { line: 1, character: 23 } }
+    const stats = { visits: 0 }
+    const lookup = locatorFor(source, { stats })
+    expect(lookup(path, true)?.range).toEqual(expected)
+    expect(lookup(path)?.range).toEqual(expected)
+    // Folding repeated candidates keeps every level at two of them.
+    expect(stats.visits).toBeLessThan(2 * 10 * path.length)
+    // And a lookup that does run out lands on the same node.
+    const starved = locatorFor(source, { maxVisits: 10 })
+    expect(starved(path, true)?.range).toEqual(expected)
+    expect(starved(path)?.range).toEqual(expected)
+    expect(starved([...path, 'missing'], true)?.range).toEqual(expected)
+    expect(starved([...path, 'missing'])).toBeUndefined()
+  })
+
+  it('keeps a lookup through aliased duplicate keys linear', () => {
+    // `r.k` holds `*A` many times over, and `A.k` holds `*E` as many times with
+    // `*Y` last, so following every copy is quadratic — and past the budget,
+    // the old fallback kept the *first* candidates and put a finding for `f4`
+    // on a shadowed `*E`.
+    const copies = 100
+    const lines = ['e: &E {}', 'y: &Y']
+    for (let i = 0; i < 10; i++) lines.push(`  f${i}: ${i}`)
+    lines.push('a: &A', ...Array(copies - 1).fill('  k: *E'), '  k: *Y', 'r:', ...Array(copies).fill('  k: *A'))
+    const source = `${lines.join('\n')}\n`
+    const expected = { start: { line: 6, character: 6 }, end: { line: 6, character: 7 } }
+    const stats = { visits: 0 }
+    const lookup = locatorFor(source, { stats })
+    expect(lookup(['r', 'k', 'k', 'f4'])?.range).toEqual(expected)
+    expect(stats.visits).toBeLessThan(4 * copies)
+    // Starved of budget, the lookup falls back to following the data.
+    const starved = locatorFor(source, { maxVisits: 50 })
+    expect(starved(['r', 'k', 'k', 'f4'])?.range).toEqual(expected)
+    expect(starved(['r', 'k', 'k', 'nope'], true)?.range).toEqual(locatorFor(source)(['r', 'k', 'k'])?.range)
+  })
+
+  it('scans a merge source once, not once per candidate per lookup', () => {
+    // The shape that made the first lazy lookup quadratic: every `k` of `r` but
+    // the last aliases `X`, which merges a wide `big`, so each lookup under
+    // `r.k` asked `big` for the key once per copy of `*X`.
+    const copies = 200
+    const lines = ['big: &big', ...Array.from({ length: copies }, (_, i) => `  b${i}: ${i}`)]
+    lines.push('x: &X', '  <<: *big', 'y: &Y', ...Array.from({ length: 50 }, (_, i) => `  f${i}: ${i}`))
+    lines.push('r:', ...Array(copies - 1).fill('  k: *X'), '  k: *Y')
+    const source = `${lines.join('\n')}\n`
+    const stats = { visits: 0 }
+    const lookup = locatorFor(source, { stats })
+    for (let i = 0; i < 50; i++) {
+      expect(lookup(['r', 'k', `f${i}`])?.range.start).toEqual({
+        line: copies + 4 + i,
+        character: 5 + String(i).length,
+      })
+    }
+    // One pass over `r`'s explicit `k`s per lookup, plus a handful of steps.
+    expect(stats.visits).toBeLessThan(50 * (copies + 20))
+  })
+
+  it('follows toJS for a nested merge written before an explicit key', () => {
+    const source = 'b: &b {a: 2}\ns: &s {<<: *b, a: 1}\nm: {<<: *s}\n'
+    const { data, getLocationForJsonPath } = parseYaml<{ m: { a: number } }>(source)
+    expect(data.m.a).toBe(1)
+    expect(getLocationForJsonPath(['m', 'a'])?.range).toEqual({
+      start: { line: 1, character: 18 },
+      end: { line: 1, character: 19 },
+    })
+    // A duplicated key inside the source: `toJS` keeps the last one.
+    const dup = parseYaml<{ x: { a: unknown } }>('x: {<<: {a: 1, a: 2}}\n', { duplicateKeys: 'off' })
+    expect(dup.data.x.a).toBe(2)
+    expect(dup.getLocationForJsonPath(['x', 'a'])?.range.start).toEqual({ line: 0, character: 18 })
+  })
+
+  it('reports a non-finite value a merge source projects over its own nested merge', () => {
+    const source = 'b: &b {a: 1}\nm: {<<: {<<: *b, a: .inf}}\n'
+    const { data, diagnostics } = parseYaml<{ m: { a: number } }>(source, {
+      incompatibleValues: DiagnosticSeverity.Warning,
+    })
+    expect(data.m.a).toBe(Number.POSITIVE_INFINITY)
+    expect(diagnostics.map((d) => [d.code, d.range.start])).toEqual([
+      ['INCOMPATIBLE_VALUE', { line: 1, character: 20 }],
+    ])
+    // And the value a source's explicit key overrides is not reported.
+    const overridden = parseYaml('m: {<<: {<<: {a: .nan}, a: 1}}\n', {
+      incompatibleValues: DiagnosticSeverity.Warning,
+    })
+    expect(overridden.diagnostics).toEqual([])
+  })
+
+  it('locates the node toJS projects each path from, on generated merge-heavy documents', () => {
+    const random = prng(20_260_924)
+    let checked = 0
+    for (let i = 0; i < 400; i++) {
+      const source = generateMergeDocument(random)
+      checked += expectLocationsMatchData(source)
+    }
+    // Enough paths went through the check for it to mean something.
+    expect(checked).toBeGreaterThan(10_000)
   })
 
   it('reports every non-finite value once, however many aliases or merges reach it', () => {
