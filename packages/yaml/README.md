@@ -266,12 +266,12 @@ The one thing that *does* throw is the guard against a document built to exhaust
 
 | code | |
 | --- | --- |
-| `DUPLICATE_KEY` | the same mapping key appears twice — compared on the string the key projects to, so an alias to an anchored key and two collection keys with the same flow rendering both count |
+| `DUPLICATE_KEY` | the same mapping key appears twice — compared on the string the key projects to, so an alias to an anchored key and two collection keys with the same flow rendering both count. Repeated plain `<<` merge keys are not duplicates while `merge` is on |
 | `UNRESOLVED_ALIAS` | `*name` with no matching anchor in scope |
 | `RECURSIVE_ALIAS` | `*name` inside the very node `&name` labels (`&a [1, *a]`) — the anchor exists, but the cycle it describes is not built |
 | `UNTERMINATED_FLOW` | a `[` or `{` that never closes |
 | `UNTERMINATED_QUOTE` | a quoted scalar that never closes |
-| `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, a block sequence opened on the line of the key it belongs to (`key: - a`), or a block mapping opened on the `---` line (`--- a: 1`, `--- [a, b]: v`) |
+| `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, a block sequence opened on the line of the key it belongs to (`key: - a`), text between a quoted, alias, or flow-collection key and its `:` (`"a"b: 1`), or a block mapping opened on the `---` line (`--- a: 1`, `--- [a, b]: v`) |
 | `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
 | `TAB_INDENT` | a tab standing where indentation belongs — in a line's leading whitespace, in a block scalar's, or between an indicator and the compact collection it opens (`-\t- x`) |
 | `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` ``, or a `-` where a flow entry belongs (`[-]`) |
@@ -281,7 +281,8 @@ The one thing that *does* throw is the guard against a document built to exhaust
 | `BAD_BLOCK_HEADER` | a `|`/`>` header with a repeated indicator or trailing text (`|10`, `> text`) |
 | `BAD_INDENT` | a block scalar's leading blank line reaching past its first content line, a quoted scalar continued at its parent's column, or a flow collection whose continuation lines do not clear the block that holds it |
 | `BAD_IMPLICIT_KEY` | a key that does not fit on one line, a block key whose `:` sits more than 1024 characters in, or a `[ key\n : value ]` whose `:` is on the next line |
-| `BAD_PROPERTY` | an anchor or tag on an alias, or a node carrying two anchors or two tags (`&x &y 1`, or `&x` on its own line above a `&y` value) |
+| `BAD_PROPERTY` | an anchor or tag on an alias, a node carrying two anchors or two tags (`&x &y 1`, or `&x` on its own line above a `&y` value), or properties written before a `?` on its line (`&x ? a`) |
+| `BAD_ANCHOR` | an empty anchor or alias name (`& x`, a lone `*`), or an anchor name running into a flow indicator in block context (`&x{b: 1}`) |
 | `BAD_TAG` | a verbatim tag missing its closing `>`, or a tag holding a flow indicator |
 | `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
 | `BAD_DIRECTIVE` | a malformed `%YAML` version, or content after it |

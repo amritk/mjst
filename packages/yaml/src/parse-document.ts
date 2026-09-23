@@ -316,12 +316,20 @@ const skipIndicatorSeparation = (state: State): void => {
   state.pos = p
 }
 
-/** The cold half of {@link skipIndicatorSeparation}: a tab really is in the separation. */
+/**
+ * The cold half of {@link skipIndicatorSeparation}: a tab really is in the separation.
+ *
+ * A `#` here always follows whitespace, so it opens a comment and nothing compact
+ * can follow it on this line. It has to be ruled out before `findKeyColon`, which
+ * only knows to stop at a `#` it finds *past* its starting point — so `- \t#k: x`,
+ * an empty entry with a comment, read as a compact `#k: x` mapping behind a tab.
+ */
 const reportCompactTab = (state: State, tabPos: number): void => {
   const { src, len } = state
   let p = tabPos
   while (p < len && isSpace(src.charCodeAt(p))) p++
   state.pos = p
+  if (src.charCodeAt(p) === HASH) return
   if (isSeqEntryDash(src, p, len) || findKeyColon(src, p, len) >= 0) {
     pushError(state, 'TAB_INDENT', 'Tabs cannot be used for indentation', tabPos, p)
   }
@@ -731,6 +739,43 @@ const scanProps = (state: State, flow = false): NodeProps => {
   return scanPropsSlow(state, flow)
 }
 
+/** `c-flow-indicator`: the five characters that structure a flow collection. */
+const isFlowIndicator = (c: number): boolean =>
+  c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE
+
+/**
+ * Reports a malformed `&anchor` / `*alias` name spanning `[start, end)` — the
+ * indicator and the name after it. Per YAML 1.2 an anchor name is one or more
+ * `ns-anchor-char`s, and `ns-anchor-char ::= ns-char - c-flow-indicator`, so a
+ * name is malformed in exactly two ways:
+ *
+ * - it is empty (`& x`, `- &`, a lone `*`), and there is no name to refer to;
+ * - in block context, a flow indicator runs straight on from it (`&x{b: 1}`,
+ *   `&x,y`). The name ends at the indicator, and what follows needed a space in
+ *   front of it. That used to read as one long name — `&x{b:` anchoring the
+ *   scalar `1}` — which silently turned a mapping into a string. In flow
+ *   context the indicator is simply the collection's own punctuation (`[&x]`).
+ *
+ * `yaml` (eemeli) and `js-yaml` both reject both shapes. Recovery reads the name
+ * up to the indicator, so `a: &x{b: 1}` still parses as the mapping the author
+ * meant, anchored `x`. Cold: only a malformed name gets here.
+ */
+const reportBadAnchorName = (state: State, what: string, start: number, end: number): void => {
+  if (end === start + 1) {
+    pushError(state, 'BAD_ANCHOR', `${what} name cannot be empty`, start, end)
+    return
+  }
+  const name = state.src.slice(start + 1, end)
+  const next = state.src[end] ?? ''
+  pushError(
+    state,
+    'BAD_ANCHOR',
+    `${what} name "${name}" cannot run on into "${next}": a flow indicator is not part of a name, so it needs a space before it`,
+    start,
+    end + 1,
+  )
+}
+
 /** Offset of the end of a `&anchor` / `!tag` token starting at `from`. */
 const propTokenEnd = (src: string, from: number, len: number, flow: boolean): number => {
   let i = from
@@ -751,7 +796,21 @@ const scanPropsSlow = (state: State, flow = false): NodeProps => {
     skipInlineSpaces(state)
     const c = src.charCodeAt(state.pos)
     if (c === AMP) {
-      const i = propTokenEnd(src, state.pos + 1, len, flow)
+      // An anchor name ends at a flow indicator in *either* context — unlike a
+      // tag, whose block-context spelling may hold one — because the spec
+      // defines it that way everywhere: `ns-anchor-char ::= ns-char -
+      // c-flow-indicator`. So the flow-mode token end is the right one here
+      // regardless of `flow`; what the block context adds is only the report.
+      const i = propTokenEnd(src, state.pos + 1, len, true)
+      if (i === state.pos + 1 || (!flow && isFlowIndicator(src.charCodeAt(i)))) {
+        reportBadAnchorName(state, 'Anchor', state.pos, i)
+        // With no name there is nothing to register, so the node just goes
+        // unanchored — the property is reported and otherwise ignored.
+        if (i === state.pos + 1) {
+          state.pos = i
+          continue
+        }
+      }
       // A node may carry one anchor and one tag, not two of either. The loop
       // reads whatever properties are written, so without this the second `&`
       // simply overwrote the first and `&x &y 1` lost `&x` with nothing said —
@@ -1001,12 +1060,20 @@ const scanAlias = (state: State): YamlNode => {
   let i = start + 1
   while (i < len) {
     const c = src.charCodeAt(i)
-    if (isSpace(c) || c === NL || c === CR || c === COMMA || c === RBRACKET || c === RBRACE) break
+    // Every flow indicator ends the name, the opening brackets included — they
+    // are no more an `ns-anchor-char` than the closing ones (see
+    // `reportBadAnchorName`). Whatever follows is then trailing content.
+    if (isSpace(c) || c === NL || c === CR || isFlowIndicator(c)) break
     i++
   }
   const name = src.slice(start + 1, i)
   checkAmbiguousName(state, 'Alias', name, start, i)
   state.pos = i
+  // A bare `*` names nothing, so "no matching anchor" would be the wrong report.
+  if (i === start + 1) {
+    reportBadAnchorName(state, 'Alias', start, i)
+    return { kind: 'alias', source: name, start, end: i }
+  }
   // Bind to whichever anchor is currently registered under this name — the one
   // in scope at this point in the document. Capturing the node identity now (not
   // by name at `toJS` time) is what makes a later `&name` redefinition not
@@ -1819,6 +1886,55 @@ const reportLongImplicitKey = (state: State, keyStart: number, colon: number): v
 }
 
 /**
+ * Reports anything but whitespace between a block key that ends at its own
+ * delimiter — a quoted scalar, an alias, a flow collection — and the `:` that
+ * {@link findKeyColon} found for it. The spec allows only separation there
+ * (`c-s-implicit-json-key(c) ::= c-flow-json-node(n/a,c) s-separate-in-line?`),
+ * yet the cursor used to jump straight to the colon, so `"a"b: 1` quietly lost
+ * its `b`, and `"a" &x : 1` its anchor — which then surfaced, confusingly, as an
+ * unresolved alias wherever `*x` was used. `yaml` (eemeli) and `js-yaml` both
+ * reject these. Recovery keeps the key and its value; only the junk is dropped.
+ *
+ * Called only when the key stopped short of the colon, and the usual stretch
+ * then is a space or two (`"a" : 1`), so the scan is a couple of comparisons.
+ */
+const checkKeyGap = (state: State, colon: number): void => {
+  const { src } = state
+  let from = state.pos
+  while (from < colon && isSpace(src.charCodeAt(from))) from++
+  if (from >= colon) return
+  let to = colon
+  while (to > from && isSpace(src.charCodeAt(to - 1))) to--
+  pushError(
+    state,
+    'UNEXPECTED_CONTENT',
+    `Unexpected "${src.slice(from, to)}" between a mapping key and its ":"`,
+    from,
+    to,
+  )
+}
+
+/**
+ * Reports node properties written on the same line as, and before, a `?`
+ * explicit-key indicator (`&x ? a`). They cannot describe the mapping the `?`
+ * opens — a block collection has to start on a fresh line after its properties
+ * (`s-l+block-collection ::= (s-separate c-ns-properties)? s-l-comments …`), the
+ * same rule that makes `&a - x` invalid — and they cannot describe the key,
+ * which is written after the indicator. `yaml` (eemeli) reports this as
+ * `BAD_PROP_ORDER`. The properties are kept where they used to land, so
+ * nothing else about the document's reading changes.
+ */
+const reportPropsBeforeExplicitKey = (state: State, at: number): void => {
+  pushError(
+    state,
+    'BAD_PROPERTY',
+    'Node properties cannot come before a "?" explicit key indicator on its line; write them after the "?", or on a line of their own above',
+    at,
+    at + 1,
+  )
+}
+
+/**
  * Reports and consumes a `,` sitting where a value belongs (`[1,,2]`). Returns
  * whether it did, so the caller restarts its entry loop. A comma *before* the
  * closing bracket is the legal trailing comma and never reaches here — the
@@ -1890,6 +2006,21 @@ const parseFlowSeq = (state: State): YamlSeq => {
 const SET_THRESHOLD = 8
 
 /**
+ * Whether `key` is a `<<` merge key, which is an instruction rather than an
+ * entry: `toJS` folds its value into the mapping instead of storing it under a
+ * key, so two of them (`<<: *base` / `<<: *overrides`, a common docker-compose
+ * and CI shape) do not collide, and `yaml` (eemeli) and `js-yaml` both accept
+ * that. Only the *plain* spelling is one — a quoted `"<<"` is an ordinary
+ * string key — and only while merging is on; with `merge: false` every `<<` is
+ * an ordinary key and duplicates are reported like any other.
+ *
+ * This must agree with the merge test in `toJsValue`, which compares the raw
+ * `source` — a quoted key's source keeps its quotes, so only a plain `<<` passes.
+ */
+const isMergeKey = (state: State, key: YamlNode): boolean =>
+  state.merge && key.kind === 'scalar' && key.style === 'plain' && key.source === '<<'
+
+/**
  * Reports `key` if an earlier pair in `items` already used it, and returns the
  * tracking `Set` to carry into the next call (`null` while the map is still
  * small enough to scan). Shared by the block and flow mapping parsers, which
@@ -1903,12 +2034,13 @@ const SET_THRESHOLD = 8
  * silently overwrote the first with nothing reported.
  */
 const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<string> | null): Set<string> | null => {
+  if (isMergeKey(state, key)) return seen
   const text = keyText(key)
   if (seen === null && items.length >= SET_THRESHOLD) {
     seen = new Set()
     for (let i = 0; i < items.length; i++) {
       const k = items[i]?.key
-      if (k !== undefined) seen.add(keyText(k))
+      if (k !== undefined && !isMergeKey(state, k)) seen.add(keyText(k))
     }
   }
   if (seen !== null) {
@@ -1918,7 +2050,8 @@ const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<stri
   }
   for (let i = 0; i < items.length; i++) {
     const k = items[i]?.key
-    if (k !== undefined && keyText(k) === text) {
+    // A quoted `"<<"` renders like a merge key, so a match has to rule one out.
+    if (k !== undefined && keyText(k) === text && !isMergeKey(state, k)) {
       pushError(state, 'DUPLICATE_KEY', `Map key "${text}" is duplicated`, key.start, key.end)
       break
     }
@@ -2330,6 +2463,9 @@ const parseBlockMap = (
         skipInlineSpaces(state)
         contentPos = state.pos
         c = src.charCodeAt(contentPos)
+        if (c === QUESTION && keyProps !== NO_PROPS && introducerBoundary(src, contentPos + 1, len)) {
+          reportPropsBeforeExplicitKey(state, contentPos)
+        }
       }
       // The `? ` introducer outranks any `: ` later on the line — see the same
       // ordering in `parseNodeInner`.
@@ -2389,11 +2525,17 @@ const parseBlockMap = (
         if (key.source.indexOf('\n') !== -1) {
           pushError(state, 'BAD_IMPLICIT_KEY', 'An implicit key must be on one line', key.start, key.end)
         }
+        // A quoted key, an alias and a flow collection all end at their own
+        // closing delimiter rather than at the colon `findKeyColon` found, so the
+        // stretch between the two is checked in each of those branches. A plain
+        // key runs right up to the colon and cannot leave anything behind.
+        if (state.pos < colon) checkKeyGap(state, colon)
       } else if (kc === STAR) {
         // `*ref: value` keys the mapping by the anchored value, so the key has to
         // be a real alias node — slicing it as text would key it by the literal
         // `*ref` and lose the reference.
         key = scanAlias(state)
+        if (state.pos < colon) checkKeyGap(state, colon)
       } else if (kc === LBRACKET || kc === LBRACE) {
         // `[a, b]: value` / `{x: 1}: value` — the key is a flow collection, and
         // like an alias it has to be parsed rather than sliced. As text it came
@@ -2403,6 +2545,7 @@ const parseBlockMap = (
         // always gone through `parseNodeInner` and been parsed properly.
         enterFlow(state, indent)
         key = kc === LBRACKET ? parseFlowSeq(state) : parseFlowMap(state)
+        if (state.pos < colon) checkKeyGap(state, colon)
       } else {
         let end = colon
         while (end > lineContentPos && isSpace(src.charCodeAt(end - 1))) end--
@@ -2654,6 +2797,9 @@ const parseNodeInner = (state: State, indent: number, parentIndent: number, seqA
   // first read the `?` as ordinary text and folded the rest of the entry in
   // after it.
   if (cc === QUESTION && introducerBoundary(src, state.pos + 1, len)) {
+    // Properties on a line of their own above the `?` returned further up, so
+    // any still in hand were written on the `?` line itself.
+    if (props !== NO_PROPS) reportPropsBeforeExplicitKey(state, state.pos)
     return attachProps(parseBlockMap(state, indent, -1), props, state)
   }
   // A line beginning with a quote may be a quoted *key* (e.g. `"200":`), so the
