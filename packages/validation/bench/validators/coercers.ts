@@ -3,9 +3,9 @@ import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import Ajv2020 from 'ajv/dist/2020.js'
 
-import { buildSchema } from '../../src/parsers/index.ts'
-import { buildValidatorSchema } from '../../src/validators/index.ts'
+import { generate } from '@amritk/validation'
 import type { CoerceCase } from './coerce-cases.ts'
 
 /** A generated file, as both packages hand it back. */
@@ -36,12 +36,47 @@ export type Coercer = (input: unknown) => unknown
  *     or the errors. Nothing is ever substituted, so a caller learns what was
  *     wrong with the document they actually sent.
  */
-export const ENGINE_IDS = ['parser', 'validator'] as const
+export const ENGINE_IDS = ['parser', 'validator', 'ajv'] as const
 export type EngineId = (typeof ENGINE_IDS)[number]
 
 export const ENGINE_LABELS: Record<EngineId, string> = {
   parser: 'parsers (parseX)',
   validator: 'validators --coerce (coerceX)',
+  ajv: 'ajv coerceTypes (clone first)',
+}
+
+/**
+ * A plain JSON deep copy — the cheapest clone that is correct for a parsed
+ * document, and so the fairest one to charge Ajv. `structuredClone` would be the
+ * obvious call and is several times slower.
+ */
+const cloneJson = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(cloneJson)
+  if (typeof value !== 'object' || value === null) return value
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value)) out[key] = cloneJson((value as Record<string, unknown>)[key])
+  return out
+}
+
+/**
+ * Ajv compiled `{ allErrors: true, coerceTypes: true }` — the configuration
+ * `coerceX` is built to replace — held to the same contract: the caller's input
+ * is left alone and the answer comes back as `{ valid, value }`.
+ *
+ * Ajv coerces in place, so leaving the input alone means cloning it first, on
+ * every call. That is not a handicap invented for the bench: a caller that keeps
+ * the document it was given (a config it will diff, re-read, or report on) has
+ * to do exactly this, and one that does not has handed its input to Ajv to
+ * rewrite. `format` is left an annotation, as it is in mjst without `--formats`.
+ */
+const buildAjv = (coerceCase: CoerceCase): Coercer => {
+  const validate = new Ajv2020({ allErrors: true, coerceTypes: true, strict: false, validateFormats: false }).compile(
+    coerceCase.schema as object,
+  )
+  return (input) => {
+    const value = cloneJson(input)
+    return validate(value) ? { valid: true, value } : { valid: false, errors: validate.errors }
+  }
 }
 
 /**
@@ -59,34 +94,24 @@ const toTsSpecifiers = (source: string): string => source.replace(/(from '\.[^']
  * can time the codegen and weigh the output without also loading it — the two
  * cold costs a consumer pays before any of the throughput below applies.
  *
- * The parser is built with `strict: false` (its coercing mode, the only one that
- * repairs rather than throws) and `helpersMode: 'embedded'` so the temp dir it
- * is written to is self-contained.
+ * Both go through the package's public `generate`, so the bench runs the same
+ * way under either runtime: Bun resolves `@amritk/validation` to its sources
+ * through the `development` condition, Node to the built `dist`. The parser is
+ * asked for `parse` — its coercing mode, the only one that repairs rather than
+ * throws — with its helpers emitted, so the temp dir it is written to is
+ * self-contained.
  */
-export const generateEngine = async (engine: EngineId, coerceCase: CoerceCase): Promise<GeneratedFile[]> =>
-  engine === 'parser'
-    ? buildSchema(
-        coerceCase.schema,
-        coerceCase.typeName,
-        undefined, // extensions
-        false, // typesOnly
-        false, // logWarnings
-        false, // strict — off, so the parser coerces and repairs instead of throwing
-        'embedded', // helpersMode — ship helper sources so the temp dir is self-contained
-        './', // helpersImportPrefix
-        false, // readonly
-        false, // stripUnknown — neither engine drops undeclared keys here
-      )
-    : buildValidatorSchema(
-        coerceCase.schema,
-        coerceCase.typeName,
-        '', // typeSuffix
-        undefined, // schemas
-        'count-keys', // unknownKeys
-        undefined, // formats
-        true, // coerce — emit the `coerceX` half
-        false, // branchErrors
-      )
+export const generateEngine = async (
+  engine: Exclude<EngineId, 'ajv'>,
+  coerceCase: CoerceCase,
+): Promise<GeneratedFile[]> =>
+  generate(
+    coerceCase.schema,
+    coerceCase.typeName,
+    engine === 'parser'
+      ? { modes: ['types', 'parse'], helpersMode: 'embedded' }
+      : { modes: ['types', 'guard', 'validate', 'coerce'], unknownKeys: 'count-keys' },
+  )
 
 /**
  * Writes one engine's generated source to a temp dir and imports the entry point
@@ -94,6 +119,7 @@ export const generateEngine = async (engine: EngineId, coerceCase: CoerceCase): 
  * re-implementation of it.
  */
 export const buildCoercer = async (engine: EngineId, coerceCase: CoerceCase): Promise<Coercer> => {
+  if (engine === 'ajv') return buildAjv(coerceCase)
   const files = await generateEngine(engine, coerceCase)
   const dir = mkdtempSync(join(tmpdir(), `mjst-coerce-bench-${engine}-`))
   for (const file of files) {

@@ -98,8 +98,14 @@ asking for both is an error rather than a silent choice.
 ### Moving off Ajv
 
 `coerceX` is built to replace Ajv compiled with `{ allErrors: true,
-coerceTypes: true }`. It never accepts a value its own `validateX` rejects, and
-where it and Ajv differ, it is on purpose:
+coerceTypes: true }`, and it is better on each count: the answer, the speed and
+the safety of the input.
+
+**It accepts only what the schema accepts.** Anything `coerceX` hands back as
+valid, `validateX` has just accepted, and a differential fuzz over random
+schemas with `anyOf`, `oneOf`, `allOf` and `if`/`then`/`else` checks every
+accepted document against an Ajv that does not coerce. Where the two differ, it
+is on purpose:
 
 - **`null` is never coerced**, in either direction. Ajv reads `null` as `""`, `0`
   or `false` for a string, number or boolean field, and reads those back as
@@ -120,9 +126,38 @@ where it and Ajv differ, it is on purpose:
   tries each branch, so under `oneOf: [{ type: 'integer' }, { type: 'string' }]`
   it turns `0` into `"0"` while trying the string branch, sees two matches, and
   rejects a valid document. `coerceX` accepts `0` as written.
-- **The input is never modified.** Ajv coerces in place, so a caller has to
-  clone first. `coerceX` returns a new value that shares everything it did not
-  touch, or the input itself when nothing needed coercing.
+- **Coercion reaches every applicator.** Scalars are coerced through `$ref`,
+  `allOf` (each subschema in turn), `if`/`then`/`else` (toward `then` when the
+  value matches `if`, `else` otherwise), and union branches, nested to any depth.
+
+**It never touches the input.** Ajv coerces in place, so a caller that keeps its
+document has to clone it first. `coerceX` returns a new value that shares
+everything it did not touch, or the input itself when nothing needed coercing.
+
+**It is faster.** Against Ajv cloning first, so both leave the caller's document
+alone (`bun run bench:validators:coerce`, or
+`bench:validators:coerce:node`):
+
+| schema | runtime | valid input | needs coercing | cannot be coerced |
+|:--|:--|--:|--:|--:|
+| small (4 fields) | Bun | 5.3× | 1.5× | 1.6× |
+| small (4 fields) | Node | 10× | 2.1× | 2.2× |
+| order (nested + array) | Bun | 9.9× | 1.6× | 1.8× |
+| order (nested + array) | Node | 8.3× | 1.9× | 2.2× |
+| assert-loose | Bun | 19× | 1.4× | 3.1× |
+| assert-loose | Node | 36× | 1.6× | 3.2× |
+| config (unions via `$ref`) | Bun | 3.2× | 1.5× | 2.4× |
+| config (unions via `$ref`) | Node | 4.3× | 1.4× | 3.4× |
+
+<sub>Each cell is how many times faster `coerceX` is than Ajv on the same input,
+each engine timed in its own process (Bun 1.3.11, Node 22.22, Linux x64). A
+valid document is the common case and the widest gap: where `isX` is a
+standalone guard, `coerceX` answers it with that guard and hands the input
+straight back, without walking it. On valid input Ajv rewrites nothing, so it can
+also be timed without the clone; `coerceX` is still ahead there, by 1.1–2.4× (the
+narrowest being the union config on Node). The config case is the shape
+`--coerce` exists for: every coercible scalar sits inside a union reached
+through `$ref`.</sub>
 
 The errors differ in one way worth knowing if you key diagnostics on
 `path + keyword + params`: an `additionalProperties` error points **at the
@@ -180,7 +215,8 @@ could import its 17 KiB of error types and runtime helpers.
 
 ## Is it faster?
 
-No, and it should not be. Ask this package for one mode and it emits **the exact
+Than the two engines it wraps? No, and it should not be. (Than Ajv, yes — see
+[Moving off Ajv](#moving-off-ajv).) Ask this package for one mode and it emits **the exact
 bytes** the engine that owns that mode emits — which the test suite pins per
 mode, by fingerprint, not by reading the output. Identical code cannot
 run at a different speed, so there is no runtime claim to make here and none is

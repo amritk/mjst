@@ -239,6 +239,23 @@ describe('coerced-vs-ajv', () => {
     }
   })
 
+  // The numeric-string grammar is scanned by hand because the regex was the
+  // single most expensive thing a number coercion did. The regex stays here as
+  // the specification, and the scan has to accept exactly what it accepts.
+  it('reads a numeric string exactly as the grammar says', () => {
+    const grammar = /^[+-]?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/
+    const rng = makeRng(0x5ca1)
+    const alphabet = ['0', '1', '7', '9', '+', '-', '.', 'e', 'E', ' ', 'x', 'a', '_']
+    const disagreements: string[] = []
+    for (let i = 0; i < 20_000; i++) {
+      const text = Array.from({ length: Math.floor(rng() * 7) }, () => pick(rng, alphabet)).join('')
+      const expected = grammar.test(text) && Number.isFinite(Number(text)) ? Number(text) : text
+      const actual = coerceScalar(text, 'number')
+      if (!Object.is(actual, expected)) disagreements.push(`${JSON.stringify(text)}: ${String(actual)}`)
+    }
+    expect(disagreements.slice(0, 10)).toEqual([])
+  })
+
   it('never invents a value for a scalar property of any coercible type', () => {
     for (const type of SCALARS) {
       assertNeverInvents(
@@ -343,6 +360,69 @@ describe('coerced-vs-ajv', () => {
       const values = Array.from({ length: 12 }, () => ({ d: randomValue(rng, 2) }))
       assertNeverInvents(schema, values)
     }
+  })
+
+  // The two properties everything else rests on, over schemas built from every
+  // keyword coercion walks into. Ajv is not the oracle for the *value* here: it
+  // coerces in place while it tries each branch, so its answer under a union is
+  // often whatever the last branch it tried left behind. What is checked instead:
+  //
+  //  - anything accepted is valid by the schema itself, judged by an Ajv that
+  //    does not coerce. So accepting a document Ajv rejects is only ever
+  //    accepting a valid document Ajv's own coercion broke;
+  //  - a document that is already valid comes back as the very same object,
+  //    which is what lets `coerceX` answer valid input with the guard alone.
+  it('accepts only valid documents, and leaves a valid one untouched', { timeout: 120_000 }, () => {
+    const rng = makeRng(0xc0e7ce)
+    const leaf = (): Record<string, unknown> => {
+      if (rng() < 0.15) return { const: pick(rng, [false, true, 'x', 1]) }
+      const type = pick(rng, ['string', 'number', 'integer', 'boolean'] as const)
+      const node: Record<string, unknown> = { type }
+      if (rng() < 0.2 && (type === 'integer' || type === 'number')) node['minimum'] = 1
+      if (rng() < 0.2 && type === 'string') node['minLength'] = 2
+      return node
+    }
+    const node = (depth: number): Record<string, unknown> => {
+      if (depth <= 0 || rng() < 0.3) return leaf()
+      const roll = rng()
+      const branches = (): Record<string, unknown>[] =>
+        Array.from({ length: 2 + Math.floor(rng() * 2) }, () => node(depth - 1))
+      if (roll < 0.2) return { anyOf: branches() }
+      if (roll < 0.3) return { oneOf: branches() }
+      if (roll < 0.4) return { allOf: branches() }
+      if (roll < 0.5) return { type: 'array', items: node(depth - 1) }
+      const properties: Record<string, unknown> = {}
+      for (const key of ['a', 'b', 'c']) if (rng() < 0.7) properties[key] = node(depth - 1)
+      const object: Record<string, unknown> = { type: 'object', properties }
+      if (rng() < 0.3) object['required'] = ['a']
+      if (rng() < 0.25) {
+        object['if'] = { properties: { a: { const: pick(rng, [true, 'x', 1]) } }, required: ['a'] }
+        object['then'] = { properties: { b: node(depth - 1) } }
+        if (rng() < 0.5) object['else'] = { properties: { b: node(depth - 1) } }
+      }
+      return object
+    }
+
+    const problems: string[] = []
+    for (let i = 0; i < 400; i++) {
+      const schema = { type: 'object', properties: { d: node(3) } }
+      const exports = generated(schema)
+      const coerce = exports['coerceRoot'] as Coercer
+      const walk = exports['coerceRootValue'] as (input: unknown) => unknown
+      const validate = exports['validateRoot'] as (input: unknown) => unknown
+      const plain = new Ajv2020({ allErrors: true, strict: false }).compile(schema)
+      for (let j = 0; j < 15; j++) {
+        const value = { d: randomValue(rng, 3) }
+        const result = coerce(structuredClone(value))
+        if (result.valid && !plain(structuredClone(result.value))) {
+          problems.push(`accepted an invalid document: ${JSON.stringify(schema)} ${JSON.stringify(value)}`)
+        }
+        if (validate(value) === true && walk(value) !== value) {
+          problems.push(`rewrote a valid document: ${JSON.stringify(schema)} ${JSON.stringify(value)}`)
+        }
+      }
+    }
+    expect(problems, problems.slice(0, 5).join('\n')).toEqual([])
   })
 
   // `string | { … }` is the commonest shape in a hand-written config schema, and

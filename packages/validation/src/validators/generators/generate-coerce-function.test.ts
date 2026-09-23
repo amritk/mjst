@@ -345,6 +345,76 @@ describe('generate-coerce-function', () => {
     expect(coerce({ d: '1', e: '2' })).toEqual({ valid: true, value: { d: 1, e: 2 } })
   })
 
+  // The usual way to extend a definition. Every subschema has to hold, so each
+  // one's coercion is something the validator requires anyway.
+  it('coerces through every subschema of an allOf', async () => {
+    const coerce = await compileLinked({
+      type: 'object',
+      properties: {
+        server: {
+          allOf: [{ $ref: '#/$defs/base' }, { type: 'object', properties: { retries: { type: 'integer' } } }],
+        },
+      },
+      $defs: { base: { type: 'object', properties: { enabled: { type: 'boolean' } } } },
+    })
+
+    expect(coerce({ server: { enabled: 'true', retries: '3' } })).toEqual({
+      valid: true,
+      value: { server: { enabled: true, retries: 3 } },
+    })
+  })
+
+  it('coerces toward then when the value matches if, and toward else when it does not', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: {
+        auth: {
+          type: 'object',
+          properties: { kind: { type: 'string' } },
+          if: { properties: { kind: { const: 'token' } }, required: ['kind'] },
+          then: { properties: { ttl: { type: 'integer' } } },
+          else: { properties: { ttl: { type: 'boolean' } } },
+        },
+      },
+    })
+
+    expect(coerce({ auth: { kind: 'token', ttl: '60' } })).toEqual({
+      valid: true,
+      value: { auth: { kind: 'token', ttl: 60 } },
+    })
+    expect(coerce({ auth: { kind: 'basic', ttl: 'false' } })).toEqual({
+      valid: true,
+      value: { auth: { kind: 'basic', ttl: false } },
+    })
+  })
+
+  // `if` is read on the value after the node's own properties were coerced,
+  // since that is the value the validator reads it on.
+  it('judges if on the value its properties were coerced into', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: { enabled: { type: 'boolean' } },
+      if: { properties: { enabled: { const: true } }, required: ['enabled'] },
+      then: { properties: { port: { type: 'integer' } } },
+    })
+
+    expect(coerce({ enabled: 'true', port: '80' })).toEqual({ valid: true, value: { enabled: true, port: 80 } })
+    expect(coerce({ enabled: 'false', port: '80' })).toEqual({ valid: true, value: { enabled: false, port: '80' } })
+  })
+
+  it('coerces the keywords beside a $ref as well as the target', async () => {
+    const coerce = await compileLinked({
+      type: 'object',
+      properties: { d: { $ref: '#/$defs/base', properties: { extra: { type: 'number' } } } },
+      $defs: { base: { type: 'object', properties: { flag: { type: 'boolean' } } } },
+    })
+
+    expect(coerce({ d: { flag: 'true', extra: '1.5' } })).toEqual({
+      valid: true,
+      value: { d: { flag: true, extra: 1.5 } },
+    })
+  })
+
   it('emits no union walk when a branch accepts anything', () => {
     const { code } = generateCoerceFunction(
       {

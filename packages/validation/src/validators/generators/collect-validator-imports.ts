@@ -48,12 +48,19 @@ type CollectValidatorImportsOptions = {
   readonly reads?: (names: {
     readonly typeName: string
     readonly validatorName: string
+    readonly guardName: string
     readonly checkerName: string
     readonly coercerName: string
     readonly repairerName: string
   }) => {
     readonly type: boolean
     readonly validator: boolean
+    /**
+     * The `$ref` target's `isX` guard. A yes/no test of a `$ref` — a union
+     * branch, a `not`, an `if` — asks it rather than `validateX`, so it builds no
+     * error on the way to `false`.
+     */
+    readonly guard?: boolean
     /**
      * The `$ref` target's fail-fast validator. Only a file generated with the
      * check half on names it, and then only from inside its own `checkX` — the
@@ -86,18 +93,21 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
   const filename = refToFilename(ref)
   const typeName = refToName(ref, suffix)
   const validatorName = `validate${typeName}`
+  const guardName = `is${typeName}`
   const checkerName = `check${typeName}`
   const coercerName = `coerce${typeName}Value`
   const repairerName = `repair${typeName}At`
   const {
     type,
     validator,
+    guard = false,
     checker = false,
     coercer = false,
     repairer = false,
   } = reads({
     typeName,
     validatorName,
+    guardName,
     checkerName,
     coercerName,
     repairerName,
@@ -106,6 +116,7 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
   // `./x.js` → sibling `x.ts` is the standard NodeNext form.
   const values = [
     ...(validator ? [validatorName] : []),
+    ...(guard ? [guardName] : []),
     ...(checker ? [checkerName] : []),
     ...(coercer ? [coercerName] : []),
     ...(repairer ? [repairerName] : []),

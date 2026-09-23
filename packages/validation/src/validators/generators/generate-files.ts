@@ -8,7 +8,11 @@ import { formatCheckName } from './emit-format-checks'
 import { NO_FORMATS } from './enforced-keywords'
 import { generateCoerceFunction } from './generate-coerce-function'
 import { generateRepairFunction } from './generate-repair-function'
-import { generateBooleanGuard, generateCheckFunction, generateValidatorFunction } from './generate-validator-function'
+import {
+  generateBooleanGuardSource,
+  generateCheckFunction,
+  generateValidatorFunction,
+} from './generate-validator-function'
 
 /**
  * Options for controlling what gets generated in a validator file.
@@ -125,7 +129,12 @@ export const generateValidatorFile = (
     formats,
     options?.branchErrors === true,
   )
-  const booleanGuard = generateBooleanGuard(schema, typeName, typeSuffix, unknownKeys, formats)
+  const { code: booleanGuard, standalone: standaloneGuard } = generateBooleanGuardSource(
+    schema,
+    typeName,
+    unknownKeys,
+    formats,
+  )
   // Emitted from the same generator as `validateX`, off the same schema, so the
   // two can only disagree about how far they looked — never about the verdict.
   const checker =
@@ -144,6 +153,7 @@ export const generateValidatorFile = (
     ? generateCoerceFunction(schema, typeName, typeSuffix, {
         ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
         formats,
+        standaloneGuard,
       }).code
     : ''
   const repairer = options?.repair === true ? generateRepairFunction(schema, typeName, typeSuffix).code : ''
@@ -168,9 +178,10 @@ export const generateValidatorFile = (
     rootSchema: options?.rootSchema,
     typeSuffix,
     importExt,
-    reads: ({ typeName: name, validatorName, checkerName, coercerName, repairerName }) => ({
+    reads: ({ typeName: name, validatorName, guardName, checkerName, coercerName, repairerName }) => ({
       type: mentions(name),
       validator: mentions(validatorName),
+      guard: mentions(guardName),
       checker: mentions(checkerName),
       coercer: mentions(coercerName),
       repairer: mentions(repairerName),

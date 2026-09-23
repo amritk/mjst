@@ -89,4 +89,13 @@ spelled as a flag: everything that judges a document, nothing that builds one.
    of two, and that a build asking for no validator mode ships no
    `validation-result.ts`.
 
+9. **`coerceX` is not Ajv's `coerceTypes`, on purpose.** It never modifies its
+   input (no defensive clone needed), never coerces `null` in either direction,
+   and reads only clean numerals as numbers (`" "`, `"0x10"`, `"Infinity"` are
+   rejected). It coerces inside `anyOf`/`oneOf`/`allOf`/`if`: a union branch the
+   value already matches wins uncoerced (so `false` stays `false` under
+   `anyOf: [string, { const: false }]`, where Ajv answers `"false"`), and two
+   branches that would coerce to different values leave it as written. Do not
+   tell a user a value will come out the way Ajv would produce it inside a union.
+
 Only the `.` entry. Install: `bun add @amritk/validation`.

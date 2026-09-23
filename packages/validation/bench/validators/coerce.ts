@@ -72,7 +72,7 @@ const compare = (mine: number, theirs: number): string => {
 }
 
 const run = async (): Promise<void> => {
-  console.log('\n=== parser engine (coercing) vs validator engine (coerce) ===\n')
+  console.log('\n=== parser engine (coercing) vs validator engine (coerce) vs ajv coerceTypes ===\n')
   console.log(`Node/Bun: ${IS_BUN ? `Bun ${Bun.version}` : process.version}`)
   console.log('Each engine is timed in an isolated process; ±n% is the coefficient of variation,')
   console.log('and ~ flags a sample whose CV exceeded 10% (treat it as less trustworthy).')
@@ -87,7 +87,7 @@ const run = async (): Promise<void> => {
 
     const agreed = ENGINE_IDS.every((engine) => results.get(engine)?.agreesOnValid === true)
     console.log(
-      `  agreement: ${agreed ? 'both coerce clean and coercible input onto the same document ✓' : 'DISAGREE ✗'}`,
+      `  agreement: ${agreed ? 'every engine coerces clean and coercible input onto the same document ✓' : 'DISAGREE ✗'}`,
     )
     for (const engine of ENGINE_IDS) {
       if (results.get(engine)?.agreesOnValid === false) {
@@ -111,6 +111,17 @@ const run = async (): Promise<void> => {
 
     const parser = results.get('parser')
     const validator = results.get('validator')
+    const ajv = results.get('ajv')
+    if (validator && ajv) {
+      console.log('')
+      console.log(`  → coerceX is ${compare(validator.clean.median, ajv.clean.median)} than ajv on clean input`)
+      console.log(
+        `  → coerceX is ${compare(validator.coercible.median, ajv.coercible.median)} than ajv on coercible input`,
+      )
+      console.log(
+        `  → coerceX is ${compare(validator.unrepairable.median, ajv.unrepairable.median)} than ajv on unrepairable input`,
+      )
+    }
     if (parser && validator) {
       console.log('')
       console.log(`  → parser is ${compare(parser.clean.median, validator.clean.median)} on clean input`)
@@ -127,7 +138,9 @@ const run = async (): Promise<void> => {
     console.log(
       `    ${pad('engine', 32)}${padStart('codegen', 12)}${padStart('per schema', 14)}${padStart('shared once', 14)}`,
     )
+    // Ajv compiles at runtime with `new Function`, so it has no source to weigh.
     for (const engine of ENGINE_IDS) {
+      if (engine === 'ajv') continue
       const { perSchema, shared } = weigh(await generateEngine(engine, coerceCase))
       const ms = await generateMs(() => generateEngine(engine, coerceCase))
       const cells =

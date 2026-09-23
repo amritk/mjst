@@ -102,14 +102,21 @@ export type CliConfig = {
    * coerces, Ajv coerces to the same value; the cells Ajv guesses at become
    * errors instead of silent repairs.
    *
-   * At a union (`anyOf`, `oneOf`, a `type` array) a value that already matches
-   * a branch as written is left alone. Otherwise each branch coerces it its own
+   * Coercion reaches through `$ref`, `allOf`, `if`/`then`/`else` and unions. At
+   * a union (`anyOf`, `oneOf`, a `type` array) a value that already matches a
+   * branch as written is left alone. Otherwise each branch coerces it its own
    * way, and the result is taken only when every branch that then accepts it
    * agrees on it; two different readings leave the value as written for the
    * validator to report. So the answer never depends on the order the union was
    * written in, which under Ajv it does — Ajv coerces into the first branch that
    * will take the value, and turns `false` into `"false"` through a string
    * branch listed before a `const: false` one.
+   *
+   * A document that is already valid is answered by `isX` alone where that is a
+   * standalone guard, and handed back as the very same object. Against Ajv
+   * cloning its input first — which it must to leave the caller's document
+   * alone — `coerceX` runs 3–36× faster on valid input and 1.4–2× faster on
+   * input that needs coercing (`bench:validators:coerce`).
    *
    * Requires `validators`. `validateX` and `isX` are unchanged either way.
    */

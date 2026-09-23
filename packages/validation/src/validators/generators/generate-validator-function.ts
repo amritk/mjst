@@ -905,15 +905,15 @@ const generateKeywordChecks = (
     // A fail-fast body asks the target's own fail-fast half. It answers with the
     // very error `validateX` would have reported first for this position, so the
     // two agree on what the first error is, and it stops as soon as it has one.
-    // A yes/no match expression only needs to know the target failed, so it
-    // leaves its IIFE with `false`, asking the fail-fast half when this emission
-    // has one. A match expression that keeps its branch errors pushes them into
+    // A yes/no match expression only needs to know the target failed, so it asks
+    // the target's `isX` — a fail-fast guard that builds no error and no path —
+    // and leaves its IIFE with `false`. A match expression that keeps its branch errors pushes them into
     // its `_m`, where a `return` would leave the branch rather than the validator.
     const delegate =
       ctx.sink === FAIL_FAST_SINK
         ? [`  const _r = ${checkerName(target)}(${raw}, ${path})`, `  if (_r !== true) return _r`]
         : ctx.sink === MATCH_BOOL_SINK
-          ? [`  const _r = ${emittedName(target, ctx.failFast)}(${raw}, ${path})`, `  if (_r !== true) return false`]
+          ? [`  if (!${guardName(target)}(${raw})) return false`]
           : [
               `  const _r = ${validatorName(target)}(${raw}, ${path})`,
               `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`,
@@ -1247,15 +1247,17 @@ const generateConstraintChecks = (
       // `return` out of the `for` being a `return` out of the validator.
       const failFast = ctx.sink === FAIL_FAST_SINK
       const target = refToName(itemSchema.$ref, suffix)
-      const onFailure = failFast
-        ? 'return _ir'
-        : ctx.sink === MATCH_BOOL_SINK
-          ? 'return false'
-          : `${ctx.sink}.push(..._ir.errors)`
+      const onFailure = failFast ? 'return _ir' : `${ctx.sink}.push(..._ir.errors)`
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
-      lines.push(`      const _ir = ${emittedName(target, ctx.failFast)}(${raw}[${iv}], ${itemPath})`)
-      lines.push(`      if (_ir !== true) ${onFailure}`)
+      // A yes/no test asks the target's guard, which builds nothing on the way to
+      // `false` — the same reason the named-property delegation does.
+      if (ctx.sink === MATCH_BOOL_SINK) {
+        lines.push(`      if (!${guardName(target)}(${raw}[${iv}])) return false`)
+      } else {
+        lines.push(`      const _ir = ${emittedName(target, ctx.failFast)}(${raw}[${iv}], ${itemPath})`)
+        lines.push(`      if (_ir !== true) ${onFailure}`)
+      }
       lines.push(`    }`)
       lines.push(`  }`)
     } else if (isSchemaObject(itemSchema)) {
@@ -3201,7 +3203,23 @@ export const generateBooleanGuard = (
   _suffix = '',
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats: ReadonlySet<string> = NO_FORMATS,
-): string => {
+): string => generateBooleanGuardSource(schema, typeName, unknownKeys, formats).code
+
+/**
+ * {@link generateBooleanGuard}, together with whether the guard it emitted stands
+ * on its own or falls back to calling `validateX`.
+ *
+ * The coercing half asks: it answers an already-valid document with one guard
+ * call, which is only a saving when the guard is a real fail-fast check. A
+ * fallback runs the whole validator and builds every error on the way to `false`,
+ * so there the coercer walks first instead.
+ */
+export const generateBooleanGuardSource = (
+  schema: JSONSchema,
+  typeName: string,
+  unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats: ReadonlySet<string> = NO_FORMATS,
+): { code: string; standalone: boolean } => {
   const name = guardName(typeName)
   const returns = typeDescribesEveryAcceptedValue(rewriteNullable(schema) as JSONSchema)
     ? `input is ${typeName}`
@@ -3224,16 +3242,16 @@ export const generateBooleanGuard = (
     // A `$ref`, a `const`/`enum` or an `x-mjst` hint beside the object keywords
     // is something the block form refuses too, so the answer is the fallback
     // either way — say so here rather than fall through to a leaf that would.
-    if (!objectRootIsSelfContained(rewritten)) return fallback
+    if (!objectRootIsSelfContained(rewritten)) return { code: fallback, standalone: false }
     const block = booleanObjectParts(rewritten, 'input', 'obj', ctx)
-    if (block === null) return fallback
+    if (block === null) return { code: fallback, standalone: false }
     // A guard that is one chain is the chain itself. One that hoists a nested
     // object or tests a key set is a sequence of early exits (see
     // {@link GuardBlock}), with `return true` once every test has passed.
     const body = isFlatGuardBlock(block)
       ? [`  return (`, block.conditions.map((part) => `    ${part}`).join(' &&\n'), `  )`]
       : [...renderGuardBlock(block, 'return false', '  ', 'lines', unknownKeys), `  return true`]
-    return [
+    const code = [
       `export const ${name} = (input: unknown): ${returns} => {`,
       // Same unused-local as the validator's hot guard: a node with no property
       // to read guards on the shape alone and never touches the narrowing.
@@ -3241,12 +3259,13 @@ export const generateBooleanGuard = (
       ...body,
       `}`,
     ].join('\n')
+    return { code, standalone: true }
   }
 
   // Non-object roots (scalar, enum, array) can often be expressed inline too.
   const expr = booleanLeafExpr(rewritten, 'input', ctx)
-  if (expr === null) return fallback
-  return `export const ${name} = (input: unknown): ${returns} => ${expr}`
+  if (expr === null) return { code: fallback, standalone: false }
+  return { code: `export const ${name} = (input: unknown): ${returns} => ${expr}`, standalone: true }
 }
 
 /**
@@ -3814,15 +3833,41 @@ export const createSubschemaMatcher = (
   formats: ReadonlySet<string>,
   hoistNamespace: string,
 ): {
-  /** A boolean expression over `raw`, which must be a plain identifier in scope beside `_path`. */
-  match: (sub: JSONSchema, raw: string) => string
+  /**
+   * The test for `sub` as the body of a function whose parameter is `input` —
+   * statements that `return false` at the first failure and `true` at the end —
+   * or a constant when the answer never depends on the value.
+   *
+   * A body rather than an expression because an expression here is an IIFE, and
+   * JavaScriptCore allocates the closure on every call: roughly 50 ns per branch
+   * tested, which on a union-heavy document was most of what coercing it cost.
+   */
+  test: (sub: JSONSchema) => boolean | string
   declarations: (text: string) => string[]
 } => {
   const ctx: NestingContext = { ...createRootContext(rootSchema, formats), hoistNamespace }
   return {
-    // `required`: the caller hands over a value it already has, so an
-    // `undefined` is judged rather than waved through as an absent property.
-    match: (sub, raw) => generateMatchesExpr(raw, rewriteNullable(sub) as JSONSchema, suffix, ctx, true),
+    test: (sub) => {
+      if (sub === false) return false
+      const rewritten = rewriteNullable(sub) as JSONSchema
+      const state: FailFast = { on: false, blocked: false }
+      // `required`: the caller hands over a value it already has, so an
+      // `undefined` is judged rather than waved through as an absent property.
+      const checks = generateValueChecks(
+        '',
+        'input',
+        '`${_path}`',
+        rewritten,
+        suffix,
+        { ...ctx, sink: MATCH_BOOL_SINK, failFast: state, branchErrors: false },
+        true,
+      )
+      if (checks.length === 0) return true
+      if (!state.blocked) return `${checks.join('\n')}\n  return true`
+      // A body that reports unconditionally cannot take the early-return form
+      // (see {@link FailFast}), so it keeps the buffered expression.
+      return `  return ${generateMatchesExpr('input', rewritten, suffix, ctx, true)}`
+    },
     declarations: (text) =>
       ctx.hoisted.filter((entry) => text.includes(entry.reference)).map((entry) => entry.declaration),
   }
