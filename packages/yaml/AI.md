@@ -42,7 +42,7 @@ for (const error of doc.errors) {
    include `DUPLICATE_KEY`, `UNRESOLVED_ALIAS`, `UNEXPECTED_CONTENT`,
    `UNTERMINATED_FLOW`, `TAB_INDENT`, `UNEXPECTED_DIRECTIVE`, and the
    syntax-level `BAD_COMMENT` / `BAD_ESCAPE` / `BAD_BLOCK_HEADER` /
-   `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY` /
+   `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY` / `BAD_ANCHOR` /
    `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar). A misplaced or malformed
    directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
    `AMBIGUOUS_ANCHOR_NAME` (an anchor or alias name ending in `:` — YAML makes
