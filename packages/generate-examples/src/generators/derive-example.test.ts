@@ -77,6 +77,30 @@ describe('deriveExample — satisfiable-instance regressions', () => {
     expect(deriveExample({ type: 'integer', minimum: 6, maximum: 12, multipleOf: 5 })).toBe(10)
   })
 
+  it('clears an exclusive lower bound inside a narrow range', () => {
+    // A fixed half-unit nudge landed on 0.5, past the 0.01 maximum.
+    expect(deriveExample({ type: 'number', exclusiveMinimum: 0, maximum: 0.01 })).toBe(0.005)
+    expect(deriveExample({ type: 'number', exclusiveMinimum: 0.1, exclusiveMaximum: 0.2 })).toBeCloseTo(0.15)
+  })
+
+  it('honours exclusiveMaximum alongside a looser maximum', () => {
+    expect(deriveExample({ type: 'number', maximum: 10, exclusiveMaximum: -3 })).toBe(-3.5)
+  })
+
+  it('clears an exclusive bound by one multipleOf step', () => {
+    expect(deriveExample({ type: 'number', minimum: 9.8, exclusiveMaximum: 10, multipleOf: 0.1 })).toBeCloseTo(9.8)
+    expect(deriveExample({ type: 'number', exclusiveMinimum: 0, multipleOf: 0.25 })).toBe(0.25)
+  })
+
+  it('rounds fractional bounds inward on an integer', () => {
+    expect(deriveExample({ type: 'integer', maximum: -0.5 })).toBe(-1)
+    expect(deriveExample({ type: 'integer', exclusiveMinimum: 1.5, maximum: 2 })).toBe(2)
+  })
+
+  it('steps an integer by a whole multiple of a fractional multipleOf', () => {
+    expect(deriveExample({ type: 'integer', minimum: 1, multipleOf: 2.5 })).toBe(5)
+  })
+
   it('produces distinct uniqueItems that respect the item schema', () => {
     expect(
       deriveExample({
