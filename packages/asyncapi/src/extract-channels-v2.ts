@@ -3,6 +3,7 @@ import { readKey } from '@amritk/helpers/read-key'
 
 import { mergeTraits } from './merge-traits'
 import { type NormalizeMessageOptions, normalizeMessage } from './normalize-message'
+import type { NormalizeSchemaCache } from './normalize-schema'
 import { resolveNode } from './resolve-pointer'
 import type { ExtractionIssue, MessageDirection, NormalizedChannel, NormalizedMessage } from './types'
 
@@ -46,6 +47,7 @@ export const extractChannelsV2 = (
 ): NormalizedChannel[] => {
   const channelsMap = readKey(document, 'channels')
   if (typeof channelsMap !== 'object' || channelsMap === null) return []
+  const cache: NormalizeSchemaCache = new WeakMap()
   const defaultContentType = readKey(document, 'defaultContentType')
 
   const channels: NormalizedChannel[] = []
@@ -112,6 +114,7 @@ export const extractChannelsV2 = (
             issues,
             itemPath,
             options,
+            cache,
           ),
         )
       }

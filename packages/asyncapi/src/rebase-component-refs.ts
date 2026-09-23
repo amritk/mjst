@@ -3,7 +3,7 @@ import { entersSchemaMap, isDataPosition } from '@amritk/helpers/build-resource-
 import { assertSchemaDepth } from '@amritk/helpers/max-schema-depth'
 import { readKey } from '@amritk/helpers/read-key'
 
-import { normalizeSchema } from './normalize-schema'
+import { type NormalizeSchemaCache, normalizeSchema } from './normalize-schema'
 import type { SchemaFormatFamily } from './schema-format'
 import { classifySchemaFormat } from './schema-format'
 import type { ExtractionIssue } from './types'
@@ -163,6 +163,7 @@ export const rebaseComponentRefs = (
   family: Exclude<SchemaFormatFamily, 'unsupported' | 'avro'>,
   issues: ExtractionIssue[],
   path: string,
+  cache?: NormalizeSchemaCache,
 ): Record<string, unknown> => {
   const documentRecord =
     typeof document === 'object' && document !== null && !Array.isArray(document)
@@ -493,7 +494,7 @@ export const rebaseComponentRefs = (
       return
     }
 
-    const normalized = normalizeSchema(schema as Record<string, unknown>, componentFamily)
+    const normalized = normalizeSchema(schema as Record<string, unknown>, componentFamily, cache)
 
     // Hoist the component's own definitions to the root and copy the body
     // without them. Both block spellings are hoisted, each under its own key:
@@ -520,7 +521,7 @@ export const rebaseComponentRefs = (
     for (const { block, defName, value } of blockValues) {
       const prepared =
         typeof value === 'object' && value !== null && !Array.isArray(value)
-          ? normalizeSchema(value as Record<string, unknown>, componentFamily)
+          ? normalizeSchema(value as Record<string, unknown>, componentFamily, cache)
           : value
       assignKey(copiedDefs, allocateDefKey(name, block, defName), rewrite(prepared, 0, false, scope))
     }
@@ -543,7 +544,7 @@ export const rebaseComponentRefs = (
     assignKey(
       copiedDefs,
       key,
-      rewrite(normalizeSchema(raw as Record<string, unknown>, family), 0, false, DOC_DEF_SCOPE),
+      rewrite(normalizeSchema(raw as Record<string, unknown>, family, cache), 0, false, DOC_DEF_SCOPE),
     )
   }
 

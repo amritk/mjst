@@ -1,6 +1,6 @@
 import { type AvroEncoding, avroToJsonSchema } from '@amritk/adapters/avro-to-json-schema'
 
-import { normalizeSchema } from './normalize-schema'
+import { type NormalizeSchemaCache, normalizeSchema } from './normalize-schema'
 import { rebaseComponentRefs } from './rebase-component-refs'
 import { classifySchemaFormat } from './schema-format'
 import type { ExtractionIssue, MessageDirection, NormalizedMessage } from './types'
@@ -59,6 +59,7 @@ export const normalizeMessage = (
   issues: ExtractionIssue[],
   path: string,
   options: NormalizeMessageOptions = {},
+  cache?: NormalizeSchemaCache,
 ): NormalizedMessage => {
   const normalizeOne = (
     value: unknown,
@@ -94,11 +95,12 @@ export const normalizeMessage = (
       return undefined
     }
     return rebaseComponentRefs(
-      normalizeSchema(value as Record<string, unknown>, family),
+      normalizeSchema(value as Record<string, unknown>, family, cache),
       document,
       family,
       issues,
       `${path}/${label}`,
+      cache,
     )
   }
 
