@@ -26,10 +26,13 @@ export const buildCookiesObject = (
 
   const length = header.length
   let start = 0
+  // The first '=' at or after `start`, carried across pairs so a header of
+  // '='-less segments is not rescanned to its end once per segment.
+  let eq = header.indexOf('=')
   while (start < length) {
     let end = header.indexOf(';', start)
     if (end === -1) end = length
-    const eq = header.indexOf('=', start)
+    if (eq !== -1 && eq < start) eq = header.indexOf('=', start)
     // A segment without '=' is not a valid cookie-pair; skip it like the
     // parsers everyone already runs behind do.
     if (eq !== -1 && eq < end) {

@@ -94,4 +94,16 @@ describe('build-query-object-from-string', () => {
       }
     }
   })
+
+  // Bare keys ahead of a single '=' are the input that made the parser rescan
+  // to the end for every pair; the fix carries the next '=' across pairs, and
+  // this pins that doing so reads every pair the way URLSearchParams does.
+  it('reads bare keys ahead of a late = the way URLSearchParams does', () => {
+    const queryString = `${Array.from({ length: 2_000 }, (_, i) => `k${i % 50}`).join('&')}&user=x&a&b=`
+    for (const plan of PLANS) {
+      expect(buildQueryObjectFromString(queryString, plan)).toEqual(
+        buildQueryObject(new URLSearchParams(queryString), plan),
+      )
+    }
+  })
 })
