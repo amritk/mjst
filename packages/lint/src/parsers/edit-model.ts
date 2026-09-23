@@ -1,4 +1,4 @@
-import { isAlias, isMap, isScalar, isSeq, parseDocument, type YamlNode, type YamlSeq } from '@amritk/yaml'
+import { isMap, isScalar, isSeq, keyText, parseDocument, type YamlNode, type YamlSeq } from '@amritk/yaml'
 import { applyEdits, findNodeAtLocation, modify, type Node, parseTree } from 'jsonc-parser'
 
 import type { ParserFormat } from './index'
@@ -73,21 +73,30 @@ const detectEol = (text: string): string => {
 // --- YAML ------------------------------------------------------------------
 
 /**
- * Stringifies a key the way `toJS` does, so the paths we address by match the
- * keys the projected data exposes: a null key is `null`, a bool/number key is its
- * `String()` form, an alias key is `*name`, and a complex (map/seq) key is empty.
+ * Reads a path segment as a sequence index, accepting only the canonical form an
+ * index is written in: a non-negative integer, or its decimal string with no
+ * sign, padding, or leading zero. `Number()` also reads `'01'`, `' 1'`, `'1.0'`,
+ * `'0x1'`, and `'+1'` as 1, so a segment that names no element silently landed
+ * on element 1 instead of being the no-op an unresolved path promises.
  */
-const keyName = (key: unknown): string => {
-  if (isScalar(key)) {
-    const v = key.value
-    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
-  }
-  if (isAlias(key)) return `*${key.source}`
-  if (isMap(key) || isSeq(key)) return ''
-  return String(key)
-}
+const seqIndex = (segment: string | number): number =>
+  typeof segment === 'number' ? segment : /^(?:0|[1-9]\d*)$/.test(segment) ? Number(segment) : -1
 
-/** Navigates the YAML CST to the node at `path`, or `undefined` if absent. */
+/**
+ * Navigates the YAML CST to the node at `path`, or `undefined` if absent.
+ *
+ * Keys are compared through the parser's own `keyText`, so a path is addressed
+ * by exactly the key `toJS` projected: `''` for a null key (`~: 1`), the anchored
+ * value's text for an alias key (`*k : 1`), and the flow rendering for a
+ * collection key (`? [a, b]`). A local copy of that rule had drifted — it said
+ * `'null'`, `'*k'`, and `''` — so lint located a finding under one of those keys
+ * but its fix quietly changed nothing.
+ *
+ * This deliberately does not reuse `nodeAtPath`, which follows an `*alias` on
+ * the way down. That is right for locating a finding, but an edit routed through
+ * an alias would rewrite the anchored definition and so every other use of it;
+ * here an alias ends the walk, which keeps such edits the documented no-op.
+ */
 const yamlNodeAt = (root: YamlNode | null, path: JsonPath): YamlNode | undefined => {
   let current: YamlNode | undefined = root ?? undefined
   for (const segment of path) {
@@ -97,10 +106,10 @@ const yamlNodeAt = (root: YamlNode | null, path: JsonPath): YamlNode | undefined
       // Last-wins: duplicate keys resolve to the final occurrence, matching how
       // `toJS` and the position index treat them, so an edit is not a silent no-op
       // that lands on a shadowed earlier copy.
-      const pair = current.items.findLast((item) => keyName(item.key) === target)
+      const pair = current.items.findLast((item) => keyText(item.key) === target)
       current = pair?.value ?? undefined
     } else if (isSeq(current)) {
-      current = current.items[Number(segment)]
+      current = current.items[seqIndex(segment)]
     } else {
       return undefined
     }
@@ -113,7 +122,7 @@ const yamlPairAt = (root: YamlNode | null, path: JsonPath): { key?: YamlNode; va
   const parent = yamlNodeAt(root, path.slice(0, -1))
   if (!parent || !isMap(parent)) return {}
   const last = String(path[path.length - 1])
-  const pair = parent.items.findLast((item) => keyName(item.key) === last)
+  const pair = parent.items.findLast((item) => keyText(item.key) === last)
   if (!pair) return {}
   return { key: pair.key, ...(pair.value ? { value: pair.value } : {}) }
 }
@@ -229,7 +238,7 @@ const applyYamlOp = (text: string, op: EditOp): string => {
       const parent = yamlNodeAt(root, op.path.slice(0, -1))
       if (!parent || !isMap(parent)) return text
       const last = String(op.path[op.path.length - 1])
-      const index = parent.items.findLastIndex((item) => keyName(item.key) === last)
+      const index = parent.items.findLastIndex((item) => keyText(item.key) === last)
       if (index === -1) return text
       const pair = parent.items[index]
       const key = pair?.key as YamlNode
@@ -296,7 +305,7 @@ const applyYamlOp = (text: string, op: EditOp): string => {
       }
       if (!isMap(parent)) return text
       // Inserting is additive only; if the key is already there we leave it alone.
-      if (parent.items.some((item) => keyName(item.key) === op.key)) return text
+      if (parent.items.some((item) => keyText(item.key) === op.key)) return text
       const pair = `${yamlInsertKey(op.key)}: ${yamlInsertValue(op.value)}`
       if (text.charCodeAt(parent.start) === 123 /* { */) {
         const last = parent.items[parent.items.length - 1]

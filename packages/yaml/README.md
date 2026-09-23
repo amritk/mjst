@@ -21,14 +21,14 @@
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
-- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~29–39× faster**, and the bundle is **~3.3× smaller**.
-- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.7–1.9× faster**, the bundle is **~1.3× smaller**, and we *also* hand you the positioned tree it cannot produce.
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~29–36× faster**, and the bundle is **~3.2× smaller**.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2.3× faster**, the bundle is **~1.3× smaller**, and we *also* hand you the positioned tree it cannot produce.
 
 It passes **397 of the 402 cases** in the official YAML test suite, with every
 remaining case [written down and explained](#conformance-measured) rather than
 left to chance.
 
-It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) coerce a value when written.
+It targets the YAML that real configuration and OpenAPI documents use: block and flow collections, all three quoting styles, literal/folded block scalars with chomping, comments, anchors, aliases, merge keys, explicit `? key` / `: value` entries, and multi-document (`---`-separated) streams. Scalars resolve via the YAML 1.2 **core schema** — so an OpenAPI `version: 1.0.0` stays the string `"1.0.0"` instead of turning into a number — and the core-schema `!!` tags (`!!str`, `!!int`, `!!float`, `!!bool`, `!!null`) type a value written in their format — and report, rather than force, one that is not.
 
 **OpenAPI compatibility.** OpenAPI restricts its YAML to the JSON-compatible subset — *"tags MUST be limited to those allowed by the JSON Schema ruleset"* and map keys must be scalar strings — and that subset is exactly what's covered above. Keeping `version: 1.0.0` a string (rather than a float) and *not* coercing untagged ISO dates into `Date`s is the correct, round-trip-safe behavior an OpenAPI tool needs.
 
@@ -127,7 +127,7 @@ if (isMap(contents)) {
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
 | `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, comments, toJS() }` where every node carries `start`/`end` source offsets. |
 | `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors, problems, and comments. |
-| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. Follows an `*alias` on the way down, so a path under an aliased collection resolves to the node inside the anchored value. |
+| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. Follows an `*alias` on the way down, so a path under an aliased collection resolves to the node inside the anchored value. A tree edited in place after a lookup is still read correctly — pairs added, removed, replaced, or re-keyed — with one exception in mappings of 16+ pairs: re-keying a pair to duplicate an *earlier* key may still resolve to the earlier pair, where `toJS()` keeps the later one. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `keyText(node)` | The string a mapping key projects to in `toJS()` output — the same string `nodeAtPath` matches a path segment against. Use it when you walk the tree yourself and need your paths to line up with the projected data. Rendering is bounded, so a key built from aliases that expand exponentially is cut short with `…` rather than run away. |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
@@ -198,8 +198,10 @@ sittings.
 that imports it. This one table has no runtime split: it measures what the
 bundler emits, which is the same bytes whoever runs them. The bench bundles a small consumer of each library rather than
 the library's own entry point, so the numbers reflect code that is actually
-reachable. Ours covers the full surface (`parse`, `parseDocument`, `nodeAtPath`,
-`lineCounter`); `js-yaml` gets only `load`, because it has no positioned-tree
+reachable. Ours imports what a diagnostics consumer uses (`parse`,
+`parseDocument`, `nodeAtPath`, `lineCounter`) — not every export, so `keyText`,
+`parseAllDocuments`, and the node guards are not counted; `yaml` gets `parse`
+and `parseDocument`, and `js-yaml` only `load`, because it has no positioned-tree
 equivalent to import.
 
 | | size | |
@@ -230,7 +232,7 @@ schema** for scalar typing. The exact boundaries:
 
 **Scalars**
 
-- Plain (unquoted), single-quoted (`''` escape), and double-quoted scalars (full escapes — `\n`, `\t`, `\xNN`, `\uNNNN`, `\UNNNNNNNN` — line continuation, and folding).
+- Plain (unquoted), single-quoted (`''` escape), and double-quoted scalars (full escapes — `\n`, `\t`, `\xNN`, `\uNNNN`, `\UNNNNNNNN` — line continuation, and folding). An escape YAML does not define, or one with the wrong number of hex digits, keeps its backslash in the value (`"C:\Users"` stays `C:\Users`) and is reported as `BAD_ESCAPE`.
 - Literal `|` and folded `>` block scalars with chomping (`-` strip, `+` keep, default clip) and explicit indentation indicators.
 - Multi-line plain scalars (folded) in both block context and flow context (`[ … ]` / `{ … }`), where a wrapped line's indentation is trimmed and line breaks fold per YAML 1.2 (single break → space, a run of *n* breaks → *n − 1* newlines).
 
@@ -240,19 +242,19 @@ schema** for scalar typing. The exact boundaries:
 
 **Tags**
 
-- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. A core tag **coerces** what it is written on rather than only confirming it: `!!int "7"` is `7`, `!!bool "FALSE"` is `false`, `!!float 1` is `1` (an integer form is a valid float), and `!!null x` is `null`. The tag is the author saying what the value is. Quoting does not change what it means — `!!int "0x1F"` is `31` just as `!!int 0x1F` is, because the text goes through the core schema rather than through `parseInt` alone.
-- Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A conformant OpenAPI document won't use these. Note that three of the four do **not** survive `JSON.stringify` — a `Set` and a `Map` both serialize to `{}`, and a `Uint8Array` to an object keyed by index — so a document using them is no longer JSON-round-trippable, however faithfully it parsed. Only reach for them when you are consuming the values in JavaScript rather than re-serializing.
+- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. A core tag applies to any text written in its own format, quoted or not: `!!int "7"` is `7`, `!!bool "FALSE"` is `false`, `!!float 1` is `1` (an integer form is a valid float), and `!!int "0x1F"` is `31` just as `!!int 0x1F` is. Text that is *not* in the tag's format — `!!int 1.9`, `!!int "12abc"`, `!!null x`, `!!bool yes` — keeps the string it was written as, with a `BAD_TAG_VALUE` warning, rather than being coerced into something the author did not write. A tagged mapping key is keyed by its tagged value, so `!!str 1.50: x` is the key `"1.50"`.
+- Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A `!!timestamp` has to match the [YAML timestamp format](https://yaml.org/type/timestamp.html), and one written without a time zone is UTC — never the host's local time. Invalid base64, a timestamp that is not one, an `!!omap` entry that is not a single pair or repeats a key, and a collection tag on the wrong kind of node are `BAD_TAG_VALUE` warnings; the value is left as written. A conformant OpenAPI document won't use these. Note that three of the four do **not** survive `JSON.stringify` — a `Set` and a `Map` both serialize to `{}`, and a `Uint8Array` to an object keyed by index — so a document using them is no longer JSON-round-trippable, however faithfully it parsed. Only reach for them when you are consuming the values in JavaScript rather than re-serializing.
 - All three spellings resolve to the same tag: the shorthand `!!str`, the verbatim `!<tag:yaml.org,2002:str>`, and a shorthand through a handle a `%TAG` directive declared.
 - The non-specific `!` resolves a scalar as a string, per the failsafe schema.
 - Any other tag is **captured on the node** (readable via `node.tag`) and its value passed through unchanged. A *local* tag keeps its `!` — `node.tag` is `!custom` for `!custom`, versus `str` for `!!str` — so an application tag that happens to share a core tag's name does not coerce.
 
 **References, documents, and trivia**
 
-- Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option). Anchors and aliases work as mapping keys, and an alias key resolves to the anchored value.
+- Anchors (`&name`) and aliases (`*name`); `<<` merge keys (toggle with the `merge` option). A mapping may repeat a plain `<<` key (`<<: *a` / `<<: *b`) without a `DUPLICATE_KEY`; a quoted `"<<"`, and any `<<` under `merge: false`, is an ordinary key, so repeating it is a duplicate. A merge source that is not a mapping is reported (`BAD_MERGE`) and skipped. Anchors and aliases work as mapping keys, and an alias key resolves to the anchored value.
 - Node properties written on a mapping key (`&a key: value`, `!!str 23: v`) apply to **the key**, so a later `*a` resolves to the key — not to the mapping it opens. Properties on a line of their own above the mapping describe the mapping itself.
 - Collections as mapping keys, both explicit (`? [a, b]` / `: value`) and implicit (`[a, b]: value`), in any entry position. A JavaScript object can only be keyed by a string, so a collection key projects to its flow rendering — `{ '[ a, b ]': 'value' }` — and two keys that render alike are reported as duplicates, because in the projection they are.
 - Compact block collections opened on an explicit entry's introducer line — `? a` / `: - one` is a sequence, `? earth: blue` a mapping — with their remaining entries aligned under that first one.
-- Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope, tag handles, and problem list.
+- Multi-document streams (`---` / `...`) via `parseAllDocuments`, each document with its own anchor scope, tag handles, and problem list. A marker counts only at column 0: an indented `---` or `...` is ordinary text (` ---` is the string `"---"`).
 - A root node written on the `---` line itself — `--- foo`, `--- |`, `--- !!str`, or a quoted scalar spanning the lines below it. Its content is measured against column 0, not the column the marker pushed it to, so `--- >` may hold a block scalar starting at column 0.
 - `%TAG` directives (handles are resolved) and `%YAML` (the version is reported, not applied — resolution is always the 1.2 core schema).
 - Comments (full-line and inline), blank lines, and a leading byte-order mark. Comments are skipped by default and collected onto `doc.comments` when `keepComments` is set — including the ones on `---`/`...` marker and directive lines.
@@ -266,30 +268,32 @@ The one thing that *does* throw is the guard against a document built to exhaust
 
 | code | |
 | --- | --- |
-| `DUPLICATE_KEY` | the same mapping key appears twice — compared on the string the key projects to, so an alias to an anchored key and two collection keys with the same flow rendering both count |
+| `DUPLICATE_KEY` | the same mapping key appears twice — compared on the string the key projects to, so an alias to an anchored key and two collection keys with the same flow rendering both count. Repeated plain `<<` merge keys are not duplicates while `merge` is on |
 | `UNRESOLVED_ALIAS` | `*name` with no matching anchor in scope |
 | `RECURSIVE_ALIAS` | `*name` inside the very node `&name` labels (`&a [1, *a]`) — the anchor exists, but the cycle it describes is not built |
 | `UNTERMINATED_FLOW` | a `[` or `{` that never closes |
 | `UNTERMINATED_QUOTE` | a quoted scalar that never closes |
-| `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, a block sequence opened on the line of the key it belongs to (`key: - a`), or a block mapping opened on the `---` line (`--- a: 1`, `--- [a, b]: v`) |
+| `UNEXPECTED_CONTENT` | content after a node ends, a second root node with no `---`, content after a `...` marker, a document marker inside a flow collection, a block sequence opened on the line of the key or node properties it belongs to (`key: - a`), text between a quoted, alias, or flow-collection key and its `:` (`"a"b: 1`), or a block collection opened on the `---` line (`--- a: 1`, `--- - a`, `--- ? a`, `--- [a, b]: v`) |
 | `UNEXPECTED_COMMA` | an empty flow entry (`[1, , 2]`) |
 | `TAB_INDENT` | a tab standing where indentation belongs — in a line's leading whitespace, in a block scalar's, or between an indicator and the compact collection it opens (`-\t- x`) |
-| `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` ``, or a `-` where a flow entry belongs (`[-]`) |
+| `BAD_SCALAR_START` | a plain scalar starting with an indicator character — `@`, `` ` ``, `]`, `}`, `,`, `%`, `|`, `>` (`a: ]`, `[|]`, `a: ,x`) — a `?` with no content after it (`a: ?`, `[?]`), or a `-` where a flow entry belongs (`[-]`) |
 | `BAD_SCALAR_CONTENT` | a `: ` inside a plain scalar, which the spec ends the scalar at (`a: b: c`, or a continuation line that reads as a mapping entry) |
 | `BAD_COMMENT` | a `#` with no whitespace before it, so the rest of the line is not a comment (`"value"# …`) |
-| `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`) |
+| `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`, `"\é"`), or a `\x`/`\u`/`\U` without exactly 2/4/8 hex digits or past U+10FFFF; the escape is kept as written |
+| `BAD_MERGE` | a `<<` merge whose value is not a mapping or a list of mappings (`<<: 5`, `<<: [1, 2]`, an empty `<<:`, an alias to a scalar, a `!!set` or `!!omap`, which project to a `Set`/`Map` with nothing to merge); the bad source is skipped when projecting |
 | `BAD_BLOCK_HEADER` | a `|`/`>` header with a repeated indicator or trailing text (`|10`, `> text`) |
 | `BAD_INDENT` | a block scalar's leading blank line reaching past its first content line, a quoted scalar continued at its parent's column, or a flow collection whose continuation lines do not clear the block that holds it |
 | `BAD_IMPLICIT_KEY` | a key that does not fit on one line, a block key whose `:` sits more than 1024 characters in, or a `[ key\n : value ]` whose `:` is on the next line |
-| `BAD_PROPERTY` | an anchor or tag on an alias, or a node carrying two anchors or two tags (`&x &y 1`, or `&x` on its own line above a `&y` value) |
+| `BAD_PROPERTY` | an anchor or tag on an alias, a node carrying two anchors or two tags (`&x &y 1`, or `&x` on its own line above a `&y` value), or properties written before a `?` on its line (`&x ? a`) |
+| `BAD_ANCHOR` | an empty anchor or alias name (`& x`, a lone `*`), or an anchor name running into a flow indicator in block context (`&x{b: 1}`) |
 | `BAD_TAG` | a verbatim tag missing its closing `>`, or a tag holding a flow indicator |
 | `UNKNOWN_TAG_HANDLE` | a tag handle no `%TAG` directive declared |
-| `BAD_DIRECTIVE` | a malformed `%YAML` version, or content after it |
+| `BAD_DIRECTIVE` | a malformed `%YAML` version, or content after it (a malformed `%TAG` reuses the code as a warning) |
 | `DUPLICATE_DIRECTIVE` | a second `%YAML` directive on one document (a `%TAG` handle declared twice reuses the code as a warning) |
-| `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it |
+| `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it (a `%` line after `---` is reported and kept as content) |
 | `DEPTH_LIMIT` | nesting past the parser's depth cap |
 
-Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), a `%TAG` handle declared twice (`DUPLICATE_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), a `%TAG` handle declared twice (`DUPLICATE_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — `BAD_TAG_VALUE`, a schema tag that cannot describe what it is written on (`!!int 1.9`, `!!binary "not base64!"`), and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
 
 ### Not supported
 
@@ -361,7 +365,6 @@ listed here agreed at the time of that run.
 | document | @amritk/yaml | `yaml` | `js-yaml` |
 | --- | --- | --- | --- |
 | `t: !!float 1` | `1` | `"1"` | `1` |
-| `t: !!null x` | `null` | `"x"` | throws |
 | `...` alone, or after a comment | no document | one `null` document | one `null` document |
 | `%YAML 1.2` with no document | `UNEXPECTED_DIRECTIVE` | accepted | throws |
 | `%YAML 1.2` twice | `DUPLICATE_DIRECTIVE` | accepted | throws |
@@ -372,10 +375,6 @@ Reading them:
 - **`!!float 1`** — the core schema's float production accepts an integer form, so
   `1` is a valid float and resolves to the number. `yaml` requires a decimal point
   and falls back to the raw string; `js-yaml` agrees with us.
-- **`!!null x`** — a core tag coerces (see the Tags list under
-  [Supported](#supported)), so the tag wins and the value is `null`. The three
-  parsers pick three different answers here; ours is the one consistent with how
-  `!!int "7"` and `!!bool "FALSE"` behave.
 - **`...` with nothing before it** — the document-end marker ends a document; it
   does not open one. The suite's own event stream for these cases (`HWV9`, `QT73`,
   and the spec's Example 9.3, `M7A3`) is an empty stream, so the extra `null`

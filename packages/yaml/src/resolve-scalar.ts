@@ -99,6 +99,14 @@ export const resolvePlainValue = (text: string): string | number | boolean | nul
   return text
 }
 
+/**
+ * True when `text` is written in one of the core schema's int forms (decimal,
+ * `0x` hex, `0o` octal). {@link resolvePlainValue} hands back a number for the
+ * float forms too, so an explicit `!!int` needs this to tell `12` from `1.9` or
+ * `.inf` — none of which a `!!int` tag can honestly describe.
+ */
+export const isCoreInt = (text: string): boolean => INT_DEC.test(text) || INT_HEX.test(text) || INT_OCT.test(text)
+
 const DOUBLE_ESCAPES: Record<string, string> = {
   '0': '\0',
   a: '\x07',
@@ -265,20 +273,26 @@ const unescapeLine = (line: string, allowContinuation: boolean): QuotedLine => {
       const hex = line.slice(i + 2, i + 2 + len)
       // The escape is only valid with exactly `len` hex digits naming a real Unicode
       // code point. A short/non-hex run (`\xZZ`) or an out-of-range value (`\UFFFFFFFF`,
-      // which would make `String.fromCodePoint` throw) is treated as a literal escape
-      // letter, consuming just `\x` so the trailing characters are preserved.
+      // which would make `String.fromCodePoint` throw) is kept exactly as written,
+      // backslash and all — the scanner has already reported it as `BAD_ESCAPE`.
+      // Only `\x` is consumed, so the characters after it pass through untouched.
       const valid = hex.length === len && /^[0-9a-fA-F]+$/.test(hex)
       const code = valid ? Number.parseInt(hex, 16) : Number.NaN
       if (code <= 0x10ffff && !Number.isNaN(code)) {
         text += String.fromCodePoint(code)
         i += 2 + len
       } else {
-        text += next
+        text += '\\' + next
         i += 2
       }
     } else {
+      // An escape the spec does not define (`\.`, `\é`) is reported by the scanner,
+      // and its text is kept as the author wrote it. Dropping just the backslash
+      // looked like a repair but produced a string nobody wrote — `C:\Users` read
+      // as `C:Users` — and a linter that echoes the value back should show the
+      // text the diagnostic is about. `yaml` (eemeli) recovers the same way.
       const mapped = DOUBLE_ESCAPES[next]
-      text += mapped ?? next
+      text += mapped ?? '\\' + next
       i += 2
     }
     if (text.length > before) {
@@ -324,6 +338,21 @@ const foldQuotedLines = (raw: string[]): string => {
     const prev = merged[merged.length - 1]
     if (prev === undefined || !prev.continues) {
       merged.push(line)
+      continue
+    }
+    // An empty line after a `\` continuation is not folded away with the escaped
+    // break: `s-double-escaped(n) ::= s-white* "\" b-non-content l-empty(n,flow-in)*`,
+    // and each `l-empty` is a line feed of content. So it becomes one `\n` and the
+    // continuation carries on, joining the next content line with no space.
+    // Splicing it like any other line merged it away, so `"a\` + blank + `b"`
+    // read as `a b` instead of the spec's (and PyYAML's) `a\nb`. The final line
+    // is never an `l-empty` — no break follows it, only the closing quote.
+    // The `\n` is marked as escape-produced, which keeps the merged line from
+    // reading as blank when that `\n` is all it holds.
+    if (i < raw.length - 1 && !line.continues && isBlankQuoted(line)) {
+      if (prev.firstEsc === -1) prev.firstEsc = prev.text.length
+      prev.lastEsc = prev.text.length
+      prev.text += '\n'
       continue
     }
     // Splice a `\`-continued line onto the one before it: no separator, and the

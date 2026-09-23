@@ -17,7 +17,7 @@ describe('core-schema tags', () => {
 
   it('resolves !!float, !!null, and !!bool per the core schema', () => {
     expect(parseDocument('a: !!float 3\n').toJS()).toEqual({ a: 3 })
-    expect(parseDocument('a: !!null anything\n').toJS()).toEqual({ a: null })
+    expect(parseDocument('a: !!null ~\n').toJS()).toEqual({ a: null })
     expect(parseDocument('a: !!bool false\n').toJS()).toEqual({ a: false })
   })
 
@@ -257,11 +257,10 @@ describe('explicit ? / : mapping entries', () => {
 
   it('records the source range of an explicit key node', () => {
     const node = parseDocument('? name\n: value\n').contents
-    if (node?.kind === 'map') {
-      const key = node.items[0]?.key
-      // `name` begins at offset 2 (just past `? `) and ends before the newline.
-      expect([key?.start, key?.end]).toEqual([2, 6])
-    }
+    if (node?.kind !== 'map') throw new Error('expected a map')
+    const key = node.items[0]?.key
+    // `name` begins at offset 2 (just past `? `) and ends before the newline.
+    expect([key?.start, key?.end]).toEqual([2, 6])
   })
 
   it('does not over-report duplicates for distinct complex keys', () => {
@@ -375,12 +374,11 @@ describe('multi-line plain scalars in flow collections', () => {
 
   it('spans the source range from the first line to the last folded line', () => {
     const node = parseDocument('[a\n  b, c]\n').contents
-    if (node?.kind === 'seq') {
-      const first = node.items[0]
-      // `a` starts at offset 1; the folded scalar ends after `b` on line 2
-      // (offset 6), with the trailing break and `, c]` left to the sequence.
-      expect([first?.start, first?.end]).toEqual([1, 6])
-    }
+    if (node?.kind !== 'seq') throw new Error('expected a sequence')
+    const first = node.items[0]
+    // `a` starts at offset 1; the folded scalar ends after `b` on line 2
+    // (offset 6), with the trailing break and `, c]` left to the sequence.
+    expect([first?.start, first?.end]).toEqual([1, 6])
   })
 })
 
@@ -805,10 +803,10 @@ describe('block scalar headers', () => {
 })
 
 describe('quoted scalar escapes and indentation', () => {
-  it('reports an escape the spec does not define, keeping the character', () => {
+  it('reports an escape the spec does not define, keeping it as written', () => {
     const doc = parseDocument('a: "b\\.c"\n')
     expect(doc.errors.map((e) => e.code)).toEqual(['BAD_ESCAPE'])
-    expect(doc.toJS()).toEqual({ a: 'b.c' })
+    expect(doc.toJS()).toEqual({ a: 'b\\.c' })
     // `\'` is a single-quoted escape; inside double quotes it means nothing.
     expect(parseDocument('a: "quoted \\\' scalar"\n').errors.map((e) => e.code)).toContain('BAD_ESCAPE')
   })
@@ -1389,9 +1387,11 @@ describe('numeric tags written on a quoted scalar', () => {
     expect(parseDocument('a: !!float "1e3"\n').toJS()).toEqual({ a: 1000 })
   })
 
-  it('still truncates a float to an int and leaves unparseable text alone', () => {
-    expect(parseDocument('a: !!int "1.5"\n').toJS()).toEqual({ a: 1 })
-    expect(parseDocument('a: !!int "42 items"\n').toJS()).toEqual({ a: 42 })
+  it('leaves text that is not an int or float spelling alone', () => {
+    // No truncating `1.5` or reading a number off the front of `42 items`: a tag
+    // applies only to text in its own format (see scalars-and-tags.test.ts).
+    expect(parseDocument('a: !!int "1.5"\n').toJS()).toEqual({ a: '1.5' })
+    expect(parseDocument('a: !!int "42 items"\n').toJS()).toEqual({ a: '42 items' })
     expect(parseDocument('a: !!int "abc"\n').toJS()).toEqual({ a: 'abc' })
     expect(parseDocument('a: !!float "abc"\n').toJS()).toEqual({ a: 'abc' })
   })

@@ -9,11 +9,17 @@ import {
   type ISourceSet,
   type JsonPath,
 } from '@amritk/lint/types'
-import { type OriginMap, type ResolveError, resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
-import { parse as parseYaml } from '@amritk/yaml'
+import {
+  type OriginMap,
+  type ResolveError,
+  type ResolveResult,
+  resolveRefs,
+  resolveRefsFromFile,
+} from '@amritk/resolve-refs'
 
-import { withAllowedRootsHint } from '../allowed-roots-hint'
+import { describeResolveError } from '../describe-resolve-error'
 import { hasExternalRefs } from '../has-external-refs'
+import { parseYamlStrict } from '../parse-yaml-strict'
 
 /** How `mjst lint` dereferences `$ref` (and `$dynamicRef`/`$recursiveRef`). */
 export type ResolverOptions = {
@@ -38,17 +44,32 @@ export type ResolverOptions = {
 const isRemote = (location: string): boolean => /^https?:\/\//i.test(location)
 
 /**
+ * Parses a referenced YAML document, throwing on a parse error or a
+ * multi-document stream rather than returning the parser's salvage (see
+ * {@link parseYamlStrict}). A throw here is how the resolver learns the file
+ * could not be loaded: it becomes a `ResolveError` at the `$ref` that named the
+ * file, and so an `unresolved-ref` finding — the same path a missing file takes.
+ *
+ * Duplicate keys are let through, the last one winning: that is what a
+ * referenced JSON file has always done (`JSON.parse`), and the ruleset's
+ * `parserOptions.duplicateKeys` — which the resolver cannot see — is the
+ * user's say over duplicates, in the linted document itself.
+ */
+const parseReferencedYaml = (content: string, location: string): unknown =>
+  parseYamlStrict(content, location, { what: 'a $ref target', singleLine: true, uniqueKeys: false })
+
+/**
  * Parses a referenced document by extension: YAML for `.yaml`/`.yml`, JSON for
  * `.json`, and for anything else (extensionless, remote) tries JSON first, then
  * YAML. YAML is a JSON superset, so this accepts every document the linter does.
  */
 const parseDoc = (content: string, location: string): unknown => {
-  if (/\.ya?ml$/i.test(location)) return parseYaml(content)
+  if (/\.ya?ml$/i.test(location)) return parseReferencedYaml(content, location)
   if (/\.json$/i.test(location)) return JSON.parse(content)
   try {
     return JSON.parse(content)
   } catch {
-    return parseYaml(content)
+    return parseReferencedYaml(content, location)
   }
 }
 
@@ -117,7 +138,7 @@ const toFindings = (errors: ResolveError[], root: Document): IDiagnostic[] =>
     const location = error.path.length > 0 ? root.getLocationForJsonPath(error.path, true) : undefined
     const finding: IDiagnostic = {
       code: 'unresolved-ref',
-      message: withAllowedRootsHint(error.message),
+      message: describeResolveError(error.message),
       path: error.path,
       severity: DiagnosticSeverity.Error,
       range: location?.range ?? DOCUMENT_START,
@@ -125,6 +146,51 @@ const toFindings = (errors: ResolveError[], root: Document): IDiagnostic[] =>
     if (root.source !== undefined) finding.source = root.source
     return finding
   })
+
+/**
+ * Whether the linter read `document` as a `---` stream of several documents.
+ *
+ * The YAML parser hands a stream over as an array of its documents, with every
+ * position looked up under a leading document index, and the stream itself (the
+ * empty path) has no position. A single document always has one, its root node,
+ * even when that root is an array: that is what tells `- a\n- b` apart from a
+ * stream, whose data is an array too.
+ */
+const isMultiDocument = (document: Document): document is Document<unknown[]> =>
+  Array.isArray(document.data) && document.data.length > 1 && document.getLocationForJsonPath([]) === undefined
+
+/**
+ * One document's resolve, plus the location its `origins` use for that document
+ * itself: the root file's absolute path when it was resolved from disk, `''`
+ * when it was resolved in memory.
+ */
+type DocumentResolution = ResolveResult & { location: string }
+
+/**
+ * Re-bases the resolve of document `index` of a multi-document root onto the
+ * stream, collecting its origins into `into` and returning its errors. Paths
+ * into that document gain the `[index]` prefix the linter's own paths carry, so
+ * a finding lands in the right document at the right line; origins in other
+ * files are left as they are.
+ */
+const rebaseOntoStream = (
+  { errors, origins, location }: DocumentResolution,
+  index: number,
+  rootLocation: string,
+  into: OriginMap,
+): ResolveError[] => {
+  if (origins) {
+    for (const [node, origin] of origins) {
+      if (into.has(node)) continue
+      const inThisDocument = origin.location === location
+      into.set(node, inThisDocument ? { location: rootLocation, pointer: [index, ...origin.pointer] } : origin)
+    }
+  }
+  // An error with no path of its own (a `$ref` written in a referenced file)
+  // still belongs to this document, so it is anchored at the document's start
+  // rather than at the top of the stream.
+  return errors.map((error) => ({ message: error.message, path: [index, ...error.path] }))
+}
 
 /**
  * Builds a {@link LintResolver} backed by `@amritk/resolve-refs`, dereferencing
@@ -135,6 +201,11 @@ const toFindings = (errors: ResolveError[], root: Document): IDiagnostic[] =>
  * refs is resolved from disk **only when its source file reads back exactly as
  * the linted input** — so a piped document (`--stdin-filepath`) never resolves
  * against a different on-disk file — with remote fetching gated by `options`.
+ *
+ * A multi-document root (a YAML `---` stream) is resolved one document at a
+ * time, each as a root of its own — `#/…` points into the document the `$ref`
+ * is written in, and so does a `$ref` naming the root file — and the results
+ * are put back into the array the linter reads the stream as.
  */
 export const createLintResolver = (options: ResolverOptions = {}): LintResolver => {
   const fromFileOptions = {
@@ -151,26 +222,55 @@ export const createLintResolver = (options: ResolverOptions = {}): LintResolver 
   // one the document itself lives in.
   const extraRoots = (options.allowedRoots ?? []).map((root) => resolvePath(root))
 
+  /**
+   * Resolves one document. `absolute` is the root file's path when the root may
+   * be resolved from disk (it reads back as the linted input), else `undefined`.
+   */
+  const resolveDocument = async (data: unknown, absolute: string | undefined): Promise<DocumentResolution> => {
+    if (absolute !== undefined && hasExternalRefs(data)) {
+      const result = await resolveRefsFromFile(absolute, {
+        ...fromFileOptions,
+        // The linter has parsed this very text already; hand that value over
+        // rather than have the root read and parsed a second time (the most
+        // expensive step of linting a large spec). It also keeps a root with a
+        // syntax error of its own (already a `parser` finding) out of the
+        // strict parse that referenced files get.
+        rootDocument: data,
+        ...(extraRoots.length > 0 ? { allowedRoots: [dirname(absolute), ...extraRoots] } : {}),
+      })
+      return { ...result, location: absolute }
+    }
+    return { ...resolveRefs(data, { trackOrigins: true }), location: '' }
+  }
+
   return async (document, { input }) => {
     const { source } = document
-    if (source && hasExternalRefs(document.data)) {
-      const absolute = resolvePath(source)
-      if (readsBackAs(absolute, input)) {
-        const { resolved, origins, errors } = await resolveRefsFromFile(absolute, {
-          ...fromFileOptions,
-          ...(extraRoots.length > 0 ? { allowedRoots: [dirname(absolute), ...extraRoots] } : {}),
-        })
-        return {
-          resolved,
-          sources: buildSourceSet(document, resolved, origins, absolute),
-          ...(errors.length > 0 ? { diagnostics: toFindings(errors, document) } : {}),
-        }
+    const absolute =
+      source && hasExternalRefs(document.data) && readsBackAs(resolvePath(source), input)
+        ? resolvePath(source)
+        : undefined
+
+    if (!isMultiDocument(document)) {
+      const { resolved, origins, errors, location } = await resolveDocument(document.data, absolute)
+      return {
+        resolved,
+        sources: buildSourceSet(document, resolved, origins, location),
+        ...(errors.length > 0 ? { diagnostics: toFindings(errors, document) } : {}),
       }
     }
-    const { resolved, origins, errors } = resolveRefs(document.data, { trackOrigins: true })
+
+    // Resolving the stream as one value would make `#/…` an index into the
+    // array of documents; each document is a root of its own instead. A
+    // document without cross-file refs still resolves in memory, exactly as it
+    // would were it the only one in its file.
+    const rootLocation = absolute ?? ''
+    const results = await Promise.all(document.data.map((data) => resolveDocument(data, absolute)))
+    const origins: OriginMap = new Map()
+    const errors = results.flatMap((result, index) => rebaseOntoStream(result, index, rootLocation, origins))
+    const resolved = results.map((result) => result.resolved)
     return {
       resolved,
-      sources: buildSourceSet(document, resolved, origins, ''),
+      sources: buildSourceSet(document, resolved, origins, rootLocation),
       ...(errors.length > 0 ? { diagnostics: toFindings(errors, document) } : {}),
     }
   }

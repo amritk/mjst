@@ -70,6 +70,7 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 | `maxDepth` | `512` | How deep to walk before leaving a subtree unresolved and recording an error. |
 | `cache` | `true` | Pass `false` to bypass the process-wide session cache for this call — everything is re-fetched, nothing is stored. |
 | `parse` | `JSON.parse` | Custom content parser (e.g. YAML-aware). |
+| `rootDocument` | — | The root's already-parsed value. The named file is then neither read nor parsed; its location still anchors relative refs, `allowedRoots`, and `origins`. The value is only read, never written or aliased into the result. |
 | `trackOrigins` | `false` | Record a per-node origin map on the result. |
 
 Errors (a missing file, a refused host, a refused path, a bad URL, a document too

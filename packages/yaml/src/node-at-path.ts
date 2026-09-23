@@ -1,6 +1,6 @@
 import { isAlias, isMap, isSeq } from './guards'
 import { keyText } from './parse-document'
-import type { YamlNode } from './types'
+import type { YamlMap, YamlNode, YamlPair } from './types'
 
 /** A path into a document, e.g. `['paths', '/pets', 'get']` or `['tags', 0]`. */
 export type NodePath = readonly (string | number)[]
@@ -26,6 +26,108 @@ const resolveAlias = (node: YamlNode): YamlNode | undefined => {
     current = current.target
   }
   return current
+}
+
+/**
+ * Smallest mapping {@link findPair} indexes rather than scans. Below it a linear
+ * scan is a handful of string compares and allocates nothing, which beats
+ * building (and holding) a `Map` for the small mappings that make up nearly
+ * every document; above it a scan per path segment is what made resolving every
+ * path of a large spec quadratic in its widest mappings — OpenAI's public
+ * OpenAPI document has one of 959 keys.
+ */
+const INDEX_MIN_PAIRS = 16
+
+/**
+ * A wide mapping's pair positions keyed by {@link keyText}, and how many items
+ * the mapping had when the index was built. Positions rather than the pairs
+ * themselves, so a lookup reads the pair that is at that position *now* — which
+ * is what lets it notice a pair replaced in place.
+ */
+type KeyIndex = { size: number; positions: Map<string, number> }
+
+/**
+ * Key indexes for the wide mappings {@link nodeAtPath} has walked through, built
+ * on the first lookup and weakly held so they go away with the tree. Module level
+ * because the node types are plain data the index must not be written onto: a
+ * caller serialising or deep-comparing a tree would otherwise meet it.
+ */
+const keyIndexes = new WeakMap<YamlMap, KeyIndex>()
+
+/**
+ * Builds {@link KeyIndex} for a mapping. Pairs are inserted in order, so a
+ * duplicated key ends up holding the *last* pair written — the one `toJS()`
+ * keeps, and the one the back-to-front scan finds first.
+ */
+const buildKeyIndex = (map: YamlMap): KeyIndex => {
+  const positions = new Map<string, number>()
+  const items = map.items
+  for (let i = 0; i < items.length; i++) {
+    const pair = items[i]
+    if (pair !== undefined) positions.set(keyText(pair.key), i)
+  }
+  const index = { size: items.length, positions }
+  keyIndexes.set(map, index)
+  return index
+}
+
+/**
+ * The last pair of `items` whose {@link keyText} is `key`, scanned back to front
+ * so a duplicated key resolves to the pair that *won*. `toJS()` assigns each pair
+ * in order, so the last one written is the value the projection holds — the same
+ * rule `JSON.parse` follows, and what `uniqueKeys: false` documents. Taking the
+ * first match instead pointed a diagnostic at the shadowed node: the span of a
+ * value the caller is not looking at.
+ */
+const scanPairs = (items: readonly (YamlPair | undefined)[], key: string): YamlPair | undefined => {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const pair = items[i]
+    if (pair !== undefined && keyText(pair.key) === key) return pair
+  }
+  return undefined
+}
+
+/**
+ * Finds the pair of `map` whose {@link keyText} is `key`, taking the last one
+ * when the key is duplicated.
+ *
+ * A wide mapping answers from its index, which has to give the answer a scan
+ * would even after the tree was edited in place — the wide and the narrow
+ * mapping used to disagree there, the index quietly returning a pair that had
+ * been replaced, or missing a key that had been renamed. So the index is never
+ * trusted blind:
+ * - it is rebuilt whenever `items.length` differs from when it was built, so
+ *   pairs pushed, popped or spliced in are seen;
+ * - a hit is checked against the pair now at that position — still there, still
+ *   under that key — and a mismatch rebuilds the index;
+ * - a miss is confirmed by a scan, which is what finds a pair put in place or a
+ *   key renamed *to* the name being looked up. A miss is the rare case (a
+ *   lookup for a path that exists is a hit), so paying a scan for it keeps the
+ *   index's point: resolving every path of a wide mapping stays linear.
+ *
+ * One in-place edit still reads differently: renaming a later key to one that
+ * appears earlier, so the mapping gains a duplicate whose earlier copy the index
+ * holds. A scan takes the later pair; the index, whose hit still checks out, the
+ * earlier. Telling the two apart would need the very scan the index replaces.
+ */
+const findPair = (map: YamlMap, key: string): YamlPair | undefined => {
+  const items = map.items
+  if (items.length < INDEX_MIN_PAIRS) return scanPairs(items, key)
+  let index = keyIndexes.get(map)
+  if (index === undefined || index.size !== items.length) index = buildKeyIndex(map)
+  const at = index.positions.get(key)
+  if (at === undefined) {
+    const found = scanPairs(items, key)
+    // Found by the scan but not the index: the index is stale, so the next
+    // lookup should not pay for the scan again.
+    if (found !== undefined) buildKeyIndex(map)
+    return found
+  }
+  const pair = items[at]
+  if (pair !== undefined && keyText(pair.key) === key) return pair
+  // The pair at that position was replaced or renamed since the index was built.
+  const fresh = buildKeyIndex(map).positions.get(key)
+  return fresh === undefined ? undefined : items[fresh]
 }
 
 /**
@@ -67,20 +169,7 @@ export const nodeAtPath = (root: YamlNode | null, path: NodePath, closest = fals
     let next: YamlNode | null | undefined
 
     if (isMap(node)) {
-      const key = String(segment)
-      // Scanned back to front so a duplicated key resolves to the pair that
-      // *won*. `toJS()` assigns each pair in order, so the last one written is
-      // the value the projection holds — the same rule `JSON.parse` follows, and
-      // what `uniqueKeys: false` documents. Taking the first match instead
-      // pointed a diagnostic at the shadowed node: the span of a value the
-      // caller is not looking at.
-      for (let i = node.items.length - 1; i >= 0; i--) {
-        const pair = node.items[i]
-        if (pair !== undefined && keyText(pair.key) === key) {
-          next = pair.value
-          break
-        }
-      }
+      next = findPair(node, String(segment))?.value
     } else if (isSeq(node)) {
       // A string segment has to be the canonical spelling of the index, the only
       // key `toJS()`'s array answers to: `Number()` also took '', ' 1', '0x1', '1e0'.

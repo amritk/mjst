@@ -4,10 +4,10 @@ import { assignKey } from '@amritk/helpers/assign-key'
 import { readKey } from '@amritk/helpers/read-key'
 import type { JsonPath, OriginMap } from '@amritk/resolve-refs'
 import { resolveRefsFromFile } from '@amritk/resolve-refs'
-import { parseDocument } from '@amritk/yaml'
 
 import type { CliConfig } from './cli-config'
 import { hasExternalRefs } from './has-external-refs'
+import { parseYamlStrict } from './parse-yaml-strict'
 import { buildResolveOptions, formatResolveErrors } from './resolve-policy'
 
 /**
@@ -19,29 +19,24 @@ import { buildResolveOptions, formatResolveErrors } from './resolve-policy'
  * error naming an invisible character. YAML parse problems are collected
  * rather than thrown, so they are surfaced here: generating from the salvage
  * of a malformed document would silently drop the channels that failed to
- * parse.
+ * parse. So is a multi-document stream, of which the parser reads only the
+ * first document — generating from half a file while exiting 0 would silently
+ * drop every channel in the later ones.
+ *
+ * A `referenced` file's message stays on one line, since it is listed as one
+ * bullet among the resolve errors.
  */
-const parseDocumentText = (content: string, location: string): unknown => {
+const parseDocumentText = (content: string, location: string, referenced = false): unknown => {
   const text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content
   if (/\.json$/i.test(location)) return JSON.parse(text)
-  const doc = parseDocument(text)
-  if (doc.errors.length > 0) {
-    const details = doc.errors
-      .slice(0, 5)
-      .map((error) => `  - ${error.message}`)
-      .join('\n')
-    throw new Error(`Failed to parse ${location} as YAML:\n${details}`)
-  }
-  // The parser reads only the first document of a `---` stream and flags the
-  // rest with a warning; generating from half a file while exiting 0 would
-  // silently drop every channel in the later documents.
-  if (doc.warnings.some((warning) => warning.code === 'MULTIPLE_DOCUMENTS')) {
-    throw new Error(
-      `${location} contains multiple YAML documents; an AsyncAPI document must be a single-document file.`,
-    )
-  }
-  return doc.toJS()
+  return parseYamlStrict(text, location, {
+    what: referenced ? 'a $ref target' : 'an AsyncAPI document',
+    singleLine: referenced,
+  })
 }
+
+/** {@link parseDocumentText} for a `$ref`-referenced file (the resolver's `parse` callback). */
+const parseReferencedText = (content: string, location: string): unknown => parseDocumentText(content, location, true)
 
 /** Walks a resolver `JsonPath` down a plain JSON tree. */
 const nodeAt = (root: unknown, pointer: JsonPath): unknown => {
@@ -120,7 +115,10 @@ export const loadAsyncApiDocument = async (config: Partial<CliConfig>, documentP
 
   const { resolved, errors, origins } = await resolveRefsFromFile(documentPath, {
     ...buildResolveOptions(config, documentPath),
-    parse: parseDocumentText,
+    // Parsed just above; without this the resolver would read and parse the
+    // whole document a second time.
+    rootDocument: document,
+    parse: parseReferencedText,
     trackOrigins: true,
   })
   if (errors.length > 0) throw new Error(formatResolveErrors(documentPath, errors))

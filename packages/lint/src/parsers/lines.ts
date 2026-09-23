@@ -11,13 +11,36 @@ export type LineMap = {
 /**
  * Builds a {@link LineMap} for `source`. The line-start offsets are precomputed
  * once so each `positionAt` lookup is a binary search rather than a re-scan.
+ *
+ * A line ends at CR LF, a lone CR, or a lone LF — YAML 1.2 §5.4's
+ * `b-break ::= CR LF | CR | LF`, which is also where JSON's scanner breaks lines.
+ * Counting LF alone put every position in a CR-only file on line 0 while the
+ * parser (and `@amritk/yaml`'s `lineCounter`) put it on its real line.
  */
 export const createLineMap = (source: string): LineMap => {
   const length = source.length
   // Offset at which each line starts. lineStarts[0] === 0.
   const lineStarts = [0]
-  for (let i = 0; i < source.length; i++) {
-    if (source.charCodeAt(i) === 10 /* \n */) lineStarts.push(i + 1)
+  // Hop break to break with `indexOf`, which the engine vectorizes, rather than
+  // reading every character: this runs once per linted document, right after the
+  // parse, and the same change was worth ~3x in the parser's own line counter.
+  let nl = source.indexOf('\n')
+  let cr = source.indexOf('\r')
+  while (nl !== -1 || cr !== -1) {
+    if (cr !== -1 && (nl === -1 || cr < nl)) {
+      // CR LF is one break: step over both and move the LF scan past the one we
+      // just consumed, or a Windows file would gain an empty line per real one.
+      if (source.charCodeAt(cr + 1) === 10 /* \n */) {
+        lineStarts.push(cr + 2)
+        nl = source.indexOf('\n', cr + 2)
+      } else {
+        lineStarts.push(cr + 1)
+      }
+      cr = source.indexOf('\r', cr + 1)
+    } else {
+      lineStarts.push(nl + 1)
+      nl = source.indexOf('\n', nl + 1)
+    }
   }
 
   const positionAt = (offset: number): IPosition => {

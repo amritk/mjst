@@ -23,9 +23,16 @@ export type YamlScalar = {
   start: number
   /** Exclusive end offset into the source. */
   end: number
-  /** A `!!`-style tag if one was written, e.g. `str` for `!!str`. */
+  /**
+   * The tag written on this node, if any, in resolved form. A schema tag is
+   * stored by its short suffix however it was spelled (`!!str` and
+   * `!<tag:yaml.org,2002:str>` are both `str`); anything else keeps its full
+   * form — a local tag keeps its `!` (`!foo` is `!foo`), the non-specific tag
+   * is `!`, and a tag written with a `%TAG`-declared handle is stored as the
+   * full tag it expands to.
+   */
   tag?: string
-  /** The `&name` anchor declared on this node, if any. */
+  /** The `&name` anchor declared on this node (without the `&`), if any. */
   anchor?: string
 }
 
@@ -63,7 +70,12 @@ export type YamlMap = {
   items: YamlPair[]
   start: number
   end: number
+  /**
+   * The tag written on this mapping, if any, in the same resolved form as
+   * {@link YamlScalar.tag} (`!!set` is `set`, `!foo` is `!foo`).
+   */
   tag?: string
+  /** The `&name` anchor declared on this mapping (without the `&`), if any. */
   anchor?: string
 }
 
@@ -73,7 +85,12 @@ export type YamlSeq = {
   items: YamlNode[]
   start: number
   end: number
+  /**
+   * The tag written on this sequence, if any, in the same resolved form as
+   * {@link YamlScalar.tag} (`!!omap` is `omap`, `!foo` is `!foo`).
+   */
   tag?: string
+  /** The `&name` anchor declared on this sequence (without the `&`), if any. */
   anchor?: string
 }
 
@@ -83,6 +100,46 @@ export type YamlNode = YamlScalar | YamlAlias | YamlMap | YamlSeq
 export type YamlErrorKind = 'error' | 'warning'
 
 /**
+ * Every code the parser reports, so a consumer can branch on one exhaustively
+ * and a typo in a comparison fails to typecheck. Most codes are only ever
+ * errors; `BAD_DIRECTIVE` and `DUPLICATE_DIRECTIVE` are errors for `%YAML` and
+ * warnings for `%TAG`, and the rest of the warnings — `AMBIGUOUS_ANCHOR_NAME`,
+ * `BAD_TAG_VALUE`, `MULTIPLE_DOCUMENTS`, `UNKNOWN_DIRECTIVE`,
+ * `UNSUPPORTED_YAML_VERSION` — are never errors. The README's table says what
+ * each one means.
+ */
+export type YamlErrorCode =
+  | 'AMBIGUOUS_ANCHOR_NAME'
+  | 'BAD_ANCHOR'
+  | 'BAD_BLOCK_HEADER'
+  | 'BAD_COMMENT'
+  | 'BAD_DIRECTIVE'
+  | 'BAD_ESCAPE'
+  | 'BAD_IMPLICIT_KEY'
+  | 'BAD_INDENT'
+  | 'BAD_MERGE'
+  | 'BAD_PROPERTY'
+  | 'BAD_SCALAR_CONTENT'
+  | 'BAD_SCALAR_START'
+  | 'BAD_TAG'
+  | 'BAD_TAG_VALUE'
+  | 'DEPTH_LIMIT'
+  | 'DUPLICATE_DIRECTIVE'
+  | 'DUPLICATE_KEY'
+  | 'MULTIPLE_DOCUMENTS'
+  | 'RECURSIVE_ALIAS'
+  | 'TAB_INDENT'
+  | 'UNEXPECTED_COMMA'
+  | 'UNEXPECTED_CONTENT'
+  | 'UNEXPECTED_DIRECTIVE'
+  | 'UNKNOWN_DIRECTIVE'
+  | 'UNKNOWN_TAG_HANDLE'
+  | 'UNRESOLVED_ALIAS'
+  | 'UNSUPPORTED_YAML_VERSION'
+  | 'UNTERMINATED_FLOW'
+  | 'UNTERMINATED_QUOTE'
+
+/**
  * A parse problem with an exact source span. `start`/`end` are `[start, end)`
  * offsets; pair them with {@link import('./line-counter').lineCounter} for
  * `line:column`.
@@ -90,7 +147,7 @@ export type YamlErrorKind = 'error' | 'warning'
 export type YamlError = {
   kind: YamlErrorKind
   /** Short stable code, e.g. `DUPLICATE_KEY`, so callers can branch without string-matching. */
-  code: string
+  code: YamlErrorCode
   message: string
   start: number
   end: number
@@ -138,8 +195,11 @@ export type ParseOptions = {
    */
   uniqueKeys?: boolean
   /**
-   * Honor the `<<` merge key (YAML merge spec). Default `true`. When off, `<<`
-   * is treated as an ordinary key.
+   * Honor the `<<` merge key (YAML merge spec). Default `true`. While on, a
+   * mapping may repeat a plain `<<` (`<<: *a` / `<<: *b`) and a merge source
+   * that is not a mapping is a `BAD_MERGE` error. When off, `<<` is treated as
+   * an ordinary key — projected as written, not checked, and a repeat is a
+   * `DUPLICATE_KEY` like any other.
    */
   merge?: boolean
   /**

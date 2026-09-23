@@ -3,6 +3,7 @@ import Suite from 'yaml-test-suite'
 
 import { EXPECTED_FAILURES } from './conformance-expected-failures.test-utils'
 import { parseAllDocuments } from './parse-document'
+import type { ParseOptions } from './types'
 
 /**
  * Measures this parser against the official YAML test suite — the same corpus
@@ -119,11 +120,14 @@ const deepEqual = (a: unknown, b: unknown): boolean => {
   )
 }
 
-/** Runs one case, returning `null` when it conforms or a short reason when it does not. */
-const check = (testCase: Case): string | null => {
+/**
+ * Runs one case, returning `null` when it conforms or a short reason when it
+ * does not. `options` is only ever set to measure what an option default costs.
+ */
+const check = (testCase: Case, options?: ParseOptions): string | null => {
   let docs: ReturnType<typeof parseAllDocuments>
   try {
-    docs = parseAllDocuments(testCase.yaml)
+    docs = parseAllDocuments(testCase.yaml, options)
   } catch (error) {
     return testCase.fail ? null : `threw: ${(error as Error).message}`
   }
@@ -192,6 +196,17 @@ describe('YAML test suite conformance', () => {
     const passing = [...RESULTS.values()].filter((reason) => reason === null).length
     const rate = ((passing / RESULTS.size) * 100).toFixed(1)
     console.log(`YAML 1.2 test suite: ${passing}/${RESULTS.size} cases (${rate}%)`)
-    expect(passing).toBeGreaterThan(0)
+    // Pinned to the numbers the README states, so the prose cannot drift from the run.
+    expect(RESULTS.size).toBe(402)
+    expect(passing).toBe(397)
+  })
+
+  it('passes the two duplicate-key cases once `uniqueKeys` is off', () => {
+    // The README says the `uniqueKeys` default accounts for exactly two of the
+    // listed cases (`2JQS`, `X38W`). Checked by running the whole suite again
+    // with the option off: what is left must be the three extended-tag cases.
+    const failing = CASES.filter((testCase) => check(testCase, { uniqueKeys: false }) !== null).map((c) => c.key)
+    expect(failing.sort()).toEqual(['2XXW', '565N', 'J7PZ'])
+    expect(CASES.length - failing.length).toBe(399)
   })
 })

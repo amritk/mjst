@@ -14,10 +14,9 @@ describe('guards', () => {
   it('identifies a map and its pairs', () => {
     const node = parseDocument('a: 1').contents
     expect(isMap(node)).toBe(true)
-    if (isMap(node)) {
-      expect(isPair(node.items[0])).toBe(true)
-      expect(isScalar(node.items[0]?.key)).toBe(true)
-    }
+    if (!isMap(node)) throw new Error('expected a map')
+    expect(isPair(node.items[0])).toBe(true)
+    expect(isScalar(node.items[0]?.key)).toBe(true)
   })
 
   it('identifies a sequence', () => {
@@ -28,7 +27,9 @@ describe('guards', () => {
   it('identifies an alias', () => {
     const doc = parseDocument('a: &x 1\nb: *x')
     const node = doc.contents
-    if (isMap(node)) expect(isAlias(node.items[1]?.value)).toBe(true)
+    if (!isMap(node)) throw new Error('expected a map')
+    expect(isAlias(node.items[1]?.value)).toBe(true)
+    expect(isAlias(node.items[0]?.value)).toBe(false)
   })
 
   it('rejects non-nodes', () => {

@@ -134,6 +134,23 @@ export type ResolveOptions = {
    */
   parse?: (content: string, location: string) => unknown
   /**
+   * The root document's already-parsed content. When set, the file you named
+   * is neither read nor handed to `parse` — this value stands in for it — but
+   * its location still anchors everything else: relative `$ref`s resolve
+   * against it, the default `allowedRoots` is its folder, and `origins` name it.
+   *
+   * For callers that have parsed the root already (a linter, a code generator)
+   * and would otherwise pay to read and parse a large document twice. It is
+   * only read, never written, so the caller keeps ownership of the tree; the
+   * resolved result never shares an object with it.
+   *
+   * ```ts
+   * const document = parseYaml(await readFile(path, 'utf8'))
+   * resolveRefsFromFile(path, { rootDocument: document, parse: parseYamlOrJson })
+   * ```
+   */
+  rootDocument?: unknown
+  /**
    * Record a per-node origin map on the result (`origins`). For every object or
    * array inlined in place of a `$ref`, the map records the document and in-file
    * path it was defined at, so a consumer can attribute resolved-tree nodes back

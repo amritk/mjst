@@ -179,28 +179,24 @@ describe('parse-document', () => {
   it('records the source range of a scalar value', () => {
     const source = 'title: My API'
     const node = parseDocument(source).contents
-    if (node?.kind === 'map') {
-      const value = node.items[0]?.value
-      // "My API" starts at offset 7 and ends (exclusive) at 13.
-      expect([value?.start, value?.end]).toEqual([7, 13])
-    }
+    if (node?.kind !== 'map') throw new Error('expected a map')
+    const value = node.items[0]?.value
+    // "My API" starts at offset 7 and ends (exclusive) at 13.
+    expect([value?.start, value?.end]).toEqual([7, 13])
   })
 
   it('starts a block map range at its first key', () => {
     const source = 'info:\n  title: a\n  version: b\n'
     const node = parseDocument(source).contents
-    if (node?.kind === 'map') {
-      const info = node.items[0]?.value
-      // The nested map begins at `title`, the first child key (offset 8).
-      expect(info?.start).toBe(8)
-    }
+    if (node?.kind !== 'map') throw new Error('expected a map')
+    const info = node.items[0]?.value
+    // The nested map begins at `title`, the first child key (offset 8).
+    expect(info?.start).toBe(8)
   })
 
   it('exposes anchors on the nodes that declare them', () => {
     const node = parseDocument('a: &myAnchor 1\n').contents
-    if (node?.kind === 'map') {
-      const value = node.items[0]?.value
-      if (value?.kind === 'scalar') expect(value.anchor).toBe('myAnchor')
-    }
+    if (node?.kind !== 'map') throw new Error('expected a map')
+    expect(node.items[0]?.value).toMatchObject({ kind: 'scalar', value: 1, anchor: 'myAnchor' })
   })
 })

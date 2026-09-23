@@ -1,96 +1,9 @@
-import {
-  isAlias,
-  isMap,
-  isPair,
-  isScalar,
-  isSeq,
-  parseAllDocuments,
-  type YamlDocument,
-  type YamlNode,
-  type YamlPair,
-} from '@amritk/yaml'
+import { parseAllDocuments, type YamlDocument } from '@amritk/yaml'
 
 import { createLineMap } from './lines'
-import {
-  DiagnosticSeverity,
-  type IDiagnostic,
-  type ILocation,
-  type IParseResult,
-  type IParserOptions,
-  type IRange,
-  type JsonPath,
-} from './types'
-
-/**
- * Encodes a path into a lookup key, each segment prefixed with its length so
- * distinct paths cannot collide: a plain `join` turns a `null` map key into `''`
- * (colliding with the root path `[]`), and a separator alone reads `['a.b']` and
- * `['a', 'b']` as the same path.
- *
- * A segment is keyed by its text, whether it arrived as a number or a string.
- * A node is a map or a sequence, never both, so `0` and `"0"` under one parent
- * name the same child — and a finding's path spells an all-digit map key such as
- * a `"200"` response as the number `200`, which a key telling the two apart sent
- * to the enclosing map instead.
- */
-const pathKey = (path: JsonPath): string => {
-  let key = ''
-  for (const segment of path) {
-    const text = String(segment)
-    key += `${text.length}:${text}`
-  }
-  return key
-}
-
-/**
- * Renders a collection (map/seq) mapping key in flow style, mirroring how
- * `@amritk/yaml`'s `toJS` projects one. This has to match that projection
- * exactly: the position index is keyed by path, and a path segment that differs
- * from the key the data actually carries points diagnostics at the wrong node —
- * or at nothing.
- */
-const serializeComplexKey = (node: YamlNode): string => {
-  if (isSeq(node)) {
-    return node.items.length === 0 ? '[]' : `[ ${node.items.map(flowText).join(', ')} ]`
-  }
-  if (isMap(node)) {
-    const pairs = node.items
-      .filter(isPair)
-      .map((pair) => `${flowText(pair.key)}: ${pair.value ? flowText(pair.value) : 'null'}`)
-    return pairs.length === 0 ? '{}' : `{ ${pairs.join(', ')} }`
-  }
-  return flowText(node)
-}
-
-/**
- * Renders a node as it reads inside a flow collection, where an empty scalar is
- * `null` rather than the `''` a JavaScript object key collapses to. Mirrors the
- * parser's own `flowText`.
- */
-const flowText = (node: YamlNode): string => {
-  if (isScalar(node)) {
-    const v = node.value
-    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
-  }
-  if (isAlias(node)) return node.target ? flowText(node.target) : `*${node.source}`
-  return serializeComplexKey(node)
-}
-
-/**
- * Stringifies a mapping key into an index segment, matching `toJS`'s `keyText`
- * so a keyed path lines up with the projected data: an empty key is `''`, an
- * alias resolves through to the value it points at, and a collection key renders
- * in flow style. An alias with no anchor keeps its `*name` text, the same
- * fallback the projection uses.
- */
-const keyToString = (key: YamlNode): string => {
-  if (isScalar(key)) {
-    const v = key.value
-    return typeof v === 'string' ? v : v === null ? '' : String(v)
-  }
-  if (isAlias(key)) return key.target ? keyToString(key.target) : `*${key.source}`
-  return serializeComplexKey(key)
-}
+import { DiagnosticSeverity, type IDiagnostic, type IParseResult, type IParserOptions } from './types'
+import { createYamlLocator } from './yaml-locator'
+import { reportNonFinite } from './yaml-non-finite'
 
 /**
  * Parses YAML (a JSON superset, so this handles both) into data plus a source
@@ -118,7 +31,6 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
   const incompatibleValues = options.incompatibleValues
   const incompatSeverity = typeof incompatibleValues === 'number' ? incompatibleValues : undefined
   const docs = parseAllDocuments(source, { uniqueKeys: !dedupe })
-  const index = new Map<string, IRange>()
 
   const diagnostics: IDiagnostic[] = []
   const pushError = (severity: DiagnosticSeverity, message: string, start: number, end: number, code?: string) => {
@@ -130,90 +42,23 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     })
   }
 
-  const rangeOf = (node: YamlNode): IRange => ({
-    start: lineMap.positionAt(node.start),
-    end: lineMap.positionAt(node.end),
-  })
-
-  // Aliases are re-expanded into every path that reaches them, so nested aliases
-  // (the "billion laughs" shape) can fan out super-linearly. Bound the total
-  // nodes walked across the whole stream; on exhaustion we stop extending the
-  // index rather than throw — untouched paths simply fall back to the closest
-  // indexed ancestor.
-  let budget = Math.max(100_000, source.length * 100)
-
-  /** True when a pair is a `<<` merge key, whose value folds into the parent map. */
-  const isMergePair = (pair: YamlPair): boolean => isScalar(pair.key) && pair.key.source === '<<'
-
   /**
-   * Indexes the keys of a merged map (or list of maps, reached through the `<<`
-   * value) at the parent `path`. A merged key is skipped when the path is already
-   * occupied — by an explicit key or an earlier merge — mirroring `toJS`, where
-   * explicit keys and earlier merges win over later ones.
+   * Reports every non-finite number in a document when the caller opted in.
+   * The core schema projects `.nan`/`.inf`/`-.inf` to non-finite JS numbers,
+   * which `JSON.stringify` silently rewrites to `null`, so a value that will not
+   * survive a JSON round-trip is caught here.
    */
-  const walkMerge = (node: YamlNode | null | undefined, path: JsonPath): void => {
-    const target = node != null && isAlias(node) ? node.target : node
-    if (target == null) return
-    if (isSeq(target)) {
-      for (const item of target.items) walkMerge(item, path)
-      return
-    }
-    if (!isMap(target)) return
-    for (const item of target.items) {
-      if (!isPair(item)) continue
-      if (isMergePair(item)) {
-        walkMerge(item.value, path)
-        continue
-      }
-      const childPath = [...path, keyToString(item.key)]
-      if (!index.has(pathKey(childPath))) walk(item.value, childPath)
-    }
-  }
-
-  const walk = (node: YamlNode | null | undefined, path: JsonPath): void => {
-    if (node == null || budget-- <= 0) return
-    index.set(pathKey(path), rangeOf(node))
-
-    if (isScalar(node)) {
-      // The core schema projects `.nan`/`.inf`/`-.inf` to non-finite JS numbers,
-      // which `JSON.stringify` silently rewrites to `null`. Report them when the
-      // caller opted in, so a value that won't survive a JSON round-trip is caught.
-      const value = node.value
-      if (incompatSeverity !== undefined && typeof value === 'number' && !Number.isFinite(value)) {
-        pushError(
-          incompatSeverity,
-          `Value ${String(value)} cannot be represented in JSON and will serialize to null.`,
-          node.start,
-          node.end,
-          'INCOMPATIBLE_VALUE',
-        )
-      }
-      return
-    }
-
-    // Follow an alias to its anchor definition so paths reachable only through the
-    // alias resolve to the anchored node (the alias itself keeps the range set
-    // above); an unresolved alias has no target and simply stops here.
-    const target = isAlias(node) ? node.target : node
-    if (target == null) return
-
-    if (isMap(target)) {
-      const merges: (YamlNode | null)[] = []
-      for (const item of target.items) {
-        if (!isPair(item)) continue
-        if (isMergePair(item)) {
-          merges.push(item.value)
-          continue
-        }
-        walk(item.value, [...path, keyToString(item.key)])
-      }
-      // Merged keys fill positions the explicit keys above did not claim.
-      for (const merge of merges) walkMerge(merge, path)
-    } else if (isSeq(target)) {
-      target.items.forEach((item, i) => {
-        walk(item, [...path, i])
-      })
-    }
+  const checkIncompatible = (doc: YamlDocument): void => {
+    if (incompatSeverity === undefined) return
+    reportNonFinite(doc.contents, (node) => {
+      pushError(
+        incompatSeverity,
+        `Value ${String(node.value)} cannot be represented in JSON and will serialize to null.`,
+        node.start,
+        node.end,
+        'INCOMPATIBLE_VALUE',
+      )
+    })
   }
 
   const collectProblems = (doc: YamlDocument): void => {
@@ -221,43 +66,63 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
       // Duplicate keys honor the configured severity; every other parser error is
       // a hard error.
       const severity = err.code === 'DUPLICATE_KEY' ? dupSeverity : DiagnosticSeverity.Error
-      pushError(severity, err.message, err.start, err.end)
+      // Carry the parser's stable code (`DUPLICATE_KEY`, `BAD_INDENT`, …) so a
+      // caller can branch on the kind of problem without matching the message,
+      // the same way `INCOMPATIBLE_VALUE` already does.
+      pushError(severity, err.message, err.start, err.end, err.code)
     }
     for (const warn of doc.warnings) {
-      pushError(DiagnosticSeverity.Warning, warn.message, warn.start, warn.end)
+      pushError(DiagnosticSeverity.Warning, warn.message, warn.start, warn.end, warn.code)
+    }
+  }
+
+  /**
+   * Projects one document to plain data, turning a failed projection into a
+   * diagnostic. `toJS` throws — catchably, by design — on a document whose
+   * aliases would expand past its budget (the "billion laughs" shape) or whose
+   * projection nests too deep. Letting that escape made a few hundred bytes of
+   * YAML throw straight out of `createDocument` and every lint entry point, while
+   * every other unusable document comes back as findings; `parseJson` reports its
+   * own too-deep case the same way. The finding sits at the start of the document
+   * that failed, and its value is `undefined`, as a JSON document's is when it
+   * cannot be read at all.
+   */
+  const project = (doc: YamlDocument): unknown => {
+    try {
+      return doc.toJS()
+    } catch (error) {
+      const at = doc.contents?.start ?? 0
+      const message = error instanceof Error ? error.message : String(error)
+      pushError(DiagnosticSeverity.Error, message, at, at, 'RESOURCE_EXHAUSTION')
+      return undefined
     }
   }
 
   let data: unknown
   if (docs.length > 1) {
-    // Multi-document stream: index each document under its own `[i, …]` prefix and
-    // project to an array of per-document values.
-    data = docs.map((doc, i) => {
-      walk(doc.contents, [i])
+    // Multi-document stream: positions are looked up under each document's own
+    // `[i, …]` prefix, and the data is an array of per-document values.
+    data = docs.map((doc) => {
+      checkIncompatible(doc)
       collectProblems(doc)
-      return doc.toJS()
+      return project(doc)
     })
   } else {
     // Single document (or an empty stream): keep the flat, unprefixed shape.
     const doc = docs[0]
     if (doc) {
-      walk(doc.contents, [])
+      checkIncompatible(doc)
       collectProblems(doc)
-      data = doc.toJS()
+      data = project(doc)
     } else {
       data = null
     }
   }
 
-  const getLocationForJsonPath = (path: JsonPath, closest = false): ILocation | undefined => {
-    const p = path.slice()
-    while (true) {
-      const range = index.get(pathKey(p))
-      if (range) return { range }
-      if (!closest || p.length === 0) return undefined
-      p.pop()
-    }
-  }
+  // Positions are resolved on demand, per path: a lint run asks for the few
+  // paths that carry findings, and indexing every node up front cost more than
+  // the parse itself on a large spec.
+  const getLocationForJsonPath = createYamlLocator(docs, lineMap)
 
   return { data: data as T, diagnostics, getLocationForJsonPath }
 }
