@@ -950,9 +950,7 @@ const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
   // `serializeValue` renders that as `null` — an example the declared `number`
   // type rejects. Ignore it, exactly as the arbitrary side does.
   const multipleOf =
-    hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0
-      ? schema.multipleOf
-      : undefined
+    hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0 ? schema.multipleOf : undefined
   const step = isInteger ? (multipleOf === undefined ? 1 : (integerStep(multipleOf) ?? multipleOf)) : multipleOf
 
   if (step === undefined) {

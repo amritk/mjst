@@ -2015,7 +2015,12 @@ describe('generate-validator-function', () => {
       const schema = {
         type: 'object' as const,
         properties: {
-          u: { anyOf: [{ type: 'string' as const, minLength: 2 }, { type: 'number' as const, minimum: 0 }] },
+          u: {
+            anyOf: [
+              { type: 'string' as const, minLength: 2 },
+              { type: 'number' as const, minimum: 0 },
+            ],
+          },
         },
       }
       const code = generateValidatorFunction(schema, 'Root')
