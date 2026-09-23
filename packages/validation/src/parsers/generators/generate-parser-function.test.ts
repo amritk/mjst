@@ -1805,8 +1805,21 @@ describe('generate-parser-function', () => {
     // the generated type is the literal union, so any other string is not a
     // `ThemeColor`.
     expect(result).toBe(
-      'export const parseThemeColor = (input: unknown): ThemeColor => ["red","green","blue","yellow","purple"].includes(input as never) ? input as ThemeColor : "red" as ThemeColor;',
+      'export const parseThemeColor = (input: unknown): ThemeColor => (input === "red" || input === "green" || input === "blue" || input === "yellow" || input === "purple") ? input as ThemeColor : "red" as ThemeColor;',
     )
+  })
+
+  // `[…].includes(input)` compares by reference, so an object or array member
+  // was never found and valid input came back as the first member.
+  it('keeps a structural root enum member rather than replacing it', () => {
+    const parse = evalGenerated<(input: unknown) => unknown>(
+      generateParserFunction({ enum: [1, [1], { a: 1 }] } as JSONSchema, 'T'),
+      'parseT',
+    )
+    expect(parse([1])).toEqual([1])
+    expect(parse({ a: 1 })).toEqual({ a: 1 })
+    expect(parse({ a: 2 })).toBe(1)
+    expect(parse([1, 2])).toBe(1)
   })
 
   it('generates parser for geo coordinate with min/max on required and optional number fields', () => {

@@ -33,7 +33,7 @@ import { findDiscriminator } from '#parsers/helpers/find-discriminator'
 import { getDiscriminatorValue } from '#parsers/helpers/get-discriminator-value'
 
 import { assertNoUnsupportedKeywords } from './assert-supported-keywords'
-import { generateEnumCaseInsensitiveCoercion } from './generate-enum-check'
+import { generateEnumCaseInsensitiveCoercion, generateEnumCheck } from './generate-enum-check'
 import {
   generateBackstopAssertion,
   generateCompositionChecks,
@@ -1099,13 +1099,17 @@ const generateNonObjectParser = (
         : `export const ${functionName} = (input: unknown): ${typeName} => ${literal} as ${typeName};`
     }
     if (hasEnum(schema) && schema.enum.length > 0) {
-      const values = JSON.stringify(schema.enum)
       const fallback = JSON.stringify(schema.enum[0])
       // Case-insensitive normalization sits on the non-member branch only, so an
-      // exact member still returns via the `includes` fast path untouched.
+      // exact member still returns via the membership test untouched.
       const ci = unionCtx?.caseInsensitive ? generateEnumCaseInsensitiveCoercion('input', schema.enum, fallback) : null
       const coerced = ci ? `(${ci})` : fallback
-      return `export const ${functionName} = (input: unknown): ${typeName} => ${values}.includes(input as never) ? input as ${typeName} : ${coerced} as ${typeName};`
+      // Compared member by member, deep for an object or array member, the same
+      // test the property path emits. `[…].includes(input)` compares by
+      // reference, so a valid `{ a: 1 }` against `enum: [{ a: 1 }]` was never a
+      // member and came back as the fallback; it also built the array per call.
+      const member = generateEnumCheck('input', schema.enum)
+      return `export const ${functionName} = (input: unknown): ${typeName} => ${member} ? input as ${typeName} : ${coerced} as ${typeName};`
     }
     // A top-level union must validate membership: an unmatched value is not of
     // the declared union type, so coerce it to a member-shaped default. Reuse the
