@@ -69,9 +69,6 @@ const readHeadings = (value: unknown, options: MarkdownHeadingsOptions = {}): Do
 const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : undefined
 
-/** The root `x-mjst.markdown` object, or an empty one. */
-const rootDoc = (schema: ConfigSchema): Readonly<Record<string, unknown>> => markdownOf(schema)
-
 /**
  * Reads the extra pages the schema declares. Every page needs an `id` (what
  * properties reference) and a `file` (where it is written); a page missing
@@ -129,7 +126,7 @@ const readSections = (value: unknown): readonly DocSection[] =>
  * them.
  */
 export const readDocConfig = (schema: ConfigSchema, options: MarkdownOptions = {}): DocConfig => {
-  const doc = rootDoc(schema)
+  const doc = markdownOf(schema)
   const declared = readPages(doc['pages'])
   // A schema may declare the index page explicitly (to give it examples of its
   // own); that declaration is merged rather than duplicated into a second page.

@@ -142,6 +142,16 @@ describe('flatten-root', () => {
     expect(flattened['x-mjst']).toEqual({ markdown: { language: 'yaml' } })
   })
 
+  // `x-mjst` also holds the type generators' hints, so a root with only a hint
+  // has no docs config of its own and a branch's still applies.
+  it('takes the docs config from a branch when the root x-mjst holds only a hint', () => {
+    const flattened = flattenRoot({
+      'x-mjst': { brand: 'Config' },
+      anyOf: [{ 'x-mjst': { brand: 'Branch', markdown: { language: 'javascript' } }, properties: { a: {} } }],
+    })
+    expect(flattened['x-mjst']).toEqual({ brand: 'Config', markdown: { language: 'javascript' } })
+  })
+
   it('ignores branches that declare no properties', () => {
     const schema = { anyOf: [{ type: 'string' }, { type: 'null' }] }
     expect(flattenRoot(schema)).toBe(schema)

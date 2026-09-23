@@ -1,7 +1,7 @@
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it, vi } from 'vitest'
 
-import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive, MJST_EXTENSION_KEY } from './mjst-extension'
+import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive, hasMjstHint, MJST_EXTENSION_KEY } from './mjst-extension'
 
 describe('getMjstInstanceOf', () => {
   it('reads a valid instanceOf class name', () => {
@@ -84,5 +84,22 @@ describe('getMjstBrand', () => {
 
   it('returns undefined when the extension is absent', () => {
     expect(getMjstBrand({ type: 'string' })).toBeUndefined()
+  })
+})
+
+describe('hasMjstHint', () => {
+  it('is true for any hint the generators read, supported or not', () => {
+    expect(hasMjstHint({ 'x-mjst': { brand: 'UserId' } })).toBe(true)
+    expect(hasMjstHint({ 'x-mjst': { instanceOf: 'Unsupported' } })).toBe(true)
+    expect(hasMjstHint({ 'x-mjst': { primitive: 'bigint', markdown: { page: 'p' } } })).toBe(true)
+  })
+
+  // The docs generator's keys share the object and shape no type or verdict.
+  it('is false for an x-mjst holding only docs settings', () => {
+    expect(hasMjstHint({ 'x-mjst': { hidden: true, markdown: { page: 'p' } } })).toBe(false)
+    expect(hasMjstHint({ 'x-mjst': {} })).toBe(false)
+    expect(hasMjstHint({ 'x-mjst': 'Date' })).toBe(false)
+    expect(hasMjstHint({ type: 'string' })).toBe(false)
+    expect(hasMjstHint(true)).toBe(false)
   })
 })

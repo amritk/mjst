@@ -2,7 +2,7 @@ import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { assignKey } from './assign-key'
 import { assertSchemaDepth, MAX_SCHEMA_DEPTH } from './max-schema-depth'
-import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive } from './mjst-extension'
+import { getMjstBrand, getMjstInstanceOf, getMjstPrimitive, hasMjstHint, MJST_EXTENSION_KEY } from './mjst-extension'
 import { readKey } from './read-key'
 import { refToName } from './ref-to-name'
 import { referencedConditional } from './referenced-conditional'
@@ -140,12 +140,18 @@ const NON_PLAIN_KEYWORDS: ReadonlySet<string> = new Set([
   'x-mjst',
 ])
 
-/** True for a fragment made of `properties` and `required` alone (see {@link NON_PLAIN_KEYWORDS}). */
+/**
+ * True for a fragment made of `properties` and `required` alone (see
+ * {@link NON_PLAIN_KEYWORDS}). An `x-mjst` counts only when it carries a
+ * generator hint: one holding nothing but docs settings shapes no type.
+ */
 const isPlainFragment = (schema: JSONSchema): schema is SchemaNode => {
   if (!isSchemaObject(schema)) return false
   const type = keywordOf(schema, 'type')
   if (type !== undefined && type !== 'object') return false
-  return !Object.keys(schema).some((key) => NON_PLAIN_KEYWORDS.has(key))
+  return !Object.keys(schema).some(
+    (key) => NON_PLAIN_KEYWORDS.has(key) && (key !== MJST_EXTENSION_KEY || hasMjstHint(schema)),
+  )
 }
 
 /** The `required` list a fragment declares, or nothing when it declares none. */

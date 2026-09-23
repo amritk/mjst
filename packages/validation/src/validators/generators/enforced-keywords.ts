@@ -1,4 +1,4 @@
-import { MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
+import { hasMjstHint, MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
@@ -78,6 +78,9 @@ export const declaresKeywordOutside = (
   const record = schema as Record<string, unknown>
   for (const keyword of Object.keys(record)) {
     if (owned.includes(keyword)) continue
+    // An `x-mjst` holding only docs settings (`hidden`, `markdown`) checks
+    // nothing, so it must not push a node off its specialised emitter.
+    if (keyword === MJST_EXTENSION_KEY && !hasMjstHint(record)) continue
     if (ENFORCED_KEYWORDS.has(keyword)) return true
     if (keyword === 'format' && enforcesFormat(record, formats)) return true
   }

@@ -91,7 +91,8 @@ describe('read-doc-meta', () => {
   // `hidden` is not about markdown in particular, so it sits on `x-mjst`
   // itself; everything the renderer lays out sits under `markdown`.
   it('reads hidden off x-mjst and nowhere else', () => {
-    expect(readDocMeta({ 'x-mjst': { markdown: { hidden: true } } }).hidden).toBe(false)
+    // Ignoring it would publish the option it was written to hide.
+    expect(() => readDocMeta({ 'x-mjst': { markdown: { hidden: true } } })).toThrow(/belongs on `x-mjst` itself/)
     expect(readDocMeta({ 'x-mjst': { layout: 'table', page: 'advanced' } })).toEqual(readDocMeta({}))
   })
 

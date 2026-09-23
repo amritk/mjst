@@ -1,4 +1,5 @@
 import { asArray, asProperties, isObject } from '#helpers/guards'
+import { MARKDOWN_KEY, MJST_KEY, mjstOf } from '#helpers/read-doc-meta'
 import { childSchema } from '#reference/child-entries'
 import { collectProperties } from '#reference/collect-properties'
 import type { ConfigSchema, SchemaProperty } from '#types/schema'
@@ -57,12 +58,21 @@ export const flattenRoot = (schema: ConfigSchema): ConfigSchema => {
     branches.map(read).find((value) => value !== undefined)
   const title = schema.title ?? branchWith((branch) => branch.title)
   const description = schema.description ?? branchWith((branch) => branch.description)
-  const doc = isObject(schema['x-mjst']) ? schema['x-mjst'] : branchWith((branch) => branch['x-mjst'])
+  // Per member of `x-mjst` rather than the whole object: it also carries the
+  // type generators' hints, and a root saying only `brand` would otherwise
+  // hide the page configuration its branches carry. A branch's other members
+  // describe that branch, so only its `markdown` is borrowed.
+  const markdownIn = (node: unknown): Readonly<Record<string, unknown>> | undefined => {
+    const markdown = mjstOf(node)[MARKDOWN_KEY]
+    return isObject(markdown) ? markdown : undefined
+  }
+  const markdown = markdownIn(schema) ?? branchWith(markdownIn)
+  const doc = { ...mjstOf(schema), ...(markdown !== undefined && { [MARKDOWN_KEY]: markdown }) }
 
   return {
     ...(title !== undefined && { title }),
     ...(description !== undefined && { description }),
-    ...(doc !== undefined && { 'x-mjst': doc }),
+    ...(Object.keys(doc).length > 0 && { [MJST_KEY]: doc }),
     required: [...required],
     properties,
   }

@@ -667,7 +667,9 @@ what a key means depends on where it sits:
   generator that has nothing to do with markdown.
 - **`x-mjst.hidden`** sits on `x-mjst` itself, because keeping an internal
   option out of the docs is not about markdown in particular. `true` leaves
-  the property out entirely — no row, no heading, and its children with it.
+  the property out entirely — no row, no heading, and its children with it. A
+  `hidden` under `markdown` is an error rather than ignored, since ignoring it
+  would publish the very option it was written to hide.
 
 On the **root schema**, under `x-mjst.markdown`:
 

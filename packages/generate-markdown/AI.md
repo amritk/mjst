@@ -54,7 +54,7 @@ or `mjst markdown <schema> --table --readme <file>`.
    `layout`, `sort`, `order`, `example`/`examples`, `note`/`notes`, `footer`
    on a property; `pages`, `sections`, `table`, `headings`, `language`… on the
    root). `hidden` is not markdown-specific, so it sits on `x-mjst` itself:
-   `"x-mjst": { "hidden": true }`. Do not post-process the generated
+   `"x-mjst": { "hidden": true }` (one under `markdown` throws). Do not post-process the generated
    markdown; edit the schema and regenerate. `layout`
    (`'headings' | 'table' | 'none'`) is read on a property, where it lays out
    that property's children, and on a root `x-mjst.markdown.sections` entry,

@@ -80,6 +80,15 @@ const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | u
  */
 export const readDocMeta = (node: unknown): DocMeta => {
   const doc = markdownOf(node)
+  // Refused rather than ignored: `hidden` keeps an internal option out of the
+  // docs, so reading past a misplaced one would publish exactly the option it
+  // was written to hide — and moving `x-doc` under `markdown` wholesale puts
+  // it there.
+  if (Object.hasOwn(doc, 'hidden')) {
+    throw new Error(
+      '`hidden` belongs on `x-mjst` itself, not under `x-mjst.markdown`: write `"x-mjst": { "hidden": true }`.',
+    )
+  }
   const page = stringExtension(doc['page'])
   const section = stringExtension(doc['section'])
   const type = stringExtension(doc['type'])

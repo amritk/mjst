@@ -19,4 +19,4 @@ The docs now share mjst's one vendor extension with the type generators, and a k
 
 A `$ref` site's `x-mjst` still merges with its definition's key by key, and `markdown` merges key by key again, so a ref site that names a page or adds a brand keeps the definition's examples.
 
-**Breaking:** `x-doc` is no longer read. Move `"x-doc": { … }` to `"x-mjst": { "markdown": { … } }`, and `x-doc.hidden` to `x-mjst.hidden`.
+**Breaking:** `x-doc` is no longer read. Move `"x-doc": { … }` to `"x-mjst": { "markdown": { … } }`, and `x-doc.hidden` to `x-mjst.hidden` — a `hidden` left under `markdown` throws rather than being ignored, since ignoring it would publish the option it was meant to hide.
