@@ -92,6 +92,18 @@ never fails. Coercion moves a value that is already right but written in the
 wrong type; repair also substitutes a value the schema supplies for one that
 cannot be coerced, and reports the validator's own errors as the repairs.
 
+**`parseX` agrees with `coerceX`.** Wherever `coerceX` accepts a document, the
+coercing `parseX` returns the very same value — through a union, an `allOf`, an
+`if`, a `$ref`, recursion included — and it only repairs what `coerceX` would
+have rejected. A differential test pins that over random schemas. To get there,
+a definition whose own tree has an `anyOf`/`oneOf`/`allOf`/`if`/`not` carries an
+exact test (`matchesX`) and the coercion walk (`coerceXInput`) in front of its
+repairing parser, and every definition such a one reaches carries them too. A
+schema without combinators emits exactly what it always did; one with them
+emits more — about twice the parser code on a large OpenAPI document — which is
+what a second, exact opinion on each definition costs. A `strict` or
+`stripUnknown` parser has no `coerceX` to agree with and is unchanged.
+
 `parse` and `parseStrict` are the same function name under two contracts, so
 asking for both is an error rather than a silent choice.
 
@@ -140,24 +152,24 @@ alone (`bun run bench:validators:coerce`, or
 
 | schema | runtime | valid input | needs coercing | cannot be coerced |
 |:--|:--|--:|--:|--:|
-| small (4 fields) | Bun | 5.3× | 1.5× | 1.6× |
-| small (4 fields) | Node | 10× | 2.1× | 2.2× |
-| order (nested + array) | Bun | 9.9× | 1.6× | 1.8× |
-| order (nested + array) | Node | 8.3× | 1.9× | 2.2× |
-| assert-loose | Bun | 19× | 1.4× | 3.1× |
-| assert-loose | Node | 36× | 1.6× | 3.2× |
-| config (unions via `$ref`) | Bun | 3.2× | 1.5× | 2.4× |
-| config (unions via `$ref`) | Node | 4.3× | 1.4× | 3.4× |
+| small (4 fields) | Bun | 5.4× | 1.7× | 1.5× |
+| small (4 fields) | Node | 9.9× | 2.1× | 2.2× |
+| order (nested + array) | Bun | 11× | 1.6× | 1.9× |
+| order (nested + array) | Node | 8.4× | 1.8× | 2.2× |
+| assert-loose | Bun | 19× | 1.4× | 3.0× |
+| assert-loose | Node | 36× | 1.6× | 3.1× |
+| config (unions via `$ref`) | Bun | 7.2× | 1.7× | 3.7× |
+| config (unions via `$ref`) | Node | 5.2× | 1.5× | 4.6× |
 
 <sub>Each cell is how many times faster `coerceX` is than Ajv on the same input,
 each engine timed in its own process (Bun 1.3.11, Node 22.22, Linux x64). A
 valid document is the common case and the widest gap: where `isX` is a
 standalone guard, `coerceX` answers it with that guard and hands the input
 straight back, without walking it. On valid input Ajv rewrites nothing, so it can
-also be timed without the clone; `coerceX` is still ahead there, by 1.1–2.4× (the
-narrowest being the union config on Node). The config case is the shape
-`--coerce` exists for: every coercible scalar sits inside a union reached
-through `$ref`.</sub>
+also be timed without the clone; `coerceX` is still ahead there, by 1.2–3.3×.
+The config case is the shape `--coerce` exists for: every coercible scalar sits
+inside a union reached through `$ref`, and every union branch is tested by a
+named function rather than a closure built per call.</sub>
 
 The errors differ in one way worth knowing if you key diagnostics on
 `path + keyword + params`: an `additionalProperties` error points **at the

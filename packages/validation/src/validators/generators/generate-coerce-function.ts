@@ -36,6 +36,8 @@ type CoerceContext = {
   next: () => number
   /** Builds the branch tests a union coercion asks before it coerces anything. */
   readonly matcher: ReturnType<typeof createSubschemaMatcher>
+  /** The walk a `$ref` position calls — `coerceXValue` in a validator file. */
+  readonly refCoercer: (ref: string) => string
 }
 
 /**
@@ -133,6 +135,19 @@ const emitMatcher = (body: string, ctx: CoerceContext): string => {
 }
 
 /**
+ * The test for one branch, by name: the shared named test the validator's own
+ * emitters would call for it, or — for a body only the buffered form can
+ * express — one emitted here. `true`/`false` when the answer never depends on
+ * the value.
+ */
+const branchTest = (branch: JSONSchema, ctx: CoerceContext): boolean | string => {
+  const named = ctx.matcher.named(branch)
+  if (named !== null) return named
+  const body = ctx.matcher.test(branch)
+  return typeof body === 'string' ? emitMatcher(body, ctx) : body
+}
+
+/**
  * Emits the coercion for an `anyOf` / `oneOf` whose branches are more than bare
  * scalars: `string | { enabled: boolean }`, a `$ref` beside a literal, a union
  * nested inside another one.
@@ -176,7 +191,7 @@ const emitBranchCoercer = (
   // the tests already written for the branches before it would be dead code.
   const tests: (boolean | string)[] = []
   for (const branch of branches as JSONSchema[]) {
-    const test = ctx.matcher.test(branch)
+    const test = branchTest(branch, ctx)
     if (test === true) return null
     tests.push(test)
   }
@@ -185,14 +200,13 @@ const emitBranchCoercer = (
   // coerce emits nothing at all. A branch that takes nothing (`false`) can
   // neither match nor be coerced into, and drops out of both lists.
   const live = (branches as JSONSchema[])
-    .map((branch, index) => ({ body: tests[index], coerce: coercerFor(branch, ctx) }))
-    .filter((entry): entry is { body: string; coerce: Coercer } => typeof entry.body === 'string')
+    .map((branch, index) => ({ name: tests[index], coerce: coercerFor(branch, ctx) }))
+    .filter((entry): entry is { name: string; coerce: Coercer } => typeof entry.name === 'string')
   if (live.every(({ coerce }) => coerce === null)) return null
 
   const names: string[] = []
   const attempts: { coerce: (expr: string) => string; test: string }[] = []
-  for (const { body, coerce } of live) {
-    const name = emitMatcher(body, ctx)
+  for (const { name, coerce } of live) {
     names.push(name)
     if (coerce !== null) attempts.push({ coerce, test: name })
   }
@@ -270,11 +284,10 @@ const emitConditionalCoercer = (schema: Record<string, unknown>, ctx: CoerceCont
   const elseCoercer = declaresKey(schema, 'else') ? coercerFor(readKey(schema, 'else') as JSONSchema, ctx) : null
   if (thenCoercer === null && elseCoercer === null) return null
 
-  const condition = ctx.matcher.test(readKey(schema, 'if') as JSONSchema)
-  if (condition === true) return thenCoercer
-  if (condition === false) return elseCoercer
+  const test = branchTest(readKey(schema, 'if') as JSONSchema, ctx)
+  if (test === true) return thenCoercer
+  if (test === false) return elseCoercer
 
-  const test = emitMatcher(condition, ctx)
   const name = `_coerceIf${ctx.next()}`
   const whenThen = thenCoercer === null ? 'input' : thenCoercer('input')
   const whenElse = elseCoercer === null ? 'input' : elseCoercer('input')
@@ -481,7 +494,7 @@ const coercerFor = (schema: JSONSchema, ctx: CoerceContext): Coercer => {
     // Whether the target coerces anything is a question about another file, and
     // following it here would have to chase cycles. The call is cheap and
     // returns its argument when there is nothing to do.
-    typeof ref === 'string' ? (valueExpr) => `${coercerNameFor(ref, ctx.typeSuffix)}(${valueExpr})` : null,
+    typeof ref === 'string' ? (valueExpr) => `${ctx.refCoercer(ref)}(${valueExpr})` : null,
     scalar !== null
       ? (valueExpr) => `coerceScalar(${valueExpr}, ${JSON.stringify(scalar)})`
       : typeArray !== null
@@ -496,6 +509,70 @@ const coercerFor = (schema: JSONSchema, ctx: CoerceContext): Coercer => {
     emitUnionCoercer(node, 'oneOf', ctx),
     emitConditionalCoercer(node, ctx),
   ])
+}
+
+/**
+ * What {@link generateCoerceWalk} needs beyond the schema: how names are spelled
+ * in the file it is writing into.
+ */
+export type CoerceWalkOptions = {
+  readonly typeSuffix: string
+  /** The whole document, for a branch test whose `unevaluated*` has to read a `$ref`'s target. */
+  readonly rootSchema?: Record<string, unknown>
+  /** The `format` names being enforced, so a branch test agrees with the validator. */
+  readonly formats?: ReadonlySet<string>
+  /** The walk a `$ref` position calls. */
+  readonly refCoercer: (ref: string) => string
+  /** The yes/no test a `$ref` inside a branch test calls. */
+  readonly refGuard?: (typeName: string) => string
+  /** Prefix for the names the branch tests hoist, kept apart from anything else in the file. */
+  readonly hoistNamespace: string
+  /** Also build a yes/no test for the whole schema, over the same hoisted names. */
+  readonly withRootMatch?: boolean
+}
+
+/**
+ * The coercion walk for `schema`, as parts a file can place wherever it likes:
+ * the declarations the walk needs (hoisted constants, branch tests, walk
+ * helpers), the expression that coerces `input`, and — when asked — the body of
+ * a yes/no test for the whole schema.
+ *
+ * Two engines write this walk. The validator file wraps it in `coerceX`; the
+ * coercing parser runs it ahead of its own repair, so a document `coerceX`
+ * accepts comes out of `parseX` as the same value. Both get it from here, with
+ * only the names a `$ref` calls told apart.
+ */
+export const generateCoerceWalk = (
+  schema: JSONSchema,
+  options: CoerceWalkOptions,
+): { declarations: string[]; expression: string | null; rootMatch: boolean | string | null } => {
+  const helpers: string[] = []
+  const hoisted: string[] = []
+  let counter = 0
+  const matcher = createSubschemaMatcher(
+    options.typeSuffix,
+    options.rootSchema ?? (isSchemaObject(schema) ? (schema as Record<string, unknown>) : undefined),
+    options.formats ?? NO_FORMATS,
+    options.hoistNamespace,
+    ...(options.refGuard !== undefined ? [options.refGuard] : []),
+  )
+  const ctx: CoerceContext = {
+    typeSuffix: options.typeSuffix,
+    helpers,
+    hoisted,
+    next: () => counter++,
+    matcher,
+    refCoercer: options.refCoercer,
+  }
+
+  const coerce = coercerFor(schema, ctx)
+  const rootMatch = options.withRootMatch === true ? matcher.test(schema) : null
+  const reads = helpers.join('\n') + (typeof rootMatch === 'string' ? `\n${rootMatch}` : '')
+  return {
+    declarations: [...hoisted, ...matcher.declarations(reads), ...helpers],
+    expression: coerce === null ? null : coerce('input'),
+    rootMatch,
+  }
 }
 
 /**
@@ -529,20 +606,15 @@ export const generateCoerceFunction = (
     readonly standaloneGuard?: boolean
   } = {},
 ): { code: string; usesCoerceScalar: boolean } => {
-  const helpers: string[] = []
-  const hoisted: string[] = []
-  let counter = 0
-  const matcher = createSubschemaMatcher(
+  const { declarations, expression } = generateCoerceWalk(schema, {
     typeSuffix,
-    options.rootSchema ?? (isSchemaObject(schema) ? (schema as Record<string, unknown>) : undefined),
-    options.formats ?? NO_FORMATS,
-    '_coerce',
-  )
-  const ctx: CoerceContext = { typeSuffix, helpers, hoisted, next: () => counter++, matcher }
-
-  const coerce = coercerFor(schema, ctx)
+    ...(options.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+    ...(options.formats !== undefined ? { formats: options.formats } : {}),
+    refCoercer: (ref) => coercerNameFor(ref, typeSuffix),
+    hoistNamespace: '_coerce',
+  })
   const valueName = `coerce${typeName}Value`
-  const body = coerce === null ? 'input' : coerce('input')
+  const body = expression ?? 'input'
 
   // A document that already passes has nothing to coerce: every stage above only
   // moves a value toward what the validator requires of it, so on a valid
@@ -556,11 +628,10 @@ export const generateCoerceFunction = (
   // test here instead grew a coercing build by a third on a large OpenAPI
   // document for a gain only on input that needed nothing. Without it the walk
   // runs first and `validateX` judges once — still well ahead of Ajv.
-  const passes = coerce !== null && options.standaloneGuard === true ? `is${typeName}` : null
+  const passes = expression !== null && options.standaloneGuard === true ? `is${typeName}` : null
 
-  const parts = [...hoisted, ...matcher.declarations(helpers.join('\n')), ...helpers]
   const walk = [
-    ...(parts.length > 0 ? [parts.join('\n\n'), ''] : []),
+    ...(declarations.length > 0 ? [declarations.join('\n\n'), ''] : []),
     `export const ${valueName} = (input: unknown): unknown => ${body}`,
     '',
     `export const coerce${typeName} = (input: unknown, _path = ''): CoercionResult<${typeName}> => {`,

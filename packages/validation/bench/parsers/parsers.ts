@@ -3,9 +3,9 @@ import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { generate } from '@amritk/validation'
 import { type TSchema, Value } from '@sinclair/typebox/value'
 
-import { buildSchema } from '../../src/parsers/index.ts'
 import type { ParseCase } from './schemas.ts'
 
 /** A parser that turns unknown input into a clean typed object (or throws). */
@@ -58,18 +58,15 @@ const TYPEBOX_PARSE_OPS = {
 const toTsSpecifiers = (source: string): string => source.replace(/(from '\.[^']*)\.js'/g, "$1.ts'")
 
 const loadMjstParser = async (parseCase: ParseCase): Promise<Parser> => {
-  const files = await buildSchema(
-    parseCase.schema,
-    parseCase.typeName,
-    undefined, // extensions
-    false, // typesOnly
-    false, // logWarnings
-    true, // strict
-    'embedded', // helpersMode — ship helper sources so the temp dir is self-contained
-    './', // helpersImportPrefix
-    false, // readonly
-    parseCase.mode === 'safe', // stripUnknown — strip extras (safe) vs reject them via the closed schema (strict)
-  )
+  // Through the package entry, so the bench runs under Node too: Bun resolves it
+  // to the sources, Node to the built `dist`.
+  const files = await generate(parseCase.schema, parseCase.typeName, {
+    modes: ['types', 'parseStrict'],
+    // Ship helper sources so the temp dir is self-contained.
+    helpersMode: 'embedded',
+    // Strip extras (safe) vs reject them via the closed schema (strict).
+    stripUnknown: parseCase.mode === 'safe',
+  })
   const dir = mkdtempSync(join(tmpdir(), 'mjst-parse-bench-'))
   for (const file of files) {
     const path = join(dir, file.filename)

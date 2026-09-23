@@ -3,9 +3,9 @@ import { mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { generate } from '@amritk/validation'
 import Ajv2020 from 'ajv/dist/2020.js'
 
-import { generate } from '@amritk/validation'
 import type { CoerceCase } from './coerce-cases.ts'
 
 /** A generated file, as both packages hand it back. */

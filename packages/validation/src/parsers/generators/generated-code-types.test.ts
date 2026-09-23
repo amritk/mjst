@@ -18,6 +18,37 @@ import { buildSchema } from './build-schema'
  * self-contained, so no module resolution reaches outside the generated files.
  */
 const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
+  // `propertyNames` makes the root's own shape check a stub, so no fast path reads
+  // the nested object's or the array item's shape checks. They were declared
+  // anyway, and unread, on every such property of a large OpenAPI document.
+  [
+    'unread-nested-shape-checks',
+    {
+      type: 'object',
+      propertyNames: { maxLength: 20 },
+      properties: {
+        inner: { type: 'object', properties: { a: { type: 'string' } } },
+        list: { type: 'array', items: { type: 'object', properties: { b: { type: 'number' } } } },
+      },
+    },
+  ],
+  // A union reached through `$ref`: the coercing parser carries the exact half,
+  // with its imports, its runtime helpers and the private repairing parser.
+  [
+    'exact-half-union-ref',
+    {
+      type: 'object',
+      properties: { m: { $ref: '#/$defs/method' }, k: { anyOf: [{ type: 'string' }, { const: false }] } },
+      $defs: {
+        method: {
+          anyOf: [
+            { type: 'string' },
+            { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'] },
+          ],
+        },
+      },
+    },
+  ],
   ['scalars', { type: 'object', properties: { a: { type: 'string' }, b: { type: 'number' } }, required: ['a'] }],
   ['nullable-scalar', { type: 'object', properties: { a: { type: 'string', nullable: true } }, required: ['a'] }],
   [
@@ -218,6 +249,10 @@ const CASES: ReadonlyArray<readonly [string, JSONSchema]> = [
  */
 const OPTIONS: ts.CompilerOptions = {
   strict: true,
+  // The repo's own flags, and what a consumer inheriting them compiles with: a
+  // declaration the output never reads is an error there, not a warning.
+  noUnusedLocals: true,
+  noUnusedParameters: true,
   exactOptionalPropertyTypes: true,
   noUncheckedIndexedAccess: true,
   noImplicitOverride: true,

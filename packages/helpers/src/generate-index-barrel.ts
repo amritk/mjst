@@ -87,8 +87,11 @@ const collectExportNames = (content: string, typeNames: string[], constNames: st
       if (typeName !== null) {
         typeNames.push(typeName)
       } else {
+        // A leading underscore marks a name exported only for sibling modules
+        // to call — the repairing parser behind a coercing `parseX`, say — and
+        // not part of the build's public surface.
         const constName = exportNameAt(content, at, 'export const ')
-        if (constName !== null) constNames.push(constName)
+        if (constName !== null && !constName.startsWith('_')) constNames.push(constName)
       }
     }
     at = content.indexOf(EXPORT_KEYWORD, at + EXPORT_KEYWORD.length)

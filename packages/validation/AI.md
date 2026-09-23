@@ -97,5 +97,12 @@ spelled as a flag: everything that judges a document, nothing that builds one.
    `anyOf: [string, { const: false }]`, where Ajv answers `"false"`), and two
    branches that would coerce to different values leave it as written. Do not
    tell a user a value will come out the way Ajv would produce it inside a union.
+10. **The coercing `parseX` returns exactly what `coerceX` returns** whenever
+   `coerceX` accepts the document, and only repairs what `coerceX` would reject.
+   A parser file for a definition with `anyOf`/`oneOf`/`allOf`/`if`/`not` (or one
+   such a definition reaches) therefore exports `matchesX` and `coerceXInput`
+   too, and its repairing parser is private (`_parseXRepair`, kept out of the
+   barrel — a leading `_` marks a name for sibling files only). Strict and
+   `stripUnknown` parsers are unchanged.
 
 Only the `.` entry. Install: `bun add @amritk/validation`.

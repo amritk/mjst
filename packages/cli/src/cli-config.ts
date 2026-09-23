@@ -115,7 +115,7 @@ export type CliConfig = {
    * A document that is already valid is answered by `isX` alone where that is a
    * standalone guard, and handed back as the very same object. Against Ajv
    * cloning its input first — which it must to leave the caller's document
-   * alone — `coerceX` runs 3–36× faster on valid input and 1.4–2× faster on
+   * alone — `coerceX` runs 5–36× faster on valid input and 1.4–2.1× faster on
    * input that needs coercing (`bench:validators:coerce`).
    *
    * Requires `validators`. `validateX` and `isX` are unchanged either way.

@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { generate } from '@amritk/validation'
 import { TypeCompiler } from '@sinclair/typebox/compiler'
 import type { ValidateFunction } from 'ajv'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
-import { buildValidatorSchema } from '../../src/validators/index.ts'
 import type { BenchCase } from './schemas.ts'
 
 /** A validator that returns a plain boolean, normalising each library's verdict. */
@@ -65,7 +65,9 @@ const makeAjv = (): Ajv => {
 const toTsSpecifiers = (source: string): string => source.replace(/(from '\.[^']*)\.js'/g, "$1.ts'")
 
 const loadMjstValidator = async (benchCase: BenchCase): Promise<BoolValidator> => {
-  const files = await buildValidatorSchema(benchCase.schema, benchCase.typeName)
+  // The package's default modes — types, guard, validate — through its entry, so
+  // the bench runs under Node too (Bun resolves the sources, Node the built `dist`).
+  const files = await generate(benchCase.schema, benchCase.typeName)
   const dir = mkdtempSync(join(tmpdir(), 'mjst-bench-'))
   for (const file of files) writeFileSync(join(dir, file.filename), toTsSpecifiers(file.content))
 

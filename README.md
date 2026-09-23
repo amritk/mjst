@@ -169,16 +169,16 @@ valid one straight back. How many times faster `coerceX` is:
 
 | schema | runtime | valid input | needs coercing | cannot be coerced |
 |:--|:--|--:|--:|--:|
-| small (4 fields) | Bun | 5.3× | 1.5× | 1.6× |
-| small (4 fields) | Node | 10× | 2.1× | 2.2× |
-| order (nested + array) | Bun | 9.9× | 1.6× | 1.8× |
-| order (nested + array) | Node | 8.3× | 1.9× | 2.2× |
-| assert-loose | Bun | 19× | 1.4× | 3.1× |
-| assert-loose | Node | 36× | 1.6× | 3.2× |
-| config (unions via `$ref`) | Bun | 3.2× | 1.5× | 2.4× |
-| config (unions via `$ref`) | Node | 4.3× | 1.4× | 3.4× |
+| small (4 fields) | Bun | 5.4× | 1.7× | 1.5× |
+| small (4 fields) | Node | 9.9× | 2.1× | 2.2× |
+| order (nested + array) | Bun | 11× | 1.6× | 1.9× |
+| order (nested + array) | Node | 8.4× | 1.8× | 2.2× |
+| assert-loose | Bun | 19× | 1.4× | 3.0× |
+| assert-loose | Node | 36× | 1.6× | 3.1× |
+| config (unions via `$ref`) | Bun | 7.2× | 1.7× | 3.7× |
+| config (unions via `$ref`) | Node | 5.2× | 1.5× | 4.6× |
 
-<sub>Bun 1.3.11 and Node 22.22 on Linux x64, each engine timed in its own process. Reproduce with `cd packages/validation && bun run bench:validators:coerce` (Bun) or `bun run bench:validators:coerce:node` (Node). It is also stricter where Ajv guesses — no `null` read as `""`/`0`/`false`, no `" "` read as `0` — and coerces inside `anyOf`/`oneOf`/`allOf`/`if` without Ajv's first-branch-wins rewrites; see [Moving off Ajv](./packages/validation/README.md#moving-off-ajv).</sub>
+<sub>Bun 1.3.11 and Node 22.22 on Linux x64, each engine timed in its own process. Reproduce with `cd packages/validation && bun run bench:validators:coerce` (Bun) or `bun run bench:validators:coerce:node` (Node). Timed without the clone, on valid input where Ajv rewrites nothing, `coerceX` is still 1.2–3.3× ahead. It is also stricter where Ajv guesses — no `null` read as `""`/`0`/`false`, no `" "` read as `0` — and coerces inside `anyOf`/`oneOf`/`allOf`/`if` without Ajv's first-branch-wins rewrites; see [Moving off Ajv](./packages/validation/README.md#moving-off-ajv).</sub>
 
 ---
 
