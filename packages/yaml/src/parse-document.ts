@@ -131,6 +131,14 @@ type State = {
    * structure, not the missing anchor the generic report would claim.
    */
   pendingAnchors: Set<string> | null
+  /**
+   * Whether the source holds a `\r` anywhere. When it does not, `\n` is the only
+   * line break (YAML 1.2 `b-break`) the document can contain, so a scan for the
+   * end of a line can use the native `indexOf('\n')` instead of testing each
+   * character for both breaks — see {@link scanBlockScalar}. Found once per parse
+   * with a single vectorised search.
+   */
+  hasCR: boolean
 }
 
 type NodeProps = { anchor?: string; tag?: string }
@@ -1428,7 +1436,16 @@ const scanBlockScalar = (state: State, parentIndent: number): YamlScalar => {
     // pays a single integer comparison per line and never looks further.
     if (indent === 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
     let lineEnd = lineStart + contentIndent
-    while (lineEnd < len && src.charCodeAt(lineEnd) !== NL && src.charCodeAt(lineEnd) !== CR) lineEnd++
+    // Without a `\r` anywhere in the source the only line break is `\n`, and the
+    // engine's native `indexOf` finds it far faster than a charCodeAt loop: block
+    // scalar content is the longest run of text most OpenAPI documents hold, and
+    // this loop was ~8% of parsing one. The loop stays for documents that do use
+    // CR line ends, where either break may end the line. Both land on the same
+    // offset — the first break at or after the content indent, or `len`.
+    if (!state.hasCR) {
+      lineEnd = src.indexOf('\n', lineEnd)
+      if (lineEnd === -1) lineEnd = len
+    } else while (lineEnd < len && src.charCodeAt(lineEnd) !== NL && src.charCodeAt(lineEnd) !== CR) lineEnd++
     lines.push(src.slice(lineStart + contentIndent, lineEnd))
     valueEnd = lineEnd
     state.pos = nextLineStart(src, lineEnd, len)
@@ -3038,6 +3055,7 @@ const newState = (source: string, options: ParseOptions): State => ({
   comments: [],
   commentWatermark: 0,
   pendingAnchors: null,
+  hasCR: source.indexOf('\r') !== -1,
 })
 
 /**
