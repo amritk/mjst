@@ -232,6 +232,16 @@ const cached = (
   return validator
 }
 
+// The limits and cache keys of a call with no options, built once:
+// `validate(schema)(value)` inline is a common way to call this, and building
+// the key on every call cost more than validating a small value.
+const DEFAULT_LIMITS = resolveLimits(undefined)
+const DEFAULT_KEYS: Readonly<Record<ValidatorMode, string>> = {
+  guard: cacheKey('guard', undefined, DEFAULT_LIMITS),
+  errors: cacheKey('errors', undefined, DEFAULT_LIMITS),
+  split: cacheKey('split', undefined, DEFAULT_LIMITS),
+}
+
 /**
  * Returns a validator for the schema, reusing a cached one when the same schema
  * object and configuration have been requested before.
@@ -241,8 +251,9 @@ export const prepareValidator = (
   options: ValidateOptions | undefined,
   emitErrors: boolean,
 ): ((input: unknown) => unknown) => {
-  const limits = resolveLimits(options?.limits)
-  const key = cacheKey(emitErrors ? 'errors' : 'guard', options, limits)
+  const mode = emitErrors ? 'errors' : 'guard'
+  const limits = options === undefined ? DEFAULT_LIMITS : resolveLimits(options.limits)
+  const key = options === undefined ? DEFAULT_KEYS[mode] : cacheKey(mode, options, limits)
   return cached(schema, key, () =>
     makeValidator(
       schema,
@@ -284,8 +295,7 @@ export const prepareSplitValidator = (
   schema: unknown,
   options: ValidateOptions | undefined,
 ): ((input: unknown) => unknown) => {
-  const limits = resolveLimits(options?.limits)
-  const key = cacheKey('split', options, limits)
+  const key = options === undefined ? DEFAULT_KEYS.split : cacheKey('split', options, resolveLimits(options.limits))
 
   return cached(schema, key, () => {
     const guard = prepareValidator(schema, options, false)

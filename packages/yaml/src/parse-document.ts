@@ -1,4 +1,10 @@
-import { resolveDoubleQuoted, resolvePlainValue, resolveSingleQuoted, trimTrailingSpaces } from './resolve-scalar'
+import {
+  resolveDoubleQuoted,
+  resolvePlainValue,
+  resolveSingleQuoted,
+  trimTrailingSpaces,
+  trimWs,
+} from './resolve-scalar'
 import type {
   ParseOptions,
   YamlAlias,
@@ -1253,16 +1259,16 @@ const foldSegments = (segments: string[]): string => {
   let out = trimTrailingSpaces(segments[0] ?? '')
   let i = 1
   while (i < segments.length) {
-    const seg = (segments[i] ?? '').trim()
+    const seg = trimWs(segments[i] ?? '')
     if (seg === '') {
       let blanks = 0
-      while (i < segments.length && (segments[i] ?? '').trim() === '') {
+      while (i < segments.length && trimWs(segments[i] ?? '') === '') {
         blanks++
         i++
       }
       out += '\n'.repeat(blanks)
       if (i < segments.length) {
-        out += (segments[i] ?? '').trim()
+        out += trimWs(segments[i] ?? '')
         i++
       }
     } else {

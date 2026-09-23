@@ -46,4 +46,25 @@ describe('parse', () => {
     // A genuinely multi-line plain scalar still folds to a string.
     expect(parse('m: foo\n  bar\n\nn: 2\n')).toEqual({ m: 'foo bar', n: 2 })
   })
+
+  // Folding strips spaces and tabs, the only characters YAML calls white space.
+  // `String#trim` also took a no-break space or an ideographic space off the
+  // edge of a line, which dropped text the author wrote.
+  it('keeps Unicode spaces at the edges of folded lines', () => {
+    const nbsp = '\u00a0'
+    for (const source of [
+      `k: a\n   ${nbsp}b${nbsp} \n  c\n`,
+      `k: 'a\n   ${nbsp}b${nbsp} \n  c'\n`,
+      `k: "a\n   ${nbsp}b${nbsp} \n  c"\n`,
+    ]) {
+      expect(parse(source)).toEqual({ k: `a ${nbsp}b${nbsp} c` })
+    }
+    expect(parse("k: 'a\n  \u3000\n  c'\n")).toEqual({ k: 'a \u3000 c' })
+  })
+
+  it('unescapes a double-quoted scalar with literal runs around its escapes', () => {
+    expect(parse('k: "plain \\t tab \\n line \\x41 \\u00e9 \\U0001F600 end"\n')).toEqual({
+      k: 'plain \t tab \n line A \u00e9 \u{1F600} end',
+    })
+  })
 })

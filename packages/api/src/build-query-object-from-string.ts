@@ -28,12 +28,17 @@ export const buildQueryObjectFromString = (
   const query: Record<string, unknown> = Object.create(null) as Record<string, unknown>
   const length = source.length
   let start = 0
+  // The first '=' at or after `start`, carried across pairs. Searching afresh
+  // from each pair's start rescanned every '='-less pair to the next '=', which
+  // can be the end of the string: a megabyte form body of bare keys with one
+  // '=' at the end took seconds of CPU.
+  let eq = source.indexOf('=')
   while (start < length) {
     let end = source.indexOf('&', start)
     if (end === -1) end = length
     // Empty segments ('a=1&&b=2') produce no pair, same as URLSearchParams.
     if (end > start) {
-      const eq = source.indexOf('=', start)
+      if (eq !== -1 && eq < start) eq = source.indexOf('=', start)
       const hasValue = eq !== -1 && eq < end
       // A bare key ('?flag') keeps an empty value, and a bare value ('?=x')
       // keeps an empty key — both match URLSearchParams.

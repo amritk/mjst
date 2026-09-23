@@ -33,7 +33,7 @@ import { findDiscriminator } from '#parsers/helpers/find-discriminator'
 import { getDiscriminatorValue } from '#parsers/helpers/get-discriminator-value'
 
 import { assertNoUnsupportedKeywords } from './assert-supported-keywords'
-import { generateEnumCaseInsensitiveCoercion } from './generate-enum-check'
+import { generateEnumCaseInsensitiveCoercion, generateEnumCheck } from './generate-enum-check'
 import {
   generateBackstopAssertion,
   generateCompositionChecks,
@@ -751,6 +751,13 @@ const resolveForScoring = (schema: JSONSchema, rootSchema: Record<string, unknow
   return target !== undefined && isSchemaObject(target as JSONSchema) ? (target as JSONSchema) : schema
 }
 
+/** Whether a `$ref` appears anywhere in `schema`. */
+const containsRef = (schema: unknown): boolean => {
+  if (schema === null || typeof schema !== 'object') return false
+  if (Array.isArray(schema)) return schema.some(containsRef)
+  return Object.hasOwn(schema, '$ref') || Object.values(schema).some(containsRef)
+}
+
 /** True for a property whose schema names its branch outright — a `const` or a one-member `enum`. */
 const tagValueOf = (schema: JSONSchema): unknown | undefined => {
   if (!isSchemaObject(schema)) return undefined
@@ -768,6 +775,11 @@ const tagValueOf = (schema: JSONSchema): unknown | undefined => {
 const branchScoreExpression = (branch: JSONSchema, ctx: UnionParserContext): string => {
   const resolved = resolveForScoring(branch, ctx.rootSchema)
   if (!isSchemaObject(resolved) || !hasProperties(resolved)) return '0'
+  // A `$ref` branch is scored by reading its target's properties, which live in
+  // another file's schema. A `$ref` among them names a shape validator this file
+  // never imports, since imports are collected from this file's own schema, so
+  // the emitted call did not compile. Those properties score on presence alone.
+  const foreign = resolved !== branch
   const properties = resolved.properties as Record<string, JSONSchema>
   const required = new Set(hasRequired(resolved) ? (resolved.required as string[]) : [])
   const terms: string[] = []
@@ -796,7 +808,10 @@ const branchScoreExpression = (branch: JSONSchema, ctx: UnionParserContext): str
     // Well-typedness is weak evidence on top of presence: a property of the
     // right shape suggests the author meant this branch, but a coercible
     // mistype (`"5"` for a number) should not disqualify it.
-    const typeCheck = generatePropertyTypeCheck(accessor, properties[key] as JSONSchema, ctx.useRefImports, ctx.suffix)
+    const typeCheck =
+      foreign && containsRef(properties[key])
+        ? null
+        : generatePropertyTypeCheck(accessor, properties[key] as JSONSchema, ctx.useRefImports, ctx.suffix)
     if (typeCheck !== null) terms.push(`(${typeCheck} ? ${SCORE_DECLARED_WELL_TYPED} : 0)`)
   }
 
@@ -1099,13 +1114,17 @@ const generateNonObjectParser = (
         : `export const ${functionName} = (input: unknown): ${typeName} => ${literal} as ${typeName};`
     }
     if (hasEnum(schema) && schema.enum.length > 0) {
-      const values = JSON.stringify(schema.enum)
       const fallback = JSON.stringify(schema.enum[0])
       // Case-insensitive normalization sits on the non-member branch only, so an
-      // exact member still returns via the `includes` fast path untouched.
+      // exact member still returns via the membership test untouched.
       const ci = unionCtx?.caseInsensitive ? generateEnumCaseInsensitiveCoercion('input', schema.enum, fallback) : null
       const coerced = ci ? `(${ci})` : fallback
-      return `export const ${functionName} = (input: unknown): ${typeName} => ${values}.includes(input as never) ? input as ${typeName} : ${coerced} as ${typeName};`
+      // Compared member by member, deep for an object or array member, the same
+      // test the property path emits. `[…].includes(input)` compares by
+      // reference, so a valid `{ a: 1 }` against `enum: [{ a: 1 }]` was never a
+      // member and came back as the fallback; it also built the array per call.
+      const member = generateEnumCheck('input', schema.enum)
+      return `export const ${functionName} = (input: unknown): ${typeName} => ${member} ? input as ${typeName} : ${coerced} as ${typeName};`
     }
     // A top-level union must validate membership: an unmatched value is not of
     // the declared union type, so coerce it to a member-shaped default. Reuse the

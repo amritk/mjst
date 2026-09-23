@@ -1,6 +1,6 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import type { Server } from 'node:http'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -161,5 +161,37 @@ describe('fetch-to-node-handler', () => {
       expect((await fetch(origin + '/env')).status).toBe(200)
       expect(seen).toEqual([{ tenant: 'acme' }])
     })
+  })
+
+  // The host header is spliced into the URL ahead of the request-target, so a
+  // `/` in it moved the path the router saw — past a proxy rule that only let
+  // `/public` through.
+  it('keeps a host header from reshaping the routed URL', async () => {
+    const seen: string[] = []
+    const echoUrl: FetchLikeHandler = (request) => {
+      seen.push(request.url)
+      return Response.json({ ok: true })
+    }
+    const send = (origin: string, host: string): Promise<void> =>
+      new Promise((resolve, reject) => {
+        const req = httpRequest(origin + '/public', { headers: { host } }, (res) => {
+          res.resume()
+          res.on('end', resolve)
+        })
+        req.on('error', reject)
+        req.end()
+      })
+    await withServer(createServer(fetchToNodeHandler(echoUrl)), async (origin) => {
+      for (const host of ['example.com/admin', 'example.com?', 'example.com#', 'a@example.com', 'example.com\\x']) {
+        await send(origin, host)
+      }
+      await send(origin, 'example.com:8080')
+      await send(origin, '[::1]:3000')
+    })
+    expect(seen).toEqual([
+      ...Array.from({ length: 5 }, () => 'http://localhost/public'),
+      'http://example.com:8080/public',
+      'http://[::1]:3000/public',
+    ])
   })
 })

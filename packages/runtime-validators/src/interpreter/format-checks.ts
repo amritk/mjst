@@ -102,50 +102,112 @@ const UCSCHAR =
 // query (and nowhere else).
 const IPRIVATE = '\\uE000-\\uF8FF\\u{F0000}-\\u{FFFFD}\\u{100000}-\\u{10FFFD}'
 
+// Split by delimiter alone (RFC 3986 Appendix B) into scheme / authority /
+// path / query / fragment. Each part is then checked by a small
+// character-class pattern — a single monolithic grammar regex falls off
+// JavaScriptCore's regex JIT and costs ~1µs per input character on Bun.
+const SCHEME = /^[A-Za-z][A-Za-z0-9+\-.]*$/
+
+type UriChecks = { uri: (value: string) => boolean; reference: (value: string) => boolean }
+
 /**
- * Builds the `URI` and `URI-reference` patterns over a given `unreserved` set —
+ * Builds the `URI` and `URI-reference` checks over a given `unreserved` set —
  * ASCII for RFC 3986, ASCII plus `ucschar` for RFC 3987, whose query also admits
  * `iprivate`.
+ *
+ * An IPv4 host needs no case of its own: its characters are a subset of a
+ * `reg-name`'s, so the `reg-name` check accepts every one the grammar does.
  */
-const uriGrammar = (extraUnreserved: string, privateQuery = ''): { uri: string; reference: string } => {
+const uriChecks = (extraUnreserved: string, privateQuery: string, flags: string): UriChecks => {
   const unreserved = `A-Za-z0-9\\-._~${extraUnreserved}`
-  const scheme = '[A-Za-z][A-Za-z0-9+\\-.]*'
-  const pchar = `(?:[${unreserved}${SUB_DELIMS}:@]|${PCT_ENCODED})`
-  const segment = `${pchar}*`
-  const segmentNz = `${pchar}+`
-  // A relative path's first segment may not hold a colon — otherwise `1:b` would
-  // read as a scheme.
-  const segmentNzNc = `(?:[${unreserved}${SUB_DELIMS}@]|${PCT_ENCODED})+`
-  const userinfo = `(?:[${unreserved}${SUB_DELIMS}:]|${PCT_ENCODED})*`
-  const ipvFuture = `[Vv][0-9A-Fa-f]+\\.[${unreserved}${SUB_DELIMS}:]+`
-  const ipLiteral = `\\[(?:${IPV6_BODY}|${ipvFuture})\\]`
-  const regName = `(?:[${unreserved}${SUB_DELIMS}]|${PCT_ENCODED})*`
-  const host = `(?:${ipLiteral}|${IPV4_OCTETS}|${regName})`
-  const authority = `(?:${userinfo}@)?${host}(?::\\d*)?`
+  // A component is valid when it holds no character outside its set and no `%`
+  // that does not open an escape. Two searches for a *bad* character are what
+  // both engines run fastest; a `(?:[set]|%XX)*` match is a loop of alternations.
+  const badPct = /%(?![0-9A-Fa-f]{2})/
+  const only = (set: string) => {
+    const bad = new RegExp(`[^${set}%]`, flags)
+    return (value: string): boolean => !bad.test(value) && (value.indexOf('%') === -1 || !badPct.test(value))
+  }
+  // The path is checked as one run: every path form is segments of `pchar`
+  // joined by `/`, and the forms differ only in how they open, which the
+  // splitting below and `reference`'s colon rule decide.
+  const path = only(`${unreserved}${SUB_DELIMS}:@/`)
+  const query = only(`${unreserved}${SUB_DELIMS}:@/?${privateQuery}`)
+  const fragment = only(`${unreserved}${SUB_DELIMS}:@/?`)
+  const userinfo = only(`${unreserved}${SUB_DELIMS}:`)
+  const regName = only(`${unreserved}${SUB_DELIMS}`)
+  const port = /^:\d*$/
+  const ipLiteral = new RegExp(`^\\[(?:${IPV6_BODY}|[Vv][0-9A-Fa-f]+\\.[${unreserved}${SUB_DELIMS}:]+)\\]$`, flags)
 
-  const pathAbempty = `(?:/${segment})*`
-  const pathAbsolute = `/(?:${segmentNz}(?:/${segment})*)?`
-  const pathRootless = `${segmentNz}(?:/${segment})*`
-  const pathNoscheme = `${segmentNzNc}(?:/${segment})*`
+  const authority = (value: string): boolean => {
+    const at = value.indexOf('@')
+    if (at !== -1 && !userinfo(value.slice(0, at))) return false
+    const start = at + 1
+    if (value.charCodeAt(start) === 91) {
+      const close = value.indexOf(']', start)
+      if (close === -1 || !ipLiteral.test(value.slice(start, close + 1))) return false
+      return close + 1 === value.length || port.test(value.slice(close + 1))
+    }
+    const colon = value.indexOf(':', start)
+    if (colon === -1) return regName(start === 0 ? value : value.slice(start))
+    return regName(value.slice(start, colon)) && port.test(value.slice(colon))
+  }
 
-  const hierPart = `(?://${authority}${pathAbempty}|${pathAbsolute}|${pathRootless}|)`
-  const relativePart = `(?://${authority}${pathAbempty}|${pathAbsolute}|${pathNoscheme}|)`
-  const query = `(?:\\?(?:${pchar}|[/?${privateQuery}])*)?`
-  const fragment = `(?:#(?:${pchar}|[/?])*)?`
+  // Validates value[from..] as `[ "//" authority ] path [ "?" query ] [ "#" fragment ]`,
+  // splitting on delimiters by index (RFC 3986 Appendix B) so no match array or
+  // capture is allocated.
+  const hier = (value: string, from: number): boolean => {
+    const hash = value.indexOf('#', from)
+    const end = hash === -1 ? value.length : hash
+    let qmark = value.indexOf('?', from)
+    if (qmark > end) qmark = -1
+    const pathEnd = qmark === -1 ? end : qmark
+    let pathStart = from
+    if (value.charCodeAt(from) === 47 && value.charCodeAt(from + 1) === 47) {
+      let authEnd = value.indexOf('/', from + 2)
+      if (authEnd === -1 || authEnd > pathEnd) authEnd = pathEnd
+      if (!authority(value.slice(from + 2, authEnd))) return false
+      pathStart = authEnd
+    }
+    return (
+      path(value.slice(pathStart, pathEnd)) &&
+      (qmark === -1 || query(value.slice(qmark + 1, end))) &&
+      (hash === -1 || fragment(value.slice(hash + 1)))
+    )
+  }
+
+  // The scheme's colon, or -1: the first `:` with no `/`, `?` or `#` before it.
+  const schemeEnd = (value: string): number => {
+    for (let i = 0; i < value.length; i++) {
+      const c = value.charCodeAt(i)
+      if (c === 58) return i
+      if (c === 47 || c === 63 || c === 35) return -1
+    }
+    return -1
+  }
 
   return {
-    uri: `^${scheme}:${hierPart}${query}${fragment}$`,
-    reference: `^(?:${scheme}:${hierPart}|${relativePart})${query}${fragment}$`,
+    uri: (value) => {
+      const colon = schemeEnd(value)
+      return colon > 0 && SCHEME.test(value.slice(0, colon)) && hier(value, colon + 1)
+    },
+    reference: (value) => {
+      const colon = schemeEnd(value)
+      if (colon > 0) return SCHEME.test(value.slice(0, colon)) && hier(value, colon + 1)
+      // A relative reference's first segment may not hold a colon, or `1:b`
+      // would read as a scheme. A colon before any `/`, `?` or `#` came back as
+      // the scheme's above, so all that is left to refuse is one at index 0.
+      return colon !== 0 && hier(value, 0)
+    },
   }
 }
 
-const ASCII_URI = uriGrammar('')
-const IRI_URI = uriGrammar(UCSCHAR, IPRIVATE)
-
-const URI = new RegExp(ASCII_URI.uri)
-const URI_REFERENCE = new RegExp(ASCII_URI.reference)
-const IRI = new RegExp(IRI_URI.uri, 'u')
-const IRI_REFERENCE = new RegExp(IRI_URI.reference, 'u')
+const ASCII_URI = uriChecks('', '', '')
+const IRI_URI = uriChecks(UCSCHAR, IPRIVATE, 'u')
+const URI = { test: ASCII_URI.uri }
+const URI_REFERENCE = { test: ASCII_URI.reference }
+const IRI = { test: IRI_URI.uri }
+const IRI_REFERENCE = { test: IRI_URI.reference }
 
 // --- RFC 6570 URI templates ------------------------------------------------
 //
@@ -167,34 +229,42 @@ const URI_TEMPLATE = new RegExp(`^(?:${TEMPLATE_LITERAL}|${EXPRESSION})*$`, 'iu'
 
 // --- dates and times -------------------------------------------------------
 
-const DATE = /^(\d\d\d\d)-(\d\d)-(\d\d)$/
+// Shapes are tested without capture groups and the fields read back by
+// position: `exec` allocates a match array and one string per group, which
+// made a single `date-time` check cost ~0.8µs.
+const DATE = /^\d\d\d\d-\d\d-\d\d$/
 const DAYS_IN_MONTH = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
 
 const isLeapYear = (year: number): boolean => year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
 
+/** The two ASCII digits at `index`, as a number. Only called on a shape already matched. */
+const twoDigits = (value: string, index: number): number =>
+  (value.charCodeAt(index) - 48) * 10 + (value.charCodeAt(index + 1) - 48)
+
 /**
- * RFC 3339 `full-date`. The shape is a regex, but the day is arithmetic: a
- * pattern cannot know that February has 29 days in 2020 and 28 in 1998, so a
- * regex-only check calls `2020-02-30` and `1998-02-29` dates. They are not, and
- * a date field that accepts them is not validating anything a caller cares
- * about.
+ * The day arithmetic of a `full-date` whose shape is already matched, starting
+ * at index 0. The shape is a regex, but the day is arithmetic: a pattern cannot
+ * know that February has 29 days in 2020 and 28 in 1998, so a regex-only check
+ * calls `2020-02-30` and `1998-02-29` dates. They are not, and a date field that
+ * accepts them is not validating anything a caller cares about.
  */
-const isDate = (value: string): boolean => {
-  const matches = DATE.exec(value)
-  if (matches === null) return false
-  const year = +(matches[1] as string)
-  const month = +(matches[2] as string)
-  const day = +(matches[3] as string)
+const isValidDay = (value: string): boolean => {
+  const year = twoDigits(value, 0) * 100 + twoDigits(value, 2)
+  const month = twoDigits(value, 5)
+  const day = twoDigits(value, 8)
   if (month < 1 || month > 12 || day < 1) return false
   return day <= (month === 2 && isLeapYear(year) ? 29 : (DAYS_IN_MONTH[month] as number))
 }
+
+/** RFC 3339 `full-date`. */
+const isDate = (value: string): boolean => DATE.test(value) && isValidDay(value)
 
 // RFC 3339 splits the fraction off the seconds, and so does this: parsing
 // `59.999999999999999` as a number rounds it to exactly 60, which would read a
 // perfectly ordinary sub-second timestamp as a leap second.
 // `time-numoffset` is `("+" / "-") time-hour ":" time-minute` — the colon and
 // the minutes are both required, so `+0130` and `+01` are not offsets.
-const TIME = /^(\d\d):(\d\d):(\d\d)(?:\.\d+)?(?:([Zz])|([+-])(\d\d):(\d\d))?$/
+const TIME = /^\d\d:\d\d:\d\d(?:\.\d+)?(?:[Zz]|[+-]\d\d:\d\d)?$/
 
 /**
  * RFC 3339 `full-time` (`requireOffset`) or `partial-time`.
@@ -210,18 +280,20 @@ const TIME = /^(\d\d):(\d\d):(\d\d)(?:\.\d+)?(?:([Zz])|([+-])(\d\d):(\d\d))?$/
 const timeCheck =
   (requireOffset: boolean) =>
   (value: string): boolean => {
-    const matches = TIME.exec(value)
-    if (matches === null) return false
-    const hour = +(matches[1] as string)
-    const minute = +(matches[2] as string)
-    const second = +(matches[3] as string)
-    const zulu = matches[4] !== undefined
-    const offsetSign = matches[5] === '-' ? -1 : 1
-    const hasOffset = zulu || matches[5] !== undefined
-    if (requireOffset && !hasOffset) return false
-
-    const offsetHours = +(matches[6] ?? 0)
-    const offsetMinutes = +(matches[7] ?? 0)
+    if (!TIME.test(value)) return false
+    const hour = twoDigits(value, 0)
+    const minute = twoDigits(value, 3)
+    const second = twoDigits(value, 6)
+    const end = value.length
+    const last = value.charCodeAt(end - 1)
+    const zulu = last === 90 || last === 122
+    // A numeric offset is the only thing that can put a sign six from the end.
+    const sign = end >= 14 ? value.charCodeAt(end - 6) : 0
+    const numeric = sign === 43 || sign === 45
+    if (requireOffset && !zulu && !numeric) return false
+    const offsetSign = sign === 45 ? -1 : 1
+    const offsetHours = numeric ? twoDigits(value, end - 5) : 0
+    const offsetMinutes = numeric ? twoDigits(value, end - 2) : 0
     if (hour > 23 || minute > 59 || second > 60 || offsetHours > 23 || offsetMinutes > 59) return false
     if (second < 60) return true
 
@@ -236,13 +308,12 @@ const isTime = timeCheck(true)
 const isIsoTime = timeCheck(false)
 
 // RFC 3339 permits a lowercase `t`, and (by its own note) a space, between the
-// date and the time.
-const DATE_TIME_SEPARATOR = /t|\s/i
+// date and the time. A `full-date` is exactly ten characters, so the date and
+// its separator are one prefix test and the time is everything after index 10.
+const DATE_TIME_PREFIX = /^\d\d\d\d-\d\d-\d\d[Tt\s]/
 
-const dateTimeCheck = (time: (value: string) => boolean) => (value: string) => {
-  const parts = value.split(DATE_TIME_SEPARATOR)
-  return parts.length === 2 && isDate(parts[0] as string) && time(parts[1] as string)
-}
+const dateTimeCheck = (time: (value: string) => boolean) => (value: string) =>
+  DATE_TIME_PREFIX.test(value) && isValidDay(value) && time(value.slice(11))
 
 const isDateTime = dateTimeCheck(isTime)
 const isIsoDateTime = dateTimeCheck(isIsoTime)

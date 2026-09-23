@@ -317,4 +317,30 @@ describe('generate', () => {
     const withValidate = await generate(schema, 'Doc', { modes: ['types', 'validate'], helpersMode: 'embedded' })
     expect(withValidate.some((file) => file.filename === 'validation-result.ts')).toBe(true)
   })
+
+  // A union of `$ref` branches is scored by reading each target's properties,
+  // which live in another file. One of them being a `$ref` emitted a call to a
+  // shape validator the scoring file never imports, and it did not compile.
+  it('scores a $ref union branch without calling what it does not import', async () => {
+    const tools: JSONSchema = {
+      $defs: {
+        fn: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        toolFn: {
+          type: 'object',
+          properties: { type: { const: 'function' }, function: { $ref: '#/$defs/fn' } },
+          required: ['type', 'function'],
+        },
+        toolCode: { type: 'object', properties: { type: { const: 'code' } }, required: ['type'] },
+      },
+      type: 'object',
+      properties: { tool: { oneOf: [{ $ref: '#/$defs/toolCode' }, { $ref: '#/$defs/toolFn' }] } },
+    }
+    const files = await generate(tools, 'Assistant', { modes: ['types', 'parse'], helpersMode: 'embedded' })
+    expect(typeErrors(files)).toEqual([])
+    const parse = link<(input: unknown) => { tool?: unknown }>(files, 'parseAssistant')
+    expect(parse({ tool: { type: 'function', function: { name: 'f' } } }).tool).toEqual({
+      type: 'function',
+      function: { name: 'f' },
+    })
+  })
 })

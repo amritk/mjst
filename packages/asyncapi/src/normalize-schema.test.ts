@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { normalizeSchema } from './normalize-schema'
+import { type NormalizeSchemaCache, normalizeSchema } from './normalize-schema'
 
 describe('normalize-schema', () => {
   it('upgrades the AsyncAPI default dialect without a declared $schema', () => {
@@ -53,5 +53,19 @@ describe('normalize-schema', () => {
   it('passes 2020-12 through untouched', () => {
     const schema = { type: 'object', $defs: { x: { type: 'string' } } }
     expect(normalizeSchema(schema, '2020-12')).toBe(schema)
+  })
+
+  it('reuses a cached copy for the same schema and dialect', () => {
+    const cache: NormalizeSchemaCache = new WeakMap()
+    const schema = { type: 'object', definitions: { user: { type: 'object' } } }
+    const first = normalizeSchema(schema, 'asyncapi', cache)
+    expect(normalizeSchema(schema, 'asyncapi', cache)).toBe(first)
+    // The dialect is part of the key: the same object read as OpenAPI is a different schema.
+    expect(normalizeSchema(schema, 'openapi', cache)).not.toBe(first)
+  })
+
+  it('normalizes afresh without a cache', () => {
+    const schema = { type: 'object', definitions: { user: { type: 'object' } } }
+    expect(normalizeSchema(schema, 'asyncapi')).not.toBe(normalizeSchema(schema, 'asyncapi'))
   })
 })

@@ -416,6 +416,22 @@ const ACCUMULATING: FailFast = { on: false, blocked: false }
 const FAIL_FAST_SINK = '\u0000fail-fast'
 
 /**
+ * The stand-in sink a yes/no match expression reports through.
+ *
+ * A combinator that throws its branches' errors away only needs to know whether
+ * one was reported, so the report is a `return false` out of the match IIFE and
+ * nothing is built. Filling a throwaway buffer instead allocated a full error
+ * object, template-literal path included, for every branch a valid union member
+ * did not match. Like {@link FAIL_FAST_SINK} it is never spelled into the output,
+ * and it blocks the same shapes: an unconditional report would leave the rest of
+ * the IIFE unreachable, so {@link generateMatchesExpr} falls back to the buffer.
+ */
+const MATCH_BOOL_SINK = '\u0000match-bool'
+
+/** Whether reports through `sink` end the body they sit in rather than push. */
+const returnsOnReport = (sink: string): boolean => sink === FAIL_FAST_SINK || sink === MATCH_BOOL_SINK
+
+/**
  * A condition TypeScript folds away: nothing in it but boolean literals and the
  * operators joining them.
  *
@@ -431,14 +447,14 @@ const FAIL_FAST_SINK = '\u0000fail-fast'
 const LITERAL_CONDITION = /^[\s()!&|]*(?:(?:true|false)[\s()!&|]*)+$/
 
 /**
- * Gives up on the fail-fast form of the function being emitted.
+ * Gives up on the short-circuiting form of the body being emitted: the fail-fast
+ * function, or a yes/no match expression, whose `failFast` state is its own.
  *
- * Only the root sink can do this: inside a match expression the report is still
- * a push into the IIFE's own buffer, so nothing there is unreachable and nothing
- * there is blocked.
+ * A body whose reports are pushes cannot be blocked: nothing after a push is
+ * unreachable.
  */
 const blockFailFast = (ctx: NestingContext): void => {
-  if (ctx.sink === FAIL_FAST_SINK) ctx.failFast.blocked = true
+  if (returnsOnReport(ctx.sink)) ctx.failFast.blocked = true
 }
 
 /**
@@ -467,7 +483,7 @@ const hoistPrefix = (ctx: NestingContext): string => (ctx.failFast.on ? '_check'
  * the emitted text is exactly what it always was.
  */
 const typeTestAccessor = (raw: string, ctx: NestingContext): string =>
-  ctx.sink === FAIL_FAST_SINK ? `(${raw} as unknown)` : raw
+  returnsOnReport(ctx.sink) ? `(${raw} as unknown)` : raw
 
 /**
  * The name this emission exports under: `validateX` while it accumulates,
@@ -521,7 +537,9 @@ const returnError = (message: string, path: string, keyword: string, params = '{
 const pushError = (sink: string, message: string, path: string, keyword: string, params = '{}'): string =>
   sink === FAIL_FAST_SINK
     ? returnError(message, path, keyword, params)
-    : `${sink}.push({ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} })`
+    : sink === MATCH_BOOL_SINK
+      ? 'return false'
+      : `${sink}.push({ message: ${message}, path: ${path}, keyword: ${JSON.stringify(keyword)}, params: ${params} })`
 
 /** The IIFE-local buffer a match expression's checks report through. */
 const MATCH_ERROR_SINK = '_m'
@@ -877,16 +895,19 @@ const generateKeywordChecks = (
     // A fail-fast body asks the target's own fail-fast half. It answers with the
     // very error `validateX` would have reported first for this position, so the
     // two agree on what the first error is, and it stops as soon as it has one.
-    // Inside a match expression the sink is the IIFE's `_m` and a `return` there
-    // would leave the branch rather than the validator, so that half keeps
-    // delegating to `validateX` and pushing — byte for byte what it always was.
+    // A yes/no match expression only needs to know the target failed, so it
+    // leaves its IIFE with `false`, asking the fail-fast half when this emission
+    // has one. A match expression that keeps its branch errors pushes them into
+    // its `_m`, where a `return` would leave the branch rather than the validator.
     const delegate =
       ctx.sink === FAIL_FAST_SINK
         ? [`  const _r = ${checkerName(target)}(${raw}, ${path})`, `  if (_r !== true) return _r`]
-        : [
-            `  const _r = ${validatorName(target)}(${raw}, ${path})`,
-            `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`,
-          ]
+        : ctx.sink === MATCH_BOOL_SINK
+          ? [`  const _r = ${emittedName(target, ctx.failFast)}(${raw}, ${path})`, `  if (_r !== true) return false`]
+          : [
+              `  const _r = ${validatorName(target)}(${raw}, ${path})`,
+              `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`,
+            ]
     // The delegation result gets a block of its own, so two of them can sit in
     // the same statement list: `{ $ref, allOf: [{ $ref }] }` is a real shape, and
     // one `const _r` per branch in one scope is a `SyntaxError` in the emitted
@@ -1216,12 +1237,15 @@ const generateConstraintChecks = (
       // `return` out of the `for` being a `return` out of the validator.
       const failFast = ctx.sink === FAIL_FAST_SINK
       const target = refToName(itemSchema.$ref, suffix)
+      const onFailure = failFast
+        ? 'return _ir'
+        : ctx.sink === MATCH_BOOL_SINK
+          ? 'return false'
+          : `${ctx.sink}.push(..._ir.errors)`
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
-      lines.push(
-        `      const _ir = ${failFast ? checkerName(target) : validatorName(target)}(${raw}[${iv}], ${itemPath})`,
-      )
-      lines.push(`      if (_ir !== true) ${failFast ? 'return _ir' : `${ctx.sink}.push(..._ir.errors)`}`)
+      lines.push(`      const _ir = ${emittedName(target, ctx.failFast)}(${raw}[${iv}], ${itemPath})`)
+      lines.push(`      if (_ir !== true) ${onFailure}`)
       lines.push(`    }`)
       lines.push(`  }`)
     } else if (isSchemaObject(itemSchema)) {
@@ -1548,10 +1572,19 @@ const generateMatchesExpr = (
   // wrong thing — `/verb` for a union under `/method`, which is neither where the
   // mistake is nor a pointer into the instance at all.
   const valuePath = branch === undefined ? '`${_path}`' : branch.path
+  const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
+  if (branch === undefined) {
+    // Its own short-circuit state, so an unconditional report in here blocks this
+    // expression alone. Branch errors are off because nothing here keeps any.
+    const matchState: FailFast = { on: ctx.failFast.on, blocked: false }
+    const matchCtx: NestingContext = { ...ctx, sink: MATCH_BOOL_SINK, failFast: matchState, branchErrors: false }
+    const boolChecks = generateValueChecks('', value, valuePath, sub, suffix, matchCtx, required)
+    if (boolChecks.length === 0) return 'true'
+    if (!matchState.blocked) return `((): boolean => {\n${binding}${boolChecks.join('\n')}\n    return true })()`
+  }
   const checks = generateValueChecks('', value, valuePath, sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK }, required)
   if (checks.length === 0) return 'true'
   const body = checks.join('\n')
-  const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
   // Keeping what the branch complained about, instead of dropping it on the
   // floor, is what lets a failing combinator name the field that is wrong. Only a
   // branch that failed has anything to contribute, and the buffer it reports into
@@ -3679,11 +3712,32 @@ export const generateValidatorFunction = (
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats: ReadonlySet<string> = NO_FORMATS,
   branchErrors = false,
-): string =>
-  generateValidatorSource(schema, typeName, suffix, rootSchema, unknownKeys, formats, branchErrors, {
+): string => {
+  const source = generateValidatorSource(schema, typeName, suffix, rootSchema, unknownKeys, formats, branchErrors, {
     on: false,
     blocked: false,
   })
+  assertNoSinkLeaked(source, MATCH_BOOL_SINK, typeName, 'validator')
+  return source
+}
+
+/**
+ * Fails generation when a sentinel sink made it into the output.
+ *
+ * A sentinel is a stand-in {@link pushError} is meant to consume, never text. An
+ * emitter that spells `${ctx.sink}.push(…)` for itself instead of going through
+ * it writes the sentinel into the output, where it is an unprintable character
+ * in the middle of an expression — a parse error a long way from its cause. Say
+ * so here instead.
+ */
+const assertNoSinkLeaked = (source: string, sink: string, typeName: string, what: string): void => {
+  if (!source.includes(sink)) return
+  throw new Error(
+    `the ${what} for "${typeName}" emitted the error sink verbatim, which means some emitter ` +
+      'reported through `ctx.sink` without going through `pushError`. That report has to take the ' +
+      'short-circuiting form (a `return`) or stay on the accumulating path.',
+  )
+}
 
 /**
  * Generates the fail-fast half: a `checkX(input, _path?)` that returns the same
@@ -3710,18 +3764,8 @@ export const generateCheckFunction = (
 ): string => {
   const failFast: FailFast = { on: true, blocked: false }
   const source = generateValidatorSource(schema, typeName, suffix, rootSchema, unknownKeys, formats, false, failFast)
-  // The sentinel is a stand-in {@link pushError} is meant to consume, never text.
-  // An emitter that spells `${ctx.sink}.push(…)` for itself instead of going
-  // through it writes the sentinel into the output, where it is an unprintable
-  // character in the middle of an expression — a parse error a long way from its
-  // cause. Say so here instead.
-  if (source.includes(FAIL_FAST_SINK)) {
-    throw new Error(
-      `the fail-fast validator for "${typeName}" emitted the error sink verbatim, which means some emitter ` +
-        'reported through `ctx.sink` without going through `pushError`. That report has to take the fail-fast ' +
-        'form (a `return`) or stay on the accumulating path.',
-    )
-  }
+  assertNoSinkLeaked(source, FAIL_FAST_SINK, typeName, 'fail-fast validator')
+  assertNoSinkLeaked(source, MATCH_BOOL_SINK, typeName, 'fail-fast validator')
   if (!failFast.blocked) return source
 
   // `slice(0, 1)` rather than an indexed read: a `ValidationResult` that is not

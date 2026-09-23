@@ -3,6 +3,19 @@ import { upgradeDraft07Schema } from '@amritk/helpers/upgrade-draft07-schema'
 
 import type { SchemaFormatFamily } from './schema-format'
 
+/** The dialects {@link normalizeSchema} reads; Avro and unknown formats never reach it. */
+type NormalizableFamily = Exclude<SchemaFormatFamily, 'unsupported' | 'avro'>
+
+/**
+ * Normalized copies keyed by the raw schema object they came from, shared across
+ * one extraction. Every message that references a component copies it in again,
+ * so without this the draft-07 upgrade reruns once per message per component.
+ * The copies are safe to share because nothing downstream writes into them: the
+ * ref rewrite builds new objects. Keep one per extraction rather than per module,
+ * so a document edited between two extractions is never answered from the first.
+ */
+export type NormalizeSchemaCache = WeakMap<Record<string, unknown>, Map<NormalizableFamily, Record<string, unknown>>>
+
 /**
  * Normalizes one extracted schema into the 2020-12 conventions the generators
  * expect, according to the dialect its `schemaFormat` named:
@@ -31,10 +44,23 @@ import type { SchemaFormatFamily } from './schema-format'
  */
 export const normalizeSchema = (
   schema: Record<string, unknown>,
-  family: Exclude<SchemaFormatFamily, 'unsupported' | 'avro'>,
+  family: NormalizableFamily,
+  cache?: NormalizeSchemaCache,
 ): Record<string, unknown> => {
-  if (family === 'openapi') return foldNullable(schema)
   if (family === '2020-12') return schema
+  if (cache === undefined) return normalizeUncached(schema, family)
+
+  const byFamily = cache.get(schema) ?? new Map<NormalizableFamily, Record<string, unknown>>()
+  const cached = byFamily.get(family)
+  if (cached !== undefined) return cached
+  const normalized = normalizeUncached(schema, family)
+  byFamily.set(family, normalized)
+  cache.set(schema, byFamily)
+  return normalized
+}
+
+const normalizeUncached = (schema: Record<string, unknown>, family: NormalizableFamily): Record<string, unknown> => {
+  if (family === 'openapi') return foldNullable(schema)
 
   const upgraded = upgradeDraft07Schema({ ...schema, $schema: 'http://json-schema.org/draft-07/schema' })
   const defs = upgraded['$defs']

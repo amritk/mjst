@@ -22,13 +22,25 @@ import {
 } from './types'
 
 /**
- * Encodes a path into a lookup key. Each segment is tagged by kind (`.` for a
- * key, `[]` for an index) so distinct paths cannot collide: a plain `join` turns
- * a `null` map key into `''` (colliding with the root path `[]`) and cannot tell
- * the numeric index `0` from the string key `"0"`. The tags keep them apart.
+ * Encodes a path into a lookup key, each segment prefixed with its length so
+ * distinct paths cannot collide: a plain `join` turns a `null` map key into `''`
+ * (colliding with the root path `[]`), and a separator alone reads `['a.b']` and
+ * `['a', 'b']` as the same path.
+ *
+ * A segment is keyed by its text, whether it arrived as a number or a string.
+ * A node is a map or a sequence, never both, so `0` and `"0"` under one parent
+ * name the same child — and a finding's path spells an all-digit map key such as
+ * a `"200"` response as the number `200`, which a key telling the two apart sent
+ * to the enclosing map instead.
  */
-const pathKey = (path: JsonPath): string =>
-  path.map((segment) => (typeof segment === 'number' ? `[${segment}]` : `.${segment}`)).join('')
+const pathKey = (path: JsonPath): string => {
+  let key = ''
+  for (const segment of path) {
+    const text = String(segment)
+    key += `${text.length}:${text}`
+  }
+  return key
+}
 
 /**
  * Renders a collection (map/seq) mapping key in flow style, mirroring how

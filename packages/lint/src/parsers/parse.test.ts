@@ -258,3 +258,36 @@ describe('detectFormat / parseWithPointers', () => {
     expect(data.a).toBe(1)
   })
 })
+
+describe('source-map lookups', () => {
+  // A dotted key and the nested path spelling the same dots shared one index
+  // key, so the second write won and a finding on one pointed at the other.
+  it('keeps a dotted YAML key apart from the nested path', () => {
+    const { getLocationForJsonPath } = parseYaml('a.b: 1\na:\n  b: 2\n')
+    expect(getLocationForJsonPath(['a.b'])?.range.start.line).toBe(0)
+    expect(getLocationForJsonPath(['a', 'b'])?.range.start.line).toBe(2)
+  })
+
+  // A finding's path spells an all-digit key such as a `"200"` response as the
+  // number 200, and both source maps missed it and fell back to the enclosing map.
+  it('finds an all-digit map key from a numeric path segment', () => {
+    const yaml = parseYaml('responses:\n  "200":\n    description: ok\n')
+    expect(yaml.getLocationForJsonPath(['responses', 200, 'description'])?.range.start).toEqual({
+      line: 2,
+      character: 17,
+    })
+    const json = parseJson('{\n  "responses": {\n    "200": {\n      "description": "ok"\n    }\n  }\n}')
+    expect(json.getLocationForJsonPath(['responses', 200, 'description'])?.range.start).toEqual({
+      line: 3,
+      character: 21,
+    })
+    expect(json.getLocationForJsonPath(['responses', '200'])?.range.start.line).toBe(2)
+  })
+
+  it('reads a JSON array index only in its canonical spelling', () => {
+    const { getLocationForJsonPath } = parseJson('{"tags": ["a", "b"]}')
+    expect(getLocationForJsonPath(['tags', 1])?.range.start.character).toBe(15)
+    expect(getLocationForJsonPath(['tags', '1'])?.range.start.character).toBe(15)
+    expect(getLocationForJsonPath(['tags', '01'])).toBeUndefined()
+  })
+})

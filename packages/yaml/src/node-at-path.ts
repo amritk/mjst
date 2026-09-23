@@ -82,7 +82,10 @@ export const nodeAtPath = (root: YamlNode | null, path: NodePath, closest = fals
         }
       }
     } else if (isSeq(node)) {
-      const index = typeof segment === 'number' ? segment : Number(segment)
+      // A string segment has to be the canonical spelling of the index, the only
+      // key `toJS()`'s array answers to: `Number()` also took '', ' 1', '0x1', '1e0'.
+      const index =
+        typeof segment === 'number' ? segment : String(Number(segment)) === segment ? Number(segment) : Number.NaN
       next = Number.isInteger(index) ? node.items[index] : undefined
     }
 

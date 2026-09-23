@@ -129,6 +129,21 @@ const respond = async (
   }
 }
 
+/** A host name or IP literal, with an optional port: nothing that can end the authority. */
+const HOST_HEADER = /^(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?$/
+
+/**
+ * The authority to build the request URL with. The `host` header is client
+ * input, and it is spliced into the URL ahead of the path: `Host:
+ * example.com/admin` with a request-target of `/public` made the router see
+ * `/admin/public`, past any proxy rule that allowed `/public` through. A `/`,
+ * `\`, `?`, `#` or `@` all reshape the URL that way, so a header that is not a
+ * plain host and port is replaced with `localhost`, the same fallback an
+ * HTTP/1.0 client that sends no header gets.
+ */
+const authorityOf = (host: string | undefined): string =>
+  host !== undefined && HOST_HEADER.test(host) ? host : 'localhost'
+
 /**
  * Rebuilds a Web `Request` from the raw Node message. The URL must be
  * absolute for the `Request` constructor, so the authority comes from the
@@ -142,7 +157,7 @@ const respond = async (
  */
 const toRequest = async (incoming: IncomingMessage): Promise<Request> => {
   const method = (incoming.method ?? 'GET').toUpperCase()
-  const url = 'http://' + (incoming.headers.host ?? 'localhost') + (incoming.url ?? '/')
+  const url = 'http://' + authorityOf(incoming.headers.host) + (incoming.url ?? '/')
   const headers = new Headers()
   for (const [name, value] of Object.entries(incoming.headers)) {
     if (value === undefined) continue

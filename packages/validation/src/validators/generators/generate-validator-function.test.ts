@@ -2007,6 +2007,46 @@ describe('generate-validator-function', () => {
       expect(v({ a: 'abcd' })).not.toBe(true) // matches both branches
     })
 
+    // A union whose branch errors are thrown away only needs to know whether a
+    // branch failed. Building the errors anyway allocated a full error object for
+    // every branch a valid member did not match, which cost a union-heavy schema
+    // most of its throughput.
+    it('answers a discarded branch with a boolean instead of an error buffer', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: {
+          u: {
+            anyOf: [
+              { type: 'string' as const, minLength: 2 },
+              { type: 'number' as const, minimum: 0 },
+            ],
+          },
+        },
+      }
+      const code = generateValidatorFunction(schema, 'Root')
+      expect(code).not.toContain('const _m')
+      const v = evalValidator(code)
+      expect(v({ u: 'ab' })).toBe(true)
+      expect(v({ u: 3 })).toBe(true)
+      expect(v({ u: 'a' })).not.toBe(true)
+      expect(v({ u: -1 })).not.toBe(true)
+    })
+
+    // `false` as a whole branch body is an unconditional report, which as a
+    // `return` would leave the rest of the branch unreachable (TS7027). That
+    // branch keeps the buffer form.
+    it('keeps the buffer for a branch whose report is unconditional', () => {
+      const schema = {
+        type: 'object' as const,
+        properties: { u: { anyOf: [{ type: 'string' as const, allOf: [false] }, { type: 'number' as const }] } },
+      }
+      const code = generateValidatorFunction(schema as never, 'Root')
+      expect(code).toContain('const _m')
+      const v = evalValidator(code)
+      expect(v({ u: 1 })).toBe(true)
+      expect(v({ u: 'a' })).not.toBe(true)
+    })
+
     // The branch errors were computed to answer the yes/no question and then
     // thrown away, so a failing union pointed at the object rather than at the
     // field the author got wrong. The two definitions people edit most in a real

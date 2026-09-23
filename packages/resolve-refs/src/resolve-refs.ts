@@ -26,8 +26,9 @@ import type { JsonPath, OriginMap, ResolveError, ResolveResult } from './types'
 const CYCLE = Symbol('cycle')
 // A ref that resolved to nothing; cached so a repeated bad ref reports once.
 const MISSING = Symbol('missing')
-// The inlined target plus the in-document path it came from (for `origins`).
-type CacheValue = { target: unknown; pointer: JsonPath } | typeof CYCLE | typeof MISSING
+// The inlined target, the in-document path it came from (for `origins`), and
+// the base URI it resolved in (for the scope check a cached hit still makes).
+type CacheValue = { target: unknown; pointer: JsonPath; base: string } | typeof CYCLE | typeof MISSING
 
 /**
  * Everything one resolve pass carries but never varies as the walk descends.
@@ -168,36 +169,16 @@ const resolveNode = (node: unknown, base: string, depth: number, role: NodeRole,
       return obj
     }
 
-    // Resolve within the document's `$id` scope. `$recursiveRef` ignores its
-    // fragment and binds document-globally, so it skips the scoped path.
-    let found: ResolvedTarget | undefined
-    let targetBase = nodeBase
-    if (keyword === '$recursiveRef') {
-      found = resolveFragment(root, keyword, ref.startsWith('#') ? ref.slice(1) : ref)
-      targetBase = registry.rootBase
-    } else {
-      const scoped = resolveRefInScope(registry, keyword, ref, nodeBase)
-      if (scoped === 'external') return externalRef()
-      if (scoped !== undefined) {
-        found = scoped
-        targetBase = scoped.base
-      } else if (ref.startsWith('#')) {
-        // Scope-aware lookup found nothing; fall back to the document-global
-        // search for compatibility with documents that reference an anchor
-        // declared in a sibling resource.
-        found = resolveFragment(root, keyword, ref.slice(1))
-        targetBase = registry.rootBase
-      } else {
-        return externalRef()
-      }
-    }
-
     // Cache/cycle key includes the keyword (`$ref #x` and `$dynamicRef #x` can
     // bind differently) and the base URI (the same anchor name can bind
-    // differently inside different embedded resources).
+    // differently inside different embedded resources). Those three fix every
+    // input the lookup below reads, so the cache is asked first: a ref used a
+    // hundred times parses its pointer, or searches the document for its anchor,
+    // once. External refs are never cached, so each use still reports.
     const cacheKey = `${keyword} ${nodeBase} ${ref}`
     let target: unknown
     let pointer: JsonPath
+    let targetBase: string
     const cached = cache.get(cacheKey)
     if (cached === MISSING) return obj
     if (cached === CYCLE) {
@@ -210,7 +191,32 @@ const resolveNode = (node: unknown, base: string, depth: number, role: NodeRole,
     if (cached !== undefined) {
       target = cached.target
       pointer = cached.pointer
+      targetBase = cached.base
     } else {
+      // Resolve within the document's `$id` scope. `$recursiveRef` ignores its
+      // fragment and binds document-globally, so it skips the scoped path.
+      let found: ResolvedTarget | undefined
+      targetBase = nodeBase
+      if (keyword === '$recursiveRef') {
+        found = resolveFragment(root, keyword, ref.startsWith('#') ? ref.slice(1) : ref)
+        targetBase = registry.rootBase
+      } else {
+        const scoped = resolveRefInScope(registry, keyword, ref, nodeBase)
+        if (scoped === 'external') return externalRef()
+        if (scoped !== undefined) {
+          found = scoped
+          targetBase = scoped.base
+        } else if (ref.startsWith('#')) {
+          // Scope-aware lookup found nothing; fall back to the document-global
+          // search for compatibility with documents that reference an anchor
+          // declared in a sibling resource.
+          found = resolveFragment(root, keyword, ref.slice(1))
+          targetBase = registry.rootBase
+        } else {
+          return externalRef()
+        }
+      }
+
       cache.set(cacheKey, CYCLE)
       if (found === undefined) {
         // A reference that resolves to nothing (a typo'd pointer or a missing
@@ -227,7 +233,7 @@ const resolveNode = (node: unknown, base: string, depth: number, role: NodeRole,
       // The target is walked with the role it has where it is *defined*, so the
       // same ref resolves the same way whoever points at it (see roleAtPath).
       target = resolveNode(found.value, targetBase, depth + 1, roleAtPath(pointer), context)
-      cache.set(cacheKey, { target, pointer })
+      cache.set(cacheKey, { target, pointer, base: targetBase })
       // Stamp the inlined node with the path it was defined at (see resolveAt).
       // First-write-wins so the deepest definition stamps before any outer ref that
       // transitively points at the same object. Primitives can't key the map.

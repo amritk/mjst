@@ -905,39 +905,76 @@ const enforceMaxProperties = (out: Record<string, unknown>, schema: JSONSchema, 
   }
 }
 
+/** Absorbs floating-point error when a bound divided by a step should be a whole number (`0.3 / 0.1`). */
+const EPS = 1e-9
+
 /**
- * Picks a number satisfying the node's bounds and `multipleOf`. Starts at the
- * lower bound (or 0 when unbounded), nudges past an exclusive bound, then rounds
- * up to the nearest multiple. An unsatisfiable range (e.g. `minimum > maximum`)
- * can't be met and falls back to the lower bound.
+ * The spacing of the values an integer node with this `multipleOf` admits: the
+ * smallest multiple of `multipleOf` that is also a whole number (`2.5` → `5`,
+ * `0.1` → `1`). `undefined` when none turns up within a sane search, which only a
+ * step with no short decimal form produces.
+ */
+const integerStep = (multipleOf: number): number | undefined => {
+  for (let n = 1; n <= 10_000; n++) {
+    const candidate = n * multipleOf
+    if (Math.abs(candidate - Math.round(candidate)) < EPS * Math.max(1, candidate)) return Math.round(candidate)
+  }
+  return undefined
+}
+
+/**
+ * Picks a number satisfying the node's bounds and `multipleOf`: the lowest value
+ * the bounds admit, or the one nearest 0 when nothing bounds it from below.
+ *
+ * Each side's effective bound is the tighter of the inclusive and exclusive
+ * keyword, since a schema may carry both. On a grid (an integer type, or any
+ * `multipleOf`) the bounds become bounds on the multiplier `k` of the grid step,
+ * so an exclusive bound is cleared by exactly one step and a fractional bound on
+ * an integer rounds inward. Off the grid an exclusive bound is cleared by half a
+ * unit, or by half the gap when the range is narrower than that. An
+ * unsatisfiable range (e.g. `minimum > maximum`) can't be met and falls back to
+ * the lower bound.
  */
 const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
-  const step = isInteger ? 1 : 0.5
-  let lo = -Infinity
-  if (hasMinimum(schema)) lo = Math.max(lo, schema.minimum)
-  if (hasExclusiveMinimum(schema)) lo = Math.max(lo, schema.exclusiveMinimum + step)
-  const hi = hasMaximum(schema)
-    ? schema.maximum
-    : hasExclusiveMaximum(schema)
-      ? schema.exclusiveMaximum - step
-      : Number.POSITIVE_INFINITY
-
-  // Base candidate: the lower bound, or 0 (or the upper bound) when unbounded below.
-  let value = Number.isFinite(lo) ? lo : Number.isFinite(hi) ? Math.min(0, hi) : 0
-  if (isInteger) value = Math.ceil(value)
+  const minimum = hasMinimum(schema) ? schema.minimum : Number.NEGATIVE_INFINITY
+  const exclusiveMinimum = hasExclusiveMinimum(schema) ? schema.exclusiveMinimum : Number.NEGATIVE_INFINITY
+  const maximum = hasMaximum(schema) ? schema.maximum : Number.POSITIVE_INFINITY
+  const exclusiveMaximum = hasExclusiveMaximum(schema) ? schema.exclusiveMaximum : Number.POSITIVE_INFINITY
+  const lo = Math.max(minimum, exclusiveMinimum)
+  const loExclusive = exclusiveMinimum >= minimum && Number.isFinite(exclusiveMinimum)
+  const hi = Math.min(maximum, exclusiveMaximum)
+  const hiExclusive = exclusiveMaximum <= maximum && Number.isFinite(exclusiveMaximum)
 
   // A `multipleOf` that is not a finite positive number is not a step anything
   // can be a multiple of: `Math.ceil(0 / Infinity) * Infinity` is `NaN`, and
   // `serializeValue` renders that as `null` — an example the declared `number`
   // type rejects. Ignore it, exactly as the arbitrary side does.
-  if (hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0) {
-    const m = schema.multipleOf
-    value = Math.ceil(value / m - 1e-9) * m
-    // Rounding up can overshoot the upper bound; drop to the largest multiple
-    // that fits. (If even that falls below `lo`, the range has no multiple — an
-    // unsatisfiable schema — and we return the in-range candidate as best effort.)
-    if (value > hi && Number.isFinite(hi)) value = Math.floor(hi / m + 1e-9) * m
+  const multipleOf =
+    hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0 ? schema.multipleOf : undefined
+  const step = isInteger ? (multipleOf === undefined ? 1 : (integerStep(multipleOf) ?? multipleOf)) : multipleOf
+
+  if (step === undefined) {
+    if (Number.isFinite(lo)) {
+      if (!loExclusive) return lo
+      return lo + (hi > lo && Number.isFinite(hi) ? Math.min(0.5, (hi - lo) / 2) : 0.5)
+    }
+    if (!Number.isFinite(hi)) return 0
+    // `+ 0` normalizes a `-0` to `0`.
+    return (hiExclusive ? Math.min(0, hi - 0.5) : Math.min(0, hi)) + 0
   }
+
+  const kMin = Number.isFinite(lo)
+    ? loExclusive
+      ? Math.floor(lo / step + EPS) + 1
+      : Math.ceil(lo / step - EPS)
+    : Number.NEGATIVE_INFINITY
+  const kMax = Number.isFinite(hi)
+    ? hiExclusive
+      ? Math.ceil(hi / step - EPS) - 1
+      : Math.floor(hi / step + EPS)
+    : Number.POSITIVE_INFINITY
+  const k = Number.isFinite(kMin) ? kMin : Math.min(0, kMax)
+  const value = k * step
   // `+ 0` normalizes a `-0` (which `Math.ceil`/`Math.floor` can produce) to `0`.
   return (isInteger ? Math.round(value) : value) + 0
 }

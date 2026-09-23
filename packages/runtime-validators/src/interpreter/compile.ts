@@ -708,7 +708,24 @@ const compileType = (meta: NodeMeta): Step | null => {
   const types = meta.types
   if (types === undefined) return null
   const message = { message: `must be one of type: ${types.join(', ')}`, keyword: 'type', params: { type: types } }
-  // Left as a `matchesType` loop rather than an array of predicates so an
+  // When every name is one the spec defines nothing can throw, so the list
+  // compiles to predicates up front, with its own shape for the common
+  // two-member `[T, 'null']`.
+  const tests = types.map(typeTest)
+  if (tests.every((test) => test !== null)) {
+    const predicates = tests as ((value: unknown) => boolean)[]
+    if (predicates.length === 2) {
+      const [first, second] = predicates as [(value: unknown) => boolean, (value: unknown) => boolean]
+      return (ctx, value, path) => {
+        if (!first(value) && !second(value)) fail(ctx, message, path)
+      }
+    }
+    return (ctx, value, path) => {
+      for (const test of predicates) if (test(value)) return
+      fail(ctx, message, path)
+    }
+  }
+  // Otherwise a `matchesType` loop rather than an array of predicates, so an
   // unknown name late in the list still throws only when the earlier ones did
   // not already match, exactly as before.
   return (ctx, value, path) => {
