@@ -1,6 +1,6 @@
 {
   "name": "@amritk/generate-validators",
-  "version": "0.19.1",
+  "version": "0.19.2",
   "description": "Deprecated — merged into @amritk/validation. Kept as a compatibility shim; use `generate` instead.",
   "license": "MIT",
   "author": "amritk",
