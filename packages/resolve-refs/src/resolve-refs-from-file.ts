@@ -782,8 +782,12 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   }
 
   // The root document is what the caller explicitly named, so it is never
-  // subject to the confinement it defines.
-  if (!(await loadDoc(rootLocation, docCache, options, errors, deadline, []))) {
+  // subject to the confinement it defines. A caller that already parsed it
+  // hands the value over instead, and the read and parse are skipped — for a
+  // large spec that second parse was the single most expensive step of a run.
+  if (options.rootDocument !== undefined) {
+    docCache.set(rootLocation, options.rootDocument)
+  } else if (!(await loadDoc(rootLocation, docCache, options, errors, deadline, []))) {
     return { resolved: {}, errors }
   }
 

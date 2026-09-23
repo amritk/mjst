@@ -34,7 +34,11 @@ export const loadSchema = async (config: Partial<CliConfig>, schemaPath: string)
     const data: unknown = JSON.parse(await readFile(schemaPath, 'utf-8'))
     if (!hasExternalRefs(data)) return data
 
-    const { resolved, errors } = await resolveRefsFromFile(schemaPath, buildResolveOptions(config, schemaPath))
+    // `rootDocument`: the schema was parsed just above, so the resolver need not read and parse it again.
+    const { resolved, errors } = await resolveRefsFromFile(schemaPath, {
+      ...buildResolveOptions(config, schemaPath),
+      rootDocument: data,
+    })
     if (errors.length > 0) throw new Error(formatResolveErrors(schemaPath, errors))
     return resolved
   }

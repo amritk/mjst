@@ -45,7 +45,9 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
    `allowedRoots: ['./specs']` (or whatever contains both files) to allow it.
    `localRefs: false` refuses cross-file reads entirely.
 5. **JSON-only by default** (`JSON.parse`). For YAML pass a custom
-   `parse: (content, location) => …` (e.g. wrapping `@amritk/yaml`).
+   `parse: (content, location) => …` (e.g. wrapping `@amritk/yaml`). Already
+   parsed the root? Pass it as `rootDocument` and the file is not read or
+   parsed again (its path still anchors relative refs and `allowedRoots`).
 6. **`origins` exists only with `trackOrigins: true`.** Cycles are preserved (the
    cycle point stays a `$ref`), so output is not always fully flat. The remote
    cache is process-wide but credential-scoped and bounded (10 min TTL, 256
