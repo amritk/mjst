@@ -1,5 +1,13 @@
 # @amritk/validation
 
+## 0.3.1
+
+### Patch Changes
+
+- 2c9b852: An `x-mjst` holding only documentation settings (`hidden`, `markdown`) no longer changes generated code. The validator generator and the type generator used to treat the presence of `x-mjst` as a keyword that shapes a node, so a root `$ref` that named its docs pages lost its one-line delegation, and an `if` fragment carrying a docs setting dropped its conditional from the TypeScript type. They now ask whether `x-mjst` carries a generator hint (`instanceOf`, `primitive`, `brand`, `discriminator`), via the new `hasMjstHint` in `@amritk/helpers/mjst-extension`.
+- Updated dependencies [2c9b852]
+  - @amritk/helpers@0.23.2
+
 ## 0.3.0
 
 ### Minor Changes
