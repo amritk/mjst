@@ -81,6 +81,35 @@ describe('format-checks', () => {
     )
   })
 
+  // The URI grammar used to be one regex, which JavaScriptCore could not JIT:
+  // it cost about a microsecond per character on Bun, and past a couple of
+  // hundred kilobytes Bun's engine gave up and answered `false` for a valid URI,
+  // so the verdict depended on the runtime.
+  it('accepts a long URI the same way on every engine', () => {
+    const long = `https://example.com/${'a'.repeat(300_000)}?q=${'b'.repeat(1_000)}#${'c'.repeat(1_000)}`
+    for (const format of ['uri', 'uri-reference', 'iri', 'iri-reference', 'url']) {
+      expect(validate({ type: 'string', format }, { formats: 'all' })(long), format).toBe(true)
+    }
+    expect(validate({ type: 'string', format: 'uri' }, { formats: 'all' })(`${long}%zz`)).not.toBe(true)
+  })
+
+  it('reads the parts of a URI by their delimiters', () => {
+    const isUri = validate({ type: 'string', format: 'uri' }, { formats: 'all' })
+    const isReference = validate({ type: 'string', format: 'uri-reference' }, { formats: 'all' })
+    expect(isUri('http://user:pw@[::1]:8080/a/b?c=d#e')).toBe(true)
+    expect(isUri('http://[v1.x]/')).toBe(true)
+    expect(isUri('http://a@b@c/')).not.toBe(true)
+    expect(isUri('http://host:80x/')).not.toBe(true)
+    expect(isUri('http://[::1/')).not.toBe(true)
+    expect(isUri('//host/path')).not.toBe(true)
+    expect(isReference('//host/path')).toBe(true)
+    expect(isReference('a/b:c')).toBe(true)
+    // A colon in a relative reference's first segment would read as a scheme.
+    expect(isReference('1:b')).not.toBe(true)
+    expect(isReference(':b')).not.toBe(true)
+    expect(isReference('')).toBe(true)
+  })
+
   it('checks the numeric formats against the number, not the string', () => {
     // `int32` and friends constrain a number, so they used to be checked for
     // nothing at all: the format keyword was only ever consulted for strings.
