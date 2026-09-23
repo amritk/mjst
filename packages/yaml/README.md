@@ -240,8 +240,8 @@ schema** for scalar typing. The exact boundaries:
 
 **Tags**
 
-- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. A core tag **coerces** what it is written on rather than only confirming it: `!!int "7"` is `7`, `!!bool "FALSE"` is `false`, `!!float 1` is `1` (an integer form is a valid float), and `!!null x` is `null`. The tag is the author saying what the value is. Quoting does not change what it means — `!!int "0x1F"` is `31` just as `!!int 0x1F` is, because the text goes through the core schema rather than through `parseInt` alone.
-- Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A conformant OpenAPI document won't use these. Note that three of the four do **not** survive `JSON.stringify` — a `Set` and a `Map` both serialize to `{}`, and a `Uint8Array` to an object keyed by index — so a document using them is no longer JSON-round-trippable, however faithfully it parsed. Only reach for them when you are consuming the values in JavaScript rather than re-serializing.
+- Core scalar tags (the JSON-compatible set OpenAPI allows): `!!str`, `!!int`, `!!float`, `!!bool`, `!!null`. A core tag applies to any text written in its own format, quoted or not: `!!int "7"` is `7`, `!!bool "FALSE"` is `false`, `!!float 1` is `1` (an integer form is a valid float), and `!!int "0x1F"` is `31` just as `!!int 0x1F` is. Text that is *not* in the tag's format — `!!int 1.9`, `!!int "12abc"`, `!!null x`, `!!bool yes` — keeps the string it was written as, with a `BAD_TAG_VALUE` warning, rather than being coerced into something the author did not write. A tagged mapping key is keyed by its tagged value, so `!!str 1.50: x` is the key `"1.50"`.
+- Extended tags, for general config files beyond the OpenAPI subset: `!!binary` → `Uint8Array`, `!!timestamp` → `Date`, `!!set` → `Set`, `!!omap` → `Map` (matching `yaml`). A `!!timestamp` has to match the [YAML timestamp format](https://yaml.org/type/timestamp.html), and one written without a time zone is UTC — never the host's local time. Invalid base64, a timestamp that is not one, an `!!omap` entry that is not a single pair or repeats a key, and a collection tag on the wrong kind of node are `BAD_TAG_VALUE` warnings; the value is left as written. A conformant OpenAPI document won't use these. Note that three of the four do **not** survive `JSON.stringify` — a `Set` and a `Map` both serialize to `{}`, and a `Uint8Array` to an object keyed by index — so a document using them is no longer JSON-round-trippable, however faithfully it parsed. Only reach for them when you are consuming the values in JavaScript rather than re-serializing.
 - All three spellings resolve to the same tag: the shorthand `!!str`, the verbatim `!<tag:yaml.org,2002:str>`, and a shorthand through a handle a `%TAG` directive declared.
 - The non-specific `!` resolves a scalar as a string, per the failsafe schema.
 - Any other tag is **captured on the node** (readable via `node.tag`) and its value passed through unchanged. A *local* tag keeps its `!` — `node.tag` is `!custom` for `!custom`, versus `str` for `!!str` — so an application tag that happens to share a core tag's name does not coerce.
@@ -277,7 +277,8 @@ The one thing that *does* throw is the guard against a document built to exhaust
 | `BAD_SCALAR_START` | a plain scalar starting with the reserved `@` or `` ` ``, or a `-` where a flow entry belongs (`[-]`) |
 | `BAD_SCALAR_CONTENT` | a `: ` inside a plain scalar, which the spec ends the scalar at (`a: b: c`, or a continuation line that reads as a mapping entry) |
 | `BAD_COMMENT` | a `#` with no whitespace before it, so the rest of the line is not a comment (`"value"# …`) |
-| `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`) |
+| `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`, `"\é"`), or a `\x`/`\u`/`\U` without exactly 2/4/8 hex digits or past U+10FFFF; the escape is kept as written |
+| `BAD_MERGE` | a `<<` merge whose value is not a mapping or a list of mappings (`<<: 5`, `<<: [1, 2]`, an empty `<<:`) |
 | `BAD_BLOCK_HEADER` | a `|`/`>` header with a repeated indicator or trailing text (`|10`, `> text`) |
 | `BAD_INDENT` | a block scalar's leading blank line reaching past its first content line, a quoted scalar continued at its parent's column, or a flow collection whose continuation lines do not clear the block that holds it |
 | `BAD_IMPLICIT_KEY` | a key that does not fit on one line, a block key whose `:` sits more than 1024 characters in, or a `[ key\n : value ]` whose `:` is on the next line |
@@ -290,7 +291,7 @@ The one thing that *does* throw is the guard against a document built to exhaust
 | `UNEXPECTED_DIRECTIVE` | a directive with no `...` before it or no `---` after it |
 | `DEPTH_LIMIT` | nesting past the parser's depth cap |
 
-Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), a `%TAG` handle declared twice (`DUPLICATE_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
+Warnings (advisory; the document still parses): `UNSUPPORTED_YAML_VERSION`, `UNKNOWN_DIRECTIVE`, a malformed `%TAG` directive (`BAD_DIRECTIVE`), a `%TAG` handle declared twice (`DUPLICATE_DIRECTIVE`), `AMBIGUOUS_ANCHOR_NAME` — an anchor or alias name ending in `:`, which YAML makes part of the name (`*x: v` names the anchor `x:` and leaves the mapping no separator) — `BAD_TAG_VALUE`, a schema tag that cannot describe what it is written on (`!!int 1.9`, `!!binary "not base64!"`), and `MULTIPLE_DOCUMENTS`, where `parseDocument` found a second document after a `---`/`...` marker and read only the first, so switch to `parseAllDocuments` if you want the rest.
 
 ### Not supported
 
@@ -362,7 +363,6 @@ listed here agreed at the time of that run.
 | document | @amritk/yaml | `yaml` | `js-yaml` |
 | --- | --- | --- | --- |
 | `t: !!float 1` | `1` | `"1"` | `1` |
-| `t: !!null x` | `null` | `"x"` | throws |
 | `...` alone, or after a comment | no document | one `null` document | one `null` document |
 | `%YAML 1.2` with no document | `UNEXPECTED_DIRECTIVE` | accepted | throws |
 | `%YAML 1.2` twice | `DUPLICATE_DIRECTIVE` | accepted | throws |
@@ -373,10 +373,6 @@ Reading them:
 - **`!!float 1`** — the core schema's float production accepts an integer form, so
   `1` is a valid float and resolves to the number. `yaml` requires a decimal point
   and falls back to the raw string; `js-yaml` agrees with us.
-- **`!!null x`** — a core tag coerces (see the Tags list under
-  [Supported](#supported)), so the tag wins and the value is `null`. The three
-  parsers pick three different answers here; ours is the one consistent with how
-  `!!int "7"` and `!!bool "FALSE"` behave.
 - **`...` with nothing before it** — the document-end marker ends a document; it
   does not open one. The suite's own event stream for these cases (`HWV9`, `QT73`,
   and the spec's Example 9.3, `M7A3`) is an empty stream, so the extra `null`

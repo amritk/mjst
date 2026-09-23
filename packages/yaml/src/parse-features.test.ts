@@ -17,7 +17,7 @@ describe('core-schema tags', () => {
 
   it('resolves !!float, !!null, and !!bool per the core schema', () => {
     expect(parseDocument('a: !!float 3\n').toJS()).toEqual({ a: 3 })
-    expect(parseDocument('a: !!null anything\n').toJS()).toEqual({ a: null })
+    expect(parseDocument('a: !!null ~\n').toJS()).toEqual({ a: null })
     expect(parseDocument('a: !!bool false\n').toJS()).toEqual({ a: false })
   })
 
@@ -805,10 +805,10 @@ describe('block scalar headers', () => {
 })
 
 describe('quoted scalar escapes and indentation', () => {
-  it('reports an escape the spec does not define, keeping the character', () => {
+  it('reports an escape the spec does not define, keeping it as written', () => {
     const doc = parseDocument('a: "b\\.c"\n')
     expect(doc.errors.map((e) => e.code)).toEqual(['BAD_ESCAPE'])
-    expect(doc.toJS()).toEqual({ a: 'b.c' })
+    expect(doc.toJS()).toEqual({ a: 'b\\.c' })
     // `\'` is a single-quoted escape; inside double quotes it means nothing.
     expect(parseDocument('a: "quoted \\\' scalar"\n').errors.map((e) => e.code)).toContain('BAD_ESCAPE')
   })
@@ -1389,9 +1389,11 @@ describe('numeric tags written on a quoted scalar', () => {
     expect(parseDocument('a: !!float "1e3"\n').toJS()).toEqual({ a: 1000 })
   })
 
-  it('still truncates a float to an int and leaves unparseable text alone', () => {
-    expect(parseDocument('a: !!int "1.5"\n').toJS()).toEqual({ a: 1 })
-    expect(parseDocument('a: !!int "42 items"\n').toJS()).toEqual({ a: 42 })
+  it('leaves text that is not an int or float spelling alone', () => {
+    // No truncating `1.5` or reading a number off the front of `42 items`: a tag
+    // applies only to text in its own format (see scalars-and-tags.test.ts).
+    expect(parseDocument('a: !!int "1.5"\n').toJS()).toEqual({ a: '1.5' })
+    expect(parseDocument('a: !!int "42 items"\n').toJS()).toEqual({ a: '42 items' })
     expect(parseDocument('a: !!int "abc"\n').toJS()).toEqual({ a: 'abc' })
     expect(parseDocument('a: !!float "abc"\n').toJS()).toEqual({ a: 'abc' })
   })

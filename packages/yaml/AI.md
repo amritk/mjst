@@ -43,11 +43,14 @@ for (const error of doc.errors) {
    `UNTERMINATED_FLOW`, `TAB_INDENT`, `UNEXPECTED_DIRECTIVE`, and the
    syntax-level `BAD_COMMENT` / `BAD_ESCAPE` / `BAD_BLOCK_HEADER` /
    `BAD_INDENT` / `BAD_IMPLICIT_KEY` / `BAD_PROPERTY` / `BAD_ANCHOR` /
-   `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar). A misplaced or malformed
+   `BAD_SCALAR_CONTENT` (a `: ` inside a plain scalar) / `BAD_MERGE` (a `<<`
+   value that is not a mapping or a list of them). A misplaced or malformed
    directive is an **error**; an unknown directive, a non-1.2 `%YAML` version,
    `AMBIGUOUS_ANCHOR_NAME` (an anchor or alias name ending in `:` — YAML makes
    the `:` part of the name, so `*x: v` aliases `x:` and the mapping keeps no
-   separator), and `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
+   separator), `BAD_TAG_VALUE` (a `!!` tag that cannot describe its value, e.g.
+   `!!int 1.9` — the value is kept as the string written), and
+   `MULTIPLE_DOCUMENTS` are warnings. A document with errors still parses —
    check `doc.errors` rather than assuming a throw. Problems arrive in **source
    order**. The one exception to "never throws" is `toJS()` / `parse()` on a
    resource-exhaustion document — runaway alias expansion or nesting too deep to

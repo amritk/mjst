@@ -63,11 +63,11 @@ describe('resolve-scalar', () => {
 
   it('treats invalid and out-of-range escapes as literal without crashing', () => {
     // `\U` over 0x10FFFF would make String.fromCodePoint throw; it must instead
-    // fall back to the literal escape letter and leave the trailing characters
-    // to be processed normally (so nothing is dropped and nothing crashes).
-    expect(resolveDoubleQuoted('\\UFFFFFFFF')).toBe('UFFFFFFFF')
+    // keep the escape exactly as written (the parser reports it as BAD_ESCAPE)
+    // and leave the trailing characters to be processed normally.
+    expect(resolveDoubleQuoted('\\UFFFFFFFF')).toBe('\\UFFFFFFFF')
     // A short/non-hex run must not silently consume the characters that follow it.
-    expect(resolveDoubleQuoted('\\xZZ')).toBe('xZZ')
+    expect(resolveDoubleQuoted('\\xZZ')).toBe('\\xZZ')
     // A valid astral code point still resolves.
     expect(resolveDoubleQuoted('\\U0001F600')).toBe('😀')
   })

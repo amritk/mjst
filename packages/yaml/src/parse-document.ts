@@ -1,4 +1,5 @@
 import {
+  isCoreInt,
   resolveDoubleQuoted,
   resolvePlainValue,
   resolveSingleQuoted,
@@ -908,7 +909,10 @@ const attachProps = (node: YamlNode, props: NodeProps, state: State): YamlNode =
     state.anchors.set(props.anchor, node)
     state.pendingAnchors?.delete(props.anchor)
   }
-  if (props.tag) node.tag = props.tag
+  if (props.tag) {
+    node.tag = props.tag
+    checkTaggedNode(state, node)
+  }
   return node
 }
 
@@ -921,15 +925,56 @@ const attachProps = (node: YamlNode, props: NodeProps, state: State): YamlNode =
  *
  * A table read is what keeps this affordable: the check runs per backslash, and
  * a double-quoted scalar that carries none never reaches it.
+ *
+ * `1` marks an escape that is complete as it stands. The numeric introducers are
+ * `2` instead: `\x`, `\u` and `\U` are only escapes when exactly 2, 4 or 8 hex
+ * digits follow, and accepting the letter alone let `"\u12"` through with no
+ * report — to be quietly rewritten as the text `u12`.
  */
 const VALID_ESCAPE = /* @__PURE__ */ (() => {
   const t = new Uint8Array(128)
-  for (const c of '0abtnvfre "/\\N_LPxuU\t\n\r') t[c.charCodeAt(0)] = 1
+  for (const c of '0abtnvfre "/\\N_LP\t\n\r') t[c.charCodeAt(0)] = 1
+  for (const c of 'xuU') t[c.charCodeAt(0)] = 2
   return t
 })()
 
+/** True for `[0-9A-Fa-f]`. */
+const isHexDigit = (c: number): boolean => (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102)
+
+/**
+ * Settles a `\` escape the {@link VALID_ESCAPE} table could not accept on its own,
+ * and reports it unless it turns out to be well formed. Two kinds reach here:
+ *
+ * - a numeric escape, which is valid only with its full run of hex digits and
+ *   only when the code point it names exists (`\U00110000` is past the last one);
+ * - anything else, including every non-ASCII character. The table is ASCII-only,
+ *   and skipping the check above it (as this used to) let `\é` through unreported.
+ *
+ * The span covers what the author wrote as the escape — the digits a numeric one
+ * managed, or the whole escaped character even when it takes two UTF-16 units —
+ * so a diagnostic underlines the escape rather than half of it.
+ */
 const reportBadEscape = (state: State, at: number): void => {
-  pushError(state, 'BAD_ESCAPE', `"\\${state.src[at + 1]}" is not a valid escape sequence`, at, at + 2)
+  const { src, len } = state
+  const e = src.charCodeAt(at + 1)
+  if (e < 128 && VALID_ESCAPE[e] === 2) {
+    const digits = e === 0x78 /* x */ ? 2 : e === 0x75 /* u */ ? 4 : 8
+    const stop = Math.min(at + 2 + digits, len)
+    let end = at + 2
+    while (end < stop && isHexDigit(src.charCodeAt(end))) end++
+    // A well-formed `\u` escape lands here on every use, so nothing is sliced
+    // until there is something to report. Only an 8-digit `\U` can overshoot.
+    if (end - at - 2 < digits) {
+      pushError(state, 'BAD_ESCAPE', `"${src.slice(at, end)}" needs exactly ${digits} hex digits`, at, end)
+    } else if (digits === 8 && Number.parseInt(src.slice(at + 2, end), 16) > 0x10ffff) {
+      pushError(state, 'BAD_ESCAPE', `"${src.slice(at, end)}" is past the last Unicode code point`, at, end)
+    }
+    return
+  }
+  const cp = src.codePointAt(at + 1) ?? e
+  const width = cp > 0xffff ? 2 : 1
+  const escaped = String.fromCodePoint(cp)
+  pushError(state, 'BAD_ESCAPE', `"\\${escaped}" is not a valid escape sequence`, at, at + 1 + width)
 }
 
 /**
@@ -1042,7 +1087,7 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
           i++
           continue
         }
-        if (e < 128 && VALID_ESCAPE[e] === 0) reportBadEscape(state, i)
+        if (e >= 128 || VALID_ESCAPE[e] !== 1) reportBadEscape(state, i)
         i += 2
         continue
       }
@@ -2226,6 +2271,40 @@ const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<stri
   return null
 }
 
+/**
+ * Reports a `<<` merge whose value is not something that can be merged: a
+ * mapping, or a sequence of mappings, reached directly or through aliases.
+ *
+ * `toJS` skips any other source, which is the right recovery but used to be the
+ * only thing that happened — `<<: 5`, `<<: [1, 2]` and a `<<:` left empty all
+ * projected to a mapping missing the keys the author meant to pull in, with no
+ * report. `yaml` (eemeli, with `merge` on) and `js-yaml` both reject these
+ * outright. An empty value is reported at the key, since there is no value node
+ * to point at; an alias with no anchor is left to the error it already has.
+ *
+ * Called from the mapping parsers only for a pair whose key is a plain `<<` and
+ * only while merging is on — the same test `toJS` applies — so an ordinary key
+ * pays a kind test and one string comparison.
+ */
+const checkMergeValue = (state: State, key: YamlNode, value: YamlNode | null): void => {
+  if (value === null) {
+    pushError(state, 'BAD_MERGE', 'A merge key needs a mapping or a list of mappings to merge', key.start, key.end)
+    return
+  }
+  const source = value.kind === 'alias' ? value.target : value
+  if (source === undefined || source.kind === 'map') return
+  if (source.kind === 'seq') {
+    for (const item of source.items) {
+      const entry = item.kind === 'alias' ? item.target : item
+      if (entry !== undefined && entry.kind !== 'map') {
+        pushError(state, 'BAD_MERGE', 'Only a mapping can be merged into a mapping', item.start, item.end)
+      }
+    }
+    return
+  }
+  pushError(state, 'BAD_MERGE', 'Only a mapping or a list of mappings can be merged', value.start, value.end)
+}
+
 const parseFlowMap = (state: State): YamlMap => {
   const start = state.pos
   state.pos++ // {
@@ -2255,6 +2334,7 @@ const parseFlowMap = (state: State): YamlMap => {
       if (vc !== COMMA && vc !== RBRACE) value = parseFlowNode(state)
     }
     if (state.uniqueKeys) seen = trackKey(state, items, key, seen)
+    if (state.merge && key.kind === 'scalar' && key.source === '<<') checkMergeValue(state, key, value)
     items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
     skipFlowWs(state)
     const sep = state.src.charCodeAt(state.pos)
@@ -2432,13 +2512,33 @@ const parseValueOrChild = (state: State, indent: number, compact = false): YamlN
 export const keyText = (node: YamlNode): string => {
   if (node.kind === 'scalar') {
     const v = node.value
-    // Keys are usually strings already — skip the String() round-trip.
-    if (typeof v === 'string') return v
+    // Keys are usually untagged strings already — skip the String() round-trip.
+    if (typeof v === 'string' && node.tag === undefined) return v
+    // A tagged key is keyed by what its tag makes of it, exactly as `toJS` would
+    // project the same scalar as a value — `!!str 1.50` is `"1.50"`, not the
+    // number `1.5`, and reading `value` alone collided it with a real `1.5`.
+    if (node.tag !== undefined) return taggedScalarText(node, '')
     // An empty key is null in YAML and stringifies to '' — the same key `? ` and
     // an empty quoted string produce, which is what a JS object can express.
     return v === null ? '' : String(v)
   }
   return keyTextSlow(node, { left: MAX_KEY_TEXT_WORK })
+}
+
+/**
+ * The text a *tagged* scalar renders as inside a key: its {@link applyScalarTag}
+ * projection, stringified the way a JavaScript object key is — except a `Date`,
+ * which renders as its ISO string. `String(date)` is in the host's local time
+ * zone, and a key that changes with the machine that parsed it cannot be
+ * compared or looked up by path. `nullText` is what a null projects to, which
+ * differs between the two callers; see {@link flowText}.
+ */
+const taggedScalarText = (node: YamlScalar, nullText: string): string => {
+  const v = applyScalarTag(node)
+  if (typeof v === 'string') return v
+  if (v === null || v === undefined) return nullText
+  if (v instanceof Date) return v.toISOString()
+  return String(v)
 }
 
 /**
@@ -2481,7 +2581,8 @@ const keyTextSlow = (node: YamlNode, budget: TextBudget): string => {
   if (budget.left-- <= 0) return TRUNCATED
   if (node.kind === 'scalar') {
     const v = node.value
-    const text = typeof v === 'string' ? v : v === null ? '' : String(v)
+    const text =
+      node.tag !== undefined ? taggedScalarText(node, '') : typeof v === 'string' ? v : v === null ? '' : String(v)
     budget.left -= text.length
     return text
   }
@@ -2500,7 +2601,14 @@ const flowText = (node: YamlNode, budget: TextBudget): string => {
   if (budget.left-- <= 0) return TRUNCATED
   if (node.kind === 'scalar') {
     const v = node.value
-    const text = typeof v === 'string' ? v : v === null ? 'null' : String(v)
+    const text =
+      node.tag !== undefined
+        ? taggedScalarText(node, 'null')
+        : typeof v === 'string'
+          ? v
+          : v === null
+            ? 'null'
+            : String(v)
     budget.left -= text.length
     return text
   }
@@ -2754,6 +2862,7 @@ const parseBlockMap = (
     }
 
     if (state.uniqueKeys) seen = trackKey(state, items, key, seen)
+    if (state.merge && key.kind === 'scalar' && key.source === '<<') checkMergeValue(state, key, value)
     items.push({ kind: 'pair', key, value, start: key.start, end: value ? value.end : key.end })
   }
 
@@ -3128,23 +3237,127 @@ const decodeBase64 = (text: string): Uint8Array | null => {
 }
 
 /**
- * The number a `!!int` / `!!float` tag written on a *string* means, or `null`
- * when the text does not name one and the tag has to be left unapplied.
- *
- * The text goes through the core schema first, because that is where every
- * spelling of a number lives: `parseInt` alone reads `"0x1F"` as `0` (it stops
- * at the `x` unless told base 16) and `parseFloat` reads `".inf"` as `NaN`, so
- * `!!int "0x1F"` came back as `0` where the same value written unquoted —
- * already a number by the time it gets here — came back as `31`. Quoting a
- * value should not change what its tag means. `parse` stays as the fallback for
- * the text the core schema does not recognize but a number still starts
- * (`"42 items"`, `" 42 "`).
+ * The YAML timestamp type's format (https://yaml.org/type/timestamp.html): a bare
+ * `yyyy-mm-dd` date, or a date and time with an optional fraction and zone. The
+ * zone may be set off by spaces (`… 21:59:43.10 -5`, the type's own example),
+ * which is also how `js-yaml` reads it. Groups: year, month, day, then — only
+ * for the date-time form — hour, minute, second, fraction, zone, zone sign, zone
+ * hour, zone minute.
  */
-const taggedNumber = (text: string, parse: (s: string) => number): number | null => {
-  const resolved = resolvePlainValue(text.trim())
-  if (typeof resolved === 'number') return resolved
-  const n = parse(text)
-  return Number.isNaN(n) ? null : n
+const TIMESTAMP =
+  /^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]*))?(?:[ \t]*(Z|([-+])([0-9]{1,2})(?::([0-9]{2}))?))?)?$/
+
+/**
+ * The instant a `!!timestamp` names, or `null` when the text is not a YAML
+ * timestamp.
+ *
+ * This used to be `new Date(text)`, which is wrong in two ways that both come
+ * from the host. A date-time with no zone is *UTC* by the timestamp type, but
+ * `new Date` reads it as local time, so the same document parsed to instants
+ * five hours apart on a UTC server and a New York laptop. And `new Date` accepts
+ * whatever its engine does — `Dec 14 2001`, `12/14/2001` — none of which is a
+ * YAML timestamp. So the text is matched against the type's own format, and the
+ * instant is assembled from its fields in UTC with the zone offset applied.
+ *
+ * A date that does not exist (`2001-02-30`, month 13, hour 25) is rejected rather
+ * than rolled over into the next month, which `Date.UTC` would do silently.
+ * `setUTCFullYear` rather than `Date.UTC` because the latter maps years 0–99 to
+ * 1900–1999, and `0099-01-01` means the year 99.
+ */
+const parseTimestamp = (text: string): Date | null => {
+  const m = TIMESTAMP.exec(text)
+  if (m === null) return null
+  const year = Number(m[1])
+  const month = Number(m[2]) - 1
+  const day = Number(m[3])
+  const date = new Date(0)
+  date.setUTCFullYear(year, month, day)
+  if (date.getUTCMonth() !== month || date.getUTCDate() !== day) return null
+  if (m[4] === undefined) return date
+  const hour = Number(m[4])
+  const minute = Number(m[5])
+  const second = Number(m[6])
+  // 60 is a leap second, which the format allows; `Date` rolls it into the next
+  // minute, the nearest instant it can represent.
+  if (hour > 23 || minute > 59 || second > 60) return null
+  // Only milliseconds survive in a `Date`, so the fraction is cut to three digits.
+  const millis = m[7] ? Number(m[7].slice(0, 3).padEnd(3, '0')) : 0
+  date.setUTCHours(hour, minute, second, millis)
+  if (m[9] !== undefined) {
+    const offset = Number(m[10]) * 60 + Number(m[11] ?? 0)
+    // `-5` means five hours *behind* UTC, so the UTC instant is five hours later.
+    date.setTime(date.getTime() + (m[9] === '-' ? offset : -offset) * 60_000)
+  }
+  return date
+}
+
+/**
+ * Stands for "this tag cannot describe this scalar" — `!!int` on `1.9`, `!!bool`
+ * on `yes`. A symbol rather than `null` or `undefined`, both of which are real
+ * results (`!!null` resolves to `null`).
+ */
+const UNRESOLVED: unique symbol = Symbol('unresolved')
+
+/**
+ * The text a tagged scalar was written as — what `!!str` reads, and what any
+ * other tag is matched against. For a single-line plain scalar the raw source
+ * *is* the string (so `!!str 1.50` keeps its trailing zero). A plain scalar that
+ * wraps is the exception: its source still holds the raw line breaks, while
+ * `value` holds the folded text the document actually means, so it has to read
+ * the folded value rather than un-fold it. Every other style's value is already
+ * the string content.
+ */
+const taggedText = (node: YamlScalar): string => {
+  const v = node.value
+  if (node.style === 'plain' && node.source.indexOf('\n') === -1) return node.source
+  return typeof v === 'string' ? v : v === null ? '' : String(v)
+}
+
+/**
+ * The value a tag makes of a scalar, or {@link UNRESOLVED} when the scalar's
+ * text is not in that tag's format.
+ *
+ * Each core tag accepts exactly the spellings the core schema resolves to its
+ * type, quoted or not — so `!!int "0x1F"` is 31, the same as `!!int 0x1F`. The
+ * tag used to coerce whatever it was given instead: `!!int 1.9` truncated to 1,
+ * `!!int "12abc"` parsed a prefix to 12, `!!null "x"` threw the text away, and
+ * `!!float true` came back as the boolean. Each of those reported nothing and
+ * changed the data. `!!float` takes the int spellings as well — every int is a
+ * float, and `!!float 3` is how a document insists a whole number is one.
+ *
+ * Unknown and custom tags resolve to the value unchanged; the tag stays on the
+ * node for callers that want it.
+ */
+const resolveTaggedScalar = (node: YamlScalar): unknown => {
+  switch (node.tag) {
+    case 'binary':
+      return decodeBase64(taggedText(node)) ?? UNRESOLVED
+    case 'timestamp':
+      return parseTimestamp(taggedText(node)) ?? UNRESOLVED
+    // The bare `!` is the non-specific tag: it says "this node's type is not the
+    // one resolution would infer", which for a scalar means the failsafe `!!str`.
+    case '!':
+    case 'str':
+      return taggedText(node)
+    case 'null': {
+      const text = taggedText(node)
+      return resolvePlainValue(text) === null ? null : UNRESOLVED
+    }
+    case 'bool': {
+      const r = resolvePlainValue(taggedText(node))
+      return typeof r === 'boolean' ? r : UNRESOLVED
+    }
+    case 'int': {
+      const text = taggedText(node)
+      return isCoreInt(text) ? resolvePlainValue(text) : UNRESOLVED
+    }
+    case 'float': {
+      const r = resolvePlainValue(taggedText(node))
+      return typeof r === 'number' ? r : UNRESOLVED
+    }
+    default:
+      return node.value
+  }
 }
 
 /**
@@ -3155,59 +3368,108 @@ const taggedNumber = (text: string, parse: (s: string) => number): number | null
  * `timestamp` (→ `Date`), matching `yaml` (eemeli). Note this is *explicit*
  * coercion only: an untagged ISO string still resolves to a string, so the
  * implicit-timestamp surprise that makes a JSON superset lossy never happens.
- * Unknown/custom tags pass through with the value unchanged — the tag stays on
- * the node for callers that want it.
+ *
+ * A tag that cannot describe its scalar leaves the text as written — the reading
+ * `yaml` (eemeli) takes too — and the parser has already warned about it with
+ * `BAD_TAG_VALUE` (see {@link checkTaggedNode}).
  */
 const applyScalarTag = (node: YamlScalar): unknown => {
-  const v = node.value
-  switch (node.tag) {
-    case 'binary': {
-      const bytes = decodeBase64(typeof v === 'string' ? v : node.source)
-      return bytes ?? v
+  const r = resolveTaggedScalar(node)
+  return r === UNRESOLVED ? taggedText(node) : r
+}
+
+/** Short names of the tags that describe a scalar; see {@link checkTaggedNode}. */
+const SCALAR_TAGS = new Set(['str', 'int', 'float', 'bool', 'null', 'binary', 'timestamp'])
+
+/**
+ * The node kind each collection tag describes. `!!omap` and `!!pairs` are
+ * written as sequences of single-pair mappings; `!!set` as a mapping whose keys
+ * are the members. A `Map` rather than an object literal, because a tag is text
+ * from the document and `!!toString` must not find `Object.prototype.toString`.
+ */
+const COLLECTION_TAG_KIND = new Map<string, 'map' | 'seq'>([
+  ['map', 'map'],
+  ['set', 'map'],
+  ['seq', 'seq'],
+  ['omap', 'seq'],
+  ['pairs', 'seq'],
+])
+
+/**
+ * Warns when a schema tag cannot describe the node it was written on, so data a
+ * tag silently failed to shape is not mistaken for data it did. A warning, not
+ * an error: the document is well formed, and the spec leaves what to do with an
+ * unresolvable tag to the application — which here gets the value as written.
+ *
+ * Checked where the tag is attached, i.e. only for a node that carries one; the
+ * untagged path never reaches it. The node is complete by then, so a
+ * collection's entries can be checked as well as its kind.
+ */
+const checkTaggedNode = (state: State, node: YamlScalar | YamlMap | YamlSeq): void => {
+  const tag = node.tag
+  if (tag === undefined) return
+  const scalarTag = SCALAR_TAGS.has(tag)
+  const kind = scalarTag ? 'scalar' : COLLECTION_TAG_KIND.get(tag)
+  // A custom or non-specific tag names no format this parser knows to check.
+  if (kind === undefined) return
+  if (node.kind !== kind) {
+    const what = kind === 'scalar' ? 'a scalar' : kind === 'map' ? 'a mapping' : 'a sequence'
+    pushWarning(state, 'BAD_TAG_VALUE', `!!${tag} describes ${what}, and cannot be applied here`, node.start, node.end)
+    return
+  }
+  if (node.kind === 'scalar') {
+    if (resolveTaggedScalar(node) === UNRESOLVED) {
+      pushWarning(
+        state,
+        'BAD_TAG_VALUE',
+        `"${taggedText(node)}" is not a valid !!${tag} value; it is kept as a string`,
+        node.start,
+        node.end,
+      )
     }
-    case 'timestamp': {
-      const date = new Date((typeof v === 'string' ? v : node.source).trim())
-      return Number.isNaN(date.getTime()) ? v : date
+    return
+  }
+  if (node.kind === 'map') {
+    if (tag !== 'set') return
+    for (const pair of node.items) {
+      if (pair.value !== null && !(pair.value.kind === 'scalar' && pair.value.value === null)) {
+        pushWarning(state, 'BAD_TAG_VALUE', 'A !!set member cannot have a value', pair.value.start, pair.value.end)
+      }
     }
-    // The bare `!` is the non-specific tag: it says "this node's type is not the
-    // one resolution would infer", which for a scalar means the failsafe `!!str`.
-    case '!':
-    case 'str':
-      // For a single-line plain scalar the raw source *is* the string (so
-      // `!!str 1.50` keeps its trailing zero). A plain scalar that wraps is the
-      // exception: its source still holds the raw line breaks, while `value`
-      // holds the folded text the document actually means, so `!!str` over two
-      // lines must read the folded value rather than un-fold it.
-      return node.style === 'plain' && node.source.indexOf('\n') === -1
-        ? node.source
-        : typeof v === 'string'
-          ? v
-          : v === null
-            ? ''
-            : String(v)
-    case 'null':
-      return null
-    case 'bool': {
-      // For a quoted/block scalar the resolved value is the string content; for a
-      // plain scalar fall back to the raw source. Either way `!!bool "true"` must
-      // become `true`, matching how `int`/`float`/`str` read tagged scalars.
-      const s = typeof v === 'string' ? v : node.source
-      if (s === 'true' || s === 'True' || s === 'TRUE') return true
-      if (s === 'false' || s === 'False' || s === 'FALSE') return false
-      return v
+    return
+  }
+  if (tag === 'omap' || tag === 'pairs') checkOrderedPairs(state, node, tag === 'omap')
+}
+
+/**
+ * Checks the entries of an `!!omap` / `!!pairs` sequence: each has to be a
+ * mapping of exactly one pair, and an `!!omap` may not repeat a key. The
+ * projection folds an omap into a `Map`, so without this a repeated key simply
+ * lost its first value, and a malformed entry was dropped or spread across
+ * several keys, with nothing said either way.
+ */
+const checkOrderedPairs = (state: State, node: YamlSeq, unique: boolean): void => {
+  const seen = unique ? new Set<string>() : null
+  for (const item of node.items) {
+    const entry = item.kind === 'alias' ? item.target : item
+    // An alias with no anchor behind it is already an error of its own.
+    if (entry === undefined) continue
+    const pair = entry.kind === 'map' && entry.items.length === 1 ? entry.items[0] : undefined
+    if (pair === undefined) {
+      pushWarning(
+        state,
+        'BAD_TAG_VALUE',
+        `Each !!${node.tag} entry must be a single key: value pair`,
+        item.start,
+        item.end,
+      )
+      continue
     }
-    case 'int': {
-      if (typeof v === 'number') return Math.trunc(v)
-      const n = taggedNumber(typeof v === 'string' ? v : node.source, Number.parseInt)
-      return n === null ? v : Math.trunc(n)
-    }
-    case 'float': {
-      if (typeof v === 'number') return v
-      const n = taggedNumber(typeof v === 'string' ? v : node.source, Number.parseFloat)
-      return n === null ? v : n
-    }
-    default:
-      return v
+    if (seen === null) continue
+    const key = keyText(pair.key)
+    if (seen.has(key)) {
+      pushWarning(state, 'BAD_TAG_VALUE', `!!omap key "${key}" is repeated`, item.start, item.end)
+    } else seen.add(key)
   }
 }
 
