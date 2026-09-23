@@ -35,13 +35,29 @@ const BEFORE_REGEX: ReadonlySet<string> = new Set(['(', ',', '=', ':', '[', '!',
  * reads costs a lint error, and dropping one the code calls costs a build.
  */
 const stripDataText = (source: string): string => {
-  const out = source.split('')
+  // Built from slices of the source and blanked runs rather than by rewriting a
+  // character array: generated files run to hundreds of kilobytes, and this runs
+  // on every one of them.
+  const parts: string[] = []
+  let copiedTo = 0
   let previous = '\n'
   let i = 0
   const blank = (from: number, to: number): void => {
-    for (let n = from; n < to; n++) if (out[n] !== '\n') out[n] = ' '
+    parts.push(source.slice(copiedTo, from), source.slice(from, to).replace(/[^\n]/g, ' '))
+    copiedTo = to
   }
   while (i < source.length) {
+    const code = source.charCodeAt(i)
+
+    // Everything below opens on `/`, a quote or a backtick; any other character
+    // only updates what the last significant one was.
+    if (code !== 0x2f && code !== 0x22 && code !== 0x27 && code !== 0x60) {
+      if (code === 0x0a) previous = '\n'
+      else if (!isWhitespace(code, source, i)) previous = source[i] as string
+      i++
+      continue
+    }
+
     const char = source[i] as string
     const next = source[i + 1]
 
@@ -74,7 +90,7 @@ const stripDataText = (source: string): string => {
       previous = char
       continue
     }
-    if (char === '/' && BEFORE_REGEX.has(previous)) {
+    if (BEFORE_REGEX.has(previous)) {
       let n = i + 1
       let inClass = false
       while (n < source.length) {
@@ -96,12 +112,19 @@ const stripDataText = (source: string): string => {
       continue
     }
 
-    if (!/\s/.test(char)) previous = char
-    else if (char === '\n') previous = '\n'
+    previous = char
     i++
   }
-  return out.join('')
+  parts.push(source.slice(copiedTo))
+  return parts.join('')
 }
+
+/** `/\s/` for the character at `index`, answered from its code unit when it is ASCII. */
+const isWhitespace = (code: number, source: string, index: number): boolean =>
+  code < 0x80 ? code === 0x20 || (code >= 0x09 && code <= 0x0d) : /\s/.test(source[index] as string)
+
+/** A name made of word characters only, for which a word-boundary match is a token lookup. */
+const WORD_NAME = /^\w+$/
 
 /**
  * Asks whether emitted source names an identifier — the question that decides
@@ -118,5 +141,16 @@ const stripDataText = (source: string): string => {
  */
 export const identifierMentions = (source: string): ((name: string) => boolean) => {
   const code = stripDataText(source)
-  return (name: string): boolean => new RegExp(`\\b${escapeForWordMatch(name)}\\b`).test(code)
+  // A file is asked about every `$ref` it might import, several spellings each,
+  // and a fresh regex per question rescanned the whole file every time. For a
+  // name of word characters, `\bname\b` matches exactly when some maximal run of
+  // word characters equals the name, so one pass collecting those runs answers
+  // them all. Anything else (a `$`, or punctuation from a `typeSuffix`) keeps
+  // the regex, whose boundaries mean something subtler around those characters.
+  let words: ReadonlySet<string> | undefined
+  return (name: string): boolean => {
+    if (!WORD_NAME.test(name)) return new RegExp(`\\b${escapeForWordMatch(name)}\\b`).test(code)
+    words ??= new Set(code.match(/\w+/g))
+    return words.has(name)
+  }
 }
