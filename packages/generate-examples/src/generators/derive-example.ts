@@ -908,18 +908,41 @@ const enforceMaxProperties = (out: Record<string, unknown>, schema: JSONSchema, 
 /** Absorbs floating-point error when a bound divided by a step should be a whole number (`0.3 / 0.1`). */
 const EPS = 1e-9
 
+/** The digits after the decimal point in `value`'s shortest spelling (`2.5` → 1, `1e-10` → 10). */
+const decimalPlaces = (value: number): number => {
+  const [mantissa = '', exponent = '0'] = value.toString().split('e')
+  const fraction = mantissa.split('.')[1]?.length ?? 0
+  return Math.max(0, fraction - Number(exponent))
+}
+
+const greatestCommonDivisor = (a: number, b: number): number => (b === 0 ? a : greatestCommonDivisor(b, a % b))
+
 /**
  * The spacing of the values an integer node with this `multipleOf` admits: the
  * smallest multiple of `multipleOf` that is also a whole number (`2.5` → `5`,
- * `0.1` → `1`). `undefined` when none turns up within a sane search, which only a
- * step with no short decimal form produces.
+ * `0.1` → `1`, `1e-10` → `1`). `undefined` when there is no whole multiple a
+ * double can hold.
+ *
+ * A short search catches steps whose decimal spelling is not exact (`1 / 3`
+ * times 3 is 1 only within rounding). The rest are read off the decimal
+ * spelling: `multipleOf` is `p / 10^d`, and the smallest whole multiple of that
+ * fraction in lowest terms is its numerator. The search alone missed any step
+ * finer than 1e-4, and below 1e-9 took the first candidate, a `1 * multipleOf`
+ * within tolerance of 0, as a step of 0.
  */
 const integerStep = (multipleOf: number): number | undefined => {
   for (let n = 1; n <= 10_000; n++) {
     const candidate = n * multipleOf
-    if (Math.abs(candidate - Math.round(candidate)) < EPS * Math.max(1, candidate)) return Math.round(candidate)
+    const whole = Math.round(candidate)
+    if (whole >= 1 && Math.abs(candidate - whole) < EPS * Math.max(1, candidate)) return whole
   }
-  return undefined
+  const places = decimalPlaces(multipleOf)
+  if (places > 15) return undefined
+  const denominator = 10 ** places
+  const numerator = Math.round(multipleOf * denominator)
+  if (numerator < 1) return undefined
+  const step = numerator / greatestCommonDivisor(numerator, denominator)
+  return Number.isSafeInteger(step) ? step : undefined
 }
 
 /**
@@ -951,7 +974,10 @@ const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
   // type rejects. Ignore it, exactly as the arbitrary side does.
   const multipleOf =
     hasMultipleOf(schema) && Number.isFinite(schema.multipleOf) && schema.multipleOf > 0 ? schema.multipleOf : undefined
-  const step = isInteger ? (multipleOf === undefined ? 1 : (integerStep(multipleOf) ?? multipleOf)) : multipleOf
+  // An integer whose `multipleOf` has no whole multiple a double can hold keeps
+  // to whole numbers and its bounds; a fractional step rounded afterwards could
+  // land outside them.
+  const step = isInteger ? (multipleOf === undefined ? 1 : (integerStep(multipleOf) ?? 1)) : multipleOf
 
   if (step === undefined) {
     if (Number.isFinite(lo)) {
@@ -976,7 +1002,13 @@ const deriveNumber = (schema: JSONSchema, isInteger: boolean): number => {
   const k = Number.isFinite(kMin) ? kMin : Math.min(0, kMax)
   const value = k * step
   // `+ 0` normalizes a `-0` (which `Math.ceil`/`Math.floor` can produce) to `0`.
-  return (isInteger ? Math.round(value) : value) + 0
+  if (isInteger) return Math.round(value) + 0
+  // `-3 * 0.1` is `-0.30000000000000004`, just past a `minimum: -0.3`. Trimming
+  // to 15 significant digits takes the product back to the multiple it means,
+  // kept only when that still satisfies the bounds.
+  const trimmed = Number(value.toPrecision(15))
+  const inBounds = (loExclusive ? trimmed > lo : trimmed >= lo) && (hiExclusive ? trimmed < hi : trimmed <= hi)
+  return (inBounds ? trimmed : value) + 0
 }
 
 /**

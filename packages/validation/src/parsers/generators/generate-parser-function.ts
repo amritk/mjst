@@ -751,13 +751,6 @@ const resolveForScoring = (schema: JSONSchema, rootSchema: Record<string, unknow
   return target !== undefined && isSchemaObject(target as JSONSchema) ? (target as JSONSchema) : schema
 }
 
-/** Whether a `$ref` appears anywhere in `schema`. */
-const containsRef = (schema: unknown): boolean => {
-  if (schema === null || typeof schema !== 'object') return false
-  if (Array.isArray(schema)) return schema.some(containsRef)
-  return Object.hasOwn(schema, '$ref') || Object.values(schema).some(containsRef)
-}
-
 /** True for a property whose schema names its branch outright — a `const` or a one-member `enum`. */
 const tagValueOf = (schema: JSONSchema): unknown | undefined => {
   if (!isSchemaObject(schema)) return undefined
@@ -775,11 +768,6 @@ const tagValueOf = (schema: JSONSchema): unknown | undefined => {
 const branchScoreExpression = (branch: JSONSchema, ctx: UnionParserContext): string => {
   const resolved = resolveForScoring(branch, ctx.rootSchema)
   if (!isSchemaObject(resolved) || !hasProperties(resolved)) return '0'
-  // A `$ref` branch is scored by reading its target's properties, which live in
-  // another file's schema. A `$ref` among them names a shape validator this file
-  // never imports, since imports are collected from this file's own schema, so
-  // the emitted call did not compile. Those properties score on presence alone.
-  const foreign = resolved !== branch
   const properties = resolved.properties as Record<string, JSONSchema>
   const required = new Set(hasRequired(resolved) ? (resolved.required as string[]) : [])
   const terms: string[] = []
@@ -808,10 +796,9 @@ const branchScoreExpression = (branch: JSONSchema, ctx: UnionParserContext): str
     // Well-typedness is weak evidence on top of presence: a property of the
     // right shape suggests the author meant this branch, but a coercible
     // mistype (`"5"` for a number) should not disqualify it.
-    const typeCheck =
-      foreign && containsRef(properties[key])
-        ? null
-        : generatePropertyTypeCheck(accessor, properties[key] as JSONSchema, ctx.useRefImports, ctx.suffix)
+    // A `$ref` property of a `$ref` branch names a shape validator from another
+    // file's schema; `collectImports` reads through the branch to import it.
+    const typeCheck = generatePropertyTypeCheck(accessor, properties[key] as JSONSchema, ctx.useRefImports, ctx.suffix)
     if (typeCheck !== null) terms.push(`(${typeCheck} ? ${SCORE_DECLARED_WELL_TYPED} : 0)`)
   }
 

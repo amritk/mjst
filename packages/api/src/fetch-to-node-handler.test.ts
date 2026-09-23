@@ -187,11 +187,14 @@ describe('fetch-to-node-handler', () => {
       }
       await send(origin, 'example.com:8080')
       await send(origin, '[::1]:3000')
+      // An empty port is valid (`port = *DIGIT`) and the URL parser drops it.
+      await send(origin, 'example.com:')
     })
     expect(seen).toEqual([
       ...Array.from({ length: 5 }, () => 'http://localhost/public'),
       'http://example.com:8080/public',
       'http://[::1]:3000/public',
+      'http://example.com/public',
     ])
   })
 })

@@ -215,6 +215,30 @@ const collectImportTargets = (
     typeOnlyDepth--
   }
 
+  // Union branches already read through, so a cycle of unions terminates.
+  const scoredBranchRefs = new Set<string>()
+
+  /**
+   * The `$ref`s a union's coercing parser names while scoring one `$ref` branch.
+   *
+   * The scorer reads the branch target's properties and checks each one's type,
+   * which for a `$ref` property is a call to that type's shape validator. The
+   * property lives in another file's schema, so this walk never met it, and the
+   * emitted call named nothing imported. Anything collected here that the body
+   * does not end up calling is dropped again by the `usedIn` check.
+   */
+  const collectScoredBranchRefs = (branch: unknown): void => {
+    if (rootSchema === undefined || !isSchemaObject(branch as JSONSchema)) return
+    const ref = readKey(branch as Record<string, unknown>, '$ref')
+    if (typeof ref !== 'string' || !ref.startsWith('#') || scoredBranchRefs.has(ref)) return
+    scoredBranchRefs.add(ref)
+    const target = resolveRef(ref, rootSchema)
+    if (!isSchemaObject(target as JSONSchema)) return
+    const properties = readKey(target as Record<string, unknown>, 'properties')
+    if (typeof properties !== 'object' || properties === null) return
+    for (const value of Object.values(properties as Record<string, unknown>)) collectRefsFromValue(value)
+  }
+
   const collectRefsFromValue = (value: unknown): void => {
     if (typeof value !== 'object' || value === null) {
       return
@@ -301,11 +325,13 @@ const collectImportTargets = (
     if (hasOneOf(record)) {
       for (const item of record.oneOf) {
         collectRefsFromValue(item)
+        collectScoredBranchRefs(item)
       }
     }
     if (hasAnyOf(record)) {
       for (const item of record.anyOf) {
         collectRefsFromValue(item)
+        collectScoredBranchRefs(item)
       }
     }
     if (hasAllOf(record)) {
@@ -426,11 +452,13 @@ const collectImportTargets = (
   if (typeof schema === 'object' && schema !== null && hasOneOf(schema)) {
     for (const item of schema.oneOf) {
       collectRefsFromValue(item)
+      collectScoredBranchRefs(item)
     }
   }
   if (typeof schema === 'object' && schema !== null && hasAnyOf(schema)) {
     for (const item of schema.anyOf) {
       collectRefsFromValue(item)
+      collectScoredBranchRefs(item)
     }
   }
   if (typeof schema === 'object' && schema !== null && hasAllOf(schema)) {

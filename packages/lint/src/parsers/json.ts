@@ -80,7 +80,12 @@ const findNode = (root: Node, path: JsonPath): Node | undefined => {
     if (node === undefined) return undefined
     if (node.type === 'object') {
       const key = String(segment)
-      const property: Node | undefined = node.children?.find((child) => child.children?.[0]?.value === key)
+      // A property whose value failed to parse has only its key node. Skip it, as
+      // `findNodeAtLocation` did, so a later spelling of the same key (the one
+      // the parsed data actually holds) is the one found.
+      const property: Node | undefined = node.children?.find(
+        (child) => child.children?.length === 2 && child.children[0]?.value === key,
+      )
       node = property?.children?.[1]
     } else if (node.type === 'array') {
       const text = String(segment)

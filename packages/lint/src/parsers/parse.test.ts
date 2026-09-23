@@ -284,6 +284,18 @@ describe('source-map lookups', () => {
     expect(json.getLocationForJsonPath(['responses', '200'])?.range.start.line).toBe(2)
   })
 
+  // A property whose value failed to parse is only a key. The data holds the
+  // later spelling of the key, so the lookup must land there rather than stop
+  // at the broken one and fall back to the whole document.
+  it('skips a JSON property with no value when a later one has the same key', () => {
+    const { data, getLocationForJsonPath } = parseJson('{"a": , "a": 1}')
+    expect(data).toEqual({ a: 1 })
+    expect(getLocationForJsonPath(['a'])?.range).toEqual({
+      start: { line: 0, character: 13 },
+      end: { line: 0, character: 14 },
+    })
+  })
+
   it('reads a JSON array index only in its canonical spelling', () => {
     const { getLocationForJsonPath } = parseJson('{"tags": ["a", "b"]}')
     expect(getLocationForJsonPath(['tags', 1])?.range.start.character).toBe(15)

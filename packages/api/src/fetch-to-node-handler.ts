@@ -130,7 +130,8 @@ const respond = async (
 }
 
 /** A host name or IP literal, with an optional port: nothing that can end the authority. */
-const HOST_HEADER = /^(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?$/
+// The port may be empty (`example.com:`): RFC 3986's `port` is `*DIGIT`.
+const HOST_HEADER = /^(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d*)?$/
 
 /**
  * The authority to build the request URL with. The `host` header is client

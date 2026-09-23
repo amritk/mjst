@@ -320,8 +320,8 @@ describe('generate', () => {
 
   // A union of `$ref` branches is scored by reading each target's properties,
   // which live in another file. One of them being a `$ref` emitted a call to a
-  // shape validator the scoring file never imports, and it did not compile.
-  it('scores a $ref union branch without calling what it does not import', async () => {
+  // shape validator the scoring file never imported, and it did not compile.
+  it('imports what scoring a $ref union branch calls', async () => {
     const tools: JSONSchema = {
       $defs: {
         fn: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
@@ -342,5 +342,24 @@ describe('generate', () => {
       type: 'function',
       function: { name: 'f' },
     })
+  })
+
+  // The well-typed term for a `$ref` property is what tells two branches apart
+  // when a value carries the same keys for both. Scoring it on presence alone
+  // tied them, and the earlier branch won and turned `{ name }` into a string.
+  it('repairs toward the branch whose $ref property the value matches', async () => {
+    const union: JSONSchema = {
+      $defs: {
+        c: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+        a: { type: 'object', properties: { x: { $ref: '#/$defs/c' }, need: { type: 'number' } }, required: ['need'] },
+        b: { type: 'object', properties: { x: { type: 'string' }, other: { type: 'number' } }, required: ['other'] },
+      },
+      type: 'object',
+      properties: { u: { anyOf: [{ $ref: '#/$defs/b' }, { $ref: '#/$defs/a' }] } },
+    }
+    const files = await generate(union, 'Root', { modes: ['types', 'parse'], helpersMode: 'embedded' })
+    expect(typeErrors(files)).toEqual([])
+    const parse = link<(input: unknown) => { u?: unknown }>(files, 'parseRoot')
+    expect(parse({ u: { x: { name: 'n' } } }).u).toEqual({ x: { name: 'n' }, need: 0 })
   })
 })

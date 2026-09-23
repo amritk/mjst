@@ -97,6 +97,26 @@ describe('deriveExample — satisfiable-instance regressions', () => {
     expect(deriveExample({ type: 'integer', exclusiveMinimum: 1.5, maximum: 2 })).toBe(2)
   })
 
+  // A step finer than the search reached came back as `undefined` (and was
+  // then rounded across a bound), and one below 1e-9 as 0, which divided the
+  // bounds by zero into `NaN` and serialized as `null`.
+  it('steps an integer by 1 when multipleOf divides 1', () => {
+    expect(deriveExample({ type: 'integer', multipleOf: 1e-10, maximum: -1 })).toBe(-1)
+    expect(deriveExample({ type: 'integer', multipleOf: 1e-10, exclusiveMaximum: -2.5 })).toBe(-3)
+    expect(deriveExample({ type: 'integer', multipleOf: 1e-10, minimum: 1 })).toBe(1)
+    expect(deriveExample({ type: 'integer', multipleOf: 0.00001, exclusiveMinimum: 0 })).toBe(1)
+    expect(deriveExample({ type: 'integer', multipleOf: 0.000001, exclusiveMinimum: 7 })).toBe(8)
+    expect(deriveExample({ type: 'integer', multipleOf: 0.000001, minimum: 0.4 })).toBe(1)
+  })
+
+  // `-3 * 0.1` is `-0.30000000000000004`, which is below the minimum it was
+  // meant to sit on.
+  it('lands on a multiple without floating-point drift past a bound', () => {
+    expect(deriveExample({ type: 'number', minimum: -0.3, multipleOf: 0.1 })).toBe(-0.3)
+    expect(deriveExample({ type: 'number', minimum: -0.3, exclusiveMinimum: -0.5, multipleOf: 0.1 })).toBe(-0.3)
+    expect(deriveExample({ type: 'number', minimum: 0.3, multipleOf: 0.1 })).toBe(0.3)
+  })
+
   it('steps an integer by a whole multiple of a fractional multipleOf', () => {
     expect(deriveExample({ type: 'integer', minimum: 1, multipleOf: 2.5 })).toBe(5)
   })
