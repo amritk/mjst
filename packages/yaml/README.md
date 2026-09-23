@@ -127,7 +127,7 @@ if (isMap(contents)) {
 | `parse(source, options?)` | Parse straight to a JavaScript value, like `JSON.parse`. |
 | `parseDocument(source, options?)` | Parse to `{ contents, errors, warnings, comments, toJS() }` where every node carries `start`/`end` source offsets. |
 | `parseAllDocuments(source, options?)` | Parse a multi-document (`---`-separated) stream to an array of documents, each with its own anchors, problems, and comments. |
-| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. Follows an `*alias` on the way down, so a path under an aliased collection resolves to the node inside the anchored value. |
+| `nodeAtPath(root, path, closest?)` | Resolve a JSON path to its node (carrying `start`/`end`), optionally falling back to the closest ancestor. Follows an `*alias` on the way down, so a path under an aliased collection resolves to the node inside the anchored value. A tree edited in place after a lookup is still read correctly — pairs added, removed, replaced, or re-keyed — with one exception in mappings of 16+ pairs: re-keying a pair to duplicate an *earlier* key may still resolve to the earlier pair, where `toJS()` keeps the later one. |
 | `lineCounter(source)` | Build an `offset → { line, col }` mapper (1-based). |
 | `keyText(node)` | The string a mapping key projects to in `toJS()` output — the same string `nodeAtPath` matches a path segment against. Use it when you walk the tree yourself and need your paths to line up with the projected data. Rendering is bounded, so a key built from aliases that expand exponentially is cut short with `…` rather than run away. |
 | `isScalar` / `isMap` / `isSeq` / `isPair` / `isAlias` | Narrowing guards over the node union. |
@@ -280,7 +280,7 @@ The one thing that *does* throw is the guard against a document built to exhaust
 | `BAD_SCALAR_CONTENT` | a `: ` inside a plain scalar, which the spec ends the scalar at (`a: b: c`, or a continuation line that reads as a mapping entry) |
 | `BAD_COMMENT` | a `#` with no whitespace before it, so the rest of the line is not a comment (`"value"# …`) |
 | `BAD_ESCAPE` | a `\` escape double-quoted YAML does not define (`"a\.b"`, `"\é"`), or a `\x`/`\u`/`\U` without exactly 2/4/8 hex digits or past U+10FFFF; the escape is kept as written |
-| `BAD_MERGE` | a `<<` merge whose value is not a mapping or a list of mappings (`<<: 5`, `<<: [1, 2]`, an empty `<<:`, an alias to a scalar); the bad source is skipped when projecting |
+| `BAD_MERGE` | a `<<` merge whose value is not a mapping or a list of mappings (`<<: 5`, `<<: [1, 2]`, an empty `<<:`, an alias to a scalar, a `!!set` or `!!omap`, which project to a `Set`/`Map` with nothing to merge); the bad source is skipped when projecting |
 | `BAD_BLOCK_HEADER` | a `|`/`>` header with a repeated indicator or trailing text (`|10`, `> text`) |
 | `BAD_INDENT` | a block scalar's leading blank line reaching past its first content line, a quoted scalar continued at its parent's column, or a flow collection whose continuation lines do not clear the block that holds it |
 | `BAD_IMPLICIT_KEY` | a key that does not fit on one line, a block key whose `:` sits more than 1024 characters in, or a `[ key\n : value ]` whose `:` is on the next line |
