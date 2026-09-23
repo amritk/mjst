@@ -1,6 +1,6 @@
 import { isAlias, isMap, isPair, isScalar, isSeq, keyText, type YamlNode, type YamlScalar } from '@amritk/yaml'
 
-import { isMergePair } from './yaml-merge-key'
+import { createMergeResolver, isMergePair, type MergeResolver } from './yaml-merge-key'
 
 /**
  * Calls `report` once for every scalar value in a document that projects to a
@@ -14,8 +14,9 @@ import { isMergePair } from './yaml-merge-key'
  *
  * The walk covers what the projection can hold: map values, sequence items, the
  * collection an alias names, and the keys a `<<` merge brings in — skipping a
- * merged key an explicit key (or an earlier merge) already claimed, since
- * `toJS` drops that value. Keys themselves are not checked; they project to
+ * merged key an explicit key (or an earlier merge) already claimed, and taking
+ * each merged key from where the source's own projection takes it, since `toJS`
+ * drops every other value. Keys themselves are not checked; they project to
  * strings. A collection is walked once however many aliases reach it and a
  * value is reported once however many merges bring it in, so this is linear in
  * the document even for the alias-heavy "billion laughs" shape, and a value
@@ -25,33 +26,35 @@ export const reportNonFinite = (root: YamlNode | null, report: (node: YamlScalar
   /** Collections already walked, and non-finite scalars already reported. */
   const seen = new Set<YamlNode>()
 
+  /** Which node each merged key projects from, built only if a map merges. */
+  let merges: MergeResolver | undefined
+
   /**
    * Walks the keys a merge source contributes to a map, claiming each one in
-   * `claimed` so a later merge cannot bring the same key in again. `sources`
-   * holds the merge sources this map already searched: naming one twice (or
-   * reaching it through merges of merges) contributes nothing new, because every
-   * key it has is claimed by then.
+   * `claimed` so a later merge cannot bring the same key in again. The keys and
+   * their values are the source's own projection (see
+   * {@link createMergeResolver}), so in `{<<: {<<: *b, a: .inf}}` it is the
+   * source's `.inf` that lands in the data, not `b`'s `a`. `sources` holds the
+   * merge sources this map already searched: naming one twice contributes
+   * nothing new, because every key it has is claimed by then.
    */
   const visitMerge = (node: YamlNode | null | undefined, claimed: Set<string>, sources: Set<YamlNode>): void => {
     const target = node != null && isAlias(node) ? node.target : node
     if (target == null || sources.has(target)) return
     sources.add(target)
     if (isSeq(target)) {
+      // `toJS` projects an `!!omap` to a `Map`, which has no own keys to merge.
+      if (target.tag === 'omap') return
       for (const item of target.items) visitMerge(item, claimed, sources)
       return
     }
-    if (!isMap(target)) return
-    for (const pair of target.items) {
-      if (!isPair(pair)) continue
-      if (isMergePair(pair)) {
-        visitMerge(pair.value, claimed, sources)
-        continue
-      }
-      if (pair.value == null) continue
-      const key = keyText(pair.key)
+    // Likewise a `!!set` projects to a `Set`.
+    if (!isMap(target) || target.tag === 'set') return
+    merges ??= createMergeResolver()
+    for (const key of merges.keysOf(target)) {
       if (claimed.has(key)) continue
       claimed.add(key)
-      visit(pair.value)
+      visit(merges.projectedValueOf(target, key))
     }
   }
 
