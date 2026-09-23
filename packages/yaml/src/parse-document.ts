@@ -855,6 +855,10 @@ const checkQuotedIndent = (state: State, lineStart: number, parentIndent: number
   const c = src.charCodeAt(i)
   if (i >= len || c === NL || c === CR) return false
   if (i - lineStart > parentIndent) return false
+  // Inside a flow collection this is the collection's one indentation report
+  // (see `checkFlowIndent`). In block context the flag means nothing, and the
+  // next `enterFlow` resets it before anything reads it.
+  state.flowIndentReported = true
   pushError(
     state,
     'BAD_INDENT',
@@ -869,9 +873,11 @@ const checkQuotedIndent = (state: State, lineStart: number, parentIndent: number
  * Reads a single- or double-quoted scalar, including multi-line spans.
  *
  * `parentIndent` is the column its continuation lines have to clear, or -1 to
- * skip the check — for a scalar inside a flow collection, whose enclosing
- * indentation this parser does not track, and for a mapping key, where spanning
- * lines at all is the error {@link parseBlockMap} reports.
+ * skip the check — for a scalar inside a root flow collection, which no block
+ * indentation encloses, and for a mapping key, where spanning lines at all is the
+ * error {@link parseBlockMap} reports. A scalar inside a flow collection opened
+ * from block context is handed {@link State.flowIndent}, the column the
+ * collection's own lines have to clear.
  */
 const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar => {
   const { src, len } = state
@@ -933,6 +939,17 @@ const scanQuoted = (state: State, quote: number, parentIndent = -1): YamlScalar 
           break
         }
         const e = src.charCodeAt(i + 1)
+        // An escaped line break (`\` at the end of a line) joins the lines, but it
+        // is a line break all the same: the next line is a continuation line that
+        // owes its indentation, and a `---` at column 0 still ends the document.
+        // Stepping onto the break lets the branch below do both. Jumping two
+        // characters instead skipped them — and with CR LF it landed on the LF,
+        // which that branch then read as a break of its own, so the same scalar
+        // was checked under CR LF and not under LF.
+        if (e === NL || e === CR) {
+          i++
+          continue
+        }
         if (e < 128 && VALID_ESCAPE[e] === 0) reportBadEscape(state, i)
         i += 2
         continue
@@ -1038,18 +1055,106 @@ const scanAlias = (state: State): YamlNode => {
 }
 
 /**
- * `@` and `` ` `` are reserved indicators in YAML 1.2: they may not begin a plain
- * scalar. The single-operation test works because `c | 32` maps exactly the two
- * of them (64 and 96) onto 96.
+ * The characters YAML 1.2 does not let a plain scalar begin with, as a 128-entry
+ * lookup table: `ns-plain-first(c) ::= ( ns-char - c-indicator ) | ( ( "?" | ":" |
+ * "-" ) followed by ns-plain-safe(c) )`.
+ *
+ * - `1` — a c-indicator that can never start one: the flow indicators, the
+ *   node-property, comment, quote and block-scalar indicators, the directive `%`,
+ *   and the reserved `@` and `` ` ``.
+ * - `2` — `-`, `?` and `:`, which start one only when an `ns-plain-safe` character
+ *   follows, so `-1`, `?x` and `:x` are plain scalars and `- `, `? ` and `: ` are not.
+ *
+ * Most of these never reach a plain-scalar scan: a quote, a bracket, a `*`, `&` or
+ * `!`, a `#` or a `|`/`>` is dispatched to its own scanner first, so what is left
+ * over is exactly the set that used to fold silently into a string — `a: ]`,
+ * `a: %x`, `[|]`, `a: ?`. One table read of the scalar's *first* character is all
+ * the hot path pays; everything past a hit is in {@link reportBadPlainStart}.
  */
-const isReservedIndicator = (c: number): boolean => (c | 32) === 96
+const PLAIN_START = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(128)
+  for (const c of ',[]{}#&*!|>\'"%@`') t[c.charCodeAt(0)] = 1
+  for (const c of '-?:') t[c.charCodeAt(0)] = 2
+  return t
+})()
 
-const reportReservedIndicator = (state: State): void => {
-  const pos = state.pos
+/**
+ * True when the character code `c` cannot open a plain scalar, or might not —
+ * the cheap gate in front of {@link reportBadPlainStart}. (`charCodeAt` past the
+ * end yields NaN, which fails the range test.)
+ */
+const isBadPlainStart = (c: number): boolean => c < 128 && PLAIN_START[c] !== 0
+
+/**
+ * The cold half of {@link isBadPlainStart}: reports the plain scalar starting at
+ * `pos` if its first character really does rule it out. `flow` selects the flow
+ * context's reading of `ns-plain-safe`, where a flow indicator after a `-`/`?` ends
+ * the token just as white space does.
+ *
+ * Some starts are left to the reports that already cover them rather than
+ * reported twice at the same offset:
+ * - a `:` — followed by white space it is the `: ` separator, which
+ *   {@link plainColonAt} reports inside a block scalar, and a flow scanner never
+ *   starts a scalar on it at all (it reads as an empty key);
+ * - a block `- ` — the sequence-on-a-key-line report is the more useful one;
+ * - a flow indicator inside a flow collection — the entry comes back empty and
+ *   the collection reports the missing separator.
+ */
+const reportBadPlainStart = (state: State, pos: number, flow: boolean): void => {
+  const { src, len } = state
+  const c = src.charCodeAt(pos)
+  if (PLAIN_START[c] === 2) {
+    if (c === COLON) return
+    if (!(flow ? flowIndicatorBoundary(src, pos + 1, len) : introducerBoundary(src, pos + 1, len))) return
+    if (c === DASH) {
+      if (flow) {
+        // `-` is the block sequence indicator and has no meaning inside a flow
+        // collection, so `[-]` and `[-, -]` are not sequences of anything — they
+        // read as the plain scalar `"-"`, which is not what the document says.
+        pushError(
+          state,
+          'BAD_SCALAR_START',
+          'A "-" sequence indicator cannot start a flow collection entry',
+          pos,
+          pos + 1,
+        )
+        return
+      }
+      // A block sequence may open on the `:` line of an *explicit* key, and
+      // `parseValueOrChild` takes that shape before it ever gets here. Reaching a
+      // `- ` entry indicator on this path therefore means the key was implicit
+      // (`key: - a`), which the spec does not allow — the entries below have no
+      // column to align under. It folded into the value as the text `"- a - b"`.
+      pushError(
+        state,
+        'UNEXPECTED_CONTENT',
+        'A block sequence cannot start on the line of the key it belongs to',
+        pos,
+        pos + 1,
+      )
+      return
+    }
+    // A `?` followed by white space is the explicit-key indicator, which only a
+    // collection entry may open with — not the value of an implicit key
+    // (`a: ? x`), and not the key an explicit `? ` already introduced. `yaml` and
+    // `js-yaml` both reject it; it used to become the string `"? x"`. In flow
+    // context a `?` glued to a flow indicator (`[?]`) is not a plain scalar
+    // either: the explicit-key indicator needs white space after it
+    // (`ns-flow-map-entry`), and `ns-plain-first` needs content.
+    pushError(
+      state,
+      'BAD_SCALAR_START',
+      '"?" is an explicit-key indicator here and cannot start a plain scalar — quote the value',
+      pos,
+      pos + 1,
+    )
+    return
+  }
+  if (flow && (c === COMMA || c === RBRACKET || c === RBRACE || c === LBRACKET || c === LBRACE)) return
   pushError(
     state,
     'BAD_SCALAR_START',
-    `Reserved indicator "${state.src[pos]}" cannot start a plain scalar`,
+    `Indicator "${src[pos]}" cannot start a plain scalar — quote the value`,
     pos,
     pos + 1,
   )
@@ -1564,20 +1669,35 @@ const skipFlowWs = (state: State): void => {
  * flow indicator (`,` `[` `]` `{` `}`), a `:` that separates a key from a value,
  * a ` #` comment, or a line break. `lineStart` is the offset the current line's
  * content began at, so the ` #` comment rule only fires when a space precedes it.
+ *
+ * A `:` stays inside the scalar only when an `ns-plain-safe` character follows it
+ * (`ns-plain-char`), and in flow context that excludes *every* flow indicator —
+ * the opening ones included. So in `{a:{b: 1}}` the key is `a` and the `:` is the
+ * value indicator, as `yaml` (eemeli) and `js-yaml` both read it; stopping only
+ * before `,`/`]`/`}` keyed the mapping by `a:` and left `{b: 1}}` unterminated.
+ * `{a:1}` is untouched — `1` is plain-safe, so that is still the one scalar `a:1`.
  */
 const flowPlainLineEnd = (src: string, from: number, lineStart: number, len: number): number => {
   let i = from
   while (i < len) {
     const c = src.charCodeAt(i)
     if (c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE || c === NL || c === CR) break
-    if (c === COLON) {
-      const n = src.charCodeAt(i + 1)
-      if (i + 1 >= len || isSpace(n) || n === COMMA || n === RBRACKET || n === RBRACE || n === NL || n === CR) break
-    }
+    if (c === COLON && flowColonEnds(src, i + 1, len)) break
     if (c === HASH && i > lineStart && isSpace(src.charCodeAt(i - 1))) break
     i++
   }
   return i
+}
+
+/**
+ * True when a `:` whose next character sits at `after` ends a flow plain scalar —
+ * i.e. that character is not `ns-plain-safe` in flow context: white space, a line
+ * break, end of input, or any flow indicator. Shared by the two places a flow
+ * plain scalar can meet a `:`, the middle of a line and the start of a wrapped one.
+ */
+const flowColonEnds = (src: string, after: number, len: number): boolean => {
+  const n = src.charCodeAt(after)
+  return n === LBRACKET || n === LBRACE || flowIndicatorBoundary(src, after, len)
 }
 
 /**
@@ -1640,10 +1760,11 @@ const scanFlowPlain = (state: State): YamlScalar => {
     // which left the key carrying a trailing newline (`{foo\n: bar}` keyed the
     // mapping by `"foo\n"`) or the comment glued onto the value.
     if (c === HASH) break
-    if (c === COLON) {
-      const n = src.charCodeAt(j + 1)
-      if (j + 1 >= len || isSpace(n) || n === COMMA || n === RBRACKET || n === RBRACE || n === NL || n === CR) break
-    }
+    if (c === COLON && flowColonEnds(src, j + 1, len)) break
+    // This line really is a continuation, so it owes the enclosing block's
+    // indentation. Lines that end the scalar instead are left to `skipFlowWs`,
+    // which checks them once the collection parser resumes.
+    if (!state.flowIndentReported) checkFlowIndent(state, scan)
     const lineEnd = flowPlainLineEnd(src, j, j, len)
     let e = lineEnd
     while (e > j && isSpace(src.charCodeAt(e - 1))) e--
@@ -1705,23 +1826,13 @@ const parseFlowNodeInner = (state: State): YamlNode => {
   let node: YamlNode
   if (c === LBRACKET) node = parseFlowSeq(state)
   else if (c === LBRACE) node = parseFlowMap(state)
-  else if (c === DQUOTE || c === SQUOTE) node = scanQuoted(state, c)
+  // A quoted scalar's continuation lines owe the enclosing block's indentation
+  // just as the collection's own lines do (see `checkFlowIndent`). A root flow
+  // collection sits at -1, which switches the check off.
+  else if (c === DQUOTE || c === SQUOTE) node = scanQuoted(state, c, state.flowIndentReported ? -1 : state.flowIndent)
   else if (c === STAR) node = scanAlias(state)
   else {
-    if (isReservedIndicator(c)) reportReservedIndicator(state)
-    // `-` is the block sequence indicator and has no meaning inside a flow
-    // collection, so `[-]` and `[-, -]` are not sequences of anything — they
-    // read as the plain scalar `"-"`, which is not what the document says.
-    // (`-1` and `-x` are ordinary plain scalars and never reach here.)
-    else if (c === DASH && flowIndicatorBoundary(state.src, state.pos + 1, state.len)) {
-      pushError(
-        state,
-        'BAD_SCALAR_START',
-        'A "-" sequence indicator cannot start a flow collection entry',
-        state.pos,
-        state.pos + 1,
-      )
-    }
+    if (isBadPlainStart(c)) reportBadPlainStart(state, state.pos, true)
     node = scanFlowPlain(state)
   }
   return attachProps(node, props, state)
@@ -1863,6 +1974,12 @@ const parseFlowSeq = (state: State): YamlSeq => {
       const pair: YamlPair = { kind: 'pair', key: item, value, start: item.start, end: value ? value.end : item.end }
       items.push({ kind: 'map', items: [pair], start: item.start, end: pair.end })
       skipFlowWs(state)
+    } else if (explicitKey) {
+      // `[ ? a ]` is still a pair — `ns-flow-pair` with an empty value — so the
+      // `?` alone is enough to make the entry a single-pair mapping. Pushing the
+      // bare key read it as the scalar `a`, and `[ ? ]` as a `null` entry.
+      const pair: YamlPair = { kind: 'pair', key: item, value: null, start: item.start, end: item.end }
+      items.push({ kind: 'map', items: [pair], start: item.start, end: item.end })
     } else {
       items.push(item)
     }
@@ -2040,21 +2157,7 @@ const parseInlineValue = (state: State, parentIndent: number): YamlNode | null =
     node = scanQuoted(state, c, parentIndent)
     checkTrailingContent(state)
   } else {
-    if (isReservedIndicator(c)) reportReservedIndicator(state)
-    // A block sequence may open on the `:` line of an *explicit* key, and
-    // `parseValueOrChild` takes that shape before it ever gets here. Reaching a
-    // `- ` entry indicator on this path therefore means the key was implicit
-    // (`key: - a`), which the spec does not allow — the entries below have no
-    // column to align under. It folded into the value as the text `"- a - b"`.
-    else if (c === DASH && isSeqEntryDash(state.src, state.pos, state.len)) {
-      pushError(
-        state,
-        'UNEXPECTED_CONTENT',
-        'A block sequence cannot start on the line of the key it belongs to',
-        state.pos,
-        state.pos + 1,
-      )
-    }
+    if (isBadPlainStart(c)) reportBadPlainStart(state, state.pos, false)
     node = scanPlainScalar(state, parentIndent)
   }
   return attachProps(node, props, state)
@@ -2111,6 +2214,13 @@ const parseValueOrChild = (state: State, indent: number, compact = false): YamlN
     // Both shapes set their own indentation from the column the first entry
     // landed on, which is past the introducer rather than at it.
     if (isSeqEntryDash(src, state.pos, len)) return parseBlockSeq(state, columnOf(src, state.pos))
+    // A compact mapping may open on an explicit entry of its own (`? a` / `: ? b`,
+    // or `? ? a`). It has no `: ` for `findKeyColon` to find, so it used to fold
+    // into the plain scalar `"? b"`; the `?` outranks any colon later on the line
+    // for the same reason it does in `parseNodeInner`.
+    if (src.charCodeAt(state.pos) === QUESTION && introducerBoundary(src, state.pos + 1, len)) {
+      return parseBlockMap(state, columnOf(src, state.pos), -1)
+    }
     const colon = findKeyColon(src, state.pos, len)
     if (colon >= 0) return parseBlockMap(state, columnOf(src, state.pos), colon)
   }
@@ -2404,6 +2514,9 @@ const parseBlockMap = (
         enterFlow(state, indent)
         key = kc === LBRACKET ? parseFlowSeq(state) : parseFlowMap(state)
       } else {
+        // A key is a plain scalar like any other, so `]k: 1` and `>k: 1` are held
+        // to the same first-character rule a value is.
+        if (isBadPlainStart(kc)) reportBadPlainStart(state, lineContentPos, false)
         let end = colon
         while (end > lineContentPos && isSpace(src.charCodeAt(end - 1))) end--
         const text = src.slice(lineContentPos, end)
@@ -2669,7 +2782,7 @@ const parseNodeInner = (state: State, indent: number, parentIndent: number, seqA
     checkTrailingContent(state)
     return quoted
   }
-  if (isReservedIndicator(cc)) reportReservedIndicator(state)
+  if (isBadPlainStart(cc)) reportBadPlainStart(state, state.pos, false)
   return attachProps(scanPlainScalar(state, parentIndent), props, state)
 }
 
