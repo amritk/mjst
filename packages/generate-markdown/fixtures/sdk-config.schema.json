@@ -4,70 +4,72 @@
   "title": "Configuration",
   "description": "SDK generation is driven by a single config object that describes the SDK name, version, target outputs, environments, resource tree, client settings, and publishing behavior.\n\nUse the config to keep SDK behavior predictable across generated targets. The top-level `targets` map controls which artifacts are generated, while `resources` controls the public client shape.",
   "type": "object",
-  "x-doc": {
-    "file": "configuration.md",
-    "language": "json",
-    "layout": "table",
-    "example": {
-      "caption": "A minimal config:",
-      "value": {
-        "name": "Acme API",
-        "environments": {
-          "production": "https://api.acme.com"
+  "x-mjst": {
+    "markdown": {
+      "file": "configuration.md",
+      "language": "json",
+      "layout": "table",
+      "example": {
+        "caption": "A minimal config:",
+        "value": {
+          "name": "Acme API",
+          "environments": {
+            "production": "https://api.acme.com"
+          },
+          "environmentOrder": ["production"],
+          "targets": {
+            "typescript": {
+              "packageName": "@acme/api"
+            }
+          },
+          "resources": {}
+        }
+      },
+      "pages": [
+        {
+          "id": "typescript",
+          "file": "configuration/typescript.md",
+          "title": "TypeScript",
+          "description": "Add `typescript` under `targets` to generate a TypeScript SDK package."
         },
-        "environmentOrder": ["production"],
-        "targets": {
-          "typescript": {
-            "packageName": "@acme/api"
-          }
+        {
+          "id": "python",
+          "file": "configuration/python.md",
+          "title": "Python",
+          "description": "Add `python` under `targets` to generate a Python SDK package."
+        }
+      ],
+      "sections": [
+        {
+          "id": "identity",
+          "title": "Identity",
+          "description": "What the generated SDK calls itself, everywhere it has to name something."
         },
-        "resources": {}
-      }
-    },
-    "pages": [
-      {
-        "id": "typescript",
-        "file": "configuration/typescript.md",
-        "title": "TypeScript",
-        "description": "Add `typescript` under `targets` to generate a TypeScript SDK package."
-      },
-      {
-        "id": "python",
-        "file": "configuration/python.md",
-        "title": "Python",
-        "description": "Add `python` under `targets` to generate a Python SDK package."
-      }
-    ],
-    "sections": [
-      {
-        "id": "identity",
-        "title": "Identity",
-        "description": "What the generated SDK calls itself, everywhere it has to name something."
-      },
-      {
-        "id": "output",
-        "title": "Output",
-        "description": "Which artifacts are generated, and what shape the public client takes."
-      },
-      {
-        "id": "runtime",
-        "title": "Runtime Behavior",
-        "description": "How the generated client behaves once somebody installs it.",
-        "sort": "alphabetical"
-      },
-      {
-        "id": "emitter",
-        "title": "Emitter Options",
-        "description": "How the TypeScript emitter names things.",
-        "page": "typescript"
-      },
-      {
-        "id": "destinations",
-        "title": "Destinations",
-        "description": "Use `destinations.production` to push generated output to a GitHub repository.",
-        "page": "typescript"
-      }
-    ]
+        {
+          "id": "output",
+          "title": "Output",
+          "description": "Which artifacts are generated, and what shape the public client takes."
+        },
+        {
+          "id": "runtime",
+          "title": "Runtime Behavior",
+          "description": "How the generated client behaves once somebody installs it.",
+          "sort": "alphabetical"
+        },
+        {
+          "id": "emitter",
+          "title": "Emitter Options",
+          "description": "How the TypeScript emitter names things.",
+          "page": "typescript"
+        },
+        {
+          "id": "destinations",
+          "title": "Destinations",
+          "description": "Use `destinations.production` to push generated output to a GitHub repository.",
+          "page": "typescript"
+        }
+      ]
+    }
   },
   "required": ["name", "version", "targets", "environments", "environmentOrder"],
   "properties": {
@@ -75,9 +77,11 @@
       "type": "string",
       "description": "Human-readable SDK or product name used for generated package metadata and client naming.",
       "examples": ["Acme API"],
-      "x-doc": {
-        "section": "identity",
-        "order": 1
+      "x-mjst": {
+        "markdown": {
+          "section": "identity",
+          "order": 1
+        }
       }
     },
     "version": {
@@ -85,15 +89,17 @@
       "description": "Base SDK version. A target-level version overrides this for a specific artifact.",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "examples": ["1.4.0"],
-      "x-doc": {
-        "section": "identity",
-        "order": 2
+      "x-mjst": {
+        "markdown": {
+          "section": "identity",
+          "order": 2
+        }
       }
     },
     "internalBuildId": {
       "type": "string",
       "description": "Set by the build pipeline. Not something a user writes.",
-      "x-doc": {
+      "x-mjst": {
         "hidden": true
       }
     },
@@ -101,31 +107,35 @@
       "type": "string",
       "deprecated": true,
       "description": "Former spelling of `name`.",
-      "x-doc": {
-        "section": "identity",
-        "note": "Remove it \u2014 `name` has replaced it and the two cannot both be set."
+      "x-mjst": {
+        "markdown": {
+          "section": "identity",
+          "note": "Remove it \u2014 `name` has replaced it and the two cannot both be set."
+        }
       }
     },
     "targets": {
       "type": "object",
       "description": "Per-language packaging, publishing, and emitter options keyed by target id. Add a key for every artifact you want generated.",
-      "x-doc": {
-        "section": "output",
-        "example": {
-          "value": {
-            "targets": {
-              "typescript": {
-                "packageName": "@acme/api",
-                "packageManager": "pnpm"
-              },
-              "python": {
-                "packageName": "acme_api",
-                "projectName": "acme-api"
+      "x-mjst": {
+        "markdown": {
+          "section": "output",
+          "example": {
+            "value": {
+              "targets": {
+                "typescript": {
+                  "packageName": "@acme/api",
+                  "packageManager": "pnpm"
+                },
+                "python": {
+                  "packageName": "acme_api",
+                  "projectName": "acme-api"
+                }
               }
             }
-          }
-        },
-        "footer": "Set `skip: true` on a target to keep its config in place without generating it."
+          },
+          "footer": "Set `skip: true` on a target to keep its config in place without generating it."
+        }
       },
       "properties": {
         "typescript": {
@@ -145,19 +155,21 @@
     "resources": {
       "type": "object",
       "description": "Resource tree that defines the generated client and resource shape.",
-      "x-doc": {
-        "section": "output",
-        "layout": "none",
-        "example": {
-          "value": {
-            "resources": {
-              "users": {
-                "methods": {
-                  "list": "get /users",
-                  "create": "post /users"
-                },
-                "models": {
-                  "User": "User"
+      "x-mjst": {
+        "markdown": {
+          "section": "output",
+          "layout": "none",
+          "example": {
+            "value": {
+              "resources": {
+                "users": {
+                  "methods": {
+                    "list": "get /users",
+                    "create": "post /users"
+                  },
+                  "models": {
+                    "User": "User"
+                  }
                 }
               }
             }
@@ -175,15 +187,17 @@
         "type": "string",
         "format": "uri"
       },
-      "x-doc": {
-        "section": "runtime",
-        "example": {
-          "value": {
-            "environments": {
-              "production": "https://api.acme.com",
-              "sandbox": "https://sandbox.acme.com"
-            },
-            "environmentOrder": ["production", "sandbox"]
+      "x-mjst": {
+        "markdown": {
+          "section": "runtime",
+          "example": {
+            "value": {
+              "environments": {
+                "production": "https://api.acme.com",
+                "sandbox": "https://sandbox.acme.com"
+              },
+              "environmentOrder": ["production", "sandbox"]
+            }
           }
         }
       }
@@ -195,22 +209,28 @@
       },
       "minItems": 1,
       "description": "Insertion order of environments. The first entry is the SDK default.",
-      "x-doc": {
-        "section": "runtime"
+      "x-mjst": {
+        "markdown": {
+          "section": "runtime"
+        }
       }
     },
     "clientSettings": {
       "$ref": "#/$defs/clientSettings",
       "description": "SDK-wide client constructor settings for auth, retries, timeouts, and headers.",
-      "x-doc": {
-        "section": "runtime"
+      "x-mjst": {
+        "markdown": {
+          "section": "runtime"
+        }
       }
     },
     "pagination": {
       "type": "array",
       "description": "Named pagination schemes referenced by method-level pagination settings.",
-      "x-doc": {
-        "section": "runtime"
+      "x-mjst": {
+        "markdown": {
+          "section": "runtime"
+        }
       },
       "items": {
         "type": "object",
@@ -236,8 +256,10 @@
       },
       "description": "`\"<verb> <path>\"` endpoints to drop from generation entirely.",
       "examples": [["get /me", "post /internal/reindex"]],
-      "x-doc": {
-        "section": "runtime"
+      "x-mjst": {
+        "markdown": {
+          "section": "runtime"
+        }
       }
     }
   },
@@ -260,25 +282,27 @@
     "typescriptTarget": {
       "type": "object",
       "required": ["packageName"],
-      "x-doc": {
-        "page": "typescript",
-        "example": {
-          "value": {
-            "targets": {
-              "typescript": {
-                "packageName": "@acme/api",
-                "packageManager": "pnpm",
-                "destinations": {
-                  "production": {
-                    "repo": "acme/acme-typescript"
+      "x-mjst": {
+        "markdown": {
+          "page": "typescript",
+          "example": {
+            "value": {
+              "targets": {
+                "typescript": {
+                  "packageName": "@acme/api",
+                  "packageManager": "pnpm",
+                  "destinations": {
+                    "production": {
+                      "repo": "acme/acme-typescript"
+                    }
                   }
                 }
               }
             }
-          }
-        },
-        "heading": false,
-        "layout": "table"
+          },
+          "heading": false,
+          "layout": "table"
+        }
       },
       "properties": {
         "packageName": {
@@ -299,11 +323,13 @@
         "options": {
           "type": "object",
           "description": "TypeScript emitter options.",
-          "x-doc": {
-            "section": "emitter",
-            "heading": false,
-            "layout": "table",
-            "footer": "`propertyCasing: 'sdk'` also generates a wire\u2194SDK remap, so request and response bodies stay correct on the network."
+          "x-mjst": {
+            "markdown": {
+              "section": "emitter",
+              "heading": false,
+              "layout": "table",
+              "footer": "`propertyCasing: 'sdk'` also generates a wire\u2194SDK remap, so request and response bodies stay correct on the network."
+            }
           },
           "properties": {
             "propertyCasing": {
@@ -316,16 +342,20 @@
         "destinations": {
           "type": "object",
           "description": "GitHub destinations for generated output.",
-          "x-doc": {
-            "layout": "table"
+          "x-mjst": {
+            "markdown": {
+              "layout": "table"
+            }
           },
           "properties": {
             "production": {
               "$ref": "#/$defs/gitDestination",
-              "x-doc": {
-                "section": "destinations",
-                "heading": false,
-                "layout": "table"
+              "x-mjst": {
+                "markdown": {
+                  "section": "destinations",
+                  "heading": false,
+                  "layout": "table"
+                }
               }
             }
           }
@@ -335,20 +365,22 @@
     "pythonTarget": {
       "type": "object",
       "required": ["packageName", "projectName"],
-      "x-doc": {
-        "page": "python",
-        "example": {
-          "value": {
-            "targets": {
-              "python": {
-                "packageName": "acme_api",
-                "projectName": "acme-api"
+      "x-mjst": {
+        "markdown": {
+          "page": "python",
+          "example": {
+            "value": {
+              "targets": {
+                "python": {
+                  "packageName": "acme_api",
+                  "projectName": "acme-api"
+                }
               }
             }
-          }
-        },
-        "heading": false,
-        "layout": "table"
+          },
+          "heading": false,
+          "layout": "table"
+        }
       },
       "properties": {
         "packageName": {
@@ -372,8 +404,10 @@
       "type": "object",
       "required": ["repo"],
       "description": "Push generated output to a GitHub repository.",
-      "x-doc": {
-        "layout": "table"
+      "x-mjst": {
+        "markdown": {
+          "layout": "table"
+        }
       },
       "properties": {
         "repo": {
@@ -409,8 +443,10 @@
     },
     "clientSettings": {
       "type": "object",
-      "x-doc": {
-        "layout": "table"
+      "x-mjst": {
+        "markdown": {
+          "layout": "table"
+        }
       },
       "properties": {
         "defaultClientName": {

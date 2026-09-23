@@ -27,7 +27,7 @@ export type RenderPropertyOptions = {
    * default are in that row, so the block below carries only what a row cannot
    * hold: the examples, the notes, and the table of its own children.
    *
-   * A block in that position always gets a heading, whatever `x-doc.heading`
+   * A block in that position always gets a heading, whatever `x-mjst.markdown.heading`
    * says. `heading: false` means "the heading above already names this" — true
    * of a page or a section, and false of a table row, which names it in a cell
    * several lines up. Without one, a child's Deprecated callout read as the
@@ -61,11 +61,11 @@ const codeList = (values: readonly unknown[], language: string): string =>
  * 1. the heading, then a **Deprecated** callout when the schema says so,
  * 2. the **Type:** label and a **Required** marker — what the reader needs
  *    before the prose can mean anything (the label unless the root
- *    `x-doc.headings.type` is `never`),
+ *    `x-mjst.markdown.headings.type` is `never`),
  * 3. the description, verbatim markdown, so a schema can carry lists and links,
  * 4. **Default:**, **Allowed values:**, **Examples:** and **Constraints:** —
  *    the facts the prose should not have to repeat,
- * 5. any notes as blockquotes, the code examples, the `x-doc.footer` prose
+ * 5. any notes as blockquotes, the code examples, the `x-mjst.markdown.footer` prose
  *    that only makes sense after them, and finally the children.
  *
  * Returns blocks rather than one string so the caller controls the blank lines
@@ -117,9 +117,9 @@ export const renderProperty = (
   const values = asArray(prop.enum)
   // A type label that spells out an enum already said this, so repeating it
   // here would be the same sentence twice. Only a label the reader can see
-  // counts: `x-doc.type` may have replaced it, the property may render without
+  // counts: `x-mjst.markdown.type` may have replaced it, the property may render without
   // a heading, and a schema may have turned the label off — on its headings
-  // (`x-doc.headings.type`) or, under a row, on its tables (`x-doc.table.type`,
+  // (`x-mjst.markdown.headings.type`) or, under a row, on its tables (`x-mjst.markdown.table.type`,
   // whose `auto` always keeps the column for an enum). Any of those left the
   // values printed nowhere at all.
   const typeShown = options.summarised

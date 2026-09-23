@@ -304,7 +304,7 @@ its own flags (and its own `--help`), independent of the generation flags above.
 
 ```bash
 # The prose reference: a heading, a type, the description and an example per
-# property, across as many pages as the schema's x-doc keyword declares
+# property, across as many pages as the schema's x-mjst keyword declares
 npx mjst markdown ./config.schema.json --out-dir ./docs
 
 # The other shape: one HTML table, spliced into an existing markdown file
@@ -315,7 +315,7 @@ npx mjst markdown ./config.schema.json --table --readme ./README.md
 | --- | --- |
 | `<schema>` | The JSON Schema to document (positional, required). |
 | `--out-dir` | Directory the prose reference pages are written to (default: the current directory). |
-| `--file` | Output path of the index page (default: the schema's `x-doc.file`, then `index.md`). |
+| `--file` | Output path of the index page (default: the schema's `x-mjst.file`, then `index.md`). |
 | `--title` | Page title (default: the schema's `title`). |
 | `--language` | Fence language for derived examples and literals (default: `json`). |
 | `--layout` | Default layout for nested properties: `headings` (default), `table`, or `none`. |
@@ -324,7 +324,7 @@ npx mjst markdown ./config.schema.json --table --readme ./README.md
 | `--type-label` | Whether every property heading gets its **Type:** line: `auto` (default) or `never`. Under `never` an enum lists its **Allowed values:** instead, since the label was the only other place they appeared. |
 | `--type-column` | When a property table renders its **Type** column: `auto` (default — only when a row fills it with something a reader could act on), `always`, or `never`. |
 | `--default-column` | When a property table renders its **Default** column: `auto` (default), `always`, or `never`. |
-| `--required-style` | How a property table says which properties are required: `marker` (default — `_required_` beside the name) or `column` (a **Required** column). |
+| `--required-style` | How a property table says which properties are required: `column` (default — a **Required** column), or any other text as a suffix right after a required name, as markdown or inline HTML — e.g. `"*"`, `" _required_"` or `"<br><sub><i>required</i></sub>"`. Appended exactly as written, so include a leading space if you want one. |
 | `--required-first` | List the required properties at the top of every table, the rest under them. |
 | `--table` | Render the HTML config table instead of the prose pages. |
 | `--readme` | Markdown file the table is spliced into (default: `README.md`). Requires `--table`. |

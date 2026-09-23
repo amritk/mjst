@@ -21,7 +21,7 @@ type Placement = { readonly page: string; readonly section: DocSection | undefin
 
 /**
  * Works out which page and section a property belongs to, and says so loudly
- * when the schema contradicts itself. A typo in `x-doc.page` would otherwise
+ * when the schema contradicts itself. A typo in `x-mjst.markdown.page` would otherwise
  * drop the property out of the docs entirely — the one failure mode a docs
  * generator must never have, because nothing about the output looks wrong.
  */
@@ -31,7 +31,7 @@ const placeEntry = (entry: DocEntry, parentPage: string, sections: ReadonlyMap<s
   if (meta.section !== undefined && section === undefined) {
     throw new Error(
       `Property "${formatPath(entry.path)}" names the section "${meta.section}", which the schema's ` +
-        'root `x-doc.sections` does not declare.',
+        'root `x-mjst.markdown.sections` does not declare.',
     )
   }
   if (meta.page !== undefined && section !== undefined && section.page !== meta.page) {
@@ -80,7 +80,7 @@ const collectEntries = (
     if (!known.has(placement.page)) {
       throw new Error(
         `Property "${formatPath(entry.path)}" is assigned to page "${placement.page}", which the schema's ` +
-          'root `x-doc.pages` does not declare.',
+          'root `x-mjst.markdown.pages` does not declare.',
       )
     }
     // A nested property that names a section is pulled up next to the page's own
@@ -141,7 +141,7 @@ export const buildPages = (schema: ConfigSchema, config: DocConfig): readonly Pa
   if (duplicateId !== undefined) {
     throw new Error(
       `Two pages share the id "${duplicateId.id}". A property naming it would be documented in full in both ` +
-        'files, so give each page in `x-doc.pages` its own id.',
+        'files, so give each page in `x-mjst.markdown.pages` its own id.',
     )
   }
   // Compared after normalisation, so `a.md` and `./a.md` are recognised as the
@@ -151,7 +151,7 @@ export const buildPages = (schema: ConfigSchema, config: DocConfig): readonly Pa
   )
   if (duplicateFile !== undefined) {
     throw new Error(
-      `Two pages are both written to "${duplicateFile.file}". Give each page in \`x-doc.pages\` its own file.`,
+      `Two pages are both written to "${duplicateFile.file}". Give each page in \`x-mjst.markdown.pages\` its own file.`,
     )
   }
   // Two sections with one id both claim every property naming it, so each is
@@ -162,14 +162,14 @@ export const buildPages = (schema: ConfigSchema, config: DocConfig): readonly Pa
   if (duplicateSection !== undefined) {
     throw new Error(
       `Two sections share the id "${duplicateSection.id}". Every property naming it would be documented in both, ` +
-        'so give each section in `x-doc.sections` its own id.',
+        'so give each section in `x-mjst.markdown.sections` its own id.',
     )
   }
   for (const section of config.sections) {
     if (!known.has(section.page)) {
       throw new Error(
         `Section "${section.id}" renders on page "${section.page}", which the schema's root ` +
-          '`x-doc.pages` does not declare.',
+          '`x-mjst.markdown.pages` does not declare.',
       )
     }
   }

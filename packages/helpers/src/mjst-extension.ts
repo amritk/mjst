@@ -12,7 +12,12 @@ import { isSchemaObject } from './schema-guards'
 export const MJST_EXTENSION_KEY = 'x-mjst'
 
 /**
- * The shape of the `x-mjst` extension object.
+ * The shape of the `x-mjst` extension object, as the type generators read it.
+ *
+ * The object is contextual — what a key means depends on the node it sits on —
+ * and not every key is here: `@amritk/generate-markdown` reads its own from the
+ * same object (`hidden`, and its settings under `markdown`), and these readers
+ * leave them alone.
  *
  * - `instanceOf` names a JavaScript class the value must be an instance of at
  *   runtime (e.g. `'Date'`). It round-trips constructs like TypeBox's
@@ -99,6 +104,28 @@ const readExtensionString = (node: unknown, field: keyof MjstExtension): string 
 
   const value = readKey(extension as Record<string, unknown>, field)
   return typeof value === 'string' ? value : undefined
+}
+
+/** The members of `x-mjst` the generators read — every key of {@link MjstExtension}. */
+const HINT_KEYS: readonly (keyof MjstExtension)[] = ['instanceOf', 'primitive', 'brand', 'discriminator']
+
+/**
+ * Whether a node's `x-mjst` carries a hint the generators read, as opposed to
+ * nothing but another tool's keys — the docs generator's `hidden` and
+ * `markdown`, which change no type and no verdict.
+ *
+ * The emitters that ask whether a node is "just" one keyword used to count the
+ * presence of `x-mjst` itself, which was right while it only ever held hints.
+ * Asked that way, a property whose only extra is where its docs go lost its
+ * tight validator and its conditional type. Presence of a hint key is the
+ * question, not whether its value is supported: an unsupported `instanceOf`
+ * still meant a node too rich for the specialised paths, and still does.
+ */
+export const hasMjstHint = (node: unknown): boolean => {
+  if (!isSchemaObject(node as JSONSchema)) return false
+  const extension = readKey(node as Record<string, unknown>, MJST_EXTENSION_KEY)
+  if (typeof extension !== 'object' || extension === null) return false
+  return HINT_KEYS.some((key) => readKey(extension as Record<string, unknown>, key) !== undefined)
 }
 
 /**

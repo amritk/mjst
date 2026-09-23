@@ -8,7 +8,7 @@ const context = (anchors: PageAnchors): RenderContext => ({
   language: 'json',
   layout: 'table',
   sort: 'schema',
-  table: { type: 'auto', default: 'auto', required: 'marker', requiredFirst: false },
+  table: { type: 'auto', default: 'auto', required: 'column', requiredFirst: false },
   headings: { type: 'auto' },
   file: 'configuration.md',
   page: 'index',

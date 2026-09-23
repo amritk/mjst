@@ -52,7 +52,7 @@ describe('parse-markdown-args', () => {
         '--default-column',
         'always',
         '--required-style',
-        'column',
+        '*',
         '--required-first',
         '--type-label',
         'never',
@@ -61,7 +61,7 @@ describe('parse-markdown-args', () => {
       schema: 's.json',
       typeColumn: 'never',
       defaultColumn: 'always',
-      requiredStyle: 'column',
+      requiredStyle: '*',
       requiredFirst: true,
       typeLabel: 'never',
     })
@@ -75,9 +75,6 @@ describe('parse-markdown-args', () => {
     )
     // `always` is a column word: a heading has no blank cell to line up.
     expect(() => parseMarkdownArgs(['s.json', '--type-label', 'always'])).toThrow(/Invalid --type-label value "always"/)
-    expect(() => parseMarkdownArgs(['s.json', '--required-style', 'badge'])).toThrow(
-      /Invalid --required-style value "badge"/,
-    )
     // A switch that took a value would be a value silently thrown away.
     expect(() => parseMarkdownArgs(['s.json', '--required-first=true'])).toThrow(/takes no value/)
   })

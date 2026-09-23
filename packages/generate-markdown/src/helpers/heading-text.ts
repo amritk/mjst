@@ -37,7 +37,7 @@ export const headingText = (name: string): string => {
 const proseText = (title: string): string => collapseLineEndings(title).replace(/\s+$/, '')
 
 /**
- * Renders an author's heading override — `x-doc.title`, a section title, a page
+ * Renders an author's heading override — `x-mjst.markdown.title`, a section title, a page
  * title. Prose, not a key: it has no row to be checked against, so it is not
  * held to a property name's spelling rules.
  */
@@ -73,7 +73,7 @@ export const proseHeading = (title: string): RenderedHeading => ({
   text: proseText(title),
 })
 
-/** A property's heading — its `x-doc.title` when it has one, and its name otherwise. */
+/** A property's heading — its `x-mjst.markdown.title` when it has one, and its name otherwise. */
 export const propertyHeading = (name: string, title: string | undefined): RenderedHeading => {
   // A title of whitespace is not a title: honouring it left an empty heading
   // where the property's name should be.

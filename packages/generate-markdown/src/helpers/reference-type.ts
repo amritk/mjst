@@ -59,7 +59,7 @@ const unionOf = (parts: readonly string[]): string =>
  * - a typed array renders as `string[]` rather than `array`, and
  * - a map renders as `Record<string, T>` rather than `object`.
  *
- * `x-doc.type` wins over everything. Plenty of real config types — a callback
+ * `x-mjst.markdown.type` wins over everything. Plenty of real config types — a callback
  * signature, a named TypeScript type — have no JSON Schema spelling at all, and
  * a docs generator that cannot say `(heading: Heading) => string` would just
  * push those properties back into a hand-maintained file.
@@ -126,7 +126,7 @@ export const referenceType = (prop: SchemaProperty, language: string, depth = 0)
  * `resourceConfig` left a reader to take the value's fields as the map's own:
  * nothing on the page said the key level existed. `Record<string, T>` is the
  * same courtesy `T[]` already extends to arrays. The value label is
- * `referenceType` again, so an `x-doc.type` on the value shape names it
+ * `referenceType` again, so an `x-mjst.markdown.type` on the value shape names it
  * (`Record<string, ResourceConfig>`) and a union of pattern shapes reads as
  * one.
  *

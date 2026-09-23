@@ -120,7 +120,7 @@ describe('generate-markdown-files', () => {
             examples: [true],
           },
         },
-        'x-doc': { language: 'javascript' },
+        'x-mjst': { markdown: { language: 'javascript' } },
       }),
     )
     expect(content).toBe(
@@ -155,15 +155,20 @@ describe('generate-markdown-files', () => {
 
   it('renders an enum as a literal union without repeating it as allowed values', () => {
     const content = only(
-      generateMarkdownFiles({ properties: { mode: { enum: ['json', 'yaml'] } }, 'x-doc': { language: 'javascript' } }),
+      generateMarkdownFiles({
+        properties: { mode: { enum: ['json', 'yaml'] } },
+        'x-mjst': { markdown: { language: 'javascript' } },
+      }),
     )
     expect(content).toContain("**Type:** `'json' | 'yaml'`")
     expect(content).not.toContain('**Allowed values:**')
   })
 
-  it('lists allowed values when x-doc.type replaced the label', () => {
+  it('lists allowed values when x-mjst.markdown.type replaced the label', () => {
     const content = only(
-      generateMarkdownFiles({ properties: { mode: { enum: ['json', 'yaml'], 'x-doc': { type: 'Format' } } } }),
+      generateMarkdownFiles({
+        properties: { mode: { enum: ['json', 'yaml'], 'x-mjst': { markdown: { type: 'Format' } } } },
+      }),
     )
     expect(content).toContain('**Type:** `Format`')
     expect(content).toContain('**Allowed values:** `"json"`, `"yaml"`')
@@ -174,7 +179,7 @@ describe('generate-markdown-files', () => {
   it('drops the type line from every heading when the schema asks it to, and lists the values instead', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { headings: { type: 'never' } },
+        'x-mjst': { markdown: { headings: { type: 'never' } } },
         required: ['failOn'],
         properties: {
           failOn: { enum: ['error', 'warn'], description: 'Lowest severity that fails the run.' },
@@ -205,7 +210,9 @@ describe('generate-markdown-files', () => {
   it('lists every example when the property brings its own code block', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { name: { type: 'string', examples: ['a', 'b'], 'x-doc': { example: 'name = "a"' } } },
+        properties: {
+          name: { type: 'string', examples: ['a', 'b'], 'x-mjst': { markdown: { example: 'name = "a"' } } },
+        },
       }),
     )
     expect(content).toContain('**Examples:** `"a"`, `"b"`')
@@ -223,7 +230,10 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         properties: {
-          a: { type: 'string', 'x-doc': { note: 'Read this first.', example: 'a = 1', footer: 'And this after.' } },
+          a: {
+            type: 'string',
+            'x-mjst': { markdown: { note: 'Read this first.', example: 'a = 1', footer: 'And this after.' } },
+          },
         },
       }),
     )
@@ -248,8 +258,10 @@ describe('generate-markdown-files', () => {
   it('renders an example given as a value in the page language', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { type: 'string', 'x-doc': { example: { caption: 'Like so:', value: { a: 'b' } } } } },
-        'x-doc': { language: 'javascript' },
+        properties: {
+          a: { type: 'string', 'x-mjst': { markdown: { example: { caption: 'Like so:', value: { a: 'b' } } } } },
+        },
+        'x-mjst': { markdown: { language: 'javascript' } },
       }),
     )
     expect(content).toContain("Like so:\n\n```javascript\n{\n  a: 'b'\n}\n```")
@@ -258,7 +270,9 @@ describe('generate-markdown-files', () => {
   it('honours a per-example language override', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { type: 'string', 'x-doc': { example: { language: 'bash', code: 'acme --help' } } } },
+        properties: {
+          a: { type: 'string', 'x-mjst': { markdown: { example: { language: 'bash', code: 'acme --help' } } } },
+        },
       }),
     )
     expect(content).toContain('```bash\nacme --help\n```')
@@ -269,7 +283,7 @@ describe('generate-markdown-files', () => {
   it('widens the fence when the example contains one', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { type: 'string', 'x-doc': { example: '```js\nconst a = 1\n```' } } },
+        properties: { a: { type: 'string', 'x-mjst': { markdown: { example: '```js\nconst a = 1\n```' } } } },
       }),
     )
     expect(content).toContain('````json\n```js\nconst a = 1\n```\n````')
@@ -278,7 +292,7 @@ describe('generate-markdown-files', () => {
   it('leaves hidden properties out entirely', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { shown: { type: 'string' }, secret: { type: 'string', 'x-doc': { hidden: true } } },
+        properties: { shown: { type: 'string' }, secret: { type: 'string', 'x-mjst': { hidden: true } } },
       }),
     )
     expect(content).toContain('## shown')
@@ -303,7 +317,7 @@ describe('generate-markdown-files', () => {
         properties: {
           server: {
             type: 'object',
-            'x-doc': { layout: 'table' },
+            'x-mjst': { markdown: { layout: 'table' } },
             properties: { host: { type: 'string', description: 'Hostname to bind.' } },
           },
         },
@@ -317,7 +331,11 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         properties: {
-          server: { type: 'object', 'x-doc': { layout: 'none' }, properties: { host: { type: 'string' } } },
+          server: {
+            type: 'object',
+            'x-mjst': { markdown: { layout: 'none' } },
+            properties: { host: { type: 'string' } },
+          },
         },
       }),
     )
@@ -329,7 +347,7 @@ describe('generate-markdown-files', () => {
   it('takes the default layout from the schema', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: { server: { type: 'object', properties: { host: { type: 'string' } } } },
       }),
     )
@@ -338,11 +356,11 @@ describe('generate-markdown-files', () => {
 
   it('drops the heading and shape markers when the property is the page', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'ts', file: 'ts.md', title: 'TypeScript' }] },
+      'x-mjst': { markdown: { pages: [{ id: 'ts', file: 'ts.md', title: 'TypeScript' }] } },
       properties: {
         typescript: {
           type: 'object',
-          'x-doc': { page: 'ts', heading: false },
+          'x-mjst': { markdown: { page: 'ts', heading: false } },
           properties: { packageName: { type: 'string', description: 'Package name.' } },
         },
       },
@@ -355,10 +373,15 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         title: 'Config',
-        'x-doc': {
-          sections: [{ id: 'props', title: 'Properties', description: 'The options.' }],
+        'x-mjst': {
+          markdown: {
+            sections: [{ id: 'props', title: 'Properties', description: 'The options.' }],
+          },
         },
-        properties: { loose: { type: 'string' }, grouped: { type: 'string', 'x-doc': { section: 'props' } } },
+        properties: {
+          loose: { type: 'string' },
+          grouped: { type: 'string', 'x-mjst': { markdown: { section: 'props' } } },
+        },
       }),
     )
     // Properties that never named a section belong to the page as a whole, so
@@ -386,10 +409,12 @@ describe('generate-markdown-files', () => {
   it('renders a prose-only section with its example', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': {
-          sections: [
-            { id: 'intro', title: 'Minimal config', description: 'Start here.', example: { value: { a: 1 } } },
-          ],
+        'x-mjst': {
+          markdown: {
+            sections: [
+              { id: 'intro', title: 'Minimal config', description: 'Start here.', example: { value: { a: 1 } } },
+            ],
+          },
         },
       }),
     )
@@ -399,10 +424,10 @@ describe('generate-markdown-files', () => {
   it('sorts a section alphabetically when it asks for it', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { sections: [{ id: 's', title: 'S', sort: 'alphabetical' }] },
+        'x-mjst': { markdown: { sections: [{ id: 's', title: 'S', sort: 'alphabetical' }] } },
         properties: {
-          zebra: { type: 'string', 'x-doc': { section: 's' } },
-          apple: { type: 'string', 'x-doc': { section: 's' } },
+          zebra: { type: 'string', 'x-mjst': { markdown: { section: 's' } } },
+          apple: { type: 'string', 'x-mjst': { markdown: { section: 's' } } },
         },
       }),
     )
@@ -414,18 +439,18 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         title: 'Config',
-        'x-doc': { sections: [{ id: 'props', title: 'Required properties', layout: 'table' }] },
+        'x-mjst': { markdown: { sections: [{ id: 'props', title: 'Required properties', layout: 'table' }] } },
         required: ['organization'],
         properties: {
           organization: {
             type: 'string',
             description: 'Identity of the organization publishing the SDKs.',
-            'x-doc': { section: 'props' },
+            'x-mjst': { markdown: { section: 'props' } },
           },
           resources: {
             type: 'string',
             description: 'Resource tree that drives the generated client shape.',
-            'x-doc': { section: 'props' },
+            'x-mjst': { markdown: { section: 'props' } },
           },
         },
       }),
@@ -436,10 +461,10 @@ describe('generate-markdown-files', () => {
         '',
         '## Required properties',
         '',
-        '| Property | Type | Description |',
-        '| --- | --- | --- |',
-        '| `organization` _required_ | `string` | Identity of the organization publishing the SDKs. |',
-        '| `resources` | `string` | Resource tree that drives the generated client shape. |',
+        '| Property | Type | Required | Description |',
+        '| --- | --- | --- | --- |',
+        '| `organization` | `string` | ✅ | Identity of the organization publishing the SDKs. |',
+        '| `resources` | `string` |  | Resource tree that drives the generated client shape. |',
         '',
       ].join('\n'),
     )
@@ -451,18 +476,18 @@ describe('generate-markdown-files', () => {
   it('keeps the blocks a section table cannot hold below it', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { sections: [{ id: 'props', title: 'Properties', layout: 'table' }] },
+        'x-mjst': { markdown: { sections: [{ id: 'props', title: 'Properties', layout: 'table' }] } },
         properties: {
           organization: {
             type: 'object',
             description: 'Who is publishing.\n\nThe name is what shows up in the generated README.',
-            'x-doc': { section: 'props', note: 'Renaming it renames the packages.' },
+            'x-mjst': { markdown: { section: 'props', note: 'Renaming it renames the packages.' } },
             properties: { name: { type: 'string' } },
           },
           logLevel: {
             enum: ['debug', 'info'],
             description: 'How much to say.',
-            'x-doc': { section: 'props', example: { value: { logLevel: 'debug' } } },
+            'x-mjst': { markdown: { section: 'props', example: { value: { logLevel: 'debug' } } } },
           },
         },
       }),
@@ -481,8 +506,10 @@ describe('generate-markdown-files', () => {
   it('leaves a section table property with nothing more to say as a row alone', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { sections: [{ id: 'props', title: 'Properties', layout: 'table' }] },
-        properties: { name: { type: 'string', description: 'The name.', 'x-doc': { section: 'props' } } },
+        'x-mjst': { markdown: { sections: [{ id: 'props', title: 'Properties', layout: 'table' }] } },
+        properties: {
+          name: { type: 'string', description: 'The name.', 'x-mjst': { markdown: { section: 'props' } } },
+        },
       }),
     )
     expect(content).not.toContain('### name')
@@ -493,18 +520,20 @@ describe('generate-markdown-files', () => {
   // through a child that moved, and the table under it links across.
   it('links a section table across pages when a child moved to one', () => {
     const files = generateMarkdownFiles({
-      'x-doc': {
-        layout: 'table',
-        sections: [{ id: 'props', title: 'Properties', layout: 'table' }],
-        pages: [{ id: 'ts', file: 'targets/typescript.md', title: 'TypeScript' }],
+      'x-mjst': {
+        markdown: {
+          layout: 'table',
+          sections: [{ id: 'props', title: 'Properties', layout: 'table' }],
+          pages: [{ id: 'ts', file: 'targets/typescript.md', title: 'TypeScript' }],
+        },
       },
       properties: {
         targets: {
           type: 'object',
           description: 'What to generate.',
-          'x-doc': { section: 'props' },
+          'x-mjst': { markdown: { section: 'props' } },
           properties: {
-            typescript: { type: 'object', description: 'TypeScript target.', 'x-doc': { page: 'ts' } },
+            typescript: { type: 'object', description: 'TypeScript target.', 'x-mjst': { markdown: { page: 'ts' } } },
           },
         },
       },
@@ -518,19 +547,21 @@ describe('generate-markdown-files', () => {
   it('renders a section as headings when its layout is missing or junk', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': {
-          // A root `table` layout is the default for a *property's* children. A
-          // section takes its own layout or none at all, so neither of these
-          // groupings collapses into a table.
-          layout: 'table',
-          sections: [
-            { id: 'plain', title: 'Plain' },
-            { id: 'junk', title: 'Junk', layout: 'grid' },
-          ],
+        'x-mjst': {
+          markdown: {
+            // A root `table` layout is the default for a *property's* children. A
+            // section takes its own layout or none at all, so neither of these
+            // groupings collapses into a table.
+            layout: 'table',
+            sections: [
+              { id: 'plain', title: 'Plain' },
+              { id: 'junk', title: 'Junk', layout: 'grid' },
+            ],
+          },
         },
         properties: {
-          a: { type: 'string', 'x-doc': { section: 'plain' } },
-          b: { type: 'string', 'x-doc': { section: 'junk' } },
+          a: { type: 'string', 'x-mjst': { markdown: { section: 'plain' } } },
+          b: { type: 'string', 'x-mjst': { markdown: { section: 'junk' } } },
         },
       }),
     )
@@ -542,10 +573,12 @@ describe('generate-markdown-files', () => {
   it('renders only the prose of a section whose layout is none', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': {
-          sections: [{ id: 'props', title: 'Properties', description: 'Every option is a string.', layout: 'none' }],
+        'x-mjst': {
+          markdown: {
+            sections: [{ id: 'props', title: 'Properties', description: 'Every option is a string.', layout: 'none' }],
+          },
         },
-        properties: { a: { type: 'string', 'x-doc': { section: 'props' } } },
+        properties: { a: { type: 'string', 'x-mjst': { markdown: { section: 'props' } } } },
       }),
     )
     expect(content).toBe('## Properties\n\nEvery option is a string.\n')
@@ -554,10 +587,12 @@ describe('generate-markdown-files', () => {
   it('splits a nested property into its own page', () => {
     const files = generateMarkdownFiles({
       title: 'Configuration',
-      'x-doc': {
-        file: 'configuration.md',
-        layout: 'table',
-        pages: [{ id: 'ts', file: 'configuration/typescript.md', title: 'TypeScript' }],
+      'x-mjst': {
+        markdown: {
+          file: 'configuration.md',
+          layout: 'table',
+          pages: [{ id: 'ts', file: 'configuration/typescript.md', title: 'TypeScript' }],
+        },
       },
       properties: {
         targets: {
@@ -566,7 +601,7 @@ describe('generate-markdown-files', () => {
             typescript: {
               type: 'object',
               description: 'TypeScript target.',
-              'x-doc': { page: 'ts', heading: false },
+              'x-mjst': { markdown: { page: 'ts', heading: false } },
               properties: { packageName: { type: 'string' } },
             },
             go: { type: 'object', description: 'Go target.' },
@@ -584,12 +619,12 @@ describe('generate-markdown-files', () => {
 
   it('keeps a moved property out of the parent when children are headings', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'ts', file: 'ts.md' }] },
+      'x-mjst': { markdown: { pages: [{ id: 'ts', file: 'ts.md' }] } },
       properties: {
         targets: {
           type: 'object',
           properties: {
-            typescript: { type: 'object', 'x-doc': { page: 'ts' } },
+            typescript: { type: 'object', 'x-mjst': { markdown: { page: 'ts' } } },
             go: { type: 'object', description: 'Go target.' },
           },
         },
@@ -605,12 +640,16 @@ describe('generate-markdown-files', () => {
   it('keeps a property with its own section out of the parent listing', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { sections: [{ id: 'emitter', title: 'Emitter Options' }] },
+        'x-mjst': { markdown: { sections: [{ id: 'emitter', title: 'Emitter Options' }] } },
         properties: {
           target: {
             type: 'object',
             properties: {
-              options: { type: 'object', 'x-doc': { section: 'emitter' }, properties: { a: { type: 'string' } } },
+              options: {
+                type: 'object',
+                'x-mjst': { markdown: { section: 'emitter' } },
+                properties: { a: { type: 'string' } },
+              },
             },
           },
         },
@@ -677,17 +716,17 @@ describe('generate-markdown-files', () => {
   })
 
   // The definition documents what is true wherever it is used; the ref site adds
-  // where this use is documented. Replacing the whole `x-doc` dropped the first.
-  it('merges the x-doc of a $ref site with the definition it points at', () => {
+  // where this use is documented. Replacing the whole `x-mjst` dropped the first.
+  it('merges the x-mjst of a $ref site with the definition it points at', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'ts', file: 'ts.md', title: 'TypeScript' }] },
+      'x-mjst': { markdown: { pages: [{ id: 'ts', file: 'ts.md', title: 'TypeScript' }] } },
       properties: {
-        typescript: { $ref: '#/$defs/target', 'x-doc': { page: 'ts' } },
+        typescript: { $ref: '#/$defs/target', 'x-mjst': { markdown: { page: 'ts' } } },
       },
       $defs: {
         target: {
           type: 'object',
-          'x-doc': { heading: false, layout: 'table', example: 'targets.typescript = {}' },
+          'x-mjst': { markdown: { heading: false, layout: 'table', example: 'targets.typescript = {}' } },
           properties: { packageName: { type: 'string', description: 'Package name.' } },
         },
       },
@@ -699,16 +738,34 @@ describe('generate-markdown-files', () => {
     expect(page).toContain('| `packageName` | `string` | Package name. |')
   })
 
-  it('lets a $ref site override one x-doc member without losing the rest', () => {
+  it('lets a $ref site override one x-mjst member without losing the rest', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { $ref: '#/$defs/thing', 'x-doc': { title: 'Renamed' } } },
-        $defs: { thing: { type: 'string', 'x-doc': { type: 'Thing', note: 'Careful.' } } },
+        properties: { a: { $ref: '#/$defs/thing', 'x-mjst': { markdown: { title: 'Renamed' } } } },
+        $defs: { thing: { type: 'string', 'x-mjst': { markdown: { type: 'Thing', note: 'Careful.' } } } },
       }),
     )
     expect(content).toContain('## Renamed')
     expect(content).toContain('**Type:** `Thing`')
     expect(content).toContain('> Careful.')
+  })
+
+  // A ref site that only adds a generator hint, or only hides this use, must
+  // not take the definition's `markdown` with it.
+  it('keeps the definition markdown when a $ref site sets only top-level x-mjst members', () => {
+    const content = only(
+      generateMarkdownFiles({
+        properties: {
+          id: { $ref: '#/$defs/id', 'x-mjst': { brand: 'UserId' } },
+          secret: { $ref: '#/$defs/id', 'x-mjst': { hidden: true } },
+        },
+        $defs: { id: { type: 'string', 'x-mjst': { markdown: { type: 'UserId', note: 'Opaque.' } } } },
+      }),
+    )
+    expect(content).toContain('## id')
+    expect(content).toContain('**Type:** `UserId`')
+    expect(content).toContain('> Opaque.')
+    expect(content).not.toContain('secret')
   })
 
   it('documents the value shape of a map-like object', () => {
@@ -761,7 +818,9 @@ describe('generate-markdown-files', () => {
   })
 
   it('refuses a property assigned to a page the schema never declared', () => {
-    expect(() => generateMarkdownFiles({ properties: { a: { 'x-doc': { page: 'ghost' } } } })).toThrow(/ghost/)
+    expect(() => generateMarkdownFiles({ properties: { a: { 'x-mjst': { markdown: { page: 'ghost' } } } } })).toThrow(
+      /ghost/,
+    )
   })
 
   // Schema text reaches the metadata labels, and a backtick in it closed the
@@ -795,7 +854,7 @@ describe('generate-markdown-files', () => {
   it('collapses a line ending in a page or section title', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { title: 'My Title\n\n## Injected', sections: [{ id: 's', title: 'Sec\n# ROGUE' }] },
+        'x-mjst': { markdown: { title: 'My Title\n\n## Injected', sections: [{ id: 's', title: 'Sec\n# ROGUE' }] } },
         properties: {},
       }),
     )
@@ -809,7 +868,7 @@ describe('generate-markdown-files', () => {
   it('sanitises the fence language', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { 'x-doc': { example: { language: 'json\n```\n## Injected', code: 'x' } } } },
+        properties: { a: { 'x-mjst': { markdown: { example: { language: 'json\n```\n## Injected', code: 'x' } } } } },
       }),
     )
     expect(content).toContain('```json\nx\n```')
@@ -819,7 +878,7 @@ describe('generate-markdown-files', () => {
   it('escapes a backtick and a pipe in a table cell', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           outer: {
             type: 'object',
@@ -838,7 +897,7 @@ describe('generate-markdown-files', () => {
   it('keeps an escaped pipe inside a description in its own cell', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           outer: { type: 'object', properties: { a: { type: 'string', description: 'either a\\|b or c' } } },
         },
@@ -851,15 +910,19 @@ describe('generate-markdown-files', () => {
   // closed the destination early and everything after it became a second link.
   it('percent-encodes a cross-page link destination', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { layout: 'table', pages: [{ id: 'other', file: 'my docs (v2).md', title: 'O' }] },
-      properties: { outer: { type: 'object', properties: { a: { type: 'string', 'x-doc': { page: 'other' } } } } },
+      'x-mjst': { markdown: { layout: 'table', pages: [{ id: 'other', file: 'my docs (v2).md', title: 'O' }] } },
+      properties: {
+        outer: { type: 'object', properties: { a: { type: 'string', 'x-mjst': { markdown: { page: 'other' } } } } },
+      },
     })
     expect(files[0]?.content).toContain('[`a`](my%20docs%20%28v2%29.md#a)')
   })
 
   it('marks a deprecated property that renders without a heading', () => {
     const content = only(
-      generateMarkdownFiles({ properties: { a: { type: 'object', deprecated: true, 'x-doc': { heading: false } } } }),
+      generateMarkdownFiles({
+        properties: { a: { type: 'object', deprecated: true, 'x-mjst': { markdown: { heading: false } } } },
+      }),
     )
     expect(content).toContain('> **Deprecated**')
   })
@@ -868,7 +931,9 @@ describe('generate-markdown-files', () => {
   // to appear.
   it('lists allowed values for a property that renders without a heading', () => {
     const content = only(
-      generateMarkdownFiles({ properties: { a: { enum: ['json', 'yaml'], 'x-doc': { heading: false } } } }),
+      generateMarkdownFiles({
+        properties: { a: { enum: ['json', 'yaml'], 'x-mjst': { markdown: { heading: false } } } },
+      }),
     )
     expect(content).toContain('**Allowed values:** `"json"`, `"yaml"`')
   })
@@ -957,7 +1022,7 @@ describe('generate-markdown-files', () => {
   it('renders a table for a grandchild that a row cannot describe', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           a: {
             type: 'object',
@@ -1000,10 +1065,10 @@ describe('generate-markdown-files', () => {
 
   // The definition describes the definition; a ref site describing *this* use
   // must win, or two properties sharing a definition print the same sentence.
-  it('lets a ref site description beat the definition x-doc description', () => {
+  it('lets a ref site description beat the definition x-mjst description', () => {
     const content = only(
       generateMarkdownFiles({
-        $defs: { server: { type: 'string', 'x-doc': { description: 'Shared prose.' } } },
+        $defs: { server: { type: 'string', 'x-mjst': { markdown: { description: 'Shared prose.' } } } },
         properties: {
           primary: { $ref: '#/$defs/server', description: 'The primary server.' },
           fallback: { $ref: '#/$defs/server' },
@@ -1015,11 +1080,11 @@ describe('generate-markdown-files', () => {
   })
 
   // The ref site says where *this* use is documented, so it wins the keys it sets.
-  it('lets the ref site win the x-doc keys it sets', () => {
+  it('lets the ref site win the x-mjst keys it sets', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'ts', file: 'ts.md' }] },
-      $defs: { target: { type: 'object', 'x-doc': { page: 'index', title: 'DefTitle' } } },
-      properties: { a: { $ref: '#/$defs/target', 'x-doc': { page: 'ts' } } },
+      'x-mjst': { markdown: { pages: [{ id: 'ts', file: 'ts.md' }] } },
+      $defs: { target: { type: 'object', 'x-mjst': { markdown: { page: 'index', title: 'DefTitle' } } } },
+      properties: { a: { $ref: '#/$defs/target', 'x-mjst': { markdown: { page: 'ts' } } } },
     })
     expect(files.find((file) => file.filename === 'ts.md')?.content).toContain('DefTitle')
     expect(files[0]?.content).not.toContain('DefTitle')
@@ -1052,11 +1117,13 @@ describe('generate-markdown-files', () => {
   it('refuses two pages whose files differ only by a . segment', () => {
     expect(() =>
       generateMarkdownFiles({
-        'x-doc': {
-          pages: [
-            { id: 'i', file: 'a.md' },
-            { id: 'p2', file: './a.md' },
-          ],
+        'x-mjst': {
+          markdown: {
+            pages: [
+              { id: 'i', file: 'a.md' },
+              { id: 'p2', file: './a.md' },
+            ],
+          },
         },
         properties: {},
       }),
@@ -1066,11 +1133,13 @@ describe('generate-markdown-files', () => {
   it('refuses two pages that share an id', () => {
     expect(() =>
       generateMarkdownFiles({
-        'x-doc': {
-          pages: [
-            { id: 'x', file: 'a.md' },
-            { id: 'x', file: 'b.md' },
-          ],
+        'x-mjst': {
+          markdown: {
+            pages: [
+              { id: 'x', file: 'a.md' },
+              { id: 'x', file: 'b.md' },
+            ],
+          },
         },
         properties: {},
       }),
@@ -1083,7 +1152,9 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         title: 'R',
-        'x-doc': { example: { value: { a: 1 } }, pages: [{ id: 'index', file: 'index.md', title: 'C' }] },
+        'x-mjst': {
+          markdown: { example: { value: { a: 1 } }, pages: [{ id: 'index', file: 'index.md', title: 'C' }] },
+        },
         properties: { a: { type: 'number' } },
       }),
     )
@@ -1105,10 +1176,10 @@ describe('generate-markdown-files', () => {
   it('documents a page assignment nested far below the root', () => {
     const nest = (depth: number): Record<string, unknown> =>
       depth === 0
-        ? { type: 'string', 'x-doc': { page: 'other' }, description: 'THE LEAF' }
+        ? { type: 'string', 'x-mjst': { markdown: { page: 'other' } }, description: 'THE LEAF' }
         : { type: 'object', properties: { level: nest(depth - 1) } }
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'other', file: 'other.md', title: 'Other' }] },
+      'x-mjst': { markdown: { pages: [{ id: 'other', file: 'other.md', title: 'Other' }] } },
       properties: { root: nest(40) },
     })
     expect(files.some((file) => file.content.includes('THE LEAF'))).toBe(true)
@@ -1143,7 +1214,9 @@ describe('generate-markdown-files', () => {
         properties: {
           theme: {
             type: 'object',
-            properties: { color: { type: 'string', description: 'The colour.', 'x-doc': { page: 'index' } } },
+            properties: {
+              color: { type: 'string', description: 'The colour.', 'x-mjst': { markdown: { page: 'index' } } },
+            },
           },
         },
       }),
@@ -1168,7 +1241,9 @@ describe('generate-markdown-files', () => {
   it('leaves a ref-shaped value under example alone', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { type: 'object', 'x-doc': { example: { value: { $ref: '#/components/schemas/User' } } } } },
+        properties: {
+          a: { type: 'object', 'x-mjst': { markdown: { example: { value: { $ref: '#/components/schemas/User' } } } } },
+        },
         $defs: { anything: { type: 'string' } },
       }),
     )
@@ -1188,12 +1263,12 @@ describe('generate-markdown-files', () => {
   })
 
   // The merge exists to carry the definition's documentation through; a
-  // malformed x-doc at the ref site must not be able to erase it.
-  it('ignores a malformed x-doc at the ref site', () => {
+  // malformed x-mjst at the ref site must not be able to erase it.
+  it('ignores a malformed x-mjst at the ref site', () => {
     const content = only(
       generateMarkdownFiles({
-        $defs: { s: { type: 'string', 'x-doc': { example: 'FROM THE DEFINITION' } } },
-        properties: { a: { $ref: '#/$defs/s', 'x-doc': [] } },
+        $defs: { s: { type: 'string', 'x-mjst': { markdown: { example: 'FROM THE DEFINITION' } } } },
+        properties: { a: { $ref: '#/$defs/s', 'x-mjst': [] } },
       }),
     )
     expect(content).toContain('FROM THE DEFINITION')
@@ -1203,7 +1278,7 @@ describe('generate-markdown-files', () => {
   it('puts constraints above the notes', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { type: 'string', minLength: 1, 'x-doc': { note: 'A note.' } } },
+        properties: { a: { type: 'string', minLength: 1, 'x-mjst': { markdown: { note: 'A note.' } } } },
       }),
     )
     expect(content).toContain('**Constraints:**')
@@ -1376,7 +1451,7 @@ describe('generate-markdown-files', () => {
   it('leaves a backslash alone inside a table code cell', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           outer: { type: 'object', properties: { a: { type: 'string', default: 'C:\\path' } } },
         },
@@ -1392,7 +1467,7 @@ describe('generate-markdown-files', () => {
   it('leaves an author markdown escape intact in a table cell', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           s: { type: 'object', properties: { pat: { type: 'string', description: 'Literal \\*stars\\* here.' } } },
         },
@@ -1474,7 +1549,9 @@ describe('generate-markdown-files', () => {
   // its blockquote and the rest became page structure.
   it('keeps a note with a bare carriage return inside its blockquote', () => {
     const content = only(
-      generateMarkdownFiles({ properties: { a: { type: 'string', 'x-doc': { note: 'safe\r## INJECTED' } } } }),
+      generateMarkdownFiles({
+        properties: { a: { type: 'string', 'x-mjst': { markdown: { note: 'safe\r## INJECTED' } } } },
+      }),
     )
     expect(content).toContain('> safe\n> ## INJECTED')
     expect(content).not.toContain('\r')
@@ -1483,7 +1560,9 @@ describe('generate-markdown-files', () => {
   it('collapses a line ending in an example caption', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { type: 'string', 'x-doc': { example: { code: 'x', caption: 'cap\n## INJECTED' } } } },
+        properties: {
+          a: { type: 'string', 'x-mjst': { markdown: { example: { code: 'x', caption: 'cap\n## INJECTED' } } } },
+        },
       }),
     )
     expect(content).toContain('cap ## INJECTED')
@@ -1513,12 +1592,14 @@ describe('generate-markdown-files', () => {
   it('refuses a page that climbs out of the output directory and back in', () => {
     expect(() =>
       generateMarkdownFiles({
-        'x-doc': {
-          file: 'index.md',
-          pages: [
-            { id: 'one', file: 'a.md' },
-            { id: 'two', file: '../out/a.md' },
-          ],
+        'x-mjst': {
+          markdown: {
+            file: 'index.md',
+            pages: [
+              { id: 'one', file: 'a.md' },
+              { id: 'two', file: '../out/a.md' },
+            ],
+          },
         },
         properties: {},
       }),
@@ -1526,21 +1607,23 @@ describe('generate-markdown-files', () => {
   })
 
   it('refuses a page whose path names no file', () => {
-    expect(() => generateMarkdownFiles({ 'x-doc': { pages: [{ id: 'p', file: '.' }] }, properties: {} })).toThrow(
-      /no file to be written to/,
-    )
+    expect(() =>
+      generateMarkdownFiles({ 'x-mjst': { markdown: { pages: [{ id: 'p', file: '.' }] } }, properties: {} }),
+    ).toThrow(/no file to be written to/)
   })
 
   it('refuses two sections that share an id', () => {
     expect(() =>
       generateMarkdownFiles({
-        'x-doc': {
-          sections: [
-            { id: 's', title: 'One' },
-            { id: 's', title: 'Two' },
-          ],
+        'x-mjst': {
+          markdown: {
+            sections: [
+              { id: 's', title: 'One' },
+              { id: 's', title: 'Two' },
+            ],
+          },
         },
-        properties: { a: { type: 'string', 'x-doc': { section: 's' } } },
+        properties: { a: { type: 'string', 'x-mjst': { markdown: { section: 's' } } } },
       }),
     ).toThrow(/Two sections share the id "s"/)
   })
@@ -1550,7 +1633,7 @@ describe('generate-markdown-files', () => {
   it('does not repeat a table row in the block beneath it', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           a: {
             type: 'object',
@@ -1571,7 +1654,7 @@ describe('generate-markdown-files', () => {
   it('drops the type column when every row in a table is an object', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           targets: {
             type: 'object',
@@ -1592,7 +1675,7 @@ describe('generate-markdown-files', () => {
   it('keeps the type column for a table of enums and arrays', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           options: {
             type: 'object',
@@ -1615,7 +1698,7 @@ describe('generate-markdown-files', () => {
   it('links a row to the section below it, and only when there is one', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           server: {
             type: 'object',
@@ -1640,7 +1723,7 @@ describe('generate-markdown-files', () => {
   it('links to the numbered anchor a repeated heading gets', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           name: { type: 'string', description: 'The SDK name.' },
           pagination: {
@@ -1655,12 +1738,12 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('### name')
   })
 
-  // The root `x-doc.table` is the whole reference's, so every table on every
+  // The root `x-mjst.markdown.table` is the whole reference's, so every table on every
   // page drops the column at once.
   it('drops the type column from every table when the schema asks it to', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table', table: { type: 'never' } },
+        'x-mjst': { markdown: { layout: 'table', table: { type: 'never' } } },
         properties: {
           options: {
             type: 'object',
@@ -1684,7 +1767,7 @@ describe('generate-markdown-files', () => {
   it('does not repeat an enum under a row whose type column spells it', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           options: { type: 'object', properties: { nestedFormat: { enum: ['dots', 'brackets'] } } },
         },
@@ -1699,7 +1782,7 @@ describe('generate-markdown-files', () => {
   it('lists the required properties first and orders the blocks below to match', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table', table: { requiredFirst: true } },
+        'x-mjst': { markdown: { layout: 'table', table: { required: ' _required_', requiredFirst: true } } },
         properties: {
           server: {
             type: 'object',
@@ -1725,7 +1808,7 @@ describe('generate-markdown-files', () => {
   it('keeps everything a table row cannot hold in the block beneath it', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           outer: {
             type: 'object',
@@ -1737,7 +1820,9 @@ describe('generate-markdown-files', () => {
                 enum: [{ a: 1 }, { a: 2 }],
                 minProperties: 1,
                 pattern: '^x$',
-                'x-doc': { type: 'ChildShape', note: 'A note.', example: 'child = {}', footer: 'Afterwards.' },
+                'x-mjst': {
+                  markdown: { type: 'ChildShape', note: 'A note.', example: 'child = {}', footer: 'Afterwards.' },
+                },
                 properties: { leaf: { type: 'string', description: 'Leaf.' } },
               },
             },
@@ -1861,9 +1946,9 @@ describe('generate-markdown-files', () => {
 
   it('refuses an absolute page file and a bare parent segment', () => {
     for (const file of ['/etc/passwd.md', '..']) {
-      expect(() => generateMarkdownFiles({ 'x-doc': { pages: [{ id: 'p', file }] }, properties: {} })).toThrow(
-        /outside the output directory|no file to be written to/,
-      )
+      expect(() =>
+        generateMarkdownFiles({ 'x-mjst': { markdown: { pages: [{ id: 'p', file }] } }, properties: {} }),
+      ).toThrow(/outside the output directory|no file to be written to/)
     }
   })
 
@@ -1874,7 +1959,7 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         title: 'Config\u2028Reference',
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           server: {
             type: 'object',
@@ -1917,9 +2002,13 @@ describe('generate-markdown-files', () => {
   // documented on it twice — same heading, same anchor.
   it('documents a page-assigned property once when the schema references itself', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'extra', file: 'extra.md', title: 'Extra' }] },
+      'x-mjst': { markdown: { pages: [{ id: 'extra', file: 'extra.md', title: 'Extra' }] } },
       properties: {
-        settings: { type: 'object', 'x-doc': { page: 'extra' }, properties: { deep: { type: 'string' } } },
+        settings: {
+          type: 'object',
+          'x-mjst': { markdown: { page: 'extra' } },
+          properties: { deep: { type: 'string' } },
+        },
         children: { type: 'array', items: { $ref: '#' } },
       },
     })
@@ -1954,7 +2043,7 @@ describe('generate-markdown-files', () => {
   it('keeps the prose and the null default a table row could not hold', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           server: {
             type: 'object',
@@ -2042,8 +2131,8 @@ describe('generate-markdown-files', () => {
   // `..extra.md` lives right where it says it does; only a `..` segment escapes.
   it('allows a page file whose name merely begins with dots', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'extra', file: '..extra.md', title: 'Extra' }] },
-      properties: { a: { type: 'string', 'x-doc': { page: 'extra' } } },
+      'x-mjst': { markdown: { pages: [{ id: 'extra', file: '..extra.md', title: 'Extra' }] } },
+      properties: { a: { type: 'string', 'x-mjst': { markdown: { page: 'extra' } } } },
     })
     expect(files.map((file) => file.filename)).toContain('..extra.md')
   })
@@ -2054,7 +2143,7 @@ describe('generate-markdown-files', () => {
   it('does not cut a fenced block in a description in half', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           s: {
             type: 'object',
@@ -2084,7 +2173,7 @@ describe('generate-markdown-files', () => {
   it('keeps a childless property deprecation, constraints and notes under a table', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           server: {
             type: 'object',
@@ -2094,7 +2183,7 @@ describe('generate-markdown-files', () => {
                 deprecated: true,
                 minimum: 1,
                 description: 'Port.\n\nUse `listen` instead.',
-                'x-doc': { notes: ['Removed in v3.'] },
+                'x-mjst': { markdown: { notes: ['Removed in v3.'] } },
               },
             },
           },
@@ -2113,7 +2202,7 @@ describe('generate-markdown-files', () => {
   it('does not derive an example for a leaf beneath a table row', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           server: { type: 'object', properties: { host: { type: 'string', examples: ['example.com'] } } },
         },
@@ -2123,11 +2212,11 @@ describe('generate-markdown-files', () => {
 
     const authored = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           server: {
             type: 'object',
-            properties: { host: { type: 'string', 'x-doc': { example: 'host = "example.com"' } } },
+            properties: { host: { type: 'string', 'x-mjst': { markdown: { example: 'host = "example.com"' } } } },
           },
         },
       }),
@@ -2152,9 +2241,13 @@ describe('generate-markdown-files', () => {
   it('reads the other spelling of the empty pointer too', () => {
     const files = generateMarkdownFiles({
       title: 'Menu',
-      'x-doc': { pages: [{ id: 'extra', file: 'extra.md', title: 'Extra' }] },
+      'x-mjst': { markdown: { pages: [{ id: 'extra', file: 'extra.md', title: 'Extra' }] } },
       properties: {
-        settings: { type: 'object', 'x-doc': { page: 'extra' }, properties: { deep: { type: 'string' } } },
+        settings: {
+          type: 'object',
+          'x-mjst': { markdown: { page: 'extra' } },
+          properties: { deep: { type: 'string' } },
+        },
         children: { type: 'array', items: { $ref: '#/' } },
       },
     })
@@ -2192,7 +2285,7 @@ describe('generate-markdown-files', () => {
   it('prints a null default in a row when another row fills the column', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           s: {
             type: 'object',
@@ -2209,7 +2302,7 @@ describe('generate-markdown-files', () => {
 
   it('lets the caller override a file the schema declares', () => {
     const files = generateMarkdownFiles(
-      { 'x-doc': { file: 'from-schema.md' }, properties: { a: {} } },
+      { 'x-mjst': { markdown: { file: 'from-schema.md' } }, properties: { a: {} } },
       { file: 'from-caller.md' },
     )
     expect(files[0]?.filename).toBe('from-caller.md')
@@ -2219,7 +2312,11 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         properties: {
-          sorted: { type: 'object', 'x-doc': { sort: 'alphabetical' }, properties: { zebra: {}, apple: {} } },
+          sorted: {
+            type: 'object',
+            'x-mjst': { markdown: { sort: 'alphabetical' } },
+            properties: { zebra: {}, apple: {} },
+          },
           unsorted: { type: 'object', properties: { zebra: {}, apple: {} } },
         },
       }),
@@ -2296,7 +2393,7 @@ describe('generate-markdown-files', () => {
   it('keeps a nested fence in a description whole', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           s: {
             type: 'object',
@@ -2319,7 +2416,7 @@ describe('generate-markdown-files', () => {
   it('keeps an indented code block in a description indented', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           s: {
             type: 'object',
@@ -2345,12 +2442,12 @@ describe('generate-markdown-files', () => {
         properties: {
           theme: {
             type: 'object',
-            'x-doc': { layout: 'table' },
+            'x-mjst': { markdown: { layout: 'table' } },
             properties: {
               widget: {
                 type: 'object',
                 deprecated: true,
-                'x-doc': { heading: false, layout: 'table' },
+                'x-mjst': { markdown: { heading: false, layout: 'table' } },
                 properties: { size: { type: 'string', description: 'Size.' } },
               },
             },
@@ -2491,7 +2588,7 @@ describe('generate-markdown-files', () => {
   it('lists every example when a row suppresses the derived one', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           theme: {
             type: 'object',
@@ -2778,7 +2875,7 @@ describe('generate-markdown-files', () => {
     expect(section(content, '### again')).not.toContain('Definition prose.')
   })
 
-  // `x-doc` is a namespace, not a value: the truncation keeps the definition's
+  // `x-mjst` is a namespace, not a value: the truncation keeps the definition's
   // documentation and the ref site says where *this* use is documented. Replacing
   // the whole object drops the definition's notes the moment a ref site renames it.
   it('merges a truncated definition doc keyword with the ref site one, key by key', () => {
@@ -2788,14 +2885,14 @@ describe('generate-markdown-files', () => {
         $defs: {
           self: {
             type: 'object',
-            'x-doc': { title: 'Definition title', note: 'Definition note.' },
-            properties: { again: { $ref: '#/$defs/self', 'x-doc': { title: 'Ref site title' } } },
+            'x-mjst': { markdown: { title: 'Definition title', note: 'Definition note.' } },
+            properties: { again: { $ref: '#/$defs/self', 'x-mjst': { markdown: { title: 'Ref site title' } } } },
           },
         },
       }),
     )
     // The heading proves the ref site wins per key; the note proves the rest of
-    // the definition's `x-doc` survived it.
+    // the definition's `x-mjst` survived it.
     expect(section(content, '### Ref site title')).toContain('> Definition note.')
   })
 
@@ -2852,7 +2949,7 @@ describe('generate-markdown-files', () => {
     expect(content).toContain('### again')
   })
 
-  // A root reached through a `$ref` has no `x-doc` of its own. Inventing an
+  // A root reached through a `$ref` has no `x-mjst` of its own. Inventing an
   // empty one for it outranks the branch that carries the real one, and the
   // whole page silently changes layout.
   it('does not invent a doc keyword on a root reached through a ref', () => {
@@ -2863,7 +2960,7 @@ describe('generate-markdown-files', () => {
           {
             type: 'object',
             properties: { theme: { type: 'object', properties: { mode: { type: 'string', description: 'Mode.' } } } },
-            'x-doc': { layout: 'table' },
+            'x-mjst': { markdown: { layout: 'table' } },
           },
         ],
         $defs: { base: { type: 'object' } },
@@ -2873,7 +2970,7 @@ describe('generate-markdown-files', () => {
   })
 
   // A row names the property in a cell several lines up, so the block below it
-  // needs a heading of its own however `x-doc.heading` reads — without one, the
+  // needs a heading of its own however `x-mjst.markdown.heading` reads — without one, the
   // child's Deprecated callout landed under the parent's heading.
   it('labels a sub-block even when the child asks for no heading', () => {
     const content = only(
@@ -2882,9 +2979,14 @@ describe('generate-markdown-files', () => {
           opts: {
             type: 'object',
             description: 'Options.',
-            'x-doc': { layout: 'table' },
+            'x-mjst': { markdown: { layout: 'table' } },
             properties: {
-              legacy: { type: 'string', description: 'Old.', deprecated: true, 'x-doc': { heading: false } },
+              legacy: {
+                type: 'string',
+                description: 'Old.',
+                deprecated: true,
+                'x-mjst': { markdown: { heading: false } },
+              },
               current: { type: 'string', description: 'New.' },
             },
           },
@@ -2898,7 +3000,7 @@ describe('generate-markdown-files', () => {
   it('labels each of two heading-less children under one table', () => {
     const child = (name: string) => ({
       type: 'object',
-      'x-doc': { heading: false, layout: 'table' },
+      'x-mjst': { markdown: { heading: false, layout: 'table' } },
       properties: { [`${name}Field`]: { type: 'string', description: `${name}.` } },
     })
     const content = only(
@@ -2906,7 +3008,7 @@ describe('generate-markdown-files', () => {
         properties: {
           outer: {
             type: 'object',
-            'x-doc': { layout: 'table' },
+            'x-mjst': { markdown: { layout: 'table' } },
             properties: { alpha: child('alpha'), beta: child('beta') },
           },
         },
@@ -2922,7 +3024,7 @@ describe('generate-markdown-files', () => {
   it('does not fold a code block into a lazy continuation', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           opts: {
             type: 'object',
@@ -2953,7 +3055,7 @@ describe('generate-markdown-files', () => {
           node: {
             type: 'object',
             description: 'A node in the tree.',
-            'x-doc': { type: 'NodeShape' },
+            'x-mjst': { markdown: { type: 'NodeShape' } },
             properties: { name: { type: 'string' }, next: { $ref: '#/$defs/node' } },
           },
         },
@@ -3051,13 +3153,13 @@ describe('generate-markdown-files', () => {
   })
 
   // `$ref: '#'` is the spelling a self-recursive schema uses, and it makes the
-  // *root* the definition being truncated — whose `x-doc` is the page's own
+  // *root* the definition being truncated — whose `x-mjst` is the page's own
   // configuration. Copying it wholesale headed the property with the page title
   // and printed the page's example underneath it a second time.
   it('does not take the page title and example onto a self-referencing property', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { title: 'App configuration', example: '{ "name": "demo" }' },
+        'x-mjst': { markdown: { title: 'App configuration', example: '{ "name": "demo" }' } },
         properties: {
           name: { type: 'string' },
           parent: { $ref: '#', description: 'A parent config this one extends.' },
@@ -3075,12 +3177,12 @@ describe('generate-markdown-files', () => {
   // what it belonged to.
   it('does not move a truncated child onto the page its definition names', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'nodes', file: 'nodes.md', title: 'Nodes' }] },
-      properties: { alt: { $ref: '#/$defs/Node', 'x-doc': { page: 'index' } } },
+      'x-mjst': { markdown: { pages: [{ id: 'nodes', file: 'nodes.md', title: 'Nodes' }] } },
+      properties: { alt: { $ref: '#/$defs/Node', 'x-mjst': { markdown: { page: 'index' } } } },
       $defs: {
         Node: {
           type: 'object',
-          'x-doc': { page: 'nodes' },
+          'x-mjst': { markdown: { page: 'nodes' } },
           properties: { label: { type: 'string' }, child: { $ref: '#/$defs/Node' } },
         },
       },
@@ -3104,7 +3206,7 @@ describe('generate-markdown-files', () => {
         $defs: {
           Node: {
             type: 'object',
-            'x-doc': { description: 'A node. Described once, in $defs.' },
+            'x-mjst': { markdown: { description: 'A node. Described once, in $defs.' } },
             properties: { child: { $ref: '#/$defs/Node', description: "This node's own child." } },
           },
         },
@@ -3155,7 +3257,7 @@ describe('generate-markdown-files', () => {
   it('keeps a description that opens with a code sample out of the row', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           theme: {
             type: 'object',
@@ -3177,7 +3279,7 @@ describe('generate-markdown-files', () => {
     $defs: {
       Node: {
         type: 'object',
-        'x-doc': doc,
+        'x-mjst': doc,
         properties: {
           name: { type: 'string', description: 'Name.' },
           child: { $ref: '#/$defs/Node', description: 'Nested node.', ...site },
@@ -3193,7 +3295,10 @@ describe('generate-markdown-files', () => {
   it('keeps the definition layout on a truncation that declares its own fields', () => {
     const content = only(
       generateMarkdownFiles(
-        truncating({ layout: 'table' }, { properties: { extra: { type: 'string', description: 'Extra.' } } }),
+        truncating(
+          { markdown: { layout: 'table' } },
+          { properties: { extra: { type: 'string', description: 'Extra.' } } },
+        ),
       ),
     )
     expect(section(content, '### child')).toContain('| `extra` | `string` | Extra. |')
@@ -3205,11 +3310,11 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         title: 'Config',
-        properties: { cache: { $ref: '#/$defs/Cache', 'x-doc': { hidden: false }, description: 'Cache settings.' } },
+        properties: { cache: { $ref: '#/$defs/Cache', 'x-mjst': { hidden: false }, description: 'Cache settings.' } },
         $defs: {
           Cache: {
             type: 'object',
-            'x-doc': { hidden: true, layout: 'table' },
+            'x-mjst': { hidden: true, markdown: { layout: 'table' } },
             properties: {
               ttl: { type: 'number', description: 'Seconds.' },
               fallback: { $ref: '#/$defs/Cache', description: 'Fallback cache.' },
@@ -3224,7 +3329,9 @@ describe('generate-markdown-files', () => {
 
   it('keeps the definition example on a truncation', () => {
     const content = only(
-      generateMarkdownFiles(truncating({ example: { value: { name: 'n1' }, caption: 'A node looks like this.' } }, {})),
+      generateMarkdownFiles(
+        truncating({ markdown: { example: { value: { name: 'n1' }, caption: 'A node looks like this.' } } }, {}),
+      ),
     )
     expect(section(content, '### child')).toContain('A node looks like this.')
   })
@@ -3234,12 +3341,12 @@ describe('generate-markdown-files', () => {
   it('does not move a truncated child into the section its definition names', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { sections: [{ id: 'later', title: 'Later' }] },
+        'x-mjst': { markdown: { sections: [{ id: 'later', title: 'Later' }] } },
         properties: { alt: { $ref: '#/$defs/Node' } },
         $defs: {
           Node: {
             type: 'object',
-            'x-doc': { section: 'later' },
+            'x-mjst': { markdown: { section: 'later' } },
             properties: { label: { type: 'string' }, child: { $ref: '#/$defs/Node' } },
           },
         },
@@ -3248,17 +3355,19 @@ describe('generate-markdown-files', () => {
     expect(section(content, '### alt')).toContain('#### child')
   })
 
-  // The document root is not a definition: its `x-doc` is the page's own
+  // The document root is not a definition: its `x-mjst` is the page's own
   // configuration, and `$ref: '#'` used to reprint the page's introduction,
   // notes and footer under the property's name.
   it('takes nothing from the page onto a self-referencing property', () => {
     const content = only(
       generateMarkdownFiles({
         title: 'Configuration',
-        'x-doc': {
-          description: 'Everything on this page configures the reference.',
-          notes: ['Root note.'],
-          footer: 'Read the migration guide before upgrading.',
+        'x-mjst': {
+          markdown: {
+            description: 'Everything on this page configures the reference.',
+            notes: ['Root note.'],
+            footer: 'Read the migration guide before upgrading.',
+          },
         },
         properties: { theme: { type: 'string', description: 'The theme.' }, sibling: { $ref: '#' } },
       }),
@@ -3323,7 +3432,11 @@ describe('generate-markdown-files', () => {
     // quickly. Read once per pointer this takes a fifth of a second; read once
     // per truncation the test times out long before the message arrives.
     expect(() =>
-      generateMarkdownFiles({ 'x-doc': { layout: 'none' }, properties: { root: { $ref: '#/$defs/A' } }, $defs }),
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { layout: 'none' } },
+        properties: { root: { $ref: '#/$defs/A' } },
+        $defs,
+      }),
     ).toThrow(/more than 100000 nodes/)
   })
 
@@ -3425,10 +3538,10 @@ describe('generate-markdown-files', () => {
         properties: {
           ui: {
             type: 'object',
-            'x-doc': { layout: 'table' },
+            'x-mjst': { markdown: { layout: 'table' } },
             properties: {
               '\tindented': { type: 'string', description: 'Tab-named.' },
-              normal: { type: 'string', description: 'Fine.', 'x-doc': { type: '    Weird' } },
+              normal: { type: 'string', description: 'Fine.', 'x-mjst': { markdown: { type: '    Weird' } } },
             },
           },
         },
@@ -3446,13 +3559,15 @@ describe('generate-markdown-files', () => {
   it('keeps a code sample indented in a page, section and footer description', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': {
-          title: 'Cfg',
-          description: '    <div>page sample</div>\n\nThe page.',
-          sections: [{ id: 'later', title: 'Later', description: '    <div>section sample</div>\n\nThe section.' }],
+        'x-mjst': {
+          markdown: {
+            title: 'Cfg',
+            description: '    <div>page sample</div>\n\nThe page.',
+            sections: [{ id: 'later', title: 'Later', description: '    <div>section sample</div>\n\nThe section.' }],
+          },
         },
         properties: {
-          a: { type: 'string', 'x-doc': { section: 'later', footer: '    <div>footer sample</div>' } },
+          a: { type: 'string', 'x-mjst': { markdown: { section: 'later', footer: '    <div>footer sample</div>' } } },
         },
       }),
     )
@@ -3477,7 +3592,7 @@ describe('generate-markdown-files', () => {
         $defs: {
           Node: {
             type: 'object',
-            'x-doc': { heading: false },
+            'x-mjst': { markdown: { heading: false } },
             properties: {
               name: { type: 'string', description: 'Name.' },
               child: { $ref: '#/$defs/Node', description: 'The nested child node.' },
@@ -3501,7 +3616,7 @@ describe('generate-markdown-files', () => {
         $defs: {
           Node: {
             type: 'object',
-            'x-doc': { title: 'Node' },
+            'x-mjst': { markdown: { title: 'Node' } },
             properties: {
               left: { $ref: '#/$defs/Node', description: 'Left child.' },
               right: { $ref: '#/$defs/Node', description: 'Right child.' },
@@ -3525,7 +3640,7 @@ describe('generate-markdown-files', () => {
         $defs: {
           Node: {
             type: 'object',
-            'x-doc': { order: 0 },
+            'x-mjst': { markdown: { order: 0 } },
             properties: { aaa: { type: 'string' }, zzz: { $ref: '#/$defs/Node' } },
           },
         },
@@ -3575,7 +3690,7 @@ describe('generate-markdown-files', () => {
       generateMarkdownFiles({
         $anchor: 'root',
         title: 'Configuration',
-        'x-doc': { notes: ['A page-level note.'] },
+        'x-mjst': { markdown: { notes: ['A page-level note.'] } },
         properties: {
           name: { type: 'string', description: 'Name.' },
           nested: { $ref: '#root', description: 'A nested configuration.' },
@@ -3670,7 +3785,7 @@ describe('generate-markdown-files', () => {
   it('collapses a line ending inside a table cell code span', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           group: { type: 'object', properties: { 'a\nb': { type: 'string', description: 'D.' } } },
         },
@@ -3684,7 +3799,7 @@ describe('generate-markdown-files', () => {
   it('leaves the row empty when the whole description is a code sample', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           group: { type: 'object', properties: { t: { type: 'string', description: '    <div>only</div>' } } },
         },
@@ -3700,7 +3815,7 @@ describe('generate-markdown-files', () => {
   it('leaves the type cell empty rather than rendering an empty code span', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           group: { type: 'object', properties: { t: { description: 'D.' }, u: { type: 'string', description: 'U.' } } },
         },
@@ -3740,7 +3855,7 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         description: 'Root prose.',
-        'x-doc': { pages: [{ id: 'index', file: 'index.md', description: 'Page prose.' }] },
+        'x-mjst': { markdown: { pages: [{ id: 'index', file: 'index.md', description: 'Page prose.' }] } },
         properties: { a: { type: 'string' } },
       }),
     )
@@ -3748,19 +3863,19 @@ describe('generate-markdown-files', () => {
     expect(content).not.toContain('Root prose.')
   })
 
-  // `x-doc.sort` has to hold while the pages are being collected too, or a
+  // `x-mjst.markdown.sort` has to hold while the pages are being collected too, or a
   // property carried to another page arrives in a different order than the one
   // its parent asked for.
   it('sorts properties carried to another page the way their parent asks', () => {
     const files = generateMarkdownFiles({
-      'x-doc': { pages: [{ id: 'other', file: 'other.md', title: 'Other' }] },
+      'x-mjst': { markdown: { pages: [{ id: 'other', file: 'other.md', title: 'Other' }] } },
       properties: {
         parent: {
           type: 'object',
-          'x-doc': { sort: 'alphabetical' },
+          'x-mjst': { markdown: { sort: 'alphabetical' } },
           properties: {
-            zed: { type: 'string', 'x-doc': { page: 'other' } },
-            ant: { type: 'string', 'x-doc': { page: 'other' } },
+            zed: { type: 'string', 'x-mjst': { markdown: { page: 'other' } } },
+            ant: { type: 'string', 'x-mjst': { markdown: { page: 'other' } } },
           },
         },
       },
@@ -3859,7 +3974,7 @@ describe('generate-markdown-files', () => {
   it('does not let a heading strip the whitespace a property name carries', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table' },
+        'x-mjst': { markdown: { layout: 'table' } },
         properties: {
           parent: {
             type: 'object',
@@ -4075,15 +4190,19 @@ describe('generate-markdown-files', () => {
   })
 
   // A ref site's plain `description` outranks the definition's
-  // `x-doc.description` — but not its own. Both at once is how an author says
+  // `x-mjst.markdown.description` — but not its own. Both at once is how an author says
   // "this sentence, and this one is for the table".
   it('lets a ref site doc description beat its own plain one', () => {
     const content = only(
       generateMarkdownFiles({
         properties: {
-          a: { $ref: '#/$defs/D', description: 'Plain at ref site.', 'x-doc': { description: 'Doc at ref site.' } },
+          a: {
+            $ref: '#/$defs/D',
+            description: 'Plain at ref site.',
+            'x-mjst': { markdown: { description: 'Doc at ref site.' } },
+          },
         },
-        $defs: { D: { type: 'object', 'x-doc': { description: 'Doc on definition.' } } },
+        $defs: { D: { type: 'object', 'x-mjst': { markdown: { description: 'Doc on definition.' } } } },
       }),
     )
     expect(content).toContain('Doc at ref site.')
@@ -4094,11 +4213,13 @@ describe('generate-markdown-files', () => {
   // both is only a contradiction when the two disagree.
   it('accepts a property naming a page its section already agrees on', () => {
     const files = generateMarkdownFiles({
-      'x-doc': {
-        pages: [{ id: 'other', file: 'other.md', title: 'Other' }],
-        sections: [{ id: 'group', title: 'Group', page: 'other' }],
+      'x-mjst': {
+        markdown: {
+          pages: [{ id: 'other', file: 'other.md', title: 'Other' }],
+          sections: [{ id: 'group', title: 'Group', page: 'other' }],
+        },
       },
-      properties: { a: { type: 'string', 'x-doc': { page: 'other', section: 'group' } } },
+      properties: { a: { type: 'string', 'x-mjst': { markdown: { page: 'other', section: 'group' } } } },
     })
     expect(files.find((file) => file.filename === 'other.md')?.content).toContain('## a')
   })
@@ -4109,9 +4230,9 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         properties: {
-          a: { type: 'string', 'x-doc': { order: 1 } },
-          b: { type: 'string', 'x-doc': { order: Number.NaN } },
-          c: { type: 'string', 'x-doc': { order: 2 } },
+          a: { type: 'string', 'x-mjst': { markdown: { order: 1 } } },
+          b: { type: 'string', 'x-mjst': { markdown: { order: Number.NaN } } },
+          c: { type: 'string', 'x-mjst': { markdown: { order: 2 } } },
         },
       }),
     )
@@ -4122,16 +4243,18 @@ describe('generate-markdown-files', () => {
 
   // A note of nothing is a blockquote marker and no note.
   it('drops a note that is only whitespace', () => {
-    const content = only(generateMarkdownFiles({ properties: { a: { type: 'string', 'x-doc': { note: '   ' } } } }))
+    const content = only(
+      generateMarkdownFiles({ properties: { a: { type: 'string', 'x-mjst': { markdown: { note: '   ' } } } } }),
+    )
     expect(content).toBe('## a\n\n**Type:** `string`\n')
   })
 
-  // `x-doc.description` overrides the prose, and an override that is not prose
+  // `x-mjst.markdown.description` overrides the prose, and an override that is not prose
   // is not an override.
   it('ignores a doc description that is not a string', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { a: { type: 'string', description: 'Schema prose.', 'x-doc': { description: 5 } } },
+        properties: { a: { type: 'string', description: 'Schema prose.', 'x-mjst': { markdown: { description: 5 } } } },
       }),
     )
     expect(content).toContain('Schema prose.')
@@ -4319,7 +4442,7 @@ describe('generate-markdown-files', () => {
   })
 
   // The same precedence rule the inliner applies: a plain `description` at a
-  // hop is describing that hop, and outranks the `x-doc.description` it
+  // hop is describing that hop, and outranks the `x-mjst.markdown.description` it
   // inherited.
   it('lets an alias plain prose beat the base doc prose at a truncation', () => {
     const content = only(
@@ -4328,7 +4451,7 @@ describe('generate-markdown-files', () => {
         $defs: {
           Base: {
             type: 'object',
-            'x-doc': { description: 'Doc on the base.' },
+            'x-mjst': { markdown: { description: 'Doc on the base.' } },
             properties: { kid: { $ref: '#/$defs/Alias' } },
           },
           Alias: { $ref: '#/$defs/Base', description: 'Plain on the alias.' },
@@ -4463,7 +4586,7 @@ describe('generate-markdown-files', () => {
     expect(section(content, '#### fromAlias')).toContain('**Required**')
   })
 
-  // `x-doc.type` beats every inferred label everywhere else, so a truncated
+  // `x-mjst.markdown.type` beats every inferred label everywhere else, so a truncated
   // array whose element names itself says so too.
   it('keeps an element type name in a truncated array label', () => {
     const content = only(
@@ -4473,7 +4596,7 @@ describe('generate-markdown-files', () => {
           KidList: { type: 'array', items: { $ref: '#/$defs/Tree' } },
           Tree: {
             type: 'object',
-            'x-doc': { type: 'Tree' },
+            'x-mjst': { markdown: { type: 'Tree' } },
             properties: { kids: { $ref: '#/$defs/KidList' }, name: { type: 'string' } },
           },
         },
@@ -4508,7 +4631,7 @@ describe('generate-markdown-files', () => {
   it('does not code-span a title an author wrote', () => {
     const content = only(
       generateMarkdownFiles({
-        properties: { ok: { type: 'string', 'x-doc': { title: 'Server settings ' } } },
+        properties: { ok: { type: 'string', 'x-mjst': { markdown: { title: 'Server settings ' } } } },
       }),
     )
     expect(content).toContain('## Server settings')
@@ -4564,8 +4687,8 @@ describe('generate-markdown-files', () => {
     const content = only(
       generateMarkdownFiles({
         properties: {
-          a: { type: 'string', 'x-doc': { title: '#' } },
-          b: { type: 'string', 'x-doc': { title: 'Advanced #' } },
+          a: { type: 'string', 'x-mjst': { markdown: { title: '#' } } },
+          b: { type: 'string', 'x-mjst': { markdown: { title: 'Advanced #' } } },
         },
       }),
     )
@@ -4575,7 +4698,9 @@ describe('generate-markdown-files', () => {
 
   // A title of whitespace is not a title.
   it('falls back to the property name when a title says nothing', () => {
-    const content = only(generateMarkdownFiles({ properties: { theme: { type: 'string', 'x-doc': { title: '  ' } } } }))
+    const content = only(
+      generateMarkdownFiles({ properties: { theme: { type: 'string', 'x-mjst': { markdown: { title: '  ' } } } } }),
+    )
     expect(content).toContain('## theme')
   })
 
@@ -4584,8 +4709,8 @@ describe('generate-markdown-files', () => {
   it('does not let a page or section title be eaten either', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { title: 'Config #', sections: [{ id: 'later', title: 'Later #' }] },
-        properties: { a: { type: 'string', 'x-doc': { section: 'later' } } },
+        'x-mjst': { markdown: { title: 'Config #', sections: [{ id: 'later', title: 'Later #' }] } },
+        properties: { a: { type: 'string', 'x-mjst': { markdown: { section: 'later' } } } },
       }),
     )
     expect(content).toContain('# Config \\#\n')
@@ -4623,7 +4748,7 @@ describe('generate-markdown-files', () => {
       generateMarkdownFiles({
         properties: { root: { $ref: '#/$defs/List' } },
         $defs: {
-          List: { type: 'array', items: { $ref: '#/$defs/Elem', 'x-doc': { type: 'Elem' } } },
+          List: { type: 'array', items: { $ref: '#/$defs/Elem', 'x-mjst': { markdown: { type: 'Elem' } } } },
           Elem: { type: 'object', properties: { sub: { $ref: '#/$defs/List' } } },
         },
       }),
@@ -4636,15 +4761,16 @@ describe('generate-markdown-files', () => {
   // the escape check and the duplicate-file check — and `generateMarkdownFiles`
   // is a public export that would hand the escaping filename straight back.
   it('normalises the index page file however it is supplied', () => {
-    expect(generateMarkdownFiles({ 'x-doc': { file: 'docs/./guide.md' }, properties: { a: {} } })[0]?.filename).toBe(
-      'docs/guide.md',
-    )
+    expect(
+      generateMarkdownFiles({ 'x-mjst': { markdown: { file: 'docs/./guide.md' } }, properties: { a: {} } })[0]
+        ?.filename,
+    ).toBe('docs/guide.md')
     expect(generateMarkdownFiles({ properties: { a: {} } }, { file: 'docs/./guide.md' })[0]?.filename).toBe(
       'docs/guide.md',
     )
-    expect(() => generateMarkdownFiles({ 'x-doc': { file: 'sub/../../escape.md' }, properties: { a: {} } })).toThrow(
-      /outside the output directory/,
-    )
+    expect(() =>
+      generateMarkdownFiles({ 'x-mjst': { markdown: { file: 'sub/../../escape.md' } }, properties: { a: {} } }),
+    ).toThrow(/outside the output directory/)
   })
 
   // The keys of a `definitions` map are author-chosen names, so a draft-07
@@ -4880,7 +5006,7 @@ describe('generate-markdown-files', () => {
     }
   })
 
-  // The same renderer under a different root `x-doc.table`: the required
+  // The same renderer under a different root `x-mjst.markdown.table`: the required
   // options at the top of every table, and no type column anywhere.
   it('matches the checked-in docs for the deploy fixture', () => {
     const files = generateMarkdownFiles(fixture('deploy-config'))

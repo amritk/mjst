@@ -195,7 +195,7 @@ Two mappings look like omissions and are not:
 
 ## The `x-mjst` extension
 
-JSON Schema's core vocabulary has no keyword for a runtime `Date`, a `bigint`, or a nominal brand. mjst carries those as a vendor extension, `x-mjst`, that the generators read to emit the right TypeScript type and runtime check:
+JSON Schema's core vocabulary has no keyword for a runtime `Date`, a `bigint`, or a nominal brand. mjst carries those as a vendor extension, `x-mjst`, that the generators read to emit the right TypeScript type and runtime check. The same object carries documentation settings for [`@amritk/generate-markdown`](../generate-markdown#the-x-mjst-keyword) (`hidden`, and everything under `markdown`), which the generators ignore:
 
 | `x-mjst` hint | Generated handling |
 |:---|:---|

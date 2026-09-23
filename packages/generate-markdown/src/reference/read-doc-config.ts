@@ -1,6 +1,6 @@
 import { asArray, asText, isObject, stringExtension } from '#helpers/guards'
 import { normalizeDocPath } from '#helpers/normalize-doc-path'
-import { asExamples, DOC_KEY, readDescription } from '#helpers/read-doc-meta'
+import { asExamples, markdownOf, readDescription } from '#helpers/read-doc-meta'
 import type {
   DocConfig,
   DocHeadings,
@@ -11,7 +11,6 @@ import type {
   DocSort,
   DocTable,
   DocTableColumn,
-  DocTableRequired,
   MarkdownHeadingsOptions,
   MarkdownOptions,
   MarkdownTableOptions,
@@ -27,14 +26,13 @@ const DEFAULT_INDEX_FILE = 'index.md'
 /**
  * JSON is the default example language because a `config.schema.json` most
  * often documents a JSON config file. A schema whose config is written in
- * JavaScript says so once, in `x-doc.language`.
+ * JavaScript says so once, in `x-mjst.markdown.language`.
  */
 const DEFAULT_LANGUAGE = 'json'
 
 const LAYOUTS: readonly DocLayout[] = ['headings', 'table', 'none']
 const SORTS: readonly DocSort[] = ['schema', 'alphabetical']
 const TABLE_COLUMNS: readonly DocTableColumn[] = ['auto', 'always', 'never']
-const TABLE_REQUIRED: readonly DocTableRequired[] = ['marker', 'column']
 const HEADING_TYPES: readonly DocHeadingType[] = ['auto', 'never']
 
 /**
@@ -42,15 +40,16 @@ const HEADING_TYPES: readonly DocHeadingType[] = ['auto', 'never']
  * schema's, then the built-in.
  *
  * The defaults are the shape a reference wants when nobody has thought about
- * it: a column only when a row fills it, and requiredness marked beside the
- * name rather than spending a column on one bit.
+ * it: a column only when a row fills it, **Required** included.
  */
 const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable => {
   const table = isObject(value) ? value : {}
   return {
     type: options.type ?? asOneOf(table['type'], TABLE_COLUMNS) ?? 'auto',
     default: options.default ?? asOneOf(table['default'], TABLE_COLUMNS) ?? 'auto',
-    required: options.required ?? asOneOf(table['required'], TABLE_REQUIRED) ?? 'marker',
+    // Any string is a suffix, the empty one included: `""` is how a schema
+    // whose required properties are obvious from the prose asks for no marker.
+    required: options.required ?? (typeof table['required'] === 'string' ? table['required'] : 'column'),
     // `=== true` rather than truthiness: the schema is parsed JSON, and a
     // `"requiredFirst": "no"` that reordered every table would be a surprising
     // way to read a string.
@@ -69,12 +68,6 @@ const readHeadings = (value: unknown, options: MarkdownHeadingsOptions = {}): Do
 
 const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : undefined
-
-/** The root `x-doc` object, or an empty one. */
-const rootDoc = (schema: ConfigSchema): Readonly<Record<string, unknown>> => {
-  const doc = (schema as Readonly<Record<string, unknown>>)[DOC_KEY]
-  return isObject(doc) ? doc : {}
-}
 
 /**
  * Reads the extra pages the schema declares. Every page needs an `id` (what
@@ -133,7 +126,7 @@ const readSections = (value: unknown): readonly DocSection[] =>
  * them.
  */
 export const readDocConfig = (schema: ConfigSchema, options: MarkdownOptions = {}): DocConfig => {
-  const doc = rootDoc(schema)
+  const doc = markdownOf(schema)
   const declared = readPages(doc['pages'])
   // A schema may declare the index page explicitly (to give it examples of its
   // own); that declaration is merged rather than duplicated into a second page.

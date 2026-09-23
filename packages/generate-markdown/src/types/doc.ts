@@ -16,7 +16,7 @@ export type GeneratedFile = {
  * hand-escaping a JSON string, and it stays valid JSON either way.
  */
 export type DocExample = {
-  /** Fence language. Defaults to the page language (`x-doc.language`). */
+  /** Fence language. Defaults to the page language (`x-mjst.markdown.language`). */
   readonly language?: string
   /** Optional line of prose rendered above the fence. */
   readonly caption?: string
@@ -56,17 +56,27 @@ export type DocTableColumn = 'auto' | 'always' | 'never'
 /**
  * How a property table says which of its properties are required:
  *
- * - `marker` — `` `name` _required_ `` in the **Property** cell. Five rows in
- *   twenty are required on a real page, so a column carried one bit and a lot
- *   of blanks.
- * - `column` — a **Required** column with a ✅ in it, rendered only when some
- *   row fills it. The shape this package rendered before `marker`.
+ * - `column` (the default) — a **Required** column with a ✅ in it, rendered
+ *   only when some row fills it.
+ * - any other string — a suffix after a required property's name in the
+ *   **Property** cell, for a reference that would rather not spend a column on
+ *   one bit: `" _required_"`, `"*"` for one with a legend of its own,
+ *   `"<br><sub>required</sub>"` for the word on a line under the name, or `""`
+ *   for nothing at all.
+ *
+ * A suffix is appended exactly as written, so the separator is the author's to
+ * choose: `"*"` hugs the name and `" *"` does not. It is markdown (or inline
+ * HTML), not text, because formatting is the point of choosing one; the only
+ * things taken out are the ones that would break the row — a line ending, and a
+ * live `|` that would split it into another column.
+ *
+ * `(string & {})` rather than `string` so an editor still offers `column`.
  */
-export type DocTableRequired = 'marker' | 'column'
+export type DocTableRequired = 'column' | (string & {})
 
 /**
  * How every property table on every page is laid out. Declared once on the root
- * `x-doc.table`, because a reference whose tables disagree about which columns
+ * `x-mjst.markdown.table`, because a reference whose tables disagree about which columns
  * exist reads as several references stapled together.
  */
 export type DocTable = {
@@ -76,11 +86,11 @@ export type DocTable = {
   /**
    * Lists the required properties at the top of the table, the rest under them,
    * for a reader skimming for what they have to fill in. One table still: the
-   * order groups them, and the marker (or the column) still says which is
+   * order groups them, and the column (or the suffix) still says which is
    * which, so nothing has to be read twice.
    *
    * A stable partition over whatever order the properties were already in, so
-   * `sort` and `x-doc.order` still decide the rest.
+   * `sort` and `x-mjst.markdown.order` still decide the rest.
    */
   readonly requiredFirst: boolean
 }
@@ -97,7 +107,7 @@ export type DocHeadingType = 'auto' | 'never'
 
 /**
  * How every property rendered as a heading is laid out. Declared once on the
- * root `x-doc.headings`, for the same reason {@link DocTable} is: a reference
+ * root `x-mjst.markdown.headings`, for the same reason {@link DocTable} is: a reference
  * that labels its types on one page and not the next reads as two references.
  */
 export type DocHeadings = {
@@ -105,7 +115,7 @@ export type DocHeadings = {
 }
 
 /**
- * The normalized `x-doc` keyword of a single property. Everything here is
+ * The normalized `x-mjst` keyword of a single property. Everything here is
  * documentation-only: none of it changes what the schema validates, which is
  * why it lives under one vendor extension instead of leaking into the standard
  * keywords.
@@ -113,7 +123,7 @@ export type DocHeadings = {
 export type DocMeta = {
   /** Id of the page this property is documented on. Defaults to the index page. */
   readonly page?: string
-  /** Id of the section this property belongs to, declared in the root `x-doc.sections`. */
+  /** Id of the section this property belongs to, declared in the root `x-mjst.markdown.sections`. */
   readonly section?: string
   /**
    * Overrides the **Type:** label. Real config schemas are often documented in
@@ -150,7 +160,7 @@ export type DocMeta = {
 
 /** A markdown file the docs are split across. */
 export type DocPage = {
-  /** Id properties reference through `x-doc.page`. */
+  /** Id properties reference through `x-mjst.markdown.page`. */
   readonly id: string
   /** Output path relative to the output directory. */
   readonly file: string
@@ -166,7 +176,7 @@ export type DocPage = {
  * property list) move into the schema instead of living in a hand-edited file.
  */
 export type DocSection = {
-  /** Id properties reference through `x-doc.section`. */
+  /** Id properties reference through `x-mjst.markdown.section`. */
   readonly id: string
   readonly title?: string
   readonly description?: string
@@ -188,7 +198,7 @@ export type DocSection = {
 }
 
 /**
- * Programmatic overrides for what the schema declares in its root `x-doc`. The
+ * Programmatic overrides for what the schema declares in its root `x-mjst`. The
  * schema is the source of truth — these exist so a caller can point the same
  * schema at a different output file or language without editing it.
  *
@@ -198,7 +208,7 @@ export type DocSection = {
  * is the ordinary way to use this, and the stricter spelling rejects it.
  */
 export type MarkdownOptions = {
-  /** Output path of the index page. Defaults to `x-doc.file`, then `index.md`. */
+  /** Output path of the index page. Defaults to `x-mjst.markdown.file`, then `index.md`. */
   readonly file?: string | undefined
   /** Page title. Defaults to the schema's `title`. */
   readonly title?: string | undefined
@@ -233,7 +243,7 @@ export type MarkdownTableOptions = {
 }
 
 /**
- * The whole documentation setup a schema declares in its root `x-doc`, merged
+ * The whole documentation setup a schema declares in its root `x-mjst`, merged
  * with the caller's overrides. Built once per run and handed to the renderers,
  * so "what language are examples in" is answered in one place.
  */

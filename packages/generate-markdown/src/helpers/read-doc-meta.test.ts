@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { asExamples, readDescription, readDocMeta } from '#helpers/read-doc-meta'
 
 describe('read-doc-meta', () => {
-  it('reads an empty meta from a node without x-doc', () => {
+  it('reads an empty meta from a node without x-mjst', () => {
     expect(readDocMeta({ type: 'string' })).toEqual({
       hidden: false,
       heading: true,
@@ -13,7 +13,9 @@ describe('read-doc-meta', () => {
   })
 
   it('reads the placement members', () => {
-    const meta = readDocMeta({ 'x-doc': { page: 'typescript', section: 'output', order: 2, title: 'Target' } })
+    const meta = readDocMeta({
+      'x-mjst': { markdown: { page: 'typescript', section: 'output', order: 2, title: 'Target' } },
+    })
     expect(meta.page).toBe('typescript')
     expect(meta.section).toBe('output')
     expect(meta.order).toBe(2)
@@ -21,16 +23,20 @@ describe('read-doc-meta', () => {
   })
 
   it('accepts a bare code string as an example', () => {
-    expect(readDocMeta({ 'x-doc': { example: 'const a = 1' } }).examples).toEqual([{ code: 'const a = 1' }])
+    expect(readDocMeta({ 'x-mjst': { markdown: { example: 'const a = 1' } } }).examples).toEqual([
+      { code: 'const a = 1' },
+    ])
   })
 
   it('accepts a list of examples with captions and languages', () => {
     const meta = readDocMeta({
-      'x-doc': {
-        examples: [
-          { code: 'a', caption: 'First' },
-          { code: 'b', language: 'bash' },
-        ],
+      'x-mjst': {
+        markdown: {
+          examples: [
+            { code: 'a', caption: 'First' },
+            { code: 'b', language: 'bash' },
+          ],
+        },
       },
     })
     expect(meta.examples).toEqual([
@@ -42,59 +48,77 @@ describe('read-doc-meta', () => {
   // A JSON schema cannot hold a code block without escaping it into a string,
   // so an example may name the value instead and let the renderer serialize it.
   it('accepts an example given as a value', () => {
-    expect(readDocMeta({ 'x-doc': { example: { value: { darkMode: true } } } }).examples).toEqual([
+    expect(readDocMeta({ 'x-mjst': { markdown: { example: { value: { darkMode: true } } } } }).examples).toEqual([
       { value: { darkMode: true } },
     ])
   })
 
   it('keeps a null example value, which is a value like any other', () => {
-    expect(readDocMeta({ 'x-doc': { example: { value: null } } }).examples).toEqual([{ value: null }])
+    expect(readDocMeta({ 'x-mjst': { markdown: { example: { value: null } } } }).examples).toEqual([{ value: null }])
   })
 
   it('merges the singular and plural spellings rather than picking one', () => {
-    const meta = readDocMeta({ 'x-doc': { example: 'one', examples: ['two'], note: 'a', notes: ['b'] } })
+    const meta = readDocMeta({ 'x-mjst': { markdown: { example: 'one', examples: ['two'], note: 'a', notes: ['b'] } } })
     expect(meta.examples).toEqual([{ code: 'one' }, { code: 'two' }])
     expect(meta.notes).toEqual(['a', 'b'])
   })
 
   it('reads footers, which render after the examples', () => {
-    expect(readDocMeta({ 'x-doc': { footer: 'Afterwards…' } }).footers).toEqual(['Afterwards…'])
+    expect(readDocMeta({ 'x-mjst': { markdown: { footer: 'Afterwards…' } } }).footers).toEqual(['Afterwards…'])
   })
 
   it('drops an example that carries neither code nor value', () => {
-    expect(readDocMeta({ 'x-doc': { examples: [{ caption: 'Nothing here' }, '', 5] } }).examples).toEqual([])
+    expect(
+      readDocMeta({ 'x-mjst': { markdown: { examples: [{ caption: 'Nothing here' }, '', 5] } } }).examples,
+    ).toEqual([])
   })
 
   it('reads the hidden and heading switches', () => {
-    expect(readDocMeta({ 'x-doc': { hidden: true } }).hidden).toBe(true)
-    expect(readDocMeta({ 'x-doc': { heading: false } }).heading).toBe(false)
-    expect(readDocMeta({ 'x-doc': { heading: true } }).heading).toBe(true)
+    expect(readDocMeta({ 'x-mjst': { hidden: true } }).hidden).toBe(true)
+    expect(readDocMeta({ 'x-mjst': { markdown: { heading: false } } }).heading).toBe(false)
+    expect(readDocMeta({ 'x-mjst': { markdown: { heading: true } } }).heading).toBe(true)
   })
 
   // The schema is parsed JSON, not validated input: a mistyped member should
   // leave the default in place rather than throw halfway through a docs build.
   it('ignores members of the wrong type', () => {
     const meta = readDocMeta({
-      'x-doc': { page: 5, section: null, layout: 'grid', sort: 'random', order: 'first', hidden: 'yes' },
+      'x-mjst': { hidden: 'yes', markdown: { page: 5, section: null, layout: 'grid', sort: 'random', order: 'first' } },
     })
     expect(meta).toEqual({ hidden: false, heading: true, examples: [], notes: [], footers: [] })
   })
 
-  it('ignores a non-object x-doc', () => {
-    expect(readDocMeta({ 'x-doc': 'yes' }).hidden).toBe(false)
+  // `hidden` is not about markdown in particular, so it sits on `x-mjst`
+  // itself; everything the renderer lays out sits under `markdown`.
+  it('reads hidden off x-mjst and nowhere else', () => {
+    // Ignoring it would publish the option it was written to hide.
+    expect(() => readDocMeta({ 'x-mjst': { markdown: { hidden: true } } })).toThrow(/belongs on `x-mjst` itself/)
+    expect(readDocMeta({ 'x-mjst': { layout: 'table', page: 'advanced' } })).toEqual(readDocMeta({}))
+  })
+
+  // The same object carries the type generators' hints, which mean nothing here.
+  it('reads its members beside the hints the generators read', () => {
+    const meta = readDocMeta({ 'x-mjst': { brand: 'UserId', hidden: true, markdown: { page: 'ids' } } })
+    expect(meta.hidden).toBe(true)
+    expect(meta.page).toBe('ids')
+  })
+
+  it('ignores a non-object x-mjst', () => {
+    expect(readDocMeta({ 'x-mjst': 'yes' }).hidden).toBe(false)
     expect(readDocMeta(null).hidden).toBe(false)
+    expect(readDocMeta({ 'x-mjst': { markdown: 'yes' } })).toEqual(readDocMeta({}))
   })
 
   // A node that only passes a page down to its children would otherwise print
   // its parent's sentence a second time.
-  it('honours an empty x-doc description as a deliberate silence', () => {
-    expect(readDescription({ description: 'From the schema', 'x-doc': { description: '' } })).toBe('')
+  it('honours an empty x-mjst description as a deliberate silence', () => {
+    expect(readDescription({ description: 'From the schema', 'x-mjst': { markdown: { description: '' } } })).toBe('')
   })
 
-  it('prefers an x-doc description over the schema keyword', () => {
-    expect(readDescription({ description: 'From the schema', 'x-doc': { description: 'For the docs' } })).toBe(
-      'For the docs',
-    )
+  it('prefers an x-mjst description over the schema keyword', () => {
+    expect(
+      readDescription({ description: 'From the schema', 'x-mjst': { markdown: { description: 'For the docs' } } }),
+    ).toBe('For the docs')
     expect(readDescription({ description: 'From the schema' })).toBe('From the schema')
     expect(readDescription({ description: 42 })).toBe('')
   })
@@ -104,12 +128,12 @@ describe('read-doc-meta', () => {
   // for `table` and a property that asks for `headings` again.
   it('reads every layout and sort name it accepts', () => {
     for (const layout of ['headings', 'table', 'none'] as const) {
-      expect(readDocMeta({ 'x-doc': { layout } }).layout, layout).toBe(layout)
+      expect(readDocMeta({ 'x-mjst': { markdown: { layout } } }).layout, layout).toBe(layout)
     }
     for (const sort of ['schema', 'alphabetical'] as const) {
-      expect(readDocMeta({ 'x-doc': { sort } }).sort, sort).toBe(sort)
+      expect(readDocMeta({ 'x-mjst': { markdown: { sort } } }).sort, sort).toBe(sort)
     }
-    const unknown = readDocMeta({ 'x-doc': { layout: 'grid', sort: 'random' } })
+    const unknown = readDocMeta({ 'x-mjst': { markdown: { layout: 'grid', sort: 'random' } } })
     expect(unknown.layout).toBeUndefined()
     expect(unknown.sort).toBeUndefined()
   })
@@ -118,7 +142,7 @@ describe('read-doc-meta', () => {
   // examples follow, so a schema that grows a second footer need not rewrite
   // the first.
   it('merges both spellings of the footer keyword, singular first', () => {
-    expect(readDocMeta({ 'x-doc': { footer: 'One.', footers: ['Two.', 'Three.'] } }).footers).toEqual([
+    expect(readDocMeta({ 'x-mjst': { markdown: { footer: 'One.', footers: ['Two.', 'Three.'] } } }).footers).toEqual([
       'One.',
       'Two.',
       'Three.',

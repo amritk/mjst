@@ -52,7 +52,7 @@ describe('run', () => {
     const dir = tmp('markdown-table-style-')
     const schema = writeSchema(dir, {
       title: 'Config',
-      'x-doc': { layout: 'table' },
+      'x-mjst': { markdown: { layout: 'table' } },
       properties: {
         server: {
           type: 'object',
@@ -68,9 +68,27 @@ describe('run', () => {
     expect(stderr).toBe('')
     expect(code).toBe(0)
     const page = readFileSync(join(dir, 'index.md'), 'utf-8')
-    expect(page).toContain('| Property | Description |')
-    expect(page).toContain('| `host` _required_ | The host to bind. |')
+    expect(page).toContain('| Property | Required | Description |')
+    expect(page).toContain('| `host` | ✅ | The host to bind. |')
     expect(page.indexOf('`host`')).toBeLessThan(page.indexOf('`port`'))
+  })
+
+  it('passes a required suffix through to the generator', async () => {
+    const dir = tmp('markdown-required-suffix-')
+    const schema = writeSchema(dir, {
+      'x-mjst': { markdown: { layout: 'table' } },
+      properties: {
+        server: {
+          type: 'object',
+          required: ['host'],
+          properties: { host: { type: 'string', description: 'The host to bind.' } },
+        },
+      },
+    })
+    const { code, stderr } = await run([schema, '--out-dir', dir, '--required-style', '*', '--type-column', 'never'])
+    expect(stderr).toBe('')
+    expect(code).toBe(0)
+    expect(readFileSync(join(dir, 'index.md'), 'utf-8')).toContain('| `host`* | The host to bind. |')
   })
 
   it('passes the heading options through to the generator', async () => {

@@ -66,7 +66,7 @@ describe('heading-text', () => {
     expect(propertyHeading('-flag', undefined)).toEqual({ markdown: '`-flag`', text: '-flag' })
   })
 
-  it('lets an x-doc title replace both of them', () => {
+  it('lets an x-mjst title replace both of them', () => {
     expect(propertyHeading('targets', 'SDK targets')).toEqual({ markdown: 'SDK targets', text: 'SDK targets' })
   })
 

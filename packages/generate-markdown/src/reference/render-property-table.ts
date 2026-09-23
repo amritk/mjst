@@ -5,12 +5,9 @@ import { linkDestination } from '#helpers/link-destination'
 import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
 import { referenceType } from '#helpers/reference-type'
 import { relativeDocLink } from '#helpers/relative-doc-link'
-import { tableCell, tableCode } from '#helpers/table-cell'
+import { tableCell, tableCode, tableFragment } from '#helpers/table-cell'
 import type { DocMeta, DocTable, DocTableColumn } from '#types/doc'
 import type { DocEntry, RenderContext } from '#types/render'
-
-/** How a required property is marked under `x-doc.table.required: 'marker'`. */
-const REQUIRED_MARKER = '_required_'
 
 /**
  * Type labels that leave a reader no better off than a blank cell. `object` is
@@ -37,7 +34,7 @@ const showColumn = (column: DocTableColumn, filled: boolean): boolean =>
  * The properties of a table in the order its rows appear: the order the caller
  * handed over, or the required ones first when the schema asked for that.
  *
- * A stable partition, so `sort` and `x-doc.order` still decide the order within
+ * A stable partition, so `sort` and `x-mjst.markdown.order` still decide the order within
  * each group. Exported because the callers need the same order for the blocks
  * they render under the table: those follow their rows, and the anchors are
  * numbered in the order the headings print, so a block order that disagreed
@@ -137,13 +134,13 @@ const rowDestination = (
  * Every column has to earn its width, because the one that matters is
  * **Description** and a narrow viewport gives it what the others leave. By
  * default **Type** and **Default** are dropped when no row fills them with
- * anything the reader could act on, and requiredness is a marker in the
- * **Property** cell rather than a column: on a real page five rows in twenty
- * are required, which is a column of blanks carrying one bit.
+ * anything the reader could act on, and so is **Required** when no row is. A
+ * schema that would rather not spend a column on one bit names a suffix for
+ * the **Property** cell instead.
  *
  * All of that is the default rather than the rule — a schema that wants its
  * types spelled out everywhere, or its required options listed first, says so
- * in the root `x-doc.table` and every table on every page follows it. See
+ * in the root `x-mjst.markdown.table` and every table on every page follows it. See
  * {@link DocTable}.
  */
 export const renderPropertyTable = (
@@ -152,6 +149,7 @@ export const renderPropertyTable = (
   options: PropertyTableOptions = {},
 ): string => {
   const style = context.table.required
+  const suffix = style === 'column' ? '' : tableFragment(style)
   const summarised = options.summarised ?? (() => false)
   const properties = tableOrder(entries, context.table).map((entry) => ({
     entry,
@@ -180,8 +178,8 @@ export const renderPropertyTable = (
     const destination = rowDestination(entry, meta, context, summarised)
     const name = tableCode(entry.name)
     const label = destination === undefined ? name : `[${name}](${destination})`
-    // Under `column` the column says it instead.
-    const cells = [entry.required && style === 'marker' ? `${label} ${REQUIRED_MARKER}` : label]
+    // Under `column` the column says it instead, and the suffix is empty.
+    const cells = [entry.required ? `${label}${suffix}` : label]
     if (showType) cells.push(type.length > 0 ? tableCode(type) : '')
     if (showRequired) cells.push(entry.required ? '✅' : '')
     if (showDefault) {

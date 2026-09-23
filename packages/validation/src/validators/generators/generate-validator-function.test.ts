@@ -343,6 +343,20 @@ describe('generate-validator-function', () => {
     expect(code).toContain('<= 65535')
   })
 
+  // Docs settings share `x-mjst` with the generator hints but check nothing, so
+  // a root carrying them keeps the one-line delegation.
+  it('keeps the top-level $ref delegation when x-mjst holds only docs settings', () => {
+    const plain = generateValidatorFunction({ $ref: '#/$defs/Config' }, 'Root')
+    const documented = generateValidatorFunction(
+      { $ref: '#/$defs/Config', 'x-mjst': { hidden: true, markdown: { pages: [] } } } as never,
+      'Root',
+    )
+    expect(documented).toBe(plain)
+    expect(generateValidatorFunction({ $ref: '#/$defs/Config', 'x-mjst': { brand: 'B' } } as never, 'Root')).not.toBe(
+      plain,
+    )
+  })
+
   it('generates a $ref property delegation', () => {
     const schema = {
       type: 'object' as const,

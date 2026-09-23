@@ -97,7 +97,7 @@ export const run = async (argv: string[]): Promise<RunResult> => {
     sort: args.sort,
     headingLevel: args.headingLevel,
     // Always passed: every member is optional, so the schema's own
-    // `x-doc.table` still decides whatever the flags left alone.
+    // `x-mjst.markdown.table` still decides whatever the flags left alone.
     table: {
       type: args.typeColumn,
       default: args.defaultColumn,

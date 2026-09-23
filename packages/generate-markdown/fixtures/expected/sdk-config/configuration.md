@@ -225,10 +225,10 @@ Named base URLs the generated client can switch between.
 
 Named pagination schemes referenced by method-level pagination settings.
 
-| Property | Type | Description |
-| --- | --- | --- |
-| [`name`](#name-1) _required_ | `string` | Name methods reference this scheme by. |
-| `type` _required_ | `"cursor" \| "cursorId" \| "cursorUrl" \| "offset" \| "pageNumber"` | Which pagination strategy the generated helper implements. |
+| Property | Type | Required | Description |
+| --- | --- | --- | --- |
+| [`name`](#name-1) | `string` | ✅ | Name methods reference this scheme by. |
+| `type` | `"cursor" \| "cursorId" \| "cursorUrl" \| "offset" \| "pageNumber"` | ✅ | Which pagination strategy the generated helper implements. |
 
 #### name
 

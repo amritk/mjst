@@ -1008,6 +1008,24 @@ describe('generateTypeDefinition', () => {
     )
   })
 
+  // Docs settings share `x-mjst` with the generator hints but shape no type, so
+  // an `if` carrying them still folds into the conditional it describes.
+  it('keeps a conditional whose if carries only docs settings in x-mjst', () => {
+    const conditional = (extra: Record<string, unknown>): JSONSchema => ({
+      type: 'object',
+      properties: { mode: { enum: ['a', 'b'] }, level: { type: 'number' } },
+      if: { properties: { mode: { const: 'a' } }, required: ['mode'], ...extra },
+      then: { required: ['level'] },
+    })
+    const plain = generateTypeDefinition(conditional({}), 'T')
+    expect(plain).toContain('| { mode?: "b" }')
+    expect(generateTypeDefinition(conditional({ 'x-mjst': { hidden: true, markdown: { page: 'p' } } }), 'T')).toBe(
+      plain,
+    )
+    // A real hint still makes the fragment one it cannot fold.
+    expect(generateTypeDefinition(conditional({ 'x-mjst': { brand: 'B' } }), 'T')).not.toBe(plain)
+  })
+
   // OpenAPI's security scheme: the per-type rules are `$ref`s to conditional
   // definitions, each testing the `type` the composing schema enumerates. The
   // definition's own file cannot see that enumeration and drops its

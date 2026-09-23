@@ -122,7 +122,7 @@ export const childSources = (prop: SchemaProperty, depth = 0, own = true): reado
 export const childSchema = (prop: SchemaProperty): ChildSource => childSources(prop)[0] ?? { node: {}, hops: [] }
 
 /**
- * Orders properties for rendering. `x-doc.order` wins wherever it is set — that
+ * Orders properties for rendering. `x-mjst.markdown.order` wins wherever it is set — that
  * is the escape hatch for putting the two options everybody needs above the
  * twenty nobody does — and the rest fall back to the page's sort mode, which is
  * either the order the schema declares them in or alphabetical.

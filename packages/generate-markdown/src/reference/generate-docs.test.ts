@@ -23,13 +23,19 @@ const written = (): readonly (readonly [string, string])[] =>
 
 const multiPage = {
   title: 'Configuration',
-  'x-doc': {
-    file: 'configuration.md',
-    pages: [{ id: 'ts', file: 'configuration/typescript.md', title: 'TypeScript' }],
+  'x-mjst': {
+    markdown: {
+      file: 'configuration.md',
+      pages: [{ id: 'ts', file: 'configuration/typescript.md', title: 'TypeScript' }],
+    },
   },
   properties: {
     name: { type: 'string' },
-    typescript: { type: 'object', 'x-doc': { page: 'ts' }, properties: { packageName: { type: 'string' } } },
+    typescript: {
+      type: 'object',
+      'x-mjst': { markdown: { page: 'ts' } },
+      properties: { packageName: { type: 'string' } },
+    },
   },
 }
 
@@ -97,14 +103,14 @@ describe('generate-docs', () => {
   // nothing reaching it today can fail. What matters to a caller is the same
   // either way: the write does not happen.
   it('refuses a page that would be written outside the output directory', async () => {
-    mockSchema({ 'x-doc': { file: '../../etc/passwd' } })
+    mockSchema({ 'x-mjst': { markdown: { file: '../../etc/passwd' } } })
 
     await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/outside the output directory/)
     expect(writeFileMock).not.toHaveBeenCalled()
   })
 
   it('refuses an absolute page path', async () => {
-    mockSchema({ 'x-doc': { file: '/etc/passwd' } })
+    mockSchema({ 'x-mjst': { markdown: { file: '/etc/passwd' } } })
 
     await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/outside the output directory/)
     expect(writeFileMock).not.toHaveBeenCalled()
@@ -115,12 +121,14 @@ describe('generate-docs', () => {
   // overwritten with no error.
   it('refuses a page that climbs out of the output directory and back in', async () => {
     mockSchema({
-      'x-doc': {
-        file: 'index.md',
-        pages: [
-          { id: 'one', file: 'a.md', title: 'One' },
-          { id: 'two', file: '../out/a.md', title: 'Two' },
-        ],
+      'x-mjst': {
+        markdown: {
+          file: 'index.md',
+          pages: [
+            { id: 'one', file: 'a.md', title: 'One' },
+            { id: 'two', file: '../out/a.md', title: 'Two' },
+          ],
+        },
       },
       properties: {},
     })
@@ -130,7 +138,7 @@ describe('generate-docs', () => {
   })
 
   it('refuses a page whose path names no file', async () => {
-    mockSchema({ 'x-doc': { pages: [{ id: 'p', file: '.', title: 'P' }] }, properties: {} })
+    mockSchema({ 'x-mjst': { markdown: { pages: [{ id: 'p', file: '.', title: 'P' }] } }, properties: {} })
 
     await expect(generateDocs({ outDir: '/out' })).rejects.toThrow(/has no file to be written to/)
     expect(writeFileMock).not.toHaveBeenCalled()

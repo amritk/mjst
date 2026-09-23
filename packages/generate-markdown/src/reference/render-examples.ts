@@ -10,7 +10,7 @@ import type { DocExample } from '#types/doc'
  */
 /**
  * The language name written after the opening backticks. It comes from
- * `x-doc.language`, so it is schema text: a line ending in it closed the fence
+ * `x-mjst.markdown.language`, so it is schema text: a line ending in it closed the fence
  * on the very next line and turned the example body into page content, and a
  * backtick made the opening line not a fence at all (CommonMark forbids
  * backticks in a backtick info string), which left the sample's own `#` lines

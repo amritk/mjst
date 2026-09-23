@@ -9,11 +9,11 @@ import type { GeneratedFile, MarkdownOptions } from '#types/doc'
 /**
  * Renders a JSON Schema as prose documentation — a heading, a type, the
  * description and an example per property — and splits it across as many
- * markdown files as the schema's `x-doc.pages` declares.
+ * markdown files as the schema's `x-mjst.markdown.pages` declares.
  *
  * Everything the output says comes from the schema: the prose from
- * `description`, the structure from `x-doc.pages` / `x-doc.sections`, and the
- * code samples from `x-doc.example` (or derived from a property's `examples`).
+ * `description`, the structure from `x-mjst.markdown.pages` / `x-mjst.markdown.sections`, and the
+ * code samples from `x-mjst.markdown.example` (or derived from a property's `examples`).
  * That is the whole point — a hand-written configuration reference drifts from
  * the schema it documents, and this one cannot.
  *

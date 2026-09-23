@@ -11,7 +11,7 @@ import {
 const asStringArray = (value: unknown): readonly string[] =>
   Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
 
-import { DOC_KEY } from '#helpers/read-doc-meta'
+import { MARKDOWN_KEY, MJST_KEY, markdownOf } from '#helpers/read-doc-meta'
 import type { ConfigSchema } from '#types/schema'
 
 /**
@@ -146,7 +146,7 @@ const SCHEMA_MAP_KEYWORDS: ReadonlySet<string> = new Set([
 ])
 
 /**
- * The `x-doc` members a truncation does *not* take from the definition it
+ * The `x-mjst` members a truncation does *not* take from the definition it
  * stands for: the ones that describe where a property appears and how it is
  * announced, rather than what it is.
  *
@@ -407,10 +407,10 @@ const typeSkeleton = (
   }
   const shape: Record<string, unknown> = {}
   for (const key of ['type', 'enum', 'const']) if (node[key] !== undefined) defineOwn(shape, key, node[key])
-  // 6. `x-doc.type` beats every inferred label everywhere else, so a truncated
+  // 6. `x-mjst.markdown.type` beats every inferred label everywhere else, so a truncated
   // array whose element is named `Tree` says `Tree[]` and not `object[]`.
-  const doc = node[DOC_KEY]
-  if (isObject(doc) && typeof doc['type'] === 'string') defineOwn(shape, DOC_KEY, { type: doc['type'] })
+  const label = markdownOf(node)['type']
+  if (typeof label === 'string') defineOwn(shape, MJST_KEY, { [MARKDOWN_KEY]: { type: label } })
   if (Object.keys(shape).length > 0) {
     // An array's label names its element, so the element's own skeleton comes
     // too — reduced like everything here, so it can add a label and never a
@@ -432,6 +432,36 @@ const typeSkeleton = (
 }
 
 /**
+ * `own` laid over `base` the way a ref site's `x-mjst` is laid over its
+ * definition's: member by member, and `markdown` — a namespace of its own —
+ * member by member again, so a ref site that names a page does not wipe the
+ * definition's examples. Always a fresh object, `markdown` included, so the
+ * caller can delete from it without reaching back into the schema.
+ */
+const mergedMjst = (base: Record<string, unknown>, own: unknown): Record<string, unknown> => {
+  const merged: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(base)) defineOwn(merged, key, value)
+  const overlay = isObject(own) ? own : {}
+  for (const [key, value] of Object.entries(overlay)) if (key !== MARKDOWN_KEY) defineOwn(merged, key, value)
+  const baseMarkdown = base[MARKDOWN_KEY]
+  const ownMarkdown = overlay[MARKDOWN_KEY]
+  if (isObject(baseMarkdown) || isObject(ownMarkdown)) {
+    const markdown: Record<string, unknown> = {}
+    for (const source of [baseMarkdown, ownMarkdown]) {
+      if (isObject(source)) for (const [key, value] of Object.entries(source)) defineOwn(markdown, key, value)
+    }
+    defineOwn(merged, MARKDOWN_KEY, markdown)
+  }
+  return merged
+}
+
+/** The `markdown` member of a merged `x-mjst`, which {@link mergedMjst} always copies. */
+const markdownMember = (mjst: Record<string, unknown>): Record<string, unknown> | undefined => {
+  const markdown = mjst[MARKDOWN_KEY]
+  return isObject(markdown) ? (markdown as Record<string, unknown>) : undefined
+}
+
+/**
  * The documentation a truncation carries from the definition it stands for,
  * merged along the `$ref` chain the way the inliner merges it at every hop.
  *
@@ -445,7 +475,7 @@ const carriedDoc = (
   depth = 0,
 ): { description?: string; doc?: Record<string, unknown>; value?: Record<string, unknown> } => {
   const node = resolvePointer(root, ref)
-  // The root is not a definition: its `x-doc` is the *page's* configuration —
+  // The root is not a definition: its `x-mjst` is the *page's* configuration —
   // its title, its examples, its notes — and copied onto a property the page
   // introduced itself a second time under the property's name.
   if (!isObject(node) || node === root || depth > MAX_SCHEMA_DEPTH) return {}
@@ -454,16 +484,18 @@ const carriedDoc = (
     typeof next === 'string' ? carriedDoc(root, next, depth + 1) : {}
   const value: Record<string, unknown> = { ...base.value }
   for (const key of CARRIED_VALUE_KEYS) if (node[key] !== undefined) defineOwn(value, key, node[key])
-  const own = isObject(node[DOC_KEY]) ? (node[DOC_KEY] as Record<string, unknown>) : undefined
-  const doc: Record<string, unknown> = { ...base.doc }
-  if (own !== undefined) for (const [key, value] of Object.entries(own)) defineOwn(doc, key, value)
+  const doc = mergedMjst(base.doc ?? {}, node[MJST_KEY])
+  const markdown = markdownMember(doc)
+  const ownMarkdown = markdownOf(node)
   const description = typeof node['description'] === 'string' ? node['description'] : base.description
-  // The same rule `mergedDoc` applies: a plain `description` at this hop is
-  // describing this node, and outranks the `x-doc.description` it inherited.
-  if (typeof node['description'] === 'string' && (own === undefined || !('description' in own))) {
-    delete doc['description']
+  if (markdown !== undefined) {
+    // The same rule `mergedDoc` applies: a plain `description` at this hop is
+    // describing this node, and outranks the `x-mjst.markdown.description` it
+    // inherited.
+    if (typeof node['description'] === 'string' && !('description' in ownMarkdown)) delete markdown['description']
+    for (const key of PLACEMENT_DOC_KEYS) delete markdown[key]
+    if (Object.keys(markdown).length === 0) delete doc[MARKDOWN_KEY]
   }
-  for (const key of PLACEMENT_DOC_KEYS) delete doc[key]
   return {
     ...(description !== undefined && { description }),
     ...(Object.keys(doc).length > 0 && { doc }),
@@ -511,31 +543,33 @@ const requiredOfRef = (root: Record<string, unknown>, ref: string, budget: Budge
 }
 
 /**
- * Merges the `x-doc` keyword of a `$ref` site with the one on the definition it
+ * Merges the `x-mjst` keyword of a `$ref` site with the one on the definition it
  * points at, rather than letting the ref site replace it wholesale.
  *
  * Every other keyword is replaced, which is what JSON Schema means by a sibling
- * winning. `x-doc` is different because it is a namespace rather than a value:
+ * winning. `x-mjst` is different because it is a namespace rather than a value:
  * a definition carries the documentation that is true wherever it is used (its
  * examples, how its children lay out), and the ref site adds where *this* use is
  * documented (`page`, `section`). Replacing the whole object silently dropped a
  * definition's examples the moment a ref site assigned it to a page.
  */
 const mergedDoc = (target: Record<string, unknown>, siblings: Record<string, unknown>): Record<string, unknown> => {
-  const targetDoc = target[DOC_KEY]
-  const siblingDoc = siblings[DOC_KEY]
-  // A malformed `x-doc` at the ref site is ignored rather than allowed to wipe
+  const targetDoc = target[MJST_KEY]
+  // A malformed `x-mjst` at the ref site is ignored rather than allowed to wipe
   // the definition's, which is the opposite of what the merge is for.
   if (!isObject(targetDoc)) return {}
-  const merged: Record<string, unknown> = isObject(siblingDoc) ? { ...targetDoc, ...siblingDoc } : { ...targetDoc }
+  const merged = mergedMjst(targetDoc, siblings[MJST_KEY])
   // The definition's prose describes the definition; a ref site that writes its
   // own `description` is describing *this* use, and must win — otherwise two
   // properties sharing one definition both print the definition's sentence and
-  // neither prints its own. Only an `x-doc.description` at the ref site outranks
+  // neither prints its own. Only an `x-mjst.markdown.description` at the ref site outranks
   // the plain one there.
-  const siblingDocDescribes = isObject(siblingDoc) && 'description' in siblingDoc
-  if (typeof siblings['description'] === 'string' && !siblingDocDescribes) delete merged['description']
-  return { [DOC_KEY]: merged }
+  const markdown = markdownMember(merged)
+  const siblingDocDescribes = 'description' in markdownOf(siblings)
+  if (markdown !== undefined && typeof siblings['description'] === 'string' && !siblingDocDescribes) {
+    delete markdown['description']
+  }
+  return { [MJST_KEY]: merged }
 }
 
 /**
@@ -629,9 +663,9 @@ export const dereference = (
       const carried: Record<string, unknown> = {
         ...value,
         ...(description !== undefined && { description }),
-        ...(doc !== undefined && { [DOC_KEY]: doc }),
+        ...(doc !== undefined && { [MJST_KEY]: doc }),
       }
-      // Merged the way any other `$ref` site's `x-doc` is, so the one rule
+      // Merged the way any other `$ref` site's `x-mjst` is, so the one rule
       // about prose holds on both routes: a ref site writing its own
       // `description` is describing *this* use and wins over the definition's.
       const stub: Record<string | symbol, unknown> = {
