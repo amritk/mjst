@@ -215,6 +215,25 @@ const isDocMarker = (src: string, i: number, len: number): boolean => {
 }
 
 /**
+ * True when the line {@link peekLine} just parked on opens with a document
+ * marker. A marker only counts at column 0: the spec spells `c-directives-end`
+ * and `c-document-end` as the first characters of a line (and `c-forbidden`
+ * only reserves them at `<start-of-line>`), so an indented `---` or `...` is
+ * ordinary text — ` ---` is the string `"---"`, and `--- a` / `⟨2 spaces⟩...`
+ * folds to `"a ..."`. Reading one as a marker used to end the document there,
+ * dropping or splitting content with no diagnostic.
+ *
+ * `line.indent` is 0 exactly when the content sits at the line start (a tab in
+ * the leading whitespace counts towards it), so one integer test settles the
+ * column before the character tests run.
+ */
+const isMarkerLine = (src: string, line: LineInfo, len: number): boolean => {
+  if (line.indent !== 0) return false
+  const c = src.charCodeAt(line.contentPos)
+  return (c === DASH || c === DOT) && isDocMarker(src, line.contentPos, len)
+}
+
+/**
  * Advances the cursor to the start of the next line with real content, skipping
  * blank lines and full-line comments. Leaves `state.pos` parked at the start of
  * that line (column 0) so indentation can be measured deterministically.
@@ -1209,13 +1228,15 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
     // document-end check reports. Folding it in instead (as this used to)
     // appended a line the author had commented the scalar closed before.
     if (endsAtComment(src, valueEnd, len)) break
-    // Only a top-level scalar (`parentIndent < 0`) can sit at column 0 alongside
-    // a `---`/`...` marker; for nested scalars the indent test above already
-    // stopped us, so this short-circuits to a single comparison off the hot path.
+    // Only a line at column 0 can hold a `---`/`...` marker — indented, the same
+    // three characters are text a root scalar folds in (`a` / ` ---` is
+    // `"a ---"`). Column 0 is only reachable by a top-level scalar, since a
+    // nested one was already stopped by the indent test above, so this
+    // short-circuits to a single comparison off the hot path.
     // A `%` line is deliberately *not* a stop: the suite's XLQ9 folds one into
     // the scalar, so treating it as a misplaced directive would reject a valid
     // document to catch an invalid one — the worse of the two errors.
-    if (parentIndent < 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
+    if (indent === 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
     const lineEnd = plainLineEnd(src, i, len)
     if (!colonReported) {
       const colon = plainColonAt(src, i, lineEnd)
@@ -2316,6 +2337,11 @@ const parseBlockMap = (
       let c = src.charCodeAt(contentPos)
       // A `-` entry indicator at this indent is a sequence, not a mapping key.
       if (isSeqEntryDash(src, contentPos, len)) break
+      // Neither is a document marker, which only a root mapping (indent 0) can
+      // meet. Without this `--- b: 2` passed the key-colon scan below and the
+      // next document was merged into this one as a key called `--- b`. The
+      // indent test keeps every nested mapping at one integer comparison.
+      if (indent === 0 && (c === DASH || c === DOT) && isDocMarker(src, contentPos, len)) break
       keyProps = NO_PROPS
       // `&` and `!` cannot begin a plain scalar, so a key line that opens on one
       // is carrying node properties — and the key starts past them. Reading the
@@ -2699,23 +2725,37 @@ const docMarkerInlineNode = (state: State, p: number): number => {
 }
 
 /**
+ * True when a block mapping opens at `pos` — an explicit `? ` key or an
+ * implicit `key: `. Only asked of a root node's first line, by the two checks
+ * that care whether a block collection starts *on that line* (a `---` line, a
+ * tab-indented line); never on the per-entry path.
+ */
+const opensBlockMapping = (src: string, pos: number, len: number): boolean =>
+  (src.charCodeAt(pos) === QUESTION && introducerBoundary(src, pos + 1, len)) || findKeyColon(src, pos, len) >= 0
+
+/**
  * Parses the node written on a `---` line. The node is the document root, so it
  * is measured against column 0 whatever column the marker pushed it to —
  * `--- |` holds a block scalar whose content may start at column 0.
  */
 const parseDocMarkerNode = (state: State, contentPos: number): YamlNode => {
   const { src, len } = state
-  // A *block* mapping is the one node kind that may not start here: its
-  // following entries would have to align under a key at column 4 or beyond,
-  // which the spec does not allow a document's root mapping to do. A flow
-  // collection is fine on its own (`--- {a: 1}`), and `findKeyColon` now steps
-  // over one before looking for the separator — so it can tell `--- [a, b]`
-  // from the block mapping `--- [a, b]: v`, which this used to wave through.
-  if (findKeyColon(src, contentPos, len) >= 0) {
+  // A *block* collection is the one node kind that may not start here: its
+  // following entries would have to align under a key or `-` at column 4 or
+  // beyond, which the spec does not allow a document's root to do — the block
+  // collection production (`s-l+block-collection`) needs a line break in front
+  // of its first entry. A flow collection is fine on its own (`--- {a: 1}`), and
+  // `findKeyColon` steps over one before looking for the separator — so it can
+  // tell `--- [a, b]` from the block mapping `--- [a, b]: v`. The sequence and
+  // explicit-key forms (`--- - a`, `--- ? a`) are the same mistake and used to
+  // be read without a word. The node is still parsed either way, so the value
+  // survives the report.
+  const seq = isSeqEntryDash(src, contentPos, len)
+  if (seq || opensBlockMapping(src, contentPos, len)) {
     pushError(
       state,
       'UNEXPECTED_CONTENT',
-      'A block mapping cannot start on the "---" line',
+      seq ? 'A block sequence cannot start on the "---" line' : 'A block mapping cannot start on the "---" line',
       contentPos,
       plainLineEnd(src, contentPos, len),
     )
@@ -2725,29 +2765,60 @@ const parseDocMarkerNode = (state: State, contentPos: number): YamlNode => {
 }
 
 /**
- * Reads a leading BOM, `%`-directives, and a `---` document-start marker.
- * Returns the offset of a node written on the marker line, or -1 when there is
- * none — see {@link docMarkerInlineNode}.
+ * Parses the root node of a document that does not start on its `---` line —
+ * the shared body of {@link parseDocument} and {@link parseAllDocuments}, so the
+ * two report the same problems for the same document. `line` is the root's
+ * line as {@link peekLine} just returned it.
  */
-const skipDocumentHead = (state: State): number => {
+const parseBareRoot = (state: State, line: LineInfo): YamlNode => {
   const { src, len } = state
-  if (src.charCodeAt(0) === 0xfeff) state.pos = 1
-  for (;;) {
-    const line = peekLine(state, 0)
-    if (line.eof) return -1
-    const c = src.charCodeAt(line.contentPos)
-    if (c === PERCENT) {
-      readDirective(state, line.contentPos)
-      if (state.keepComments) recordLineComment(state, line.contentPos)
-      state.pos = nextLineStart(src, line.contentPos, len)
-      continue
-    }
-    if (c === DASH && isDocMarker(src, line.contentPos, len)) {
-      const inline = docMarkerInlineNode(state, line.contentPos)
-      if (inline >= 0) return inline
-      continue
-    }
-    return -1
+  const p = line.contentPos
+  const indent = line.indent
+  // `%` is an indicator, so it cannot open a node: a document body that starts
+  // with one is a directive written where it does not belong. It is still read
+  // as a node (`%x: 1` keys the mapping by `%x`, as `yaml` does) rather than
+  // dropped — a directive read here would describe a document already begun.
+  if (src.charCodeAt(p) === PERCENT) {
+    pushError(
+      state,
+      'UNEXPECTED_DIRECTIVE',
+      'A directive must be preceded by a "..." document-end marker',
+      p,
+      tokenEnd(src, p, len),
+    )
+  }
+  // Indented roots are rare, and a tab in their indentation rarer still, so the
+  // common document pays this one comparison.
+  if (indent !== 0) checkRootTabIndent(state, p)
+  state.pos = p
+  return parseNode(state, indent, -1)
+}
+
+/**
+ * Reports a tab in the leading whitespace of a root node's line when a block
+ * collection opens on it — `\ta: 1`, `⟨space⟩⟨tab⟩- a`, `\t? a`.
+ *
+ * {@link peekLine} cannot make this call at the root: the root owes no
+ * indentation (`minIndent` is 0), and there a leading tab is often plain
+ * separation — `\t[a]`, `\t{}`, `\t'~'` and even `\t&x` (with the collection on
+ * the next line) are valid documents, pinned by tests. What turns the tab into
+ * indentation is a block mapping or sequence *starting on this line*, whose
+ * entries take their column from it (`s-indent` is spaces only). Cold: only
+ * reached for a root that is indented at all.
+ *
+ * `state.pos` is the line start {@link peekLine} parked on. Recording it in
+ * `tabReportedAt` stops the collection's own `peekLine` from reporting the same
+ * line a second time.
+ */
+const checkRootTabIndent = (state: State, contentPos: number): void => {
+  const { src, len } = state
+  const lineStart = state.pos
+  let tab = lineStart
+  while (tab < contentPos && src.charCodeAt(tab) !== TAB) tab++
+  if (tab === contentPos || state.tabReportedAt === lineStart) return
+  if (isSeqEntryDash(src, contentPos, len) || opensBlockMapping(src, contentPos, len)) {
+    pushError(state, 'TAB_INDENT', 'Tabs cannot be used for indentation', tab, contentPos)
+    state.tabReportedAt = lineStart
   }
 }
 
@@ -3055,8 +3126,7 @@ const checkDocumentEnd = (state: State): void => {
   finishLineIfMidLine(state)
   const line = peekLine(state, 0)
   if (line.eof) return
-  const c = state.src.charCodeAt(line.contentPos)
-  if ((c === DASH || c === DOT) && isDocMarker(state.src, line.contentPos, state.len)) {
+  if (isMarkerLine(state.src, line, state.len)) {
     warnIfMoreDocuments(state, line.contentPos)
     return
   }
@@ -3070,6 +3140,39 @@ const checkDocumentEnd = (state: State): void => {
 }
 
 /**
+ * True when nothing but whitespace and a comment remains on the line from
+ * `from`. Only called just past a `---`/`...`, which {@link isDocMarker} has
+ * already required to be followed by whitespace or a break, so a `#` reached
+ * here always has the whitespace in front of it that makes it a comment.
+ */
+const lineRestIsBlank = (src: string, from: number, len: number): boolean => {
+  let i = from
+  while (i < len && isSpace(src.charCodeAt(i))) i++
+  const c = src.charCodeAt(i)
+  return i >= len || c === NL || c === CR || c === HASH
+}
+
+/**
+ * Reports content written after a `...` marker at `markerPos`. The spec's
+ * `l-document-suffix ::= c-document-end s-l-comments` leaves room for a comment
+ * and nothing else, and unlike `---` there is no node the line could be
+ * holding — `... x` would otherwise lose the `x` without a word.
+ */
+const checkDocEndTail = (state: State, markerPos: number): void => {
+  const { src, len } = state
+  if (lineRestIsBlank(src, markerPos + 3, len)) return
+  let after = markerPos + 3
+  while (after < len && isSpace(src.charCodeAt(after))) after++
+  pushError(
+    state,
+    'UNEXPECTED_CONTENT',
+    'Unexpected content after the "..." document-end marker',
+    after,
+    plainLineEnd(src, after, len),
+  )
+}
+
+/**
  * Warns when a `---`/`...` marker has another document under it.
  *
  * Reading only the first document of a stream is deliberate and documented, but
@@ -3079,13 +3182,22 @@ const checkDocumentEnd = (state: State): void => {
  * trailing marker (`a: 1\n...\n`) closes the stream without hiding anything, so
  * we look past it and only warn when real content follows.
  *
+ * A `---` may carry the next document's root on its own line (`--- b`), which
+ * hides it just as well as a line below would — so that counts as content too.
+ * A `...` may not carry anything but a comment, and says so exactly as
+ * {@link parseAllDocuments} does for the same line.
+ *
  * Advancing `state.pos` here is safe: `checkDocumentEnd` is the last thing
  * `parseDocument` does with the cursor.
  */
 const warnIfMoreDocuments = (state: State, markerPos: number): void => {
+  const { src, len } = state
   if (state.keepComments) recordLineComment(state, markerPos + 3)
-  state.pos = nextLineStart(state.src, markerPos + 3, state.len)
-  if (peekLine(state, 0).eof) return
+  let hidden = false
+  if (src.charCodeAt(markerPos) === DOT) checkDocEndTail(state, markerPos)
+  else hidden = !lineRestIsBlank(src, markerPos + 3, len)
+  state.pos = nextLineStart(src, markerPos + 3, len)
+  if (!hidden && peekLine(state, 0).eof) return
   pushWarning(
     state,
     'MULTIPLE_DOCUMENTS',
@@ -3126,28 +3238,24 @@ const finishDocument = (state: State, contents: YamlNode | null): YamlDocument =
  */
 export const parseDocument = (source: string, options: ParseOptions = {}): YamlDocument => {
   const state = newState(source, options)
-  const inline = skipDocumentHead(state)
+  if (source.charCodeAt(0) === 0xfeff) state.pos = 1
+  // The head is read by the very function the stream reader uses, so the first
+  // document is framed — and diagnosed — identically either way. This used to be
+  // a lighter copy that drifted: it took directives with no `---` after them
+  // without a word, read past a second bare `---` into the next document, and
+  // ended the document at a leading `...` instead of reading the one after it.
+  const markers = skipStreamHead(state, true)
   let contents: YamlNode | null = null
-  if (inline >= 0) {
-    contents = parseDocMarkerNode(state, inline)
-    checkDocumentEnd(state)
-    return finishDocument(state, contents)
+  if ((markers & SAW_INLINE_NODE) !== 0) {
+    contents = parseDocMarkerNode(state, state.pos)
+  } else {
+    const head = peekLine(state, 0)
+    // A column-0 marker here (only possible after a bare `---`) means this
+    // document is empty; `checkDocumentEnd` below looks past it. The test is
+    // `isDocMarker`, so a marker has to *stand alone*: `...abc: 1` is a mapping.
+    if (!head.eof && !isMarkerLine(source, head, state.len)) contents = parseBareRoot(state, head)
   }
-  const head = peekLine(state, 0)
-  if (!head.eof) {
-    // Stop a bare `...` document-end marker from being read as a scalar. The
-    // test is `isDocMarker` — the same one the stream path and `checkDocumentEnd`
-    // use — because a marker has to *stand alone*: the three dots this used to
-    // look for on their own matched `...abc` and `....` too, and returned an
-    // empty document with no diagnostic. A whole mapping (`...abc: 1`) vanished
-    // silently, which `parseAllDocuments` on the same source parses correctly.
-    const c = source.charCodeAt(head.contentPos)
-    if (c !== DOT || !isDocMarker(source, head.contentPos, state.len)) {
-      state.pos = head.contentPos
-      contents = parseNode(state, head.indent, -1)
-      checkDocumentEnd(state)
-    }
-  }
+  checkDocumentEnd(state)
   return finishDocument(state, contents)
 }
 
@@ -3196,29 +3304,18 @@ const skipStreamHead = (state: State, closed: boolean): number => {
       state.pos = nextLineStart(src, p, len)
       continue
     }
-    if (c === DOT && isDocMarker(src, p, len)) {
-      let after = p + 3
-      while (after < len && isSpace(src.charCodeAt(after))) after++
-      const trailing = src.charCodeAt(after)
-      if (after < len && trailing !== NL && trailing !== CR && trailing !== HASH) {
-        pushError(
-          state,
-          'UNEXPECTED_CONTENT',
-          'Unexpected content after the "..." document-end marker',
-          after,
-          plainLineEnd(src, after, len),
-        )
-      }
+    // Markers count only at column 0 — see `isMarkerLine`. An indented `---` or
+    // `...` falls through to the document body as text.
+    if (!isMarkerLine(src, line, len)) break
+    if (c === DOT) {
+      checkDocEndTail(state, p)
       if (state.keepComments) recordLineComment(state, p + 3)
       state.pos = nextLineStart(src, p + 3, len)
       seen |= SAW_DOC_END
       continue
     }
-    if (c === DASH && isDocMarker(src, p, len)) {
-      const inline = docMarkerInlineNode(state, p)
-      return inline >= 0 ? seen | SAW_DOC_START | SAW_INLINE_NODE : seen | SAW_DOC_START
-    }
-    break
+    const inline = docMarkerInlineNode(state, p)
+    return inline >= 0 ? seen | SAW_DOC_START | SAW_INLINE_NODE : seen | SAW_DOC_START
   }
   // Falling out here means no `---` followed, so the directives describe a
   // document that was never written.
@@ -3270,11 +3367,13 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
       if (!line.eof) {
         const p = line.contentPos
         const c = src.charCodeAt(p)
-        if (c === DASH && isDocMarker(src, p, len)) {
+        const marker = isMarkerLine(src, line, len)
+        if (marker && c === DASH) {
           // The next document's start marker: the current document is empty. Leave
           // the marker for the next iteration's `skipStreamHead` to consume.
-        } else if (c === DOT && isDocMarker(src, p, len)) {
+        } else if (marker) {
           // A `...` end marker terminates this (empty) document; consume it.
+          checkDocEndTail(state, p)
           if (state.keepComments) recordLineComment(state, p + 3)
           state.pos = nextLineStart(src, p + 3, len)
           footer = true
@@ -3291,19 +3390,7 @@ export const parseAllDocuments = (source: string, options: ParseOptions = {}): Y
               plainLineEnd(src, p, len),
             )
           }
-          // `%` is an indicator, so it cannot open a node: a document body that
-          // starts with one is a directive written where it does not belong.
-          if (c === PERCENT) {
-            pushError(
-              state,
-              'UNEXPECTED_DIRECTIVE',
-              'A directive must be preceded by a "..." document-end marker',
-              p,
-              tokenEnd(src, p, len),
-            )
-          }
-          state.pos = p
-          contents = parseNode(state, line.indent, -1)
+          contents = parseBareRoot(state, line)
           finishLineIfMidLine(state)
           bodyConsumed = true
         }
