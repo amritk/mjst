@@ -147,9 +147,24 @@ type State = {
    * with a single vectorised search.
    */
   hasCR: boolean
+  /**
+   * The last offset {@link columnOf} measured, and the start of the line it sat
+   * on. A chain of compact collections (`? ? ? a`, `- ? - ? a`) asks for the
+   * column of each introducer in turn, all on one line; walking back to the line
+   * start every time made that chain quadratic in its length. Starting the walk
+   * from the previous answer keeps each question as cheap as the gap between two
+   * introducers. `0`/`0` until the first question — offset 0 is a line start.
+   */
+  columnHintPos: number
+  columnHintLineStart: number
 }
 
-type NodeProps = { anchor?: string; tag?: string }
+/**
+ * The `&anchor` / `!tag` properties read off a node's line. `tagStart`/`tagEnd`
+ * locate the tag as written, which is the only thing a warning about a tag on an
+ * *empty* node (`a: !!bool`) has to point at; see {@link checkTaggedNode}.
+ */
+type NodeProps = { anchor?: string; tag?: string; tagStart?: number; tagEnd?: number }
 
 // The common case is a value with no anchor/tag — share one frozen object so
 // `scanProps` allocates nothing on the hot path.
@@ -358,14 +373,24 @@ const skipIndicatorSeparation = (state: State): void => {
  * can follow it on this line. It has to be ruled out before `findKeyColon`, which
  * only knows to stop at a `#` it finds *past* its starting point — so `- \t#k: x`,
  * an empty entry with a comment, read as a compact `#k: x` mapping behind a tab.
+ *
+ * An explicit `? ` key opens a compact mapping just as a `key: ` does (`: ? b`,
+ * `- ? a`), and it has no `: ` on the line for `findKeyColon` to find, so it is
+ * tested for on its own — the same two-character test `parseValueOrChild` opens
+ * that mapping on. `yaml` (eemeli) and `js-yaml` both reject the tab there.
  */
 const reportCompactTab = (state: State, tabPos: number): void => {
   const { src, len } = state
   let p = tabPos
   while (p < len && isSpace(src.charCodeAt(p))) p++
   state.pos = p
-  if (src.charCodeAt(p) === HASH) return
-  if (isSeqEntryDash(src, p, len) || findKeyColon(src, p, len) >= 0) {
+  const c = src.charCodeAt(p)
+  if (c === HASH) return
+  if (
+    isSeqEntryDash(src, p, len) ||
+    (c === QUESTION && introducerBoundary(src, p + 1, len)) ||
+    findKeyColon(src, p, len) >= 0
+  ) {
     pushError(state, 'TAB_INDENT', 'Tabs cannot be used for indentation', tabPos, p)
   }
 }
@@ -823,10 +848,37 @@ const propTokenEnd = (src: string, from: number, len: number, flow: boolean): nu
   return i
 }
 
+/**
+ * Offset past the `&anchor` / `!tag` properties written at `from`, and the white
+ * space after each — or `from` itself when there are none.
+ *
+ * This is a lookahead for the questions that only ask what kind of node a line
+ * opens, before anything reads it: whether a root line starts a block mapping
+ * ({@link opensBlockMapping}), and whether a `?`/`:` line opens a compact one
+ * ({@link parseCompactCollection}). `findKeyColon` has to start past the
+ * properties — it only steps over a flow collection or a quoted scalar that
+ * *opens* its scan, so from the `&` of `&x {a: b}` it found the `: ` inside the
+ * braces and took a flow mapping for a block one. It changes no state:
+ * {@link scanPropsSlow} registers anchors and reports malformed names when the
+ * node is really read, and must do so exactly once. The token ends match that
+ * function's — an anchor name stops at a flow indicator, a block tag does not.
+ */
+const skipPropsAhead = (src: string, from: number, len: number): number => {
+  let i = from
+  for (;;) {
+    const c = src.charCodeAt(i)
+    if (c !== AMP && c !== BANG) return i
+    i = propTokenEnd(src, i + 1, len, c === AMP)
+    while (i < len && isSpace(src.charCodeAt(i))) i++
+  }
+}
+
 const scanPropsSlow = (state: State, flow = false): NodeProps => {
   const { src, len } = state
   let anchor: string | undefined
   let tag: string | undefined
+  let tagStart = 0
+  let tagEnd = 0
   for (;;) {
     skipInlineSpaces(state)
     const c = src.charCodeAt(state.pos)
@@ -864,6 +916,8 @@ const scanPropsSlow = (state: State, flow = false): NodeProps => {
         pushError(state, 'BAD_PROPERTY', 'A node cannot carry more than one tag', state.pos, i)
       }
       tag = resolveTag(state, src.slice(state.pos, i), state.pos)
+      tagStart = state.pos
+      tagEnd = i
       state.pos = i
     } else {
       break
@@ -882,7 +936,11 @@ const scanPropsSlow = (state: State, flow = false): NodeProps => {
     pending.add(anchor)
     state.pendingAnchors = pending
   }
-  if (tag !== undefined) props.tag = tag
+  if (tag !== undefined) {
+    props.tag = tag
+    props.tagStart = tagStart
+    props.tagEnd = tagEnd
+  }
   return props
 }
 
@@ -912,7 +970,7 @@ const attachProps = (node: YamlNode, props: NodeProps, state: State): YamlNode =
   }
   if (props.tag) {
     node.tag = props.tag
-    checkTaggedNode(state, node)
+    checkTaggedNode(state, node, props)
   }
   return node
 }
@@ -2245,9 +2303,15 @@ const isMergeKey = (state: State, key: YamlNode): boolean =>
  * the projected object by exactly that string. So two collection keys that
  * render alike really do collide, and skipping them meant the second value
  * silently overwrote the first with nothing reported.
+ *
+ * A mapping's first key has nothing to collide with, so it is not rendered at
+ * all. Beyond the saving on every mapping, that is what keeps a chain of nested
+ * collection keys linear: in `? ? ? … a` each level is a one-entry mapping keyed
+ * by the whole chain below it, and rendering every level's key made the parse
+ * quadratic in the chain's depth.
  */
 const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<string> | null): Set<string> | null => {
-  if (isMergeKey(state, key)) return seen
+  if (items.length === 0 || isMergeKey(state, key)) return seen
   const text = keyText(key)
   if (seen === null && items.length >= SET_THRESHOLD) {
     seen = new Set()
@@ -2286,24 +2350,60 @@ const trackKey = (state: State, items: YamlPair[], key: YamlNode, seen: Set<stri
  * Called from the mapping parsers only for a pair whose key is a plain `<<` and
  * only while merging is on — the same test `toJS` applies — so an ordinary key
  * pays a kind test and one string comparison.
+ *
+ * What counts is what `toJS` actually folds in, not the node kind alone. A
+ * `!!set` mapping projects to a `Set` and an `!!omap` sequence to a `Map`, and
+ * neither has an own enumerable key for the merge to copy, so both used to pass
+ * this check and then merge nothing. (`!!pairs` projects to a plain list of
+ * one-pair mappings, which merges like any other list of mappings.)
  */
 const checkMergeValue = (state: State, key: YamlNode, value: YamlNode | null): void => {
   if (value === null) {
     pushError(state, 'BAD_MERGE', 'A merge key needs a mapping or a list of mappings to merge', key.start, key.end)
     return
   }
-  const source = value.kind === 'alias' ? value.target : value
-  if (source === undefined || source.kind === 'map') return
-  if (source.kind === 'seq') {
+  const source = mergeSource(value)
+  if (source === undefined) return
+  if (source.kind === 'map' && source.tag !== 'set') return
+  if (source.kind === 'seq' && source.tag !== 'omap') {
     for (const item of source.items) {
-      const entry = item.kind === 'alias' ? item.target : item
-      if (entry !== undefined && entry.kind !== 'map') {
+      const entry = mergeSource(item)
+      if (entry !== undefined && (entry.kind !== 'map' || entry.tag === 'set')) {
         pushError(state, 'BAD_MERGE', 'Only a mapping can be merged into a mapping', item.start, item.end)
       }
     }
     return
   }
-  pushError(state, 'BAD_MERGE', 'Only a mapping or a list of mappings can be merged', value.start, value.end)
+  // Past the two returns above, a collection is a `!!set` or an `!!omap`.
+  const message =
+    source.kind === 'map' || source.kind === 'seq'
+      ? `A !!${source.tag} does not project to a plain mapping, so it cannot be merged`
+      : 'Only a mapping or a list of mappings can be merged'
+  pushError(state, 'BAD_MERGE', message, value.start, value.end)
+}
+
+/**
+ * How many `*alias` hops {@link mergeSource} follows. A chain only forms through
+ * an alias that carries an anchor of its own (`b: &b *a`), which is already an
+ * error, and every hop names an anchor declared earlier — so a real chain is a
+ * hop or two, and the bound only has to rule out walking forever.
+ */
+const MAX_MERGE_ALIAS_HOPS = 100
+
+/**
+ * The node a merge value stands for: an alias followed to its target, and on
+ * through any alias *that* names, since `toJS` expands every hop. Following one
+ * hop only took `<<: *b`, with `b: &b *a`, for an alias rather than the mapping
+ * it reaches, and reported a merge `toJS` performs without trouble. `undefined`
+ * for a dangling alias, which has its own error already.
+ */
+const mergeSource = (node: YamlNode): YamlNode | undefined => {
+  let current: YamlNode | undefined = node
+  for (let hops = 0; current !== undefined && current.kind === 'alias'; hops++) {
+    if (hops >= MAX_MERGE_ALIAS_HOPS) return undefined
+    current = current.target
+  }
+  return current
 }
 
 const parseFlowMap = (state: State): YamlMap => {
@@ -2432,11 +2532,95 @@ const parseInlineValue = (state: State, parentIndent: number): YamlNode | null =
  * when a block collection is found opening on a `?`/`:` introducer line: that
  * column is the indentation its remaining entries align under, and nothing on
  * the way here recorded it.
+ *
+ * The walk back stops at the previous answer when `pos` is past it
+ * ({@link State.columnHintPos}): with no line break in between, the two share a
+ * line start. A chain of compact collections on one line (`? ? ? … a`) asks once
+ * per introducer, and walking to the line start each time was quadratic in the
+ * length of the chain.
  */
-const columnOf = (src: string, pos: number): number => {
+const columnOf = (state: State, pos: number): number => {
+  const { src } = state
+  const hint = state.columnHintPos
+  const floor = pos >= hint ? hint : 0
   let i = pos
-  while (i > 0 && !isBreak(src.charCodeAt(i - 1))) i--
-  return pos - i
+  while (i > floor && !isBreak(src.charCodeAt(i - 1))) i--
+  // Reaching the hint without meeting a break puts `pos` on the hint's line.
+  const lineStart = i === hint ? state.columnHintLineStart : i
+  state.columnHintPos = pos
+  state.columnHintLineStart = lineStart
+  return pos - lineStart
+}
+
+/**
+ * The node standing in for one nested past {@link MAX_PARSE_DEPTH}, after the
+ * report. The rest of the input is consumed so every enclosing collection loop
+ * sees end of input and stops, rather than spinning on an un-advanced cursor —
+ * the same recovery {@link parseNode} makes.
+ */
+const depthLimitNode = (state: State): YamlScalar => {
+  const pos = state.pos
+  pushError(state, 'DEPTH_LIMIT', `Exceeded maximum nesting depth of ${MAX_PARSE_DEPTH}`, pos, pos)
+  state.pos = state.len
+  return { kind: 'scalar', value: null, source: '', style: 'plain', start: pos, end: pos }
+}
+
+/**
+ * Parses the block collection a `?`/`:` introducer opens on its own line — a
+ * compact sequence (`: - b`), a compact mapping (`? earth: blue`), or a compact
+ * mapping that opens on an explicit key of its own (`? ? a`) — or returns `null`,
+ * with the cursor untouched, when the line holds an ordinary inline value.
+ *
+ * The explicit-key shape has no `: ` for `findKeyColon` to find, so it used to
+ * fold into the plain scalar `"? b"`; the `?` outranks any colon later on the
+ * line for the same reason it does in `parseNodeInner`.
+ *
+ * Each collection counts one level against {@link MAX_PARSE_DEPTH}. This path
+ * recurses — `parseBlockMap` → `parseValueOrChild` → here → `parseBlockMap` for
+ * every `?` of `? ? ? … a` — without passing through `parseNode`, whose guard
+ * is the only other one on the block side, so a line of `? ` repeated overflowed
+ * the native stack: a `RangeError` out of `parseDocument`, which never throws.
+ *
+ * Node properties may come first (`: &x b: c`, `? !!str a: b`). As at the head of
+ * a line (see `parseNodeInner`), properties on the first key's line describe that
+ * key, not the mapping it opens — `yaml` (eemeli) and `js-yaml` agree, and
+ * AI.md documents it. They have to be stepped over before looking for the
+ * colon: from the `&`, `findKeyColon` read `&x {b: c}` and `&x "b: c"` as block
+ * mappings keyed `&x {b` and `&x "b`, and the key text as a plain scalar
+ * opening on an indicator. A property line that turns out to hold a scalar or a
+ * flow collection is left for `parseInlineValue`, which reads it as before.
+ */
+const parseCompactCollection = (state: State): YamlNode | null => {
+  const { src, len } = state
+  const at = state.pos
+  const seq = isSeqEntryDash(src, at, len)
+  const keyAt = seq ? at : skipPropsAhead(src, at, len)
+  const explicit = !seq && src.charCodeAt(keyAt) === QUESTION && introducerBoundary(src, keyAt + 1, len)
+  const colon = seq || explicit ? -1 : findKeyColon(src, keyAt, len)
+  if (!seq && !explicit && colon < 0) return null
+  if (state.depth >= MAX_PARSE_DEPTH) return depthLimitNode(state)
+  // Both shapes set their own indentation from the column the first entry
+  // landed on, which is past the introducer rather than at it — and, for a key
+  // carrying properties, at the properties, as for a mapping opening a line.
+  const column = columnOf(state, at)
+  state.depth++
+  let node: YamlNode
+  if (seq) node = parseBlockSeq(state, column)
+  else {
+    let props = NO_PROPS
+    if (keyAt !== at) {
+      props = scanPropsSlow(state)
+      skipInlineSpaces(state)
+    }
+    if (explicit) {
+      // Properties cannot come before a `?` on its line; see the same report in
+      // `parseNodeInner`, whose reading of them this follows.
+      if (props !== NO_PROPS) reportPropsBeforeExplicitKey(state, state.pos)
+      node = attachProps(parseBlockMap(state, column, -1), props, state)
+    } else node = parseBlockMap(state, column, colon, null, props)
+  }
+  state.depth--
+  return node
 }
 
 /**
@@ -2475,18 +2659,8 @@ const parseValueOrChild = (state: State, indent: number, compact = false): YamlN
     return null
   }
   if (compact) {
-    // Both shapes set their own indentation from the column the first entry
-    // landed on, which is past the introducer rather than at it.
-    if (isSeqEntryDash(src, state.pos, len)) return parseBlockSeq(state, columnOf(src, state.pos))
-    // A compact mapping may open on an explicit entry of its own (`? a` / `: ? b`,
-    // or `? ? a`). It has no `: ` for `findKeyColon` to find, so it used to fold
-    // into the plain scalar `"? b"`; the `?` outranks any colon later on the line
-    // for the same reason it does in `parseNodeInner`.
-    if (src.charCodeAt(state.pos) === QUESTION && introducerBoundary(src, state.pos + 1, len)) {
-      return parseBlockMap(state, columnOf(src, state.pos), -1)
-    }
-    const colon = findKeyColon(src, state.pos, len)
-    if (colon >= 0) return parseBlockMap(state, columnOf(src, state.pos), colon)
+    const collection = parseCompactCollection(state)
+    if (collection !== null) return collection
   }
   const node = parseInlineValue(state, indent)
   finishLineIfMidLine(state)
@@ -2529,12 +2703,17 @@ export const keyText = (node: YamlNode): string => {
 /**
  * The text a *tagged* scalar renders as inside a key: its {@link applyScalarTag}
  * projection, stringified the way a JavaScript object key is — except a `Date`,
- * which renders as its ISO string. `String(date)` is in the host's local time
+ * which renders as its ISO string, and a `!!binary` payload, which renders as the
+ * base64 text it was written in. `String(date)` is in the host's local time
  * zone, and a key that changes with the machine that parsed it cannot be
  * compared or looked up by path. `nullText` is what a null projects to, which
  * differs between the two callers; see {@link flowText}.
  */
 const taggedScalarText = (node: YamlScalar, nullText: string): string => {
+  // A `!!binary` key is keyed by its base64 text, as it always was. Its bytes
+  // stringify to a comma-separated list — `AQID` became `"1,2,3"` — which
+  // collided with a literal `"1,2,3"` key and silently dropped one of the two.
+  if (node.tag === 'binary') return taggedText(node)
   const v = applyScalarTag(node)
   if (typeof v === 'string') return v
   if (v === null || v === undefined) return nullText
@@ -3127,9 +3306,17 @@ const docMarkerInlineNode = (state: State, p: number): number => {
  * implicit `key: `. Only asked of a root node's first line, by the two checks
  * that care whether a block collection starts *on that line* (a `---` line, a
  * tab-indented line); never on the per-entry path.
+ *
+ * Node properties in front are stepped over first ({@link skipPropsAhead}), as
+ * the parser itself does: `&x {a: b}` and `!!omap [a: 1]` are flow collections
+ * carrying properties, and scanning for the colon from the `&` found the one
+ * inside the braces — a false `TAB_INDENT` for `\t&x {a: b}`, and a false
+ * `UNEXPECTED_CONTENT` for `--- &x {a: b}` and `--- &x "a: b"`.
  */
-const opensBlockMapping = (src: string, pos: number, len: number): boolean =>
-  (src.charCodeAt(pos) === QUESTION && introducerBoundary(src, pos + 1, len)) || findKeyColon(src, pos, len) >= 0
+const opensBlockMapping = (src: string, pos: number, len: number): boolean => {
+  const p = skipPropsAhead(src, pos, len)
+  return (src.charCodeAt(p) === QUESTION && introducerBoundary(src, p + 1, len)) || findKeyColon(src, p, len) >= 0
+}
 
 /**
  * Parses the node written on a `---` line. The node is the document root, so it
@@ -3176,7 +3363,9 @@ const parseBareRoot = (state: State, line: LineInfo): YamlNode => {
   // with one is a directive written where it does not belong. It is still read
   // as a node (`%x: 1` keys the mapping by `%x`, as `yaml` does) rather than
   // dropped — a directive read here would describe a document already begun.
-  if (src.charCodeAt(p) === PERCENT) {
+  // Only at column 0, where a directive could stand at all; an indented `%` is
+  // left to the plain-scalar start check (see `skipStreamHead`).
+  if (indent === 0 && src.charCodeAt(p) === PERCENT) {
     pushError(
       state,
       'UNEXPECTED_DIRECTIVE',
@@ -3280,12 +3469,23 @@ const parseTimestamp = (text: string): Date | null => {
   const second = Number(m[6])
   // 60 is a leap second, which the format allows; `Date` rolls it into the next
   // minute, the nearest instant it can represent.
-  if (hour > 23 || minute > 59 || second > 60) return null
+  if (hour > 24 || minute > 59 || second > 60) return null
+  // Hour 24 is ISO 8601's end of day, and only exactly that — `24:00:00`, with
+  // any fraction all zeros — is an instant; it is midnight of the next day, which
+  // is how `Date` rolls it over and how `yaml` (eemeli) and `js-yaml` read it.
+  // Rejecting it outright turned a timestamp both of them accept into a string.
+  if (hour === 24 && (minute !== 0 || second !== 0 || /[1-9]/.test(m[7] ?? ''))) return null
   // Only milliseconds survive in a `Date`, so the fraction is cut to three digits.
   const millis = m[7] ? Number(m[7].slice(0, 3).padEnd(3, '0')) : 0
   date.setUTCHours(hour, minute, second, millis)
   if (m[9] !== undefined) {
-    const offset = Number(m[10]) * 60 + Number(m[11] ?? 0)
+    const zoneHour = Number(m[10])
+    const zoneMinute = Number(m[11] ?? 0)
+    // A zone is a clock offset, so its fields are held to a clock's range, as
+    // RFC 3339's `time-numoffset` does (hour 00–23, minute 00–59). Unchecked,
+    // `+99:99` shifted the instant by more than four days, with nothing said.
+    if (zoneHour > 23 || zoneMinute > 59) return null
+    const offset = zoneHour * 60 + zoneMinute
     // `-5` means five hours *behind* UTC, so the UTC instant is five hours later.
     date.setTime(date.getTime() + (m[9] === '-' ? offset : -offset) * 60_000)
   }
@@ -3405,17 +3605,29 @@ const COLLECTION_TAG_KIND = new Map<string, 'map' | 'seq'>([
  * Checked where the tag is attached, i.e. only for a node that carries one; the
  * untagged path never reaches it. The node is complete by then, so a
  * collection's entries can be checked as well as its kind.
+ *
+ * `props` are the properties being attached. An empty node (`a: !!bool`,
+ * `a: !!map`) has no text of its own — its span is zero-width, just past the
+ * properties or at the start of the next line — so a warning about it is placed
+ * on the tag that asked for the impossible, which is also what the author has to
+ * change.
  */
-const checkTaggedNode = (state: State, node: YamlScalar | YamlMap | YamlSeq): void => {
+const checkTaggedNode = (state: State, node: YamlScalar | YamlMap | YamlSeq, props: NodeProps = NO_PROPS): void => {
   const tag = node.tag
   if (tag === undefined) return
   const scalarTag = SCALAR_TAGS.has(tag)
   const kind = scalarTag ? 'scalar' : COLLECTION_TAG_KIND.get(tag)
   // A custom or non-specific tag names no format this parser knows to check.
   if (kind === undefined) return
+  let start = node.start
+  let end = node.end
+  if (start === end && props.tagStart !== undefined && props.tagEnd !== undefined) {
+    start = props.tagStart
+    end = props.tagEnd
+  }
   if (node.kind !== kind) {
     const what = kind === 'scalar' ? 'a scalar' : kind === 'map' ? 'a mapping' : 'a sequence'
-    pushWarning(state, 'BAD_TAG_VALUE', `!!${tag} describes ${what}, and cannot be applied here`, node.start, node.end)
+    pushWarning(state, 'BAD_TAG_VALUE', `!!${tag} describes ${what}, and cannot be applied here`, start, end)
     return
   }
   if (node.kind === 'scalar') {
@@ -3424,8 +3636,8 @@ const checkTaggedNode = (state: State, node: YamlScalar | YamlMap | YamlSeq): vo
         state,
         'BAD_TAG_VALUE',
         `"${taggedText(node)}" is not a valid !!${tag} value; it is kept as a string`,
-        node.start,
-        node.end,
+        start,
+        end,
       )
     }
     return
@@ -3661,6 +3873,8 @@ const newState = (source: string, options: ParseOptions): State => ({
   commentWatermark: 0,
   pendingAnchors: null,
   hasCR: source.indexOf('\r') !== -1,
+  columnHintPos: 0,
+  columnHintLineStart: 0,
 })
 
 /**
@@ -3732,7 +3946,9 @@ const checkDocEndTail = (state: State, markerPos: number): void => {
  * indistinguishable from a document that genuinely held those keys alone, which
  * is silent data loss for anyone who did not read the docs first. A bare
  * trailing marker (`a: 1\n...\n`) closes the stream without hiding anything, so
- * we look past it and only warn when real content follows.
+ * we look past it and only warn when real content follows — past any further
+ * bare markers too, since `a: 1\n...\n---\n` only adds an explicitly empty
+ * document (see {@link onlyEmptyDocumentsFollow}).
  *
  * A `---` may carry the next document's root on its own line (`--- b`), which
  * hides it just as well as a line below would — so that counts as content too.
@@ -3749,7 +3965,10 @@ const warnIfMoreDocuments = (state: State, markerPos: number): void => {
   if (src.charCodeAt(markerPos) === DOT) checkDocEndTail(state, markerPos)
   else hidden = !lineRestIsBlank(src, markerPos + 3, len)
   state.pos = nextLineStart(src, markerPos + 3, len)
-  if (!hidden && peekLine(state, 0).eof) return
+  if (!hidden) {
+    const next = peekLine(state, 0)
+    if (next.eof || onlyEmptyDocumentsFollow(src, state.pos, len)) return
+  }
   pushWarning(
     state,
     'MULTIPLE_DOCUMENTS',
@@ -3757,6 +3976,32 @@ const warnIfMoreDocuments = (state: State, markerPos: number): void => {
     markerPos,
     markerPos + 3,
   )
+}
+
+/**
+ * True when nothing from `from` on could hold data: only blank lines, comments,
+ * and bare `---`/`...` markers at column 0. Such a tail is a run of explicitly
+ * empty documents — `a: 1\n...\n---\n` — which hides nothing from a
+ * single-document caller, just as a lone trailing `---` does not.
+ *
+ * Deliberately side-effect free, unlike {@link peekLine}: these lines belong to
+ * documents `parseDocument` does not read, so their comments are not collected
+ * into the first one. Anything else — content, a directive, a marker carrying a
+ * node or a stray token — counts as data. Only reached once a marker follows the
+ * first document, and it stops at the first line that is not empty.
+ */
+const onlyEmptyDocumentsFollow = (src: string, from: number, len: number): boolean => {
+  let p = from
+  while (p < len) {
+    let i = p
+    while (i < len && isSpace(src.charCodeAt(i))) i++
+    const c = src.charCodeAt(i)
+    if (i < len && c !== NL && c !== CR && c !== HASH) {
+      if (i !== p || !isDocMarker(src, i, len) || !lineRestIsBlank(src, i + 3, len)) return false
+    }
+    p = nextLineStart(src, i, len)
+  }
+  return true
 }
 
 /**
@@ -3837,7 +4082,13 @@ const skipStreamHead = (state: State, closed: boolean): number => {
     if (line.eof) break
     const p = line.contentPos
     const c = src.charCodeAt(p)
-    if (c === PERCENT) {
+    // A directive, like a marker, counts only at column 0: `l-directive` opens on
+    // the `%` indicator at the start of its line. An indented `%` line is document
+    // content, and one that opens a node has the plain-scalar start rule to answer
+    // to — `yaml` (eemeli) reads ` %x: 1` that way. Taking it for a directive
+    // dropped the content, warned about an unknown `%x`, and blamed a misplaced
+    // directive for what came after.
+    if (c === PERCENT && line.indent === 0) {
       // A directive belongs to the document that follows it, so it may only
       // appear at the start of the stream or once the previous document has
       // been closed by a `...` footer.
