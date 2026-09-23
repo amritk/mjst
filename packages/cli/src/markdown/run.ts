@@ -24,6 +24,7 @@ const PAGE_FLAGS = [
   'typeColumn',
   'defaultColumn',
   'requiredStyle',
+  'requiredMarker',
   'requiredFirst',
 ] as const
 
@@ -102,6 +103,7 @@ export const run = async (argv: string[]): Promise<RunResult> => {
       type: args.typeColumn,
       default: args.defaultColumn,
       required: args.requiredStyle,
+      requiredMarker: args.requiredMarker,
       requiredFirst: args.requiredFirst,
     },
     headings: { type: args.typeLabel },

@@ -5,12 +5,9 @@ import { linkDestination } from '#helpers/link-destination'
 import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
 import { referenceType } from '#helpers/reference-type'
 import { relativeDocLink } from '#helpers/relative-doc-link'
-import { tableCell, tableCode } from '#helpers/table-cell'
+import { tableCell, tableCode, tableFragment } from '#helpers/table-cell'
 import type { DocMeta, DocTable, DocTableColumn } from '#types/doc'
 import type { DocEntry, RenderContext } from '#types/render'
-
-/** How a required property is marked under `x-doc.table.required: 'marker'`. */
-const REQUIRED_MARKER = '_required_'
 
 /**
  * Type labels that leave a reader no better off than a blank cell. `object` is
@@ -152,6 +149,7 @@ export const renderPropertyTable = (
   options: PropertyTableOptions = {},
 ): string => {
   const style = context.table.required
+  const marker = tableFragment(context.table.requiredMarker)
   const summarised = options.summarised ?? (() => false)
   const properties = tableOrder(entries, context.table).map((entry) => ({
     entry,
@@ -181,7 +179,7 @@ export const renderPropertyTable = (
     const name = tableCode(entry.name)
     const label = destination === undefined ? name : `[${name}](${destination})`
     // Under `column` the column says it instead.
-    const cells = [entry.required && style === 'marker' ? `${label} ${REQUIRED_MARKER}` : label]
+    const cells = [entry.required && style === 'marker' ? `${label}${marker}` : label]
     if (showType) cells.push(type.length > 0 ? tableCode(type) : '')
     if (showRequired) cells.push(entry.required ? '✅' : '')
     if (showDefault) {

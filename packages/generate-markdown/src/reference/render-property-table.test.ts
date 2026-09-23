@@ -13,7 +13,13 @@ const section = (id: string, overrides: Partial<DocSection> = {}): DocSection =>
 })
 
 /** The built-in table layout, which most of these tests render with. */
-const DEFAULT_TABLE: DocTable = { type: 'auto', default: 'auto', required: 'marker', requiredFirst: false }
+const DEFAULT_TABLE: DocTable = {
+  type: 'auto',
+  default: 'auto',
+  required: 'marker',
+  requiredMarker: ' _required_',
+  requiredFirst: false,
+}
 
 const context = (overrides: Partial<RenderContext> = {}): RenderContext => ({
   language: 'json',
@@ -272,6 +278,60 @@ describe('render-property-table', () => {
     expect(table).toContain('| `a` | `string` | ✅ |  |')
     expect(table).toContain('| `b` | `string` |  |  |')
     expect(table).not.toContain(REQUIRED_MARKER_TEXT)
+  })
+
+  // A reference with a legend of its own wants a symbol, and it hugs the name
+  // because the author left the space out.
+  it("puts the schema's own marker after a required name, exactly as written", () => {
+    const table = renderPropertyTable(
+      [entry('a', { type: 'string' }, true), entry('b', { type: 'string' })],
+      styled({ requiredMarker: '*' }),
+    )
+    expect(table).toContain('| `a`* | `string` |  |')
+    expect(table).toContain('| `b` | `string` |  |')
+    expect(table).not.toContain(REQUIRED_MARKER_TEXT)
+  })
+
+  // Formatting is the point of changing it, so inline HTML is passed through.
+  it('passes an HTML marker through untouched', () => {
+    const table = renderPropertyTable(
+      [entry('a', { type: 'string' }, true)],
+      styled({ requiredMarker: '<br><sub><i>required</i></sub>' }),
+    )
+    expect(table).toContain('| `a`<br><sub><i>required</i></sub> | `string` |  |')
+  })
+
+  it('marks a linked name after its link', () => {
+    const target = entry('a', { type: 'string' }, true)
+    const table = renderPropertyTable([target], {
+      ...headed(['a', target]),
+      table: { ...DEFAULT_TABLE, requiredMarker: '*' },
+    })
+    expect(table).toContain('| [`a`](#a)* |')
+  })
+
+  // A marker is one fragment of one cell: a live pipe would add a column and a
+  // line ending would end the row.
+  it('keeps a marker from breaking the row it sits in', () => {
+    const table = renderPropertyTable(
+      [entry('a', { type: 'string' }, true)],
+      styled({ requiredMarker: ' req | must\nset' }),
+    )
+    expect(table).toContain('| `a` req \\| must set | `string` |  |')
+  })
+
+  it('renders no marker at all when the schema asks for an empty one', () => {
+    const table = renderPropertyTable([entry('a', { type: 'string' }, true)], styled({ requiredMarker: '' }))
+    expect(table).toContain('| `a` | `string` |  |')
+  })
+
+  // The column says it instead, so a marker as well would say it twice.
+  it('ignores the marker under the required column', () => {
+    const table = renderPropertyTable(
+      [entry('a', { type: 'string' }, true)],
+      styled({ required: 'column', requiredMarker: '*' }),
+    )
+    expect(table).toContain('| `a` | `string` | ✅ |  |')
   })
 
   // A column of blanks is a column of blanks whichever style asked for it.

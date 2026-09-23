@@ -153,32 +153,60 @@ describe('read-doc-config', () => {
       type: 'auto',
       default: 'auto',
       required: 'marker',
+      requiredMarker: ' _required_',
       requiredFirst: false,
     })
   })
 
   it('reads the table layout the schema declares', () => {
     const config = readDocConfig({
-      'x-doc': { table: { type: 'never', default: 'always', required: 'column', requiredFirst: true } },
+      'x-doc': {
+        table: { type: 'never', default: 'always', required: 'column', requiredMarker: '*', requiredFirst: true },
+      },
     })
-    expect(config.table).toEqual({ type: 'never', default: 'always', required: 'column', requiredFirst: true })
+    expect(config.table).toEqual({
+      type: 'never',
+      default: 'always',
+      required: 'column',
+      requiredMarker: '*',
+      requiredFirst: true,
+    })
   })
 
   // Per member, so turning the type column off does not silently restate the
   // rest of a schema's choices as the defaults.
   it('lets the caller override one member of the table layout', () => {
     const config = readDocConfig({ 'x-doc': { table: { requiredFirst: true } } }, { table: { type: 'never' } })
-    expect(config.table).toEqual({ type: 'never', default: 'auto', required: 'marker', requiredFirst: true })
+    expect(config.table).toEqual({
+      type: 'never',
+      default: 'auto',
+      required: 'marker',
+      requiredMarker: ' _required_',
+      requiredFirst: true,
+    })
+  })
+
+  it('lets the caller override the required marker', () => {
+    const config = readDocConfig({ 'x-doc': { table: { requiredMarker: '*' } } }, { table: { requiredMarker: ' †' } })
+    expect(config.table.requiredMarker).toBe(' †')
+  })
+
+  // The empty string is a choice — no marker at all — not a missing value.
+  it('keeps an empty required marker', () => {
+    expect(readDocConfig({ 'x-doc': { table: { requiredMarker: '' } } }).table.requiredMarker).toBe('')
   })
 
   // The schema is parsed JSON, so a typo should leave the built-in shape rather
   // than throw halfway through a docs build.
   it('ignores a table member it does not understand', () => {
-    const config = readDocConfig({ 'x-doc': { table: { type: 'sometimes', required: 7, requiredFirst: 'yes' } } })
+    const config = readDocConfig({
+      'x-doc': { table: { type: 'sometimes', required: 7, requiredMarker: true, requiredFirst: 'yes' } },
+    })
     expect(config.table).toEqual({
       type: 'auto',
       default: 'auto',
       required: 'marker',
+      requiredMarker: ' _required_',
       requiredFirst: false,
     })
   })

@@ -73,6 +73,24 @@ describe('run', () => {
     expect(page.indexOf('`host`')).toBeLessThan(page.indexOf('`port`'))
   })
 
+  it('passes the required marker through to the generator', async () => {
+    const dir = tmp('markdown-required-marker-')
+    const schema = writeSchema(dir, {
+      'x-doc': { layout: 'table' },
+      properties: {
+        server: {
+          type: 'object',
+          required: ['host'],
+          properties: { host: { type: 'string', description: 'The host to bind.' } },
+        },
+      },
+    })
+    const { code, stderr } = await run([schema, '--out-dir', dir, '--required-marker', '*', '--type-column', 'never'])
+    expect(stderr).toBe('')
+    expect(code).toBe(0)
+    expect(readFileSync(join(dir, 'index.md'), 'utf-8')).toContain('| `host`* | The host to bind. |')
+  })
+
   it('passes the heading options through to the generator', async () => {
     const dir = tmp('markdown-type-label-')
     const schema = writeSchema(dir, { properties: { failOn: { enum: ['error', 'warn'] } } })

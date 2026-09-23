@@ -53,6 +53,8 @@ describe('parse-markdown-args', () => {
         'always',
         '--required-style',
         'column',
+        '--required-marker',
+        '*',
         '--required-first',
         '--type-label',
         'never',
@@ -62,6 +64,7 @@ describe('parse-markdown-args', () => {
       typeColumn: 'never',
       defaultColumn: 'always',
       requiredStyle: 'column',
+      requiredMarker: '*',
       requiredFirst: true,
       typeLabel: 'never',
     })

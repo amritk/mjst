@@ -53,3 +53,15 @@ export const tableCell = (value: string): string => escapePipes(collapseLineEndi
  * so the whitespace survives being shown.
  */
 export const tableCode = (value: string): string => codeSpan(escapePipes(collapseLineEndings(value)))
+
+/**
+ * Markdown the author wrote for a table cell, kept exactly as written apart from
+ * what would break the row: a line ending, which would end it, and a live `|`,
+ * which would split it into another column.
+ *
+ * Unlike {@link tableCell} it is neither cut to its first paragraph nor
+ * trimmed, because it is a fragment spliced in beside something else — the
+ * required marker after a property's name — and its edge whitespace is how the
+ * author says whether it hugs its neighbour.
+ */
+export const tableFragment = (value: string): string => escapePipes(collapseLineEndings(value))

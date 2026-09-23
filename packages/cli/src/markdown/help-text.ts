@@ -32,6 +32,8 @@ Property table options (the root x-doc.table, for every table on every page):
   --default-column <when>  Render the Default column: auto (default), always, or never
   --required-style <how>   Say which properties are required: marker (default, beside
                            the name) or column (a Required column)
+  --required-marker <text> What marker puts right after a required name, as markdown
+                           or inline HTML (default: " _required_"), e.g. "*"
   --required-first         List the required properties at the top of every table
 
 Table options:

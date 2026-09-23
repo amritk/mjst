@@ -325,6 +325,7 @@ npx mjst markdown ./config.schema.json --table --readme ./README.md
 | `--type-column` | When a property table renders its **Type** column: `auto` (default — only when a row fills it with something a reader could act on), `always`, or `never`. |
 | `--default-column` | When a property table renders its **Default** column: `auto` (default), `always`, or `never`. |
 | `--required-style` | How a property table says which properties are required: `marker` (default — `_required_` beside the name) or `column` (a **Required** column). |
+| `--required-marker` | What the `marker` style puts right after a required property's name, as markdown or inline HTML (default: `" _required_"`) — e.g. `"*"` or `"<br><sub><i>required</i></sub>"`. Appended exactly as written, so include a leading space if you want one. |
 | `--required-first` | List the required properties at the top of every table, the rest under them. |
 | `--table` | Render the HTML config table instead of the prose pages. |
 | `--readme` | Markdown file the table is spliced into (default: `README.md`). Requires `--table`. |

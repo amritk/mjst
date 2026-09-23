@@ -38,6 +38,12 @@ const TABLE_REQUIRED: readonly DocTableRequired[] = ['marker', 'column']
 const HEADING_TYPES: readonly DocHeadingType[] = ['auto', 'never']
 
 /**
+ * What a required property's name is followed by under the `marker` style. The
+ * leading space is part of it, so a marker of the author's own can leave it out.
+ */
+const DEFAULT_REQUIRED_MARKER = ' _required_'
+
+/**
  * The table layout every page renders with: the caller's choice, then the
  * schema's, then the built-in.
  *
@@ -51,6 +57,11 @@ const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable
     type: options.type ?? asOneOf(table['type'], TABLE_COLUMNS) ?? 'auto',
     default: options.default ?? asOneOf(table['default'], TABLE_COLUMNS) ?? 'auto',
     required: options.required ?? asOneOf(table['required'], TABLE_REQUIRED) ?? 'marker',
+    // Any string, the empty one included: `""` is how a schema whose required
+    // properties are already obvious from the prose asks for no marker at all.
+    requiredMarker:
+      options.requiredMarker ??
+      (typeof table['requiredMarker'] === 'string' ? table['requiredMarker'] : DEFAULT_REQUIRED_MARKER),
     // `=== true` rather than truthiness: the schema is parsed JSON, and a
     // `"requiredFirst": "no"` that reordered every table would be a surprising
     // way to read a string.

@@ -26,6 +26,8 @@ export type MarkdownArgs = {
   defaultColumn?: DocTableColumn
   /** How property tables say which properties are required (`--required-style`). */
   requiredStyle?: DocTableRequired
+  /** What the `marker` style puts after a required property's name (`--required-marker`). */
+  requiredMarker?: string
   /** True when `--required-first` was passed: required properties head every table. */
   requiredFirst?: boolean
   /** True when `--table` was passed: render the HTML table instead of the pages. */
@@ -48,6 +50,7 @@ const VALUE_KEYS = new Set([
   'typeColumn',
   'defaultColumn',
   'requiredStyle',
+  'requiredMarker',
   'readme',
 ])
 
@@ -123,6 +126,9 @@ const assignValue = (args: MarkdownArgs, key: string, value: string): void => {
       return
     case 'requiredStyle':
       args.requiredStyle = parseChoice('required-style', value, REQUIRED_STYLES)
+      return
+    case 'requiredMarker':
+      args.requiredMarker = value
       return
     case 'readme':
       args.readme = value
