@@ -24,10 +24,11 @@ export type MarkdownArgs = {
   typeColumn?: DocTableColumn
   /** When property tables render their Default column (`--default-column`). */
   defaultColumn?: DocTableColumn
-  /** How property tables say which properties are required (`--required-style`). */
+  /**
+   * How property tables say which properties are required (`--required-style`):
+   * `column`, or any other text as a suffix after a required name.
+   */
   requiredStyle?: DocTableRequired
-  /** What the `marker` style puts after a required property's name (`--required-marker`). */
-  requiredMarker?: string
   /** True when `--required-first` was passed: required properties head every table. */
   requiredFirst?: boolean
   /** True when `--table` was passed: render the HTML table instead of the pages. */
@@ -50,7 +51,6 @@ const VALUE_KEYS = new Set([
   'typeColumn',
   'defaultColumn',
   'requiredStyle',
-  'requiredMarker',
   'readme',
 ])
 
@@ -63,8 +63,6 @@ const SORTS = ['schema', 'alphabetical'] as const
 const HEADING_TYPES = ['auto', 'never'] as const
 
 const TABLE_COLUMNS = ['auto', 'always', 'never'] as const
-
-const REQUIRED_STYLES = ['marker', 'column'] as const
 
 /** Normalizes a flag name so both `--out-dir` and `--outDir` map to the same key. */
 const toCamelCase = (key: string): string => key.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
@@ -124,11 +122,10 @@ const assignValue = (args: MarkdownArgs, key: string, value: string): void => {
     case 'defaultColumn':
       args.defaultColumn = parseChoice('default-column', value, TABLE_COLUMNS)
       return
+    // Free text on purpose: anything but `column` is the suffix itself, so
+    // there is no typo to catch — `*` is as valid as ` _required_`.
     case 'requiredStyle':
-      args.requiredStyle = parseChoice('required-style', value, REQUIRED_STYLES)
-      return
-    case 'requiredMarker':
-      args.requiredMarker = value
+      args.requiredStyle = value
       return
     case 'readme':
       args.readme = value

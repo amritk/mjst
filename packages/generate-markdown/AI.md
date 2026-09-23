@@ -83,19 +83,19 @@ or `mjst markdown <schema> --table --readme <file>`.
    and scalar values only (a string, number, or boolean; anything else leaves
    the cell empty).
 9. **A property table's shape is the root `x-doc.table`'s, not the renderer's.**
-   `{ type, default, required, requiredMarker, requiredFirst }`: the two
-   columns take `'auto' | 'always' | 'never'` and default to `auto` — rendered
-   only when a row fills them with something a reader could act on, so a table
-   whose every row says `object` has no **Type** column. `required` takes
-   `'marker'` (default, `` `name` _required_ `` beside the name) or `'column'`
-   (a **Required** column with ✅). `requiredMarker` replaces the ` _required_`
-   that `marker` appends — markdown or inline HTML, appended verbatim so the
-   author picks the separator, with line endings collapsed and live pipes
-   escaped. `requiredFirst` heads each table with the required properties,
-   still as one table. Root only — per-property and per-section tables all
-   follow it — and `MarkdownOptions.table` / the CLI's `--type-column`,
-   `--default-column`, `--required-style`, `--required-marker`,
-   `--required-first` override it per member.
+   `{ type, default, required, requiredFirst }`: the two columns take
+   `'auto' | 'always' | 'never'` and default to `auto` — rendered only when a
+   row fills them with something a reader could act on, so a table whose every
+   row says `object` has no **Type** column. `required` is `'column'` (the
+   default: a **Required** column with ✅, dropped when no row is required) or
+   any other string, which is a suffix after each required name instead —
+   markdown or inline HTML (`" _required_"`, `"*"`, `""` for nothing),
+   appended verbatim so the author picks the separator, with line endings
+   collapsed and live pipes escaped. `requiredFirst` heads each table with the
+   required properties, still as one table. Root only — per-property and
+   per-section tables all follow it — and `MarkdownOptions.table` / the CLI's
+   `--type-column`, `--default-column`, `--required-style`, `--required-first`
+   override it per member.
    The root `x-doc.headings.type` (`'auto' | 'never'`, CLI `--type-label`) does
    the same for the **Type:** line under a heading. An enum spelled out by a
    label the reader can see gets no **Allowed values:** line; once the label is

@@ -11,7 +11,6 @@ import type {
   DocSort,
   DocTable,
   DocTableColumn,
-  DocTableRequired,
   MarkdownHeadingsOptions,
   MarkdownOptions,
   MarkdownTableOptions,
@@ -34,34 +33,23 @@ const DEFAULT_LANGUAGE = 'json'
 const LAYOUTS: readonly DocLayout[] = ['headings', 'table', 'none']
 const SORTS: readonly DocSort[] = ['schema', 'alphabetical']
 const TABLE_COLUMNS: readonly DocTableColumn[] = ['auto', 'always', 'never']
-const TABLE_REQUIRED: readonly DocTableRequired[] = ['marker', 'column']
 const HEADING_TYPES: readonly DocHeadingType[] = ['auto', 'never']
-
-/**
- * What a required property's name is followed by under the `marker` style. The
- * leading space is part of it, so a marker of the author's own can leave it out.
- */
-const DEFAULT_REQUIRED_MARKER = ' _required_'
 
 /**
  * The table layout every page renders with: the caller's choice, then the
  * schema's, then the built-in.
  *
  * The defaults are the shape a reference wants when nobody has thought about
- * it: a column only when a row fills it, and requiredness marked beside the
- * name rather than spending a column on one bit.
+ * it: a column only when a row fills it, **Required** included.
  */
 const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable => {
   const table = isObject(value) ? value : {}
   return {
     type: options.type ?? asOneOf(table['type'], TABLE_COLUMNS) ?? 'auto',
     default: options.default ?? asOneOf(table['default'], TABLE_COLUMNS) ?? 'auto',
-    required: options.required ?? asOneOf(table['required'], TABLE_REQUIRED) ?? 'marker',
-    // Any string, the empty one included: `""` is how a schema whose required
-    // properties are already obvious from the prose asks for no marker at all.
-    requiredMarker:
-      options.requiredMarker ??
-      (typeof table['requiredMarker'] === 'string' ? table['requiredMarker'] : DEFAULT_REQUIRED_MARKER),
+    // Any string is a suffix, the empty one included: `""` is how a schema
+    // whose required properties are obvious from the prose asks for no marker.
+    required: options.required ?? (typeof table['required'] === 'string' ? table['required'] : 'column'),
     // `=== true` rather than truthiness: the schema is parsed JSON, and a
     // `"requiredFirst": "no"` that reordered every table would be a surprising
     // way to read a string.

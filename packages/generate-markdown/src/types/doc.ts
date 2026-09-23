@@ -56,13 +56,23 @@ export type DocTableColumn = 'auto' | 'always' | 'never'
 /**
  * How a property table says which of its properties are required:
  *
- * - `marker` — `` `name` _required_ `` in the **Property** cell, or whatever
- *   {@link DocTable.requiredMarker} says instead. Five rows in twenty are
- *   required on a real page, so a column carried one bit and a lot of blanks.
- * - `column` — a **Required** column with a ✅ in it, rendered only when some
- *   row fills it. The shape this package rendered before `marker`.
+ * - `column` (the default) — a **Required** column with a ✅ in it, rendered
+ *   only when some row fills it.
+ * - any other string — a suffix after a required property's name in the
+ *   **Property** cell, for a reference that would rather not spend a column on
+ *   one bit: `" _required_"`, `"*"` for one with a legend of its own,
+ *   `"<br><sub>required</sub>"` for the word on a line under the name, or `""`
+ *   for nothing at all.
+ *
+ * A suffix is appended exactly as written, so the separator is the author's to
+ * choose: `"*"` hugs the name and `" *"` does not. It is markdown (or inline
+ * HTML), not text, because formatting is the point of choosing one; the only
+ * things taken out are the ones that would break the row — a line ending, and a
+ * live `|` that would split it into another column.
+ *
+ * `(string & {})` rather than `string` so an editor still offers `column`.
  */
-export type DocTableRequired = 'marker' | 'column'
+export type DocTableRequired = 'column' | (string & {})
 
 /**
  * How every property table on every page is laid out. Declared once on the root
@@ -74,21 +84,9 @@ export type DocTable = {
   readonly default: DocTableColumn
   readonly required: DocTableRequired
   /**
-   * What `marker` puts after a required property's name: ` _required_` unless
-   * the schema says otherwise — `*` for a reference with a legend of its own,
-   * `<br><sub>required</sub>` for one that wants it on a line under the name.
-   *
-   * Appended exactly as written, so the separator is the author's to choose:
-   * `*` hugs the name and ` *` does not. It is markdown (or inline HTML), not
-   * text, because formatting is the point of changing it; the only things
-   * taken out are the ones that would break the row — a line ending, and a
-   * live `|` that would split it into another column.
-   */
-  readonly requiredMarker: string
-  /**
    * Lists the required properties at the top of the table, the rest under them,
    * for a reader skimming for what they have to fill in. One table still: the
-   * order groups them, and the marker (or the column) still says which is
+   * order groups them, and the column (or the suffix) still says which is
    * which, so nothing has to be read twice.
    *
    * A stable partition over whatever order the properties were already in, so
@@ -241,7 +239,6 @@ export type MarkdownTableOptions = {
   readonly type?: DocTableColumn | undefined
   readonly default?: DocTableColumn | undefined
   readonly required?: DocTableRequired | undefined
-  readonly requiredMarker?: string | undefined
   readonly requiredFirst?: boolean | undefined
 }
 

@@ -16,8 +16,7 @@ const section = (id: string, overrides: Partial<DocSection> = {}): DocSection =>
 const DEFAULT_TABLE: DocTable = {
   type: 'auto',
   default: 'auto',
-  required: 'marker',
-  requiredMarker: ' _required_',
+  required: 'column',
   requiredFirst: false,
 }
 
@@ -56,8 +55,8 @@ const headed = (...headings: readonly (readonly [string, DocEntry | undefined])[
 /** A page whose root `x-doc.table` asks for something other than the default. */
 const styled = (table: Partial<DocTable>): RenderContext => context({ table: { ...DEFAULT_TABLE, ...table } })
 
-/** The marker the default style puts beside a required property's name. */
-const REQUIRED_MARKER_TEXT = '_required_'
+/** A suffix spelled the way a reference that marks its names usually does. */
+const REQUIRED_SUFFIX = ' _required_'
 
 const entry = (name: string, prop: SchemaProperty, required = false): DocEntry => ({
   name,
@@ -84,10 +83,19 @@ describe('render-property-table', () => {
     expect(renderPropertyTable([entry('a', { type: 'string' })], context())).not.toContain('Default')
   })
 
-  // One bit for a handful of rows is not worth a column of its own, and the
-  // word needs no legend under the table to be understood.
-  it('marks a required property in its own cell rather than in a column', () => {
+  it('says which properties are required in a column by default', () => {
     const table = renderPropertyTable([entry('a', { type: 'string' }, true), entry('b', { type: 'string' })], context())
+    expect(table).toContain('| Property | Type | Required | Description |')
+    expect(table).toContain('| `a` | `string` | ✅ |  |')
+    expect(table).toContain('| `b` | `string` |  |  |')
+  })
+
+  // One bit for a handful of rows is not always worth a column of its own.
+  it('marks a required property in its own cell when the schema names a suffix', () => {
+    const table = renderPropertyTable(
+      [entry('a', { type: 'string' }, true), entry('b', { type: 'string' })],
+      styled({ required: REQUIRED_SUFFIX }),
+    )
     expect(table).toContain('| Property | Type | Description |')
     expect(table).not.toContain('Required')
     expect(table).toContain('| `a` _required_ | `string` |  |')
@@ -267,36 +275,22 @@ describe('render-property-table', () => {
     )
   })
 
-  // The shape this package rendered before the marker, for a reference that
-  // wants it back.
-  it('renders a required column when the schema asks for one', () => {
-    const table = renderPropertyTable(
-      [entry('a', { type: 'string' }, true), entry('b', { type: 'string' })],
-      styled({ required: 'column' }),
-    )
-    expect(table).toContain('| Property | Type | Required | Description |')
-    expect(table).toContain('| `a` | `string` | ✅ |  |')
-    expect(table).toContain('| `b` | `string` |  |  |')
-    expect(table).not.toContain(REQUIRED_MARKER_TEXT)
-  })
-
   // A reference with a legend of its own wants a symbol, and it hugs the name
   // because the author left the space out.
-  it("puts the schema's own marker after a required name, exactly as written", () => {
+  it('puts the suffix after a required name exactly as written', () => {
     const table = renderPropertyTable(
       [entry('a', { type: 'string' }, true), entry('b', { type: 'string' })],
-      styled({ requiredMarker: '*' }),
+      styled({ required: '*' }),
     )
     expect(table).toContain('| `a`* | `string` |  |')
     expect(table).toContain('| `b` | `string` |  |')
-    expect(table).not.toContain(REQUIRED_MARKER_TEXT)
   })
 
   // Formatting is the point of changing it, so inline HTML is passed through.
-  it('passes an HTML marker through untouched', () => {
+  it('passes an HTML suffix through untouched', () => {
     const table = renderPropertyTable(
       [entry('a', { type: 'string' }, true)],
-      styled({ requiredMarker: '<br><sub><i>required</i></sub>' }),
+      styled({ required: '<br><sub><i>required</i></sub>' }),
     )
     expect(table).toContain('| `a`<br><sub><i>required</i></sub> | `string` |  |')
   })
@@ -305,40 +299,27 @@ describe('render-property-table', () => {
     const target = entry('a', { type: 'string' }, true)
     const table = renderPropertyTable([target], {
       ...headed(['a', target]),
-      table: { ...DEFAULT_TABLE, requiredMarker: '*' },
+      table: { ...DEFAULT_TABLE, required: '*' },
     })
     expect(table).toContain('| [`a`](#a)* |')
   })
 
-  // A marker is one fragment of one cell: a live pipe would add a column and a
+  // A suffix is one fragment of one cell: a live pipe would add a column and a
   // line ending would end the row.
-  it('keeps a marker from breaking the row it sits in', () => {
-    const table = renderPropertyTable(
-      [entry('a', { type: 'string' }, true)],
-      styled({ requiredMarker: ' req | must\nset' }),
-    )
+  it('keeps a suffix from breaking the row it sits in', () => {
+    const table = renderPropertyTable([entry('a', { type: 'string' }, true)], styled({ required: ' req | must\nset' }))
     expect(table).toContain('| `a` req \\| must set | `string` |  |')
   })
 
-  it('renders no marker at all when the schema asks for an empty one', () => {
-    const table = renderPropertyTable([entry('a', { type: 'string' }, true)], styled({ requiredMarker: '' }))
-    expect(table).toContain('| `a` | `string` |  |')
-  })
-
-  // The column says it instead, so a marker as well would say it twice.
-  it('ignores the marker under the required column', () => {
-    const table = renderPropertyTable(
-      [entry('a', { type: 'string' }, true)],
-      styled({ required: 'column', requiredMarker: '*' }),
-    )
-    expect(table).toContain('| `a` | `string` | ✅ |  |')
+  // Neither a column nor a mark: the prose already says it.
+  it('marks nothing at all when the suffix is empty', () => {
+    const table = renderPropertyTable([entry('a', { type: 'string' }, true)], styled({ required: '' }))
+    expect(table).toBe(['| Property | Type | Description |', '| --- | --- | --- |', '| `a` | `string` |  |'].join('\n'))
   })
 
   // A column of blanks is a column of blanks whichever style asked for it.
   it('drops the required column when no property is required', () => {
-    expect(renderPropertyTable([entry('a', { type: 'string' })], styled({ required: 'column' }))).not.toContain(
-      'Required',
-    )
+    expect(renderPropertyTable([entry('a', { type: 'string' })], context())).not.toContain('Required')
   })
 
   // One table, with the properties a reader has to fill in at the top of it.
@@ -349,7 +330,7 @@ describe('render-property-table', () => {
         entry('name', { type: 'string', description: 'The name.' }, true),
         entry('url', { type: 'string', description: 'Where it lives.' }, true),
       ],
-      styled({ requiredFirst: true }),
+      styled({ required: REQUIRED_SUFFIX, requiredFirst: true }),
     )
     expect(table).toBe(
       [
@@ -362,14 +343,14 @@ describe('render-property-table', () => {
     )
   })
 
-  // The order groups them; the marker is still what says which group a row is
+  // The order groups them; the suffix is still what says which group a row is
   // in, so a reader never has to find the boundary.
-  it('keeps the marker on a required-first table', () => {
+  it('keeps the suffix on a required-first table', () => {
     const table = renderPropertyTable(
       [entry('name', { type: 'string' }, true), entry('slug', { type: 'string' })],
-      styled({ requiredFirst: true }),
+      styled({ required: REQUIRED_SUFFIX, requiredFirst: true }),
     )
-    expect(table).toContain(`| \`name\` ${REQUIRED_MARKER_TEXT} |`)
+    expect(table).toContain('| `name` _required_ |')
   })
 
   // The two are separate choices: where requiredness is said, and what order

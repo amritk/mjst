@@ -436,10 +436,10 @@ describe('generate-markdown-files', () => {
         '',
         '## Required properties',
         '',
-        '| Property | Type | Description |',
-        '| --- | --- | --- |',
-        '| `organization` _required_ | `string` | Identity of the organization publishing the SDKs. |',
-        '| `resources` | `string` | Resource tree that drives the generated client shape. |',
+        '| Property | Type | Required | Description |',
+        '| --- | --- | --- | --- |',
+        '| `organization` | `string` | ✅ | Identity of the organization publishing the SDKs. |',
+        '| `resources` | `string` |  | Resource tree that drives the generated client shape. |',
         '',
       ].join('\n'),
     )
@@ -1699,7 +1699,7 @@ describe('generate-markdown-files', () => {
   it('lists the required properties first and orders the blocks below to match', () => {
     const content = only(
       generateMarkdownFiles({
-        'x-doc': { layout: 'table', table: { requiredFirst: true } },
+        'x-doc': { layout: 'table', table: { required: ' _required_', requiredFirst: true } },
         properties: {
           server: {
             type: 'object',

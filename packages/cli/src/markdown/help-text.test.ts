@@ -18,7 +18,6 @@ describe('help-text', () => {
       '--type-column',
       '--default-column',
       '--required-style',
-      '--required-marker',
       '--required-first',
       '--table',
       '--readme',

@@ -134,9 +134,9 @@ const rowDestination = (
  * Every column has to earn its width, because the one that matters is
  * **Description** and a narrow viewport gives it what the others leave. By
  * default **Type** and **Default** are dropped when no row fills them with
- * anything the reader could act on, and requiredness is a marker in the
- * **Property** cell rather than a column: on a real page five rows in twenty
- * are required, which is a column of blanks carrying one bit.
+ * anything the reader could act on, and so is **Required** when no row is. A
+ * schema that would rather not spend a column on one bit names a suffix for
+ * the **Property** cell instead.
  *
  * All of that is the default rather than the rule — a schema that wants its
  * types spelled out everywhere, or its required options listed first, says so
@@ -149,7 +149,7 @@ export const renderPropertyTable = (
   options: PropertyTableOptions = {},
 ): string => {
   const style = context.table.required
-  const marker = tableFragment(context.table.requiredMarker)
+  const suffix = style === 'column' ? '' : tableFragment(style)
   const summarised = options.summarised ?? (() => false)
   const properties = tableOrder(entries, context.table).map((entry) => ({
     entry,
@@ -178,8 +178,8 @@ export const renderPropertyTable = (
     const destination = rowDestination(entry, meta, context, summarised)
     const name = tableCode(entry.name)
     const label = destination === undefined ? name : `[${name}](${destination})`
-    // Under `column` the column says it instead.
-    const cells = [entry.required && style === 'marker' ? `${label}${marker}` : label]
+    // Under `column` the column says it instead, and the suffix is empty.
+    const cells = [entry.required ? `${label}${suffix}` : label]
     if (showType) cells.push(type.length > 0 ? tableCode(type) : '')
     if (showRequired) cells.push(entry.required ? '✅' : '')
     if (showDefault) {

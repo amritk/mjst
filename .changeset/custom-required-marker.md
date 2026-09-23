@@ -3,15 +3,17 @@
 "@amritk/mjst": minor
 ---
 
-Let a schema choose what marks a required property in a table.
+Let a schema choose how a property table marks required properties, and make the **Required** column the default.
 
-The root `x-doc.table.requiredMarker` replaces the ` _required_` that the `marker` style appends to a required property's name. It is markdown or inline HTML, appended exactly as written, so the author picks the separator: `"*"` hugs the name and `" *"` does not. Line endings become spaces and live `|`s are escaped so a marker cannot break its row; an empty string renders no marker. It is ignored under `required: 'column'`. `MarkdownOptions.table.requiredMarker` and `mjst markdown --required-marker <text>` override it.
+`x-doc.table.required` is now `"column"` or any other string. `"column"` — the default — renders a **Required** column with a ✅, dropped when no row is required. Any other string is a suffix put right after each required property's name, as markdown or inline HTML, appended exactly as written: `"*"` hugs the name, `" *"` does not, and `""` marks nothing. Line endings become spaces and live `|`s are escaped so a suffix cannot break its row. `MarkdownOptions.table.required` and `mjst markdown --required-style <text>` take the same values.
 
 ```json
-{ "x-doc": { "table": { "requiredMarker": "<br><sub><i>required</i></sub>" } } }
+{ "x-doc": { "table": { "required": "<br><sub><i>required</i></sub>" } } }
 ```
 
-| Property                                 | Type     | Description                |
-| ---------------------------------------- | -------- | -------------------------- |
-| `host`<br><sub><i>required</i></sub>     | `string` | The host to bind.          |
-| `port`                                   | `number` | The port to bind.          |
+| Property                             | Type     | Description       |
+| ------------------------------------ | -------- | ----------------- |
+| `host`<br><sub><i>required</i></sub> | `string` | The host to bind. |
+| `port`                               | `number` | The port to bind. |
+
+**Breaking:** tables that set no `required` now get the **Required** column instead of `` `name` _required_ ``; set `"required": " _required_"` to keep the old output. `"marker"` is no longer a keyword — it is read as a literal suffix like any other string, so replace it with `" _required_"`. `--required-style` no longer rejects values other than `marker` and `column`.

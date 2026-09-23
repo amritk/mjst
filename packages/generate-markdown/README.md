@@ -657,7 +657,7 @@ On the **root schema**:
 | `sort` | `'schema' \| 'alphabetical'` | Default property order. Defaults to `schema`. |
 | `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
 | `headings` | `{ type? }` | How every property rendered as a heading is laid out — `type` takes `'auto' \| 'never'`. See [What a heading holds](#what-a-heading-holds). Root only, like `table` |
-| `table` | `{ type?, default?, required?, requiredMarker?, requiredFirst? }` | How every property table on every page is laid out — `type` and `default` take `'auto' \| 'always' \| 'never'`, `required` takes `'marker' \| 'column'`, `requiredMarker` is the markdown `marker` puts after a required name, and `requiredFirst` heads each table with the properties that have to be filled in. See [What a property table holds](#what-a-property-table-holds). Root only: a reference whose tables disagree about which columns exist reads as several references stapled together |
+| `table` | `{ type?, default?, required?, requiredFirst? }` | How every property table on every page is laid out — `type` and `default` take `'auto' \| 'always' \| 'never'`, `required` takes `'column'` or a suffix for required names, and `requiredFirst` heads each table with the properties that have to be filled in. See [What a property table holds](#what-a-property-table-holds). Root only: a reference whose tables disagree about which columns exist reads as several references stapled together |
 | `sections` | `{ id, title?, description?, page?, layout?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. Its `layout` takes the same `'headings' \| 'table' \| 'none'` vocabulary a property's does, and defaults to `headings` — the root `layout` is the default for a property's *children*, not for a section. |
 | `example` / `examples` | see below | Code blocks under the page title. |
 
@@ -756,7 +756,7 @@ and every table on every page follows it:
 ```json
 {
   "x-doc": {
-    "table": { "type": "never", "requiredFirst": true }
+    "table": { "type": "never", "required": " _required_", "requiredFirst": true }
   }
 }
 ```
@@ -765,9 +765,8 @@ and every table on every page follows it:
 | --- | --- | --- |
 | `type` | `auto` (default), `always`, `never` | The **Type** column. `auto` renders it only when a row says something with it — a table whose every row is `object`, or states no type at all, drops it, while one with enums, arrays or maps keeps it. Every row being `string` keeps it too: that is a fact about the options rather than the absence of one. `never` is for a reference whose readers do not think in types |
 | `default` | `auto` (default), `always`, `never` | The **Default** column. `auto` renders it when some property has one. A `null` default is the absence of a value, so it prints below the table instead of in it |
-| `required` | `marker` (default), `column` | Where requiredness is said: `` `name` _required_ `` in the **Property** cell, or a **Required** column with a ✅. The marker is the default because five rows in twenty are required on a real page, so the column carried one bit and a lot of blanks — and the word is its own legend, so nothing has to be explained under the table. The column is the shape this package rendered before that, and like every other column it is dropped when no row fills it |
-| `requiredMarker` | `" _required_"` (default), any string | What `marker` puts after a required property's name, as markdown or inline HTML: `"*"` for a reference with a legend of its own, `"<br><sub><i>required</i></sub>"` to put the word on a line under the name, `""` for no marker. Appended exactly as written, so `"*"` hugs the name and `" *"` does not — the only changes are to what would break the row: a line ending becomes a space and a live `\|` is escaped. Ignored under `column`, which says it instead |
-| `requiredFirst` | `false` (default), `true` | Lists the required properties at the top of the table and the rest under them, for a reader skimming for what they have to fill in. Still one table: the order groups them and the marker (or the column) still says which is which, so nothing is read twice. A stable partition, so `sort` and `x-doc.order` decide the order within each group — and the blocks below the table follow their rows, so they are reordered with them |
+| `required` | `column` (default), any other string | Where requiredness is said. `column` is a **Required** column with a ✅, dropped like every other column when no row fills it. Any other string is a suffix put right after a required property's name in the **Property** cell instead, as markdown or inline HTML: `" _required_"`, `"*"` for a reference with a legend of its own, `"<br><sub><i>required</i></sub>"` to put the word on a line under the name, or `""` for no mark at all. The suffix is appended exactly as written, so `"*"` hugs the name and `" *"` does not — the only changes are to what would break the row: a line ending becomes a space and a live `\|` is escaped. A suffix saves a column when only a few rows in many are required |
+| `requiredFirst` | `false` (default), `true` | Lists the required properties at the top of the table and the rest under them, for a reader skimming for what they have to fill in. Still one table: the order groups them and the column (or the suffix) still says which is which, so nothing is read twice. A stable partition, so `sort` and `x-doc.order` decide the order within each group — and the blocks below the table follow their rows, so they are reordered with them |
 
 All of this is the table's shape only. A property rendered as a heading still
 gets its **Type:** and **Required** lines, which are prose rather than columns —
@@ -868,7 +867,7 @@ Two realistic schemas and the markdown they generate are checked in:
 
 - [`fixtures/api-reference-config.schema.json`](./fixtures/api-reference-config.schema.json) → [one page](./fixtures/expected/api-reference-config/configuration.md)
 - [`fixtures/sdk-config.schema.json`](./fixtures/sdk-config.schema.json) → [three pages](./fixtures/expected/sdk-config/)
-- [`fixtures/deploy-config.schema.json`](./fixtures/deploy-config.schema.json) → [one page](./fixtures/expected/deploy-config/configuration.md), the same renderer under `x-doc.table: { "type": "never", "requiredFirst": true }`
+- [`fixtures/deploy-config.schema.json`](./fixtures/deploy-config.schema.json) → [one page](./fixtures/expected/deploy-config/configuration.md), the same renderer under `x-doc.table: { "type": "never", "required": " _required_", "requiredFirst": true }`
 
 The tests compare the generator against those files. After a deliberate change,
 `bun run generate-fixtures` refreshes them — and the diff shows exactly how

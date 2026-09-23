@@ -8,7 +8,7 @@
     "file": "configuration.md",
     "language": "json",
     "layout": "table",
-    "table": { "type": "never", "requiredFirst": true },
+    "table": { "type": "never", "required": " _required_", "requiredFirst": true },
     "example": {
       "caption": "A minimal config:",
       "value": {
