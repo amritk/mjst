@@ -27,6 +27,17 @@ describe('node-at-path', () => {
     if (node?.kind === 'scalar') expect(node.value).toBe('b')
   })
 
+  it('reads a string index only in its canonical spelling', () => {
+    // `Number()` took '', ' 1', '0x1' and '1e0' as indices, none of which
+    // `toJS()`'s array answers to.
+    const doc = parseDocument('tags:\n  - a\n  - b\n')
+    for (const segment of ['', ' 1', '0x1', '1e0', '01']) {
+      expect(nodeAtPath(doc.contents, ['tags', segment])).toBeUndefined()
+    }
+    const node = nodeAtPath(doc.contents, ['tags', '1'])
+    expect(node?.kind === 'scalar' ? node.value : undefined).toBe('b')
+  })
+
   it('returns undefined for a missing path', () => {
     expect(nodeAtPath(contents, ['info', 'description'])).toBeUndefined()
   })

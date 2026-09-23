@@ -146,6 +146,9 @@ export const trimTrailingSpaces = (s: string): string => {
   return end === s.length ? s : s.slice(0, end)
 }
 
+/** Strips leading and trailing spaces/tabs only — YAML white space, unlike `String#trim`. */
+export const trimWs = (s: string): string => trimTrailingSpaces(lstrip(s))
+
 /**
  * Folds the line breaks of a multi-line flow scalar, per the YAML flow folding
  * rules: a single break between content becomes a space, and a run of blank
@@ -166,10 +169,10 @@ const foldLines = (text: string): string => {
   let out = trimTrailingSpaces(lines[0] ?? '')
   let i = 1
   while (i <= last) {
-    if ((lines[i] ?? '').trim() === '') {
+    if (trimWs(lines[i] ?? '') === '') {
       // Run of blank lines.
       let blanks = 0
-      while (i <= last && (lines[i] ?? '').trim() === '') {
+      while (i <= last && trimWs(lines[i] ?? '') === '') {
         blanks++
         i++
       }
@@ -181,13 +184,13 @@ const foldLines = (text: string): string => {
       } else {
         // Interior run: each blank line is one newline, then the next content.
         out += '\n'.repeat(blanks)
-        out += i === last ? lstrip(lines[i] ?? '') : (lines[i] ?? '').trim()
+        out += i === last ? lstrip(lines[i] ?? '') : trimWs(lines[i] ?? '')
         i++
       }
     } else {
       // Single break folds to a space. Keep trailing whitespace only on the
       // final line, where it is literal content rather than folding padding.
-      out += ' ' + (i === last ? lstrip(lines[i] ?? '') : (lines[i] ?? '').trim())
+      out += ' ' + (i === last ? lstrip(lines[i] ?? '') : trimWs(lines[i] ?? ''))
       i++
     }
   }
@@ -238,12 +241,15 @@ const unescapeLine = (line: string, allowContinuation: boolean): QuotedLine => {
   let lastEsc = -1
   let i = 0
   while (i < line.length) {
-    const ch = line[i]
-    if (ch !== '\\') {
-      text += ch
-      i++
-      continue
+    // Copy the literal run up to the next backslash in one slice rather than a
+    // character at a time: `text += ch` builds a rope node per character.
+    const bs = line.indexOf('\\', i)
+    if (bs === -1) {
+      text += i === 0 ? line : line.slice(i)
+      break
     }
+    if (bs > i) text += line.slice(i, bs)
+    i = bs
     const next = line[i + 1]
     if (next === undefined) {
       // A trailing `\` escapes the line break: the break and the next line's
@@ -303,7 +309,7 @@ const sliceQuoted = (line: QuotedLine, dropLeading: boolean, dropTrailing: boole
 
 /** A line that folding treats as a break rather than as content. Escaped whitespace is content. */
 const isBlankQuoted = (line: QuotedLine | undefined): boolean =>
-  line !== undefined && line.firstEsc === -1 && line.text.trim() === ''
+  line !== undefined && line.firstEsc === -1 && trimWs(line.text) === ''
 
 /**
  * Unescapes and folds a multi-line double-quoted scalar. The folding rules are
