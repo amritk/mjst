@@ -10,10 +10,10 @@ import {
   type JsonPath,
 } from '@amritk/lint/types'
 import { type OriginMap, type ResolveError, resolveRefs, resolveRefsFromFile } from '@amritk/resolve-refs'
-import { parse as parseYaml } from '@amritk/yaml'
 
 import { withAllowedRootsHint } from '../allowed-roots-hint'
 import { hasExternalRefs } from '../has-external-refs'
+import { parseYamlStrict } from '../parse-yaml-strict'
 
 /** How `mjst lint` dereferences `$ref` (and `$dynamicRef`/`$recursiveRef`). */
 export type ResolverOptions = {
@@ -38,17 +38,32 @@ export type ResolverOptions = {
 const isRemote = (location: string): boolean => /^https?:\/\//i.test(location)
 
 /**
+ * Parses a referenced YAML document, throwing on a parse error or a
+ * multi-document stream rather than returning the parser's salvage (see
+ * {@link parseYamlStrict}). A throw here is how the resolver learns the file
+ * could not be loaded: it becomes a `ResolveError` at the `$ref` that named the
+ * file, and so an `unresolved-ref` finding — the same path a missing file takes.
+ *
+ * Duplicate keys are let through, the last one winning: that is what a
+ * referenced JSON file has always done (`JSON.parse`), and the ruleset's
+ * `parserOptions.duplicateKeys` — which the resolver cannot see — is the
+ * user's say over duplicates, in the linted document itself.
+ */
+const parseReferencedYaml = (content: string, location: string): unknown =>
+  parseYamlStrict(content, location, { what: 'a $ref target', singleLine: true, uniqueKeys: false })
+
+/**
  * Parses a referenced document by extension: YAML for `.yaml`/`.yml`, JSON for
  * `.json`, and for anything else (extensionless, remote) tries JSON first, then
  * YAML. YAML is a JSON superset, so this accepts every document the linter does.
  */
 const parseDoc = (content: string, location: string): unknown => {
-  if (/\.ya?ml$/i.test(location)) return parseYaml(content)
+  if (/\.ya?ml$/i.test(location)) return parseReferencedYaml(content, location)
   if (/\.json$/i.test(location)) return JSON.parse(content)
   try {
     return JSON.parse(content)
   } catch {
-    return parseYaml(content)
+    return parseReferencedYaml(content, location)
   }
 }
 
@@ -158,6 +173,14 @@ export const createLintResolver = (options: ResolverOptions = {}): LintResolver 
       if (readsBackAs(absolute, input)) {
         const { resolved, origins, errors } = await resolveRefsFromFile(absolute, {
           ...fromFileOptions,
+          // The linter has parsed this very text already; hand that value over
+          // rather than have the root read and parsed a second time (the most
+          // expensive step of linting a large spec). It also keeps the resolved
+          // view the same shape as the linted one — a multi-document root is an
+          // array of its documents — and keeps a root with a syntax error of
+          // its own (already a `parser` finding) out of the strict parse that
+          // referenced files get.
+          rootDocument: document.data,
           ...(extraRoots.length > 0 ? { allowedRoots: [dirname(absolute), ...extraRoots] } : {}),
         })
         return {
