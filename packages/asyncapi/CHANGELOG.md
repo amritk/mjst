@@ -1,5 +1,14 @@
 # @amritk/asyncapi
 
+## 0.3.5
+
+### Patch Changes
+
+- c1d153b: Normalize each component schema once per extraction instead of once per message that references it. On a document where hundreds of messages share a component chain, extraction runs about twice as fast. The output does not change.
+- Updated dependencies [18903c4]
+  - @amritk/helpers@0.23.3
+  - @amritk/adapters@0.6.7
+
 ## 0.3.4
 
 ### Patch Changes

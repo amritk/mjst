@@ -1,5 +1,22 @@
 # @amritk/lint
 
+## 0.6.2
+
+### Patch Changes
+
+- 1e29978: `fixDocument` no longer lints the fixed document a second time once the fix loop has converged: the converging pass already linted that exact text, and its findings are what `remaining` reports. A document that needs no fixes is linted once instead of twice, which halves the time of the common call.
+- 781f5a0: Fix a JSON finding pointing at the whole document when its key is repeated after a property whose value failed to parse (`{"a": , "a": 1}`). The lookup stopped at the broken property instead of the later one the parsed data holds; it now skips a property with no value, as `jsonc-parser`'s lookup did.
+- 7a15021: Fix findings pointing at the wrong place in two cases.
+
+  - Under an all-digit key such as a `"200"` response, a finding's path spells the key as the number `200`. Neither the YAML nor the JSON source map found a number segment under a map, so the finding's range was the whole enclosing map. Both now find the key.
+  - In YAML, a dotted key and the nested path with the same dots (`a.b: 1` beside `a: { b: 2 }`) shared one index entry, so a finding on one was reported at the other.
+
+- Updated dependencies [41054e6]
+- Updated dependencies [743bfc1]
+- Updated dependencies [de09d82]
+  - @amritk/runtime-validators@0.15.1
+  - @amritk/yaml@0.7.3
+
 ## 0.6.1
 
 ### Patch Changes

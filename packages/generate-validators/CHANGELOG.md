@@ -1,5 +1,18 @@
 # @amritk/generate-validators
 
+## 0.19.3
+
+### Patch Changes
+
+- Updated dependencies [18903c4]
+- Updated dependencies [c3bb2b4]
+- Updated dependencies [475d7e8]
+- Updated dependencies [d8f6272]
+- Updated dependencies [a7bf02b]
+- Updated dependencies [8ef66cd]
+  - @amritk/helpers@0.23.3
+  - @amritk/validation@0.3.2
+
 ## 0.19.2
 
 ### Patch Changes
