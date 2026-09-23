@@ -1,4 +1,4 @@
-import { findNodeAtLocation, getNodeValue, type ParseError, parseTree, printParseErrorCode } from 'jsonc-parser'
+import { getNodeValue, type Node, type ParseError, parseTree, printParseErrorCode } from 'jsonc-parser'
 
 import { findExcessiveNesting, MAX_NESTING_DEPTH } from './depth'
 import { createLineMap } from './lines'
@@ -47,7 +47,7 @@ export const parseJson = <T = unknown>(source: string): IParseResult<T> => {
     if (!root) return undefined
     const p = path.slice()
     while (true) {
-      const node = findNodeAtLocation(root, p)
+      const node = findNode(root, p)
       if (node) {
         return {
           range: {
@@ -62,4 +62,32 @@ export const parseJson = <T = unknown>(source: string): IParseResult<T> => {
   }
 
   return { data, diagnostics, getLocationForJsonPath }
+}
+
+/** An array index in the only spelling a JSON array answers to. */
+const ARRAY_INDEX = /^(?:0|[1-9]\d*)$/
+
+/**
+ * The node at `path`, reading each segment by the kind of node it lands on.
+ * `jsonc-parser`'s own `findNodeAtLocation` reads a number segment as an array
+ * index only, and a finding's path spells an all-digit object key such as a
+ * `"200"` response as the number `200`, so every finding under one resolved to
+ * the enclosing object instead.
+ */
+const findNode = (root: Node, path: JsonPath): Node | undefined => {
+  let node: Node | undefined = root
+  for (const segment of path) {
+    if (node === undefined) return undefined
+    if (node.type === 'object') {
+      const key = String(segment)
+      const property: Node | undefined = node.children?.find((child) => child.children?.[0]?.value === key)
+      node = property?.children?.[1]
+    } else if (node.type === 'array') {
+      const text = String(segment)
+      node = ARRAY_INDEX.test(text) ? node.children?.[Number(text)] : undefined
+    } else {
+      return undefined
+    }
+  }
+  return node
 }
