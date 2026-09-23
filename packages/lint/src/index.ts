@@ -358,8 +358,9 @@ const MAX_FIX_PASSES = 10
 
 /**
  * Lints a document and applies the supplied `fixers` repeatedly until the
- * document stops changing (or {@link MAX_FIX_PASSES} is reached), then re-lints
- * so `remaining` reflects the fixed document. A one-call convenience over
+ * document stops changing (or {@link MAX_FIX_PASSES} is reached). `remaining`
+ * reflects the fixed document: the converging pass already linted it, so only
+ * a run that hit the cap lints once more. A one-call convenience over
  * {@link lintDocumentWithResult} + `createFixPlugin`. With no `fixers` this is a
  * no-op that just returns the findings.
  */
@@ -376,11 +377,16 @@ export const fixDocument = async (input: string, options: IFixOptions = {}): Pro
   let converged = false
   const applied: AppliedFix[] = []
   const seen = new Set<string>()
+  // The findings of the pass that converged. That pass linted `current` and
+  // changed nothing, and the fix plugin rewrites the text but never the
+  // findings, so they are already what a fresh lint of `current` would say.
+  let convergedDiagnostics: IDiagnostic[] | undefined
   for (let pass = 0; pass < MAX_FIX_PASSES; pass++) {
     const result = await runLint(current, ruleset, { ...lintOptions, plugins: [plugin] })
     // No rewrite, or a rewrite that matches what we already have, means we have converged.
     if (result.output === undefined || result.output === current) {
       converged = true
+      convergedDiagnostics = result.diagnostics
       break
     }
     current = result.output
@@ -396,7 +402,7 @@ export const fixDocument = async (input: string, options: IFixOptions = {}): Pro
     }
   }
 
-  const remaining = (await runLint(current, ruleset, lintOptions)).diagnostics
+  const remaining = convergedDiagnostics ?? (await runLint(current, ruleset, lintOptions)).diagnostics
   // `fixed` is documented as "whether any fix changed the document", so it has
   // to be measured on the document. `applied.length > 0` is a different
   // question — a multi-op fix whose ops were partly deferred rewrites the text
