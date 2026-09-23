@@ -21,7 +21,9 @@ export type ParseYamlStrictOptions = ParseOptions & {
 /**
  * Builds the "Failed to parse" message. Cold: only a document that failed to
  * parse pays for the line index, and every problem is located as
- * `path:line:col` so an editor or terminal can jump straight to it.
+ * `path:line:col` so an editor or terminal can jump straight to it. That is
+ * also why the header does not name the file: every problem already does, and
+ * a second copy of a long absolute path only pushes the problems off-screen.
  */
 const describeParseErrors = (
   errors: YamlError[],
@@ -36,13 +38,18 @@ const describeParseErrors = (
   })
   if (errors.length > MAX_LISTED_PROBLEMS) listed.push(`…and ${errors.length - MAX_LISTED_PROBLEMS} more`)
   const body = singleLine ? ` ${listed.join('; ')}` : listed.map((problem) => `\n  - ${problem}`).join('')
-  return `Failed to parse ${location} as YAML:${body}`
+  return `Failed to parse YAML:${body}`
 }
 
-/** Builds the multi-document message, pointing at the `---` that opens the second document. */
+/**
+ * Builds the multi-document message, located at the marker the parser stopped
+ * at. That is a `---` opening the second document or a `...` closing the first
+ * (`a: 1\n...\nb: 2`), after which the second starts on a later line, so the
+ * message says a document *follows* the marker rather than starts there.
+ */
 const describeMultipleDocuments = (warning: YamlError, text: string, location: string, what: string): string => {
   const { line, col } = lineCounter(text).linePos(warning.start)
-  return `${location} contains multiple YAML documents (the second starts at ${location}:${line}:${col}); ${what} must be a single-document file.`
+  return `${location}:${line}:${col}: this file contains multiple YAML documents (another one follows this marker); ${what} must be a single-document file.`
 }
 
 /**

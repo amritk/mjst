@@ -43,7 +43,9 @@ describe('resolver', () => {
     // Anchored on the `$ref` that pulled the file in, and naming the problem's
     // own position inside the referenced file.
     expect(stdout).toContain(`${join(dir, 'doc.yaml')}:3:9  error  unresolved-ref  `)
-    expect(stdout).toContain(`Failed to parse ${shared} as YAML: ${shared}:3:9: Missing closing "]" for flow sequence`)
+    expect(stdout).toContain(
+      `unresolved-ref  Failed to parse YAML: ${shared}:3:9: Missing closing "]" for flow sequence`,
+    )
     expect(stdout).not.toContain('config-name-kebab')
     // One finding per line: the report format has no room for a multi-line message.
     expect(stdout.split('\n').filter((line) => line.includes('unresolved-ref'))).toHaveLength(1)
@@ -60,7 +62,7 @@ describe('resolver', () => {
 
     expect(code).toBe(1)
     expect(stdout).toContain(
-      `${shared} contains multiple YAML documents (the second starts at ${shared}:3:1); a $ref target must be a single-document file.`,
+      `unresolved-ref  ${shared}:3:1: this file contains multiple YAML documents (another one follows this marker); a $ref target must be a single-document file.`,
     )
   })
 
@@ -75,7 +77,7 @@ describe('resolver', () => {
     const { stdout, code } = await run([join(dir, 'doc.yaml')])
 
     expect(code).toBe(1)
-    expect(stdout).toContain(`Failed to parse ${join(dir, 'shared')} as YAML: ${join(dir, 'shared')}:3:9: `)
+    expect(stdout).toContain(`unresolved-ref  Failed to parse YAML: ${join(dir, 'shared')}:3:9: `)
     expect(stdout).not.toContain('config-name-kebab')
   })
 
