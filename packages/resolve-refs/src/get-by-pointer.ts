@@ -5,6 +5,9 @@ import type { JsonPath } from './types'
  * unescapes `~1` → `/` and `~0` → `~`. Invalid percent-escapes are left as-is.
  */
 const decodeSegment = (segment: string): string => {
+  // Nearly every segment is a bare name, with nothing to percent-decode or
+  // unescape, and this runs for every segment of every pointer resolved.
+  if (!segment.includes('%') && !segment.includes('~')) return segment
   let decoded = segment
   try {
     decoded = decodeURIComponent(segment)
@@ -30,9 +33,12 @@ export const pointerToPath = (pointer: string): JsonPath => {
     .split('/')
     .map((segment) => {
       const decoded = decodeSegment(segment)
-      return /^(0|[1-9]\d*)$/.test(decoded) ? Number(decoded) : decoded
+      return ARRAY_INDEX.test(decoded) ? Number(decoded) : decoded
     })
 }
+
+/** An RFC 6901 array index: `0`, or a run of digits with no leading zero. */
+const ARRAY_INDEX = /^(0|[1-9]\d*)$/
 
 /**
  * Whether a reference fragment is a JSON Pointer rather than a plain-name
@@ -61,6 +67,9 @@ export const getByPointer = (root: unknown, pointer: string): unknown => {
   let current: unknown = root
   for (const segment of segments) {
     if (current === null || typeof current !== 'object') return undefined
+    // `Number()` alone read `0x1`, `1e0`, ` 1`, `01` and `''` as indices too, so
+    // a pointer RFC 6901 calls unresolvable landed on some element instead.
+    if (Array.isArray(current) && !ARRAY_INDEX.test(segment)) return undefined
     const key = Array.isArray(current) ? Number(segment) : segment
     if (!Object.hasOwn(current, key)) return undefined
     current = (current as Record<string, unknown>)[key]

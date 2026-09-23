@@ -140,19 +140,20 @@ export const buildResourceRegistry = (
       ? baseAfterId(root as Record<string, unknown>, initialBase)
       : initialBase
 
+  // `pointer` is the walk's shared path, so every entry stored takes a copy.
   const registerAnchors = (node: Record<string, unknown>, base: string, pointer: JsonPath): void => {
     const anchor = node['$anchor']
     if (typeof anchor === 'string') {
       const key = `${base}#${anchor}`
-      if (!staticAnchors.has(key)) staticAnchors.set(key, { value: node, pointer })
+      if (!staticAnchors.has(key)) staticAnchors.set(key, { value: node, pointer: pointer.slice() })
     }
     const dynamicAnchor = node['$dynamicAnchor']
     if (typeof dynamicAnchor === 'string') {
       dynamicAnchorCounts.set(dynamicAnchor, (dynamicAnchorCounts.get(dynamicAnchor) ?? 0) + 1)
       const key = `${base}#${dynamicAnchor}`
       // Per 2020-12 a `$dynamicAnchor` also creates an ordinary anchor.
-      if (!dynamicAnchors.has(key)) dynamicAnchors.set(key, { value: node, pointer })
-      if (!staticAnchors.has(key)) staticAnchors.set(key, { value: node, pointer })
+      if (!dynamicAnchors.has(key)) dynamicAnchors.set(key, { value: node, pointer: pointer.slice() })
+      if (!staticAnchors.has(key)) staticAnchors.set(key, { value: node, pointer: pointer.slice() })
     }
   }
 
@@ -165,22 +166,32 @@ export const buildResourceRegistry = (
   // `$anchor` key inside an enum member or a default value is part of that
   // value, and a definition *named* `$id` under `$defs` is a name, not one
   // either (see `child-role.ts`).
-  const walk = (node: unknown, base: string, pointer: JsonPath, depth: number, role: NodeRole): void => {
+  // One path array serves the whole walk, pushed and popped around each child:
+  // a copy is taken only where something is registered, which few nodes are,
+  // instead of a fresh `[...pointer, key]` for every node visited.
+  const path: JsonPath = []
+  const walk = (node: unknown, base: string, depth: number, role: NodeRole): void => {
     if (node === null || typeof node !== 'object' || depth > maxDepth || role === 'value') return
     if (Array.isArray(node)) {
-      for (let i = 0; i < node.length; i++) walk(node[i], base, [...pointer, i], depth + 1, childRole(role, i))
+      for (let i = 0; i < node.length; i++) {
+        path.push(i)
+        walk(node[i], base, depth + 1, childRole(role, i))
+        path.pop()
+      }
       return
     }
     const record = node as Record<string, unknown>
     const nodeBase = role === 'schemaMap' ? base : baseAfterId(record, base)
     if (nodeBase !== base) {
       // First declaration wins on both, matching document order.
-      if (!resources.has(nodeBase)) resources.set(nodeBase, { value: node, pointer })
+      if (!resources.has(nodeBase)) resources.set(nodeBase, { value: node, pointer: path.slice() })
       if (!bases.has(node)) bases.set(node, nodeBase)
     }
-    if (role !== 'schemaMap') registerAnchors(record, nodeBase, pointer)
+    if (role !== 'schemaMap') registerAnchors(record, nodeBase, path)
     for (const key of Object.keys(record)) {
-      walk(record[key], nodeBase, [...pointer, key], depth + 1, childRole(role, key))
+      path.push(key)
+      walk(record[key], nodeBase, depth + 1, childRole(role, key))
+      path.pop()
     }
   }
 
@@ -188,7 +199,7 @@ export const buildResourceRegistry = (
   // initial base, so both spellings of a self-reference resolve.
   if (rootBase !== initialBase) resources.set(rootBase, { value: root, pointer: [] })
   if (!resources.has(initialBase)) resources.set(initialBase, { value: root, pointer: [] })
-  walk(root, initialBase, [], 0, 'schema')
+  walk(root, initialBase, 0, 'schema')
 
   const ambiguousDynamicAnchors = new Set<string>()
   for (const [name, count] of dynamicAnchorCounts) {

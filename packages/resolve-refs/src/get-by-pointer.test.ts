@@ -65,4 +65,15 @@ describe('get-by-pointer', () => {
     // An own property that shadows a prototype member still resolves.
     expect(getByPointer(JSON.parse('{"constructor":"mine"}'), '/constructor')).toBe('mine')
   })
+
+  it('reads an array index only in its RFC 6901 spelling', () => {
+    // `Number()` read all of these as index 1 (or 0), so a pointer the spec
+    // calls unresolvable was inlined from whichever element it happened to hit.
+    const doc = { allOf: ['zero', 'one'] }
+    for (const segment of ['0x1', '1e0', ' 1', '01', '1.0', '']) {
+      expect(getByPointer(doc, `/allOf/${segment}`)).toBeUndefined()
+    }
+    expect(getByPointer(doc, '/allOf/1')).toBe('one')
+    expect(getByPointer(doc, '/allOf/0')).toBe('zero')
+  })
 })

@@ -55,27 +55,34 @@ const search = (root: unknown, predicate: (obj: Record<string, unknown>) => bool
   // too, and an anchor lookup must not be the thing that blows the stack on a
   // pathologically nested document. An anchor buried past the cap simply is not
   // found, which the callers already report as an unresolvable reference.
-  const walk = (node: unknown, pointer: JsonPath, depth: number, role: NodeRole): ResolvedTarget | undefined => {
+  // One path for the whole search, pushed and popped around each child and
+  // copied only for the node that matches, rather than a fresh copy per node.
+  const path: JsonPath = []
+  const walk = (node: unknown, depth: number, role: NodeRole): ResolvedTarget | undefined => {
     if (node === null || typeof node !== 'object' || seen.has(node) || depth > DEFAULT_MAX_DEPTH) return undefined
     if (role === 'value') return undefined
     seen.add(node)
     if (!Array.isArray(node) && role !== 'schemaMap' && predicate(node as Record<string, unknown>)) {
-      return { value: node, pointer }
+      return { value: node, pointer: path.slice() }
     }
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i++) {
-        const found = walk(node[i], [...pointer, i], depth + 1, childRole(role, i))
+        path.push(i)
+        const found = walk(node[i], depth + 1, childRole(role, i))
+        path.pop()
         if (found) return found
       }
     } else {
       for (const key of Object.keys(node)) {
-        const found = walk((node as Record<string, unknown>)[key], [...pointer, key], depth + 1, childRole(role, key))
+        path.push(key)
+        const found = walk((node as Record<string, unknown>)[key], depth + 1, childRole(role, key))
+        path.pop()
         if (found) return found
       }
     }
     return undefined
   }
-  return walk(root, [], 0, 'schema')
+  return walk(root, 0, 'schema')
 }
 
 /**
