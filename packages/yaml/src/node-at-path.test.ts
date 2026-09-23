@@ -10,8 +10,7 @@ describe('node-at-path', () => {
 
   it('locates a nested scalar by path', () => {
     const node = nodeAtPath(contents, ['info', 'title'])
-    expect(node?.kind).toBe('scalar')
-    if (node?.kind === 'scalar') expect(node.value).toBe('My API')
+    expect(node).toMatchObject({ kind: 'scalar', value: 'My API' })
   })
 
   it('exposes the exact source range for a located node', () => {
@@ -24,7 +23,7 @@ describe('node-at-path', () => {
   it('locates an array element with a numeric segment', () => {
     const doc = parseDocument('tags:\n  - name: a\n  - name: b\n')
     const node = nodeAtPath(doc.contents, ['tags', 1, 'name'])
-    if (node?.kind === 'scalar') expect(node.value).toBe('b')
+    expect(node).toMatchObject({ kind: 'scalar', value: 'b' })
   })
 
   it('reads a string index only in its canonical spelling', () => {
@@ -52,7 +51,7 @@ describe('node-at-path', () => {
   it('matches numeric map keys against stringified segments', () => {
     const doc = parseDocument('responses:\n  "200":\n    description: ok\n')
     const node = nodeAtPath(doc.contents, ['responses', '200', 'description'])
-    if (node?.kind === 'scalar') expect(node.value).toBe('ok')
+    expect(node).toMatchObject({ kind: 'scalar', value: 'ok' })
   })
 
   /**
