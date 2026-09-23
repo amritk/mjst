@@ -95,6 +95,40 @@ cannot be coerced, and reports the validator's own errors as the repairs.
 `parse` and `parseStrict` are the same function name under two contracts, so
 asking for both is an error rather than a silent choice.
 
+### Moving off Ajv
+
+`coerceX` is built to replace Ajv compiled with `{ allErrors: true,
+coerceTypes: true }`. It never accepts a value its own `validateX` rejects, and
+where it and Ajv differ, it is on purpose:
+
+- **`null` is never coerced**, in either direction. Ajv reads `null` as `""`, `0`
+  or `false` for a string, number or boolean field, and reads those back as
+  `null`. A `null` usually means "not set", and turning it into a real value
+  erases that. Here it goes to the validator as written, and the validator
+  rejects it.
+- **Only clean numerals become numbers.** `" "`, `" 1 "`, `"0x10"`, `"Infinity"`
+  and `"1."` are rejected. Ajv turns them into `0`, `1`, `16`, a value JSON
+  cannot hold, and `1`. `"007"` and `"1e3"` are still coerced.
+- **At a union, a branch the value already matches wins.** Ajv coerces into the
+  first branch that will take the value. Given `anyOf: [{ type: 'string' }, {
+  const: false }]`, Ajv turns `false` into `"false"`; `coerceX` keeps `false`.
+  When no branch matches as written, each branch coerces the value its own way
+  and the result is taken only if every branch that then accepts it agrees.
+  Two different readings leave the value alone for the validator to report, so
+  the order the branches were written in never changes the answer.
+- **A branch that fails leaves nothing behind.** Ajv coerces in place while it
+  tries each branch, so under `oneOf: [{ type: 'integer' }, { type: 'string' }]`
+  it turns `0` into `"0"` while trying the string branch, sees two matches, and
+  rejects a valid document. `coerceX` accepts `0` as written.
+- **The input is never modified.** Ajv coerces in place, so a caller has to
+  clone first. `coerceX` returns a new value that shares everything it did not
+  touch, or the input itself when nothing needed coercing.
+
+The errors differ in one way worth knowing if you key diagnostics on
+`path + keyword + params`: an `additionalProperties` error points **at the
+undeclared key** (`/readme/example_requests`) where Ajv points at the object
+holding it (`/readme`). `params.additionalProperty` names the key in both.
+
 ---
 
 ## API

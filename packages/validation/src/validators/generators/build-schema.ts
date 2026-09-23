@@ -128,10 +128,11 @@ export const coerceScalar = (value: unknown, type: string): unknown => {
  * leaving it a string under \`["string", "number"]\`. The answer should not depend
  * on the order someone wrote the union in.
  *
- * Otherwise every offered type is tried, and the coercion is taken only if it is
- * the only one that succeeds. \`true\` against \`number | string\` could be \`1\` or
- * \`"true"\` with equal justification, so it stays \`true\` and the validator says
- * what is wrong with it.
+ * Otherwise every offered type is tried, and the coercion is taken only if the
+ * types that succeed all agree on it. \`true\` against \`number | string\` could be
+ * \`1\` or \`"true"\` with equal justification, so it stays \`true\` and the
+ * validator says what is wrong with it. \`"1"\` against \`number | integer\` is \`1\`
+ * either way, so it is \`1\`.
  */
 export const coerceUnion = (value: unknown, types: readonly string[]): unknown => {
   const actual = value === null ? 'null' : typeof value
@@ -142,14 +143,13 @@ export const coerceUnion = (value: unknown, types: readonly string[]): unknown =
   }
 
   let coerced: unknown = value
-  let found = 0
   for (const type of types) {
     const candidate = coerceScalar(value, type)
     if (candidate === value) continue
-    coerced = candidate
-    found++
+    if (coerced === value) coerced = candidate
+    else if (candidate !== coerced) return value
   }
-  return found === 1 ? coerced : value
+  return coerced
 }
 
 /**

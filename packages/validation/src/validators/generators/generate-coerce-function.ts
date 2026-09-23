@@ -4,6 +4,9 @@ import { refToName } from '@amritk/helpers/ref-to-name'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { NO_FORMATS } from './enforced-keywords'
+import { createSubschemaMatcher } from './generate-validator-function'
+
 /**
  * The scalar types `coerceScalar` knows how to move a value toward. A node
  * declaring exactly one of these is a position where the schema is unambiguous
@@ -31,7 +34,25 @@ type CoerceContext = {
   readonly hoisted: string[]
   /** Supplies the next unique suffix for a helper or local. */
   next: () => number
+  /** Builds the branch tests a union coercion asks before it coerces anything. */
+  readonly matcher: ReturnType<typeof createSubschemaMatcher>
 }
+
+/**
+ * Keywords that say something about a schema without constraining the value. A
+ * union branch carrying only these beside its `type` is a bare scalar branch, and
+ * a union of nothing else is what {@link scalarUnionTypes} hands to `coerceUnion`.
+ */
+const ANNOTATION_KEYWORDS = new Set([
+  'title',
+  'description',
+  '$comment',
+  'examples',
+  'default',
+  'deprecated',
+  'readOnly',
+  'writeOnly',
+])
 
 /** The name of the value-coercing half generated for a `$ref`'s target. */
 export const coercerNameFor = (ref: string, typeSuffix: string): string => `coerce${refToName(ref, typeSuffix)}Value`
@@ -64,20 +85,18 @@ const soleScalarType = (schema: Record<string, unknown>): string | null => {
 }
 
 /**
- * Every scalar type a node offers, when *all* it offers are scalars — an
- * array-form `type`, or a union whose branches each declare one.
+ * Every scalar type a node offers, when *all* it offers are bare scalars — an
+ * array-form `type`, or a union whose every branch is `{ type: <scalar> }` and
+ * nothing more.
  *
- * A union is not a reason to give up on coercing: `string | { … }` is the
- * commonest shape in a hand-written config schema, and a number written where
- * the short form goes has exactly one sensible reading. What matters is that the
- * reading is forced rather than picked, which is what `coerceUnion` decides at
- * runtime — it needs the candidates, not a choice made here.
- *
- * A branch that is not a plain scalar type (an object, a `$ref`, another
- * combinator) contributes no candidate but does not disqualify the union: it
- * simply cannot take a scalar, so it never competes for one.
+ * Those positions go to the runtime `coerceUnion`, which needs only the list of
+ * types: with nothing but a `type` in each branch, "the value already matches a
+ * branch" is exactly "its type is already on the list", so there is no branch
+ * body to consult. Any other union — a branch with a constraint, an object, a
+ * `$ref`, a nested combinator — is {@link emitBranchCoercer}'s, which asks each
+ * branch in full.
  */
-const unionScalarTypes = (schema: Record<string, unknown>): readonly string[] | null => {
+const scalarUnionTypes = (schema: Record<string, unknown>): readonly string[] | null => {
   const declared = readKey(schema, 'type')
   if (Array.isArray(declared)) {
     const types = declared.filter((entry): entry is string => typeof entry === 'string')
@@ -86,30 +105,122 @@ const unionScalarTypes = (schema: Record<string, unknown>): readonly string[] | 
 
   // A union node that says nothing else about the value itself. `type` alongside
   // the branches would narrow them, and reading the branches without it would
-  // ignore what the node said.
+  // ignore what the node said. Both keywords at once is two unions, which the
+  // branch coercer composes.
   if (declared !== undefined) return null
-  const branches = readKey(schema, 'anyOf') ?? readKey(schema, 'oneOf')
+  const anyOf = readKey(schema, 'anyOf')
+  const oneOf = readKey(schema, 'oneOf')
+  if ((anyOf === undefined) === (oneOf === undefined)) return null
+  const branches = anyOf ?? oneOf
   if (!Array.isArray(branches) || branches.length === 0) return null
 
   const types: string[] = []
   for (const branch of branches) {
     if (!isSchemaObject(branch as JSONSchema)) return null
-    const type = soleScalarType(branch as Record<string, unknown>)
-    // Only a *bare* scalar branch offers a candidate. One carrying constraints
-    // (`{ type: 'string', pattern: … }`) still does — the coercion makes it a
-    // string and the validator judges the rest — but one carrying a `$ref` or a
-    // nested combinator is a shape this cannot reason about.
-    if (type !== null) types.push(type)
-    else if (
-      declaresObjectKeys(branch as Record<string, unknown>) ||
-      declaresArrayItems(branch as Record<string, unknown>)
-    )
-      continue
-    else if (readKey(branch as Record<string, unknown>, 'type') === 'object') continue
-    else if (readKey(branch as Record<string, unknown>, 'type') === 'array') continue
-    else return null
+    const node = branch as Record<string, unknown>
+    const type = soleScalarType(node)
+    if (type === null) return null
+    if (Object.keys(node).some((key) => key !== 'type' && !ANNOTATION_KEYWORDS.has(key))) return null
+    types.push(type)
   }
-  return types.length > 0 ? types : null
+  return types
+}
+
+/**
+ * Emits the coercion for an `anyOf` / `oneOf` whose branches are more than bare
+ * scalars: `string | { enabled: boolean }`, a `$ref` beside a literal, a union
+ * nested inside another one.
+ *
+ * The order of preference is the whole design, and it is observable:
+ *
+ *  1. **A branch the value already matches wins, uncoerced.** `false` against
+ *     `anyOf: [{ type: 'string' }, { const: false }]` stays `false`. Ajv tries the
+ *     branches in order and coerces into the first one it can, so it answers
+ *     `"false"` there — the `const` branch that was written for exactly this
+ *     value is never reached. Coercion is a way to rescue a value no branch takes,
+ *     never a reason to move one a branch already takes.
+ *  2. **Otherwise each branch coerces the value its own way**, and a result
+ *     counts only if that branch then matches it. `{ enabled: "true" }` becomes
+ *     `{ enabled: true }` through the object branch; the string branch cannot
+ *     take an object and never competes.
+ *  3. **If branches disagree, nothing is coerced.** Two branches producing
+ *     different values is two readings of what the caller meant, and this pass
+ *     does not pick one — the value goes to the validator as written, which
+ *     reports it. That is the same rule `coerceUnion` applies to scalars, and
+ *     for the same reason: the answer must not depend on the order someone wrote
+ *     the branches in. Branches that land on the *same* value agree, and that
+ *     value is taken.
+ *
+ * "Matches" is the validator's own verdict for that branch —
+ * {@link createSubschemaMatcher} emits the expression the `anyOf` / `oneOf`
+ * checks themselves use — so this can never steer a value into a branch
+ * `validateX` then rejects. For `oneOf` the value is then held to matching
+ * exactly one branch by the validator, as always.
+ */
+const emitBranchCoercer = (
+  schema: Record<string, unknown>,
+  keyword: 'anyOf' | 'oneOf',
+  ctx: CoerceContext,
+): Coercer => {
+  const branches = readKey(schema, keyword)
+  if (!Array.isArray(branches) || branches.length === 0) return null
+
+  // Every branch is asked before anything is emitted: one that takes anything
+  // means the value always matches as it is, so there is nothing to coerce, and
+  // the tests already written for the branches before it would be dead code.
+  const exprs: string[] = []
+  for (const branch of branches as JSONSchema[]) {
+    const expr = ctx.matcher.match(branch, 'input')
+    if (expr === 'true') return null
+    exprs.push(expr)
+  }
+
+  // Likewise every branch's own coercion, so a union where none has anything to
+  // coerce emits nothing at all. A branch that takes nothing (`false`) can
+  // neither match nor be coerced into, and drops out of both lists.
+  const live = (branches as JSONSchema[])
+    .map((branch, index) => ({ expr: exprs[index] as string, coerce: coercerFor(branch, ctx) }))
+    .filter(({ expr }) => expr !== 'false')
+  if (live.every(({ coerce }) => coerce === null)) return null
+
+  const tests: string[] = []
+  const attempts: { coerce: (expr: string) => string; test: string }[] = []
+  for (const { expr, coerce } of live) {
+    const name = `_matches${ctx.next()}`
+    const parameter = /\binput\b/.test(expr) ? 'input' : '_input'
+    // `_path` is there because a branch that has to fall back to collecting its
+    // errors, or delegates to a `$ref`, builds them at it. Nothing reads them.
+    ctx.helpers.push(`const ${name} = (${parameter}: unknown, _path = ''): boolean => ${expr}`)
+    tests.push(name)
+    if (coerce !== null) attempts.push({ coerce, test: name })
+  }
+
+  const id = ctx.next()
+  const name = `_coerceBranches${id}`
+  const lines = [
+    `const ${name} = (input: unknown): unknown => {`,
+    `  if (${tests.map((test) => `${test}(input)`).join(' || ')}) return input`,
+  ]
+  if (attempts.length === 1) {
+    const [only] = attempts as [(typeof attempts)[number]]
+    lines.push(`  const next = ${only.coerce('input')}`, `  return next !== input && ${only.test}(next) ? next : input`)
+  } else {
+    lines.push(`  let out: unknown = input`)
+    attempts.forEach(({ coerce, test }, index) => {
+      const local = `_next${index}`
+      lines.push(
+        `  const ${local} = ${coerce('input')}`,
+        `  if (${local} !== input && ${test}(${local})) {`,
+        `    if (out === input) out = ${local}`,
+        `    else if (!valuesEqual(out, ${local})) return input`,
+        `  }`,
+      )
+    })
+    lines.push(`  return out`)
+  }
+  lines.push(`}`)
+  ctx.helpers.push(lines.join('\n'))
+  return (valueExpr) => `${name}(${valueExpr})`
 }
 
 /**
@@ -275,12 +386,13 @@ const emitArrayCoercer = (schema: Record<string, unknown>, ctx: CoerceContext): 
 /**
  * The coercion for one schema node, or `null` when nothing under it coerces.
  *
- * Only the positions where the schema says exactly one thing about the value are
- * coerced. A combinator does not: `anyOf: [{ type: 'string' }, { type: 'number' }]`
- * gives two answers and no way to choose between them, and a coercion pass that
- * guesses is worse than one that declines — it turns a value the caller wrote
- * into a different one and reports nothing. Those positions are left exactly as
- * they arrived, and the validator that runs next judges them as it always has.
+ * A value is coerced only where the schema forces one reading of it. A single
+ * declared type does; a union does when exactly one branch can take the value
+ * (see {@link emitBranchCoercer} and `coerceUnion`). Where two readings are
+ * equally good — `true` against `number | string` — a coercion pass that guesses
+ * is worse than one that declines: it turns a value the caller wrote into a
+ * different one and reports nothing. Those positions are left exactly as they
+ * arrived, and the validator that runs next judges them as it always has.
  */
 const coercerFor = (schema: JSONSchema, ctx: CoerceContext): Coercer => {
   if (!isSchemaObject(schema)) return null
@@ -298,14 +410,25 @@ const coercerFor = (schema: JSONSchema, ctx: CoerceContext): Coercer => {
   const scalar = soleScalarType(node)
   if (scalar !== null) return (valueExpr) => `coerceScalar(${valueExpr}, ${JSON.stringify(scalar)})`
 
-  const union = unionScalarTypes(node)
+  const union = scalarUnionTypes(node)
   if (union !== null) return (valueExpr) => `coerceUnion(${valueExpr}, ${JSON.stringify(union)})`
 
+  // The node's own shape first, then each union over the result: the branches
+  // of a `type: 'object'` node judge the object its properties were coerced in,
+  // which is the object the validator judges them against.
   const type = readKey(node, 'type')
-  if (type === 'object' || (type === undefined && declaresObjectKeys(node))) return emitObjectCoercer(node, ctx)
-  if (type === 'array' || (type === undefined && declaresArrayItems(node))) return emitArrayCoercer(node, ctx)
-
-  return null
+  const stages: Coercer[] = [
+    type === 'object' || (type === undefined && declaresObjectKeys(node))
+      ? emitObjectCoercer(node, ctx)
+      : type === 'array' || (type === undefined && declaresArrayItems(node))
+        ? emitArrayCoercer(node, ctx)
+        : null,
+    emitBranchCoercer(node, 'anyOf', ctx),
+    emitBranchCoercer(node, 'oneOf', ctx),
+  ]
+  const present = stages.filter((stage): stage is NonNullable<Coercer> => stage !== null)
+  if (present.length === 0) return null
+  return (valueExpr) => present.reduce((expr, stage) => stage(expr), valueExpr)
 }
 
 /**
@@ -327,17 +450,29 @@ export const generateCoerceFunction = (
   schema: JSONSchema,
   typeName: string,
   typeSuffix = '',
+  options: {
+    /** The whole document, for a branch test whose `unevaluated*` has to read a `$ref`'s target. */
+    readonly rootSchema?: Record<string, unknown>
+    /** The `format` names the validator enforces, so a branch test agrees with it. */
+    readonly formats?: ReadonlySet<string>
+  } = {},
 ): { code: string; usesCoerceScalar: boolean } => {
   const helpers: string[] = []
   const hoisted: string[] = []
   let counter = 0
-  const ctx: CoerceContext = { typeSuffix, helpers, hoisted, next: () => counter++ }
+  const matcher = createSubschemaMatcher(
+    typeSuffix,
+    options.rootSchema ?? (isSchemaObject(schema) ? (schema as Record<string, unknown>) : undefined),
+    options.formats ?? NO_FORMATS,
+    '_coerce',
+  )
+  const ctx: CoerceContext = { typeSuffix, helpers, hoisted, next: () => counter++, matcher }
 
   const coerce = coercerFor(schema, ctx)
   const valueName = `coerce${typeName}Value`
   const body = coerce === null ? 'input' : coerce('input')
 
-  const parts = [...hoisted, ...helpers]
+  const parts = [...hoisted, ...matcher.declarations(helpers.join('\n')), ...helpers]
   const walk = [
     ...(parts.length > 0 ? [parts.join('\n\n'), ''] : []),
     `export const ${valueName} = (input: unknown): unknown => ${body}`,

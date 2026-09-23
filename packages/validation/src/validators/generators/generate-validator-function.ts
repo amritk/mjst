@@ -367,6 +367,13 @@ type NestingContext = {
    * blocks the fail-fast form anywhere blocks it for the whole function.
    */
   readonly failFast: FailFast
+  /**
+   * The prefix on every hoisted declaration this emission names — see
+   * {@link hoistPrefix}. Carried rather than derived because more than two
+   * emissions can land in one module: `validateX`, `checkX`, and the branch
+   * matchers the coercing half builds each count their hoisted names from zero.
+   */
+  readonly hoistNamespace: string
 }
 
 /**
@@ -465,9 +472,11 @@ const blockFailFast = (ctx: NestingContext): void => {
  * from its own list — so the two halves of one file both wrote `_knownKeys0` and
  * the module had the name declared twice. The fail-fast half takes a prefix of
  * its own rather than a shared counter, because the two lists are built by
- * separate walks and nothing keeps their numbering in step.
+ * separate walks and nothing keeps their numbering in step. The coercing half's
+ * branch matchers ({@link createSubschemaMatcher}) take a third, for the same
+ * reason.
  */
-const hoistPrefix = (ctx: NestingContext): string => (ctx.failFast.on ? '_check' : '')
+const hoistPrefix = (ctx: NestingContext): string => ctx.hoistNamespace
 
 /**
  * The accessor a `type` check reads through, given where its report goes.
@@ -576,6 +585,7 @@ const createRootContext = (
   // is unreachable code the consumer's build rejects.
   branchErrors: branchErrors && !failFast.on,
   failFast,
+  hoistNamespace: failFast.on ? '_check' : '',
 })
 
 /**
@@ -1516,6 +1526,7 @@ const generateValueCheckLines = (
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
     formats: ctx.formats,
+    hoistNamespace: ctx.hoistNamespace,
   }
 
   lines.push(...generateKeywordChecks('', raw, path, propSchema, suffix, valueCtx, presence))
@@ -1967,6 +1978,7 @@ const generateInlineObjectChecks = (
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
     formats: ctx.formats,
+    hoistNamespace: ctx.hoistNamespace,
   }
 
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
@@ -2026,6 +2038,7 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx:
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
     formats: ctx.formats,
+    hoistNamespace: ctx.hoistNamespace,
   }
   const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
@@ -3777,6 +3790,42 @@ export const generateCheckFunction = (
     `  return _r === true ? true : { valid: false, errors: _r.errors.slice(0, 1) }`,
     `}`,
   ].join('\n')
+}
+
+/**
+ * A yes/no matcher for subschemas, for generated code that has to ask "does this
+ * value satisfy that branch?" outside any validator body.
+ *
+ * The coercing half is the caller: a union only knows which branch a value was
+ * meant for by asking each branch, and the answer has to be the one `validateX`
+ * gives, or coercion would steer a value toward a branch the validator then
+ * rejects. So this hands out the very match expression the `anyOf` / `oneOf`
+ * emitters use, rather than a second opinion.
+ *
+ * Every expression built from one matcher shares one hoisted list, so the names
+ * it mints are unique across all of them; `hoistNamespace` keeps those names
+ * apart from the validator's own in the same module. `declarations` returns the
+ * hoisted lines a finished text actually reads, pruned the way
+ * {@link withHoisted} prunes a validator's.
+ */
+export const createSubschemaMatcher = (
+  suffix: string,
+  rootSchema: Record<string, unknown> | undefined,
+  formats: ReadonlySet<string>,
+  hoistNamespace: string,
+): {
+  /** A boolean expression over `raw`, which must be a plain identifier in scope beside `_path`. */
+  match: (sub: JSONSchema, raw: string) => string
+  declarations: (text: string) => string[]
+} => {
+  const ctx: NestingContext = { ...createRootContext(rootSchema, formats), hoistNamespace }
+  return {
+    // `required`: the caller hands over a value it already has, so an
+    // `undefined` is judged rather than waved through as an absent property.
+    match: (sub, raw) => generateMatchesExpr(raw, rewriteNullable(sub) as JSONSchema, suffix, ctx, true),
+    declarations: (text) =>
+      ctx.hoisted.filter((entry) => text.includes(entry.reference)).map((entry) => entry.declaration),
+  }
 }
 
 /** The body of both halves: the same emitters, told which shape to take. */

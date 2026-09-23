@@ -140,7 +140,12 @@ export const generateValidatorFile = (
   // what a scalar written in the wrong type is — the exact drift this package
   // avoids by having `coerceX` and `validateX` share one answer.
   const wantsCoerce = options?.coerce === true || options?.repair === true
-  const coercer = wantsCoerce ? generateCoerceFunction(schema, typeName, typeSuffix).code : ''
+  const coercer = wantsCoerce
+    ? generateCoerceFunction(schema, typeName, typeSuffix, {
+        ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+        formats,
+      }).code
+    : ''
   const repairer = options?.repair === true ? generateRepairFunction(schema, typeName, typeSuffix).code : ''
 
   const appended = [checker, coercer, repairer].filter((part) => part !== '')

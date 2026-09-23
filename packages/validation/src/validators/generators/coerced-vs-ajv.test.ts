@@ -345,7 +345,74 @@ describe('coerced-vs-ajv', () => {
     }
   })
 
-  // The one place this deliberately does not follow Ajv. Under `type: ['number',
+  // `string | { … }` is the commonest shape in a hand-written config schema, and
+  // the scalars inside the object branch are exactly what a YAML file gets wrong.
+  it('agrees on scalars inside an object branch of a union', () => {
+    const method = {
+      anyOf: [
+        { type: 'string' },
+        {
+          type: 'object',
+          properties: { enabled: { type: 'boolean' }, endpoint: { type: 'string' }, retries: { type: 'integer' } },
+          required: ['enabled'],
+        },
+      ],
+    }
+    assertAgrees({ type: 'object', properties: { d: method } }, [
+      { d: { enabled: 'true' } },
+      { d: { enabled: true, endpoint: 42 } },
+      { d: { enabled: 'false', retries: '3' } },
+      { d: { enabled: 'nope' } },
+      { d: { endpoint: 'x' } },
+      { d: 7 },
+      { d: 'short' },
+      { d: { enabled: 1, retries: 'many' } },
+    ])
+    assertAgrees({ type: 'object', properties: { d: { anyOf: [{ const: 'off' }, method] } } }, [
+      { d: 'off' },
+      { d: { enabled: 'true', endpoint: 1 } },
+      { d: { enabled: 0 } },
+    ])
+  })
+
+  it('agrees on a union nested inside a union', () => {
+    assertAgrees(
+      {
+        type: 'object',
+        properties: {
+          d: {
+            anyOf: [
+              { type: 'string' },
+              {
+                type: 'object',
+                properties: {
+                  inner: { anyOf: [{ type: 'integer' }, { type: 'object', properties: { n: { type: 'number' } } }] },
+                },
+              },
+            ],
+          },
+        },
+      },
+      [{ d: { inner: '4' } }, { d: { inner: { n: '1.5' } } }, { d: { inner: 'x' } }, { d: 3 }, { d: { inner: 4 } }],
+    )
+  })
+
+  // The other place this deliberately does not follow Ajv, and the one with
+  // consequences. Ajv coerces into the first branch that will take the value, so
+  // `false` becomes `"false"` through the string branch and the `const: false`
+  // branch — written for exactly this input — is never reached. Code reading
+  // `keyOpt === false` then sees a truthy string. A branch the value already
+  // matches wins here, so the value comes through as written.
+  it('keeps a value a later branch takes as written, where ajv coerces it into an earlier one', () => {
+    const schema = { type: 'object', properties: { keyOpt: { anyOf: [{ type: 'string' }, { const: false }] } } }
+    const byAjv: Record<string, unknown> = { keyOpt: false }
+    new Ajv2020({ allErrors: true, coerceTypes: true }).compile(schema)(byAjv)
+
+    expect(byAjv).toEqual({ keyOpt: 'false' })
+    expect(compile(schema)({ keyOpt: false })).toEqual({ valid: true, value: { keyOpt: false } })
+  })
+
+  // A place this deliberately does not follow Ajv. Under `type: ['number',
   // 'string']` Ajv walks its own coercion list and turns `"1"` into `1`; under
   // `['string', 'number']` it leaves it a string. That is a rule about the order
   // of Ajv's list, not something the schema says, and quietly changing a value

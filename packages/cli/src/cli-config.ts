@@ -97,12 +97,19 @@ export type CliConfig = {
    *
    * The table is Ajv's `coerceTypes` minus the cells where Ajv guesses — no
    * whitespace-to-zero, no `0x`/`Infinity` strings, and nothing coerced to or
-   * from `null`. Every value this coerces, Ajv coerces to the same value, so
-   * moving off Ajv never changes a value; it turns some of Ajv's silent repairs
-   * into errors instead. At a union it coerces only when exactly one of the
-   * offered types can take the value, and leaves a value that is already one of
-   * them alone — so the answer does not depend on the order the union is
-   * written in, which under Ajv it does.
+   * from `null`. `null` is left alone deliberately: it usually means "not set",
+   * and reading it as `""`, `0` or `false` erases that. Every scalar this
+   * coerces, Ajv coerces to the same value; the cells Ajv guesses at become
+   * errors instead of silent repairs.
+   *
+   * At a union (`anyOf`, `oneOf`, a `type` array) a value that already matches
+   * a branch as written is left alone. Otherwise each branch coerces it its own
+   * way, and the result is taken only when every branch that then accepts it
+   * agrees on it; two different readings leave the value as written for the
+   * validator to report. So the answer never depends on the order the union was
+   * written in, which under Ajv it does — Ajv coerces into the first branch that
+   * will take the value, and turns `false` into `"false"` through a string
+   * branch listed before a `const: false` one.
    *
    * Requires `validators`. `validateX` and `isX` are unchanged either way.
    */
