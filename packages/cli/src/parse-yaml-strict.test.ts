@@ -17,16 +17,14 @@ describe('parse-yaml-strict', () => {
   // handing that on as data is the silent corruption this guards against.
   it('throws on a parse error, naming the file and the line:col of the problem', () => {
     expect(() => parseYamlStrict('a: 1\nb: [1, 2\nc: 3\n', '/specs/broken.yaml', { what: WHAT })).toThrow(
-      'Failed to parse /specs/broken.yaml as YAML:\n  - /specs/broken.yaml:2:4: Missing closing "]" for flow sequence',
+      'Failed to parse YAML:\n  - /specs/broken.yaml:2:4: Missing closing "]" for flow sequence',
     )
   })
 
   it('joins problems on one line when asked, for one-line-per-finding reports', () => {
     expect(() =>
       parseYamlStrict('a: 1\nb: [1, 2\nc: 3\n', '/specs/broken.yaml', { what: WHAT, singleLine: true }),
-    ).toThrow(
-      'Failed to parse /specs/broken.yaml as YAML: /specs/broken.yaml:2:4: Missing closing "]" for flow sequence',
-    )
+    ).toThrow('Failed to parse YAML: /specs/broken.yaml:2:4: Missing closing "]" for flow sequence')
   })
 
   it('lists at most five problems and counts the rest', () => {
@@ -39,7 +37,7 @@ describe('parse-yaml-strict', () => {
       message = (error as Error).message
     }
     const lines = message.split('\n')
-    expect(lines[0]).toBe('Failed to parse /x.yaml as YAML:')
+    expect(lines[0]).toBe('Failed to parse YAML:')
     expect(lines.slice(1, 6).map((line) => line.slice(0, line.indexOf(': ')))).toEqual([
       '  - /x.yaml:2:1',
       '  - /x.yaml:3:1',
@@ -52,9 +50,9 @@ describe('parse-yaml-strict', () => {
 
   // Only the first document of a `---` stream is parsed; reading half a file
   // while reporting success would silently drop everything after the marker.
-  it('throws on a multi-document stream, pointing at where the second document starts', () => {
+  it('throws on a multi-document stream, pointing at the marker the second document follows', () => {
     expect(() => parseYamlStrict('a: 1\n---\nb: 2\n', '/specs/multi.yaml', { what: WHAT })).toThrow(
-      '/specs/multi.yaml contains multiple YAML documents (the second starts at /specs/multi.yaml:2:1); a test document must be a single-document file.',
+      '/specs/multi.yaml:2:1: this file contains multiple YAML documents (another one follows this marker); a test document must be a single-document file.',
     )
   })
 

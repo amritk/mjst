@@ -1,8 +1,8 @@
 import { dirname, resolve } from 'node:path'
 import type { ResolveError } from '@amritk/resolve-refs'
 
-import { withAllowedRootsHint } from './allowed-roots-hint'
 import type { CliConfig } from './cli-config'
+import { describeResolveError } from './describe-resolve-error'
 
 /**
  * Builds the `@amritk/resolve-refs` options from the CLI config, mirroring the
@@ -41,6 +41,6 @@ export const buildResolveOptions = (config: Partial<CliConfig>, documentPath: st
  * tells the user to set an option the CLI does not otherwise expose.
  */
 export const formatResolveErrors = (documentPath: string, errors: readonly ResolveError[]): string => {
-  const details = errors.map((error) => `  - ${withAllowedRootsHint(error.message)}`).join('\n')
+  const details = errors.map((error) => `  - ${describeResolveError(error.message)}`).join('\n')
   return `Failed to resolve $refs in ${documentPath}:\n${details}`
 }

@@ -46,7 +46,7 @@ describe('load-asyncapi-document', () => {
     const dir = tmp()
     const file = join(dir, 'broken.yaml')
     writeFileSync(file, 'asyncapi: 2.6.0\nchannels:\n  bad: [unclosed\n')
-    await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(/Failed to parse .*broken\.yaml as YAML/)
+    await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(/Failed to parse YAML:\n {2}- .*broken\.yaml:3:8: /)
   })
 
   it('refuses a multi-document YAML stream instead of generating from its first document', async () => {

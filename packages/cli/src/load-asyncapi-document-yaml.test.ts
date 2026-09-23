@@ -28,7 +28,7 @@ describe('load-asyncapi-document', () => {
     writeFileSync(file, 'asyncapi: 2.6.0\nchannels:\n  bad: [unclosed\n')
 
     await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(
-      `Failed to parse ${file} as YAML:\n  - ${file}:3:8: Missing closing "]" for flow sequence`,
+      `Failed to parse YAML:\n  - ${file}:3:8: Missing closing "]" for flow sequence`,
     )
   })
 
@@ -37,7 +37,7 @@ describe('load-asyncapi-document', () => {
     writeFileSync(file, 'asyncapi: 2.6.0\n---\nasyncapi: 2.6.0\n')
 
     await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(
-      `${file} contains multiple YAML documents (the second starts at ${file}:2:1); an AsyncAPI document must be a single-document file.`,
+      `${file}:2:1: this file contains multiple YAML documents (another one follows this marker); an AsyncAPI document must be a single-document file.`,
     )
   })
 
@@ -51,7 +51,7 @@ describe('load-asyncapi-document', () => {
     writeFileSync(file, withPayloadRef('./payload.yaml'))
 
     await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(
-      `Failed to resolve $refs in ${file}:\n  - Error: Failed to parse ${payload} as YAML: ${payload}:2:11: Missing closing "]" for flow sequence`,
+      `Failed to resolve $refs in ${file}:\n  - Failed to parse YAML: ${payload}:2:11: Missing closing "]" for flow sequence`,
     )
   })
 
@@ -63,7 +63,7 @@ describe('load-asyncapi-document', () => {
     writeFileSync(file, withPayloadRef('./payload.yaml'))
 
     await expect(loadAsyncApiDocument({}, file)).rejects.toThrow(
-      `${payload} contains multiple YAML documents (the second starts at ${payload}:2:1); a $ref target must be a single-document file.`,
+      `${payload}:2:1: this file contains multiple YAML documents (another one follows this marker); a $ref target must be a single-document file.`,
     )
   })
 
