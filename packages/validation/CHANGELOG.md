@@ -1,5 +1,18 @@
 # @amritk/validation
 
+## 0.3.2
+
+### Patch Changes
+
+- 18903c4: Speed up import pruning in generated files. `identifierMentions` answered each name with a fresh regex that rescanned the whole file, and blanking comments and literals rewrote the file one character at a time. It now collects the file's words once and builds the blanked text from slices. Generating every mode for the 959 definitions of the OpenAI API schema drops from about 7s to 2.2s, with byte-identical output.
+- c3bb2b4: Fix `parseX` for a root `enum` with an object or array member. Membership was tested with `[…].includes(input)`, which compares by reference, so a valid `{ "a": 1 }` against `enum: [{ "a": 1 }]` was never found and the parser replaced it with the first member. It now tests each member the way the property path does, deep for a structural member, and no longer builds the array on every call.
+- 475d7e8: Restore the well-typed scoring term for a `$ref` property of a `$ref` union branch. The previous fix for the missing import dropped the term, so two branches carrying the same keys could tie and the coercing parser repaired toward the wrong one (`{ x: { name } }` became `{ x: "[object Object]" }`). The import collector now reads through `$ref` union branches the way the scorer does and imports the shape validators it calls.
+- d8f6272: Fix generated parsers that did not compile when a union of `$ref` branches had a branch with a `$ref` property. The coercing parser scores each branch by reading its target's properties, and for a `$ref` property it emitted a call to that type's shape validator, which the scoring file never imported because imports are collected from its own schema. Such a property now counts toward the score by its presence alone. On the OpenAI API schema this removes 158 `Cannot find name` errors from the generated parsers.
+- a7bf02b: Fix parser files that did not parse. When `generate` moves a schema's type declaration out of the parser file, it finds the end of that declaration by counting braces and skipping string literals, and it read an apostrophe inside a member's JSDoc (a description such as "the model's limit") as an opening quote. With a brace between two such apostrophes, the declaration ended early and left the rest of its body in the parser file as a stray `};`. Comments are now skipped. On the OpenAI API schema this removes every syntax error from the generated parsers, along with the duplicate-identifier and bad-import errors they caused.
+- 8ef66cd: Generated validators answer an `anyOf` / `oneOf` / `not` / `if` / `contains` branch with a plain `return false` when its errors are discarded (the default, without `branchErrors`), instead of building every error into a throwaway buffer. A valid member of an inline three-branch union no longer allocates an error object per branch it does not match: `validateX`, `isX` and `checkX` on such a schema run 6–8× faster, and the emitted file is smaller. A branch whose body would report unconditionally keeps the buffer form.
+- Updated dependencies [18903c4]
+  - @amritk/helpers@0.23.3
+
 ## 0.3.1
 
 ### Patch Changes

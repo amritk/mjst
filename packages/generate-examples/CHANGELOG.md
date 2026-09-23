@@ -1,5 +1,17 @@
 # @amritk/generate-examples
 
+## 0.8.9
+
+### Patch Changes
+
+- 2d03b3c: Fix derived number examples that broke their own bounds. The tighter of `maximum` and `exclusiveMaximum` now wins (`exclusiveMaximum` was ignored whenever `maximum` was present), an exclusive bound inside a range narrower than one unit is cleared by half the gap rather than a fixed 0.5, fractional bounds on an integer round inward, and an integer with a fractional `multipleOf` steps by the smallest whole multiple (`2.5` → `5`).
+- cba72f4: Fix derived examples for an integer with a very small `multipleOf`. A step below 1e-9 was taken as 0, which produced `NaN` (serialized as `null`), and a step finer than 1e-4 fell back to rounding a fractional value across its bounds. The integer step is now read off the decimal spelling of `multipleOf` (`1e-10` steps by 1). A number on a fractional `multipleOf` grid also no longer drifts past its bound: `{ minimum: -0.3, multipleOf: 0.1 }` gives `-0.3`, not `-0.30000000000000004`.
+- Updated dependencies [18903c4]
+- Updated dependencies [41054e6]
+- Updated dependencies [743bfc1]
+  - @amritk/helpers@0.23.3
+  - @amritk/runtime-validators@0.15.1
+
 ## 0.8.8
 
 ### Patch Changes

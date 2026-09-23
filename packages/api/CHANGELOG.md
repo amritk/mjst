@@ -1,5 +1,20 @@
 # @amritk/api
 
+## 0.16.6
+
+### Patch Changes
+
+- 8d2c7ac: `fetchToNodeHandler` accepts a `Host` header with an empty port (`example.com:`), which RFC 3986 allows, instead of replacing it with `localhost`.
+- b39bb2e: Harden request parsing in two places.
+
+  - A form body or query string made of `=`-less pairs followed by one late `=` made the parser rescan to that `=` for every pair, which is quadratic: a 1 MiB body, inside the default `maxBodyBytes`, took about 1.7s of CPU. The parser now carries the next `=` across pairs and takes about 40ms on the same body. The `cookie` header parser had the same loop and gets the same fix.
+  - `fetchToNodeHandler` built the request URL by splicing the client's `Host` header in front of the path, so `Host: example.com/admin` routed a request for `/public` to `/admin/public`, past any proxy rule that only allowed `/public`. A `Host` that is not a plain host name or IP literal with an optional port is now replaced by `localhost`. `Bun.serve` builds `request.url` from `Host` the same way, so `toFetchHandler` on Bun still depends on the platform.
+
+- 69cfe7d: Match dynamic routes faster in the runtime engine. The request path is split with an `indexOf` walk instead of `split('/')`, and coerced path parameters are copied without allocating an entry array per parameter. Routes with path parameters handle 10–30% more requests per second.
+- Updated dependencies [41054e6]
+- Updated dependencies [743bfc1]
+  - @amritk/runtime-validators@0.15.1
+
 ## 0.16.5
 
 ### Patch Changes

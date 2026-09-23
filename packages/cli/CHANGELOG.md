@@ -1,5 +1,37 @@
 # @amritk/mjst
 
+## 0.25.1
+
+### Patch Changes
+
+- aa8ea0b: Load the generator pipeline (validation engines, adapters, `$ref` resolver, AsyncAPI extraction, example and contract emitters) only once a run needs it. `mjst --help` and `mjst --version` no longer import it, which roughly halves their startup time.
+- Updated dependencies [8d2c7ac]
+- Updated dependencies [b39bb2e]
+- Updated dependencies [69cfe7d]
+- Updated dependencies [c1d153b]
+- Updated dependencies [2d03b3c]
+- Updated dependencies [cba72f4]
+- Updated dependencies [18903c4]
+- Updated dependencies [1e29978]
+- Updated dependencies [781f5a0]
+- Updated dependencies [7a15021]
+- Updated dependencies [c3bb2b4]
+- Updated dependencies [475d7e8]
+- Updated dependencies [d8f6272]
+- Updated dependencies [a7bf02b]
+- Updated dependencies [fc7276d]
+- Updated dependencies [8ef66cd]
+- Updated dependencies [de09d82]
+  - @amritk/api@0.16.6
+  - @amritk/asyncapi@0.3.5
+  - @amritk/generate-examples@0.8.9
+  - @amritk/helpers@0.23.3
+  - @amritk/validation@0.3.2
+  - @amritk/lint@0.6.2
+  - @amritk/resolve-refs@0.8.0
+  - @amritk/yaml@0.7.3
+  - @amritk/adapters@0.6.7
+
 ## 0.25.0
 
 ### Minor Changes
