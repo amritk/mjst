@@ -4,25 +4,18 @@ import { readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import type { ExtractionIssue } from '@amritk/asyncapi'
-import { extractAsyncApi, listMessageSchemas } from '@amritk/asyncapi'
 import { deriveRootTypeName } from '@amritk/helpers/derive-root-type-name'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 const execFileAsync = promisify(execFile)
 
 import type { CliConfig } from './cli-config'
-import { combineGeneratedFiles } from './combine-files'
 import { createOutputWriter, type OutputWriter } from './create-output-writer'
 import { detectHelpersMode } from './detect-helpers-mode'
-import { emitExamples } from './emit-examples'
-import { CONTRACTS_DIR, CONTRACTS_PEER, emitMessageContracts } from './emit-message-contracts'
 import { ensureOutputDir } from './ensure-output-dir'
-import { generateFiles } from './generate-files'
 import { HELP_TEXT } from './help-text'
 import { isDependencyDeclared } from './is-dependency-declared'
-import { loadAsyncApiDocument } from './load-asyncapi-document'
 import { loadConfig } from './load-config'
-import { loadSchema } from './load-schema'
 import { parseCliArgs } from './parse-cli-args'
 import { parseMetaRequest } from './parse-meta-request'
 import { readVersion } from './read-version'
@@ -62,6 +55,20 @@ const resolveHelpersMode = (config: Partial<CliConfig>, outputDir: string): 'pac
     )
   }
   return helpersMode
+}
+
+/**
+ * Loads the modules every schema-driven run needs. They pull in the generator
+ * engines, the adapters and the `$ref` resolver, which is most of the CLI's
+ * import graph, so `--help`, `--version` and the subcommands would otherwise
+ * pay for all of it before doing anything.
+ */
+const loadGenerationPipeline = async (): Promise<{
+  loadSchema: typeof import('./load-schema').loadSchema
+  generateFiles: typeof import('./generate-files').generateFiles
+}> => {
+  const [{ loadSchema }, { generateFiles }] = await Promise.all([import('./load-schema'), import('./generate-files')])
+  return { loadSchema, generateFiles }
 }
 
 /**
@@ -134,6 +141,7 @@ const runExamples = async (
   outputDir: string,
   tasks: readonly ExampleTask[],
 ): Promise<void> => {
+  const { emitExamples } = await import('./emit-examples')
   const writer = await createOutputWriter(outputDir)
   const written = await commitOrDiscard(writer, async () => {
     for (const task of tasks) {
@@ -243,6 +251,7 @@ const findJsonSchemas = async (dir: string): Promise<string[]> => {
 
 /** Generates parsers for a single schema (the original one-schema-in, one-outDir-out flow). */
 const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputDir: string): Promise<void> => {
+  const { loadSchema, generateFiles } = await loadGenerationPipeline()
   const schema = await loadSchema(config, schemaPath)
 
   await ensureOutputDir(outputDir)
@@ -288,6 +297,8 @@ const runSingle = async (config: Partial<CliConfig>, schemaPath: string, outputD
  * (`--out-file src/types.ts`) — that file is replaced, its siblings are not.
  */
 const runSingleFile = async (config: Partial<CliConfig>, schemaPath: string, outFilePath: string): Promise<void> => {
+  const { loadSchema, generateFiles } = await loadGenerationPipeline()
+  const { combineGeneratedFiles } = await import('./combine-files')
   const schema = await loadSchema(config, schemaPath)
   const outputDir = dirname(outFilePath)
   await ensureOutputDir(outputDir)
@@ -336,6 +347,7 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
   }
 
   const schemaFiles = await findJsonSchemas(schemaDir)
+  const { loadSchema, generateFiles } = await loadGenerationPipeline()
 
   if (schemaFiles.length === 0) {
     console.error(`Error: no .json schema files found under ${schemaDir}.`)
@@ -415,10 +427,10 @@ const runRecursive = async (config: Partial<CliConfig>, schemaDir: string, outpu
  * This is a tip, not an error — generating a contract for a project that is
  * about to install the package is a perfectly ordinary order of operations.
  */
-const reportContractsPeer = (outputDir: string): void => {
-  if (isDependencyDeclared(outputDir, CONTRACTS_PEER)) return
+const reportContractsPeer = (outputDir: string, peer: string): void => {
+  if (isDependencyDeclared(outputDir, peer)) return
   console.log(
-    `Tip: the generated contracts import ${CONTRACTS_PEER}, which is not a declared dependency of the project ` +
+    `Tip: the generated contracts import ${peer}, which is not a declared dependency of the project ` +
       `at ${outputDir}. Install it there (it is a peer of the generated code, not of the mjst CLI).`,
   )
 }
@@ -434,6 +446,14 @@ const reportContractsPeer = (outputDir: string): void => {
  * rather than "wrong file".
  */
 const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, outputDir: string): Promise<void> => {
+  const [{ loadAsyncApiDocument }, { extractAsyncApi, listMessageSchemas }, { generateFiles }, contractsModule] =
+    await Promise.all([
+      import('./load-asyncapi-document'),
+      import('@amritk/asyncapi'),
+      import('./generate-files'),
+      import('./emit-message-contracts'),
+    ])
+  const { CONTRACTS_DIR, CONTRACTS_PEER, emitMessageContracts } = contractsModule
   const document = await loadAsyncApiDocument(config, documentPath)
   const model = extractAsyncApi(document)
   // Listing first: it appends output-name collision warnings onto the model's
@@ -542,7 +562,7 @@ const runAsyncApi = async (config: Partial<CliConfig>, documentPath: string, out
 
   if (config.messageContracts) {
     console.log(`\nMessage contracts: ${contractMessageCount} message(s) across ${contractChannelCount} channel(s)`)
-    reportContractsPeer(outputDir)
+    reportContractsPeer(outputDir, CONTRACTS_PEER)
   }
 
   if (exampleTasks.length > 0) {
