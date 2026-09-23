@@ -34,7 +34,7 @@ const showColumn = (column: DocTableColumn, filled: boolean): boolean =>
  * The properties of a table in the order its rows appear: the order the caller
  * handed over, or the required ones first when the schema asked for that.
  *
- * A stable partition, so `sort` and `x-doc.order` still decide the order within
+ * A stable partition, so `sort` and `x-mjst.markdown.order` still decide the order within
  * each group. Exported because the callers need the same order for the blocks
  * they render under the table: those follow their rows, and the anchors are
  * numbered in the order the headings print, so a block order that disagreed
@@ -140,7 +140,7 @@ const rowDestination = (
  *
  * All of that is the default rather than the rule — a schema that wants its
  * types spelled out everywhere, or its required options listed first, says so
- * in the root `x-doc.table` and every table on every page follows it. See
+ * in the root `x-mjst.markdown.table` and every table on every page follows it. See
  * {@link DocTable}.
  */
 export const renderPropertyTable = (

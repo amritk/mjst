@@ -52,7 +52,7 @@ const headed = (...headings: readonly (readonly [string, DocEntry | undefined])[
   return context({ anchors })
 }
 
-/** A page whose root `x-doc.table` asks for something other than the default. */
+/** A page whose root `x-mjst.markdown.table` asks for something other than the default. */
 const styled = (table: Partial<DocTable>): RenderContext => context({ table: { ...DEFAULT_TABLE, ...table } })
 
 /** A suffix spelled the way a reference that marks its names usually does. */
@@ -152,7 +152,7 @@ describe('render-property-table', () => {
 
   it('links a property documented on another page', () => {
     const table = renderPropertyTable(
-      [entry('typescript', { type: 'object', 'x-doc': { page: 'typescript' } })],
+      [entry('typescript', { type: 'object', 'x-mjst': { markdown: { page: 'typescript' } } })],
       context(),
     )
     expect(table).toContain('| [`typescript`](configuration/typescript.md#typescript) |  |')
@@ -160,7 +160,7 @@ describe('render-property-table', () => {
 
   it('links relative to the page being rendered', () => {
     const table = renderPropertyTable(
-      [entry('typescript', { type: 'object', 'x-doc': { page: 'index' } })],
+      [entry('typescript', { type: 'object', 'x-mjst': { markdown: { page: 'index' } } })],
       context({ file: 'guides/sdk.md', page: 'typescript' }),
     )
     expect(table).toContain('[`typescript`](../configuration.md#typescript)')
@@ -170,7 +170,7 @@ describe('render-property-table', () => {
   // section's page led nowhere.
   it('links a property its section relocated to another page', () => {
     const table = renderPropertyTable(
-      [entry('options', { type: 'object', 'x-doc': { section: 'emitter' } })],
+      [entry('options', { type: 'object', 'x-mjst': { markdown: { section: 'emitter' } } })],
       context(),
     )
     expect(table).toContain('[`options`](configuration/typescript.md#options)')
@@ -179,7 +179,7 @@ describe('render-property-table', () => {
   // A `table` section gives a heading to exactly the properties that have
   // something beyond their row, so the row only links when this one does.
   it('links into a table section on another page only when the property has a block there', () => {
-    const entries = [entry('options', { type: 'object', 'x-doc': { section: 'advanced' } })]
+    const entries = [entry('options', { type: 'object', 'x-mjst': { markdown: { section: 'advanced' } } })]
     expect(renderPropertyTable(entries, context(), { summarised: () => true })).toContain(
       '[`options`](configuration/typescript.md#options)',
     )
@@ -189,7 +189,10 @@ describe('render-property-table', () => {
   // A `none` section renders its prose and examples alone, so there is no
   // heading on that page to aim at.
   it('does not anchor into a section that renders no properties', () => {
-    const table = renderPropertyTable([entry('options', { type: 'object', 'x-doc': { section: 'prose' } })], context())
+    const table = renderPropertyTable(
+      [entry('options', { type: 'object', 'x-mjst': { markdown: { section: 'prose' } } })],
+      context(),
+    )
     expect(table).toContain('[`options`](configuration/typescript.md)')
   })
 
@@ -197,7 +200,7 @@ describe('render-property-table', () => {
   // its own there to land on.
   it('does not anchor a property rendered without a heading', () => {
     const table = renderPropertyTable(
-      [entry('typescript', { type: 'object', 'x-doc': { page: 'typescript', heading: false } })],
+      [entry('typescript', { type: 'object', 'x-mjst': { markdown: { page: 'typescript', heading: false } } })],
       context(),
     )
     expect(table).toContain('| [`typescript`](configuration/typescript.md) |  |')
@@ -227,7 +230,10 @@ describe('render-property-table', () => {
   })
 
   it('does not link a property that lives on this page', () => {
-    const table = renderPropertyTable([entry('a', { type: 'string', 'x-doc': { page: 'index' } })], context())
+    const table = renderPropertyTable(
+      [entry('a', { type: 'string', 'x-mjst': { markdown: { page: 'index' } } })],
+      context(),
+    )
     expect(table).toContain('| `a` | `string` |  |')
   })
 
@@ -239,10 +245,10 @@ describe('render-property-table', () => {
     expect(table).toContain('[`foo.bar $ref`](#foobar-ref)')
   })
 
-  // `x-doc.title` replaces the heading text outright, so it replaces the anchor
+  // `x-mjst.markdown.title` replaces the heading text outright, so it replaces the anchor
   // the heading is slugged from too.
   it('anchors a titled property to its title', () => {
-    const targets = entry('targets', { type: 'object', 'x-doc': { title: 'SDK targets' } })
+    const targets = entry('targets', { type: 'object', 'x-mjst': { markdown: { title: 'SDK targets' } } })
     const table = renderPropertyTable([targets], headed(['SDK targets', targets]))
     expect(table).toContain('[`targets`](#sdk-targets)')
   })
@@ -388,7 +394,7 @@ describe('render-property-table', () => {
   // A row is one line and its columns are split on unescaped pipes.
   it('escapes a pipe in the schema text', () => {
     const table = renderPropertyTable(
-      [entry('mode', { 'x-doc': { type: 'a | b' }, description: 'Either a | b.' })],
+      [entry('mode', { 'x-mjst': { markdown: { type: 'a | b' } }, description: 'Either a | b.' })],
       context(),
     )
     expect(table).toContain('| `mode` | `a \\| b` | Either a \\| b. |')

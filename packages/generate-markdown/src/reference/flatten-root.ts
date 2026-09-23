@@ -57,12 +57,12 @@ export const flattenRoot = (schema: ConfigSchema): ConfigSchema => {
     branches.map(read).find((value) => value !== undefined)
   const title = schema.title ?? branchWith((branch) => branch.title)
   const description = schema.description ?? branchWith((branch) => branch.description)
-  const doc = isObject(schema['x-doc']) ? schema['x-doc'] : branchWith((branch) => branch['x-doc'])
+  const doc = isObject(schema['x-mjst']) ? schema['x-mjst'] : branchWith((branch) => branch['x-mjst'])
 
   return {
     ...(title !== undefined && { title }),
     ...(description !== undefined && { description }),
-    ...(doc !== undefined && { 'x-doc': doc }),
+    ...(doc !== undefined && { 'x-mjst': doc }),
     required: [...required],
     properties,
   }

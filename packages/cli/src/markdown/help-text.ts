@@ -11,14 +11,14 @@ Usage:
 
 Two shapes come out of the same schema. By default it writes the prose
 reference — a heading, a type, the description and an example per property,
-across as many pages as the schema's x-doc keyword declares. With --table it
+across as many pages as the schema's x-mjst keyword declares. With --table it
 renders one HTML table instead and splices it into an existing markdown file
 between <!-- config-table-start --> and <!-- config-table-end -->, leaving the
 rest of that file alone.
 
 Prose reference options:
   --out-dir <dir>      Directory the pages are written to (default: the current directory)
-  --file <path>        Output path of the index page (default: the schema's x-doc.file, then index.md)
+  --file <path>        Output path of the index page (default: the schema's x-mjst.markdown.file, then index.md)
   --title <text>       Page title (default: the schema's title)
   --language <lang>    Fence language for derived examples and literals (default: json)
   --layout <mode>      Default layout for nested properties: headings (default), table, or none
@@ -27,7 +27,7 @@ Prose reference options:
   --type-label <when>  Give every property heading its Type: line: auto (default) or
                        never (an enum then lists its allowed values instead)
 
-Property table options (the root x-doc.table, for every table on every page):
+Property table options (the root x-mjst.markdown.table, for every table on every page):
   --type-column <when>     Render the Type column: auto (default), always, or never
   --default-column <when>  Render the Default column: auto (default), always, or never
   --required-style <how>   Say which properties are required: column (default, a

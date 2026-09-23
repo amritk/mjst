@@ -53,8 +53,8 @@ describe('reference-type', () => {
 
   // Plenty of real config types — a callback signature, a named TypeScript
   // type — have no JSON Schema spelling at all.
-  it('lets x-doc.type override everything', () => {
-    const prop = { type: 'object', enum: ['a'], 'x-doc': { type: 'AuthenticationConfiguration' } }
+  it('lets x-mjst.markdown.type override everything', () => {
+    const prop = { type: 'object', enum: ['a'], 'x-mjst': { markdown: { type: 'AuthenticationConfiguration' } } }
     expect(referenceType(prop, 'json')).toBe('AuthenticationConfiguration')
   })
 
@@ -69,8 +69,8 @@ describe('reference-type', () => {
     expect(referenceType({ type: 'object', additionalProperties: resource }, 'json')).toBe('Record<string, object>')
   })
 
-  it('names a map value through its x-doc.type', () => {
-    const value = { type: 'object', 'x-doc': { type: 'ResourceConfig' } }
+  it('names a map value through its x-mjst.markdown.type', () => {
+    const value = { type: 'object', 'x-mjst': { markdown: { type: 'ResourceConfig' } } }
     expect(referenceType({ type: 'object', additionalProperties: value }, 'json')).toBe(
       'Record<string, ResourceConfig>',
     )
@@ -111,14 +111,18 @@ describe('reference-type', () => {
     ).toBe('Record<string, string>[]')
   })
 
-  it('lets x-doc.type override a map label', () => {
-    const prop = { type: 'object', additionalProperties: { type: 'string' }, 'x-doc': { type: 'Environments' } }
+  it('lets x-mjst.markdown.type override a map label', () => {
+    const prop = {
+      type: 'object',
+      additionalProperties: { type: 'string' },
+      'x-mjst': { markdown: { type: 'Environments' } },
+    }
     expect(referenceType(prop, 'json')).toBe('Environments')
   })
 
   it('reports whether the type label already lists the enum', () => {
     expect(typeShowsEnum({ enum: ['a', 'b'] })).toBe(true)
-    expect(typeShowsEnum({ enum: ['a', 'b'], 'x-doc': { type: 'Mode' } })).toBe(false)
+    expect(typeShowsEnum({ enum: ['a', 'b'], 'x-mjst': { markdown: { type: 'Mode' } } })).toBe(false)
     expect(typeShowsEnum({ type: 'string' })).toBe(false)
   })
 
@@ -162,11 +166,14 @@ describe('reference-type', () => {
   })
 
   // A bracketed member is one type however many pipes it holds — an authored
-  // `x-doc.type` is the usual way one arrives.
+  // `x-mjst.markdown.type` is the usual way one arrives.
   it('does not split a bracketed member', () => {
-    expect(referenceType({ anyOf: [{ 'x-doc': { type: '(a | b)' } }, { 'x-doc': { type: '[c | d]' } }] }, 'json')).toBe(
-      '(a | b) | [c | d]',
-    )
+    expect(
+      referenceType(
+        { anyOf: [{ 'x-mjst': { markdown: { type: '(a | b)' } } }, { 'x-mjst': { markdown: { type: '[c | d]' } } }] },
+        'json',
+      ),
+    ).toBe('(a | b) | [c | d]')
   })
 
   // A branch with nothing to say contributes nothing, not a blank member with
@@ -220,7 +227,9 @@ describe('reference-type', () => {
 
   // `Alpha & Beta[]` is an intersection with an array, not an array of one.
   it('brackets an intersection used as an array element', () => {
-    const items = { allOf: [{ 'x-doc': { type: 'Alpha' } }, { 'x-doc': { type: 'Beta' } }] }
+    const items = {
+      allOf: [{ 'x-mjst': { markdown: { type: 'Alpha' } } }, { 'x-mjst': { markdown: { type: 'Beta' } } }],
+    }
     expect(referenceType({ type: 'array', items }, 'json')).toBe('(Alpha & Beta)[]')
   })
 

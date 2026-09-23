@@ -86,7 +86,7 @@ describe('child-entries', () => {
   it('drops hidden children', () => {
     const prop = {
       type: 'object',
-      properties: { shown: { type: 'string' }, secret: { type: 'string', 'x-doc': { hidden: true } } },
+      properties: { shown: { type: 'string' }, secret: { type: 'string', 'x-mjst': { hidden: true } } },
     }
     expect(names(childEntries(prop, [], 'schema'))).toEqual(['shown'])
   })
@@ -112,18 +112,21 @@ describe('child-entries', () => {
     expect(names(sortEntries([entry('foo'), entry('Foo')], 'alphabetical'))).toEqual(['Foo', 'foo'])
   })
 
-  it('puts x-doc.order ahead of the sort mode', () => {
-    const entries = [entry('c'), entry('a'), entry('b', { 'x-doc': { order: 1 } })]
+  it('puts x-mjst.markdown.order ahead of the sort mode', () => {
+    const entries = [entry('c'), entry('a'), entry('b', { 'x-mjst': { markdown: { order: 1 } } })]
     expect(names(sortEntries(entries, 'alphabetical'))).toEqual(['b', 'a', 'c'])
   })
 
   it('keeps ordered properties in their declared order', () => {
-    const entries = [entry('second', { 'x-doc': { order: 2 } }), entry('first', { 'x-doc': { order: 1 } })]
+    const entries = [
+      entry('second', { 'x-mjst': { markdown: { order: 2 } } }),
+      entry('first', { 'x-mjst': { markdown: { order: 1 } } }),
+    ]
     expect(names(sortEntries(entries, 'schema'))).toEqual(['first', 'second'])
   })
 
   it('keeps unordered properties stable behind the ordered ones', () => {
-    const entries = [entry('z'), entry('y'), entry('x', { 'x-doc': { order: 5 } })]
+    const entries = [entry('z'), entry('y'), entry('x', { 'x-mjst': { markdown: { order: 5 } } })]
     expect(names(sortEntries(entries, 'schema'))).toEqual(['x', 'z', 'y'])
   })
 })

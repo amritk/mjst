@@ -5,10 +5,10 @@
 
 Let a schema choose how a property table marks required properties, and make the **Required** column the default.
 
-`x-doc.table.required` is now `"column"` or any other string. `"column"` — the default — renders a **Required** column with a ✅, dropped when no row is required. Any other string is a suffix put right after each required property's name, as markdown or inline HTML, appended exactly as written: `"*"` hugs the name, `" *"` does not, and `""` marks nothing. Line endings become spaces and live `|`s are escaped so a suffix cannot break its row. `MarkdownOptions.table.required` and `mjst markdown --required-style <text>` take the same values.
+`x-mjst.markdown.table.required` is now `"column"` or any other string. `"column"` — the default — renders a **Required** column with a ✅, dropped when no row is required. Any other string is a suffix put right after each required property's name, as markdown or inline HTML, appended exactly as written: `"*"` hugs the name, `" *"` does not, and `""` marks nothing. Line endings become spaces and live `|`s are escaped so a suffix cannot break its row. `MarkdownOptions.table.required` and `mjst markdown --required-style <text>` take the same values.
 
 ```json
-{ "x-doc": { "table": { "required": "<br><sub><i>required</i></sub>" } } }
+{ "x-mjst": { "markdown": { "table": { "required": "<br><sub><i>required</i></sub>" } } } }
 ```
 
 | Property                             | Type     | Description       |

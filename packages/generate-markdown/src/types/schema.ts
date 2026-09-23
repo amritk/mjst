@@ -39,7 +39,7 @@ export type SchemaProperty = {
    * `readDocMeta` is what gives it a shape, and it does so defensively, because
    * a config schema is parsed JSON rather than validated input.
    */
-  readonly 'x-doc'?: Readonly<Record<string, unknown>>
+  readonly 'x-mjst'?: Readonly<Record<string, unknown>>
   readonly title?: string
   readonly deprecated?: boolean
   readonly format?: string
@@ -76,7 +76,7 @@ export type ConfigSchema = {
   readonly description?: string
   readonly required?: readonly string[]
   readonly properties?: Readonly<Record<string, SchemaProperty>>
-  readonly 'x-doc'?: Readonly<Record<string, unknown>>
+  readonly 'x-mjst'?: Readonly<Record<string, unknown>>
   /**
    * Extra table columns the schema declares for itself, as keyword → header
    * label (`{ "x-scalar-stability": "Stability" }`). Each property then carries

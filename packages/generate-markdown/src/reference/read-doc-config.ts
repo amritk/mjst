@@ -1,6 +1,6 @@
 import { asArray, asText, isObject, stringExtension } from '#helpers/guards'
 import { normalizeDocPath } from '#helpers/normalize-doc-path'
-import { asExamples, DOC_KEY, readDescription } from '#helpers/read-doc-meta'
+import { asExamples, markdownOf, readDescription } from '#helpers/read-doc-meta'
 import type {
   DocConfig,
   DocHeadings,
@@ -26,7 +26,7 @@ const DEFAULT_INDEX_FILE = 'index.md'
 /**
  * JSON is the default example language because a `config.schema.json` most
  * often documents a JSON config file. A schema whose config is written in
- * JavaScript says so once, in `x-doc.language`.
+ * JavaScript says so once, in `x-mjst.markdown.language`.
  */
 const DEFAULT_LANGUAGE = 'json'
 
@@ -69,11 +69,8 @@ const readHeadings = (value: unknown, options: MarkdownHeadingsOptions = {}): Do
 const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : undefined
 
-/** The root `x-doc` object, or an empty one. */
-const rootDoc = (schema: ConfigSchema): Readonly<Record<string, unknown>> => {
-  const doc = (schema as Readonly<Record<string, unknown>>)[DOC_KEY]
-  return isObject(doc) ? doc : {}
-}
+/** The root `x-mjst.markdown` object, or an empty one. */
+const rootDoc = (schema: ConfigSchema): Readonly<Record<string, unknown>> => markdownOf(schema)
 
 /**
  * Reads the extra pages the schema declares. Every page needs an `id` (what

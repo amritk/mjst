@@ -1,16 +1,42 @@
 import { asText, isObject, stringExtension } from '#helpers/guards'
 import type { DocExample, DocLayout, DocMeta, DocSort } from '#types/doc'
 
-/** The one vendor extension the reference renderer reads. */
-export const DOC_KEY = 'x-doc'
+/**
+ * The vendor extension the reference renderer reads — the same `x-mjst` object
+ * the type generators read `brand` and `instanceOf` from, where what a key means
+ * depends on where it sits. On the root it configures the pages; on a property
+ * it documents that property.
+ */
+export const MJST_KEY = 'x-mjst'
+
+/**
+ * The member of `x-mjst` holding what only this renderer reads: pages,
+ * sections, tables, layouts, examples. Kept apart so a key like `type` or
+ * `title` cannot be mistaken for a hint to a generator that has nothing to do
+ * with markdown. What is not about markdown in particular — `hidden`, which
+ * any generator of docs could honour — sits on `x-mjst` itself.
+ */
+export const MARKDOWN_KEY = 'markdown'
+
+/** A node's `x-mjst` object, or an empty one. */
+export const mjstOf = (node: unknown): Readonly<Record<string, unknown>> => {
+  const mjst = isObject(node) ? node[MJST_KEY] : undefined
+  return isObject(mjst) ? mjst : {}
+}
+
+/** A node's `x-mjst.markdown` object, or an empty one. */
+export const markdownOf = (node: unknown): Readonly<Record<string, unknown>> => {
+  const markdown = mjstOf(node)[MARKDOWN_KEY]
+  return isObject(markdown) ? markdown : {}
+}
 
 const LAYOUTS: readonly DocLayout[] = ['headings', 'table', 'none']
 const SORTS: readonly DocSort[] = ['schema', 'alphabetical']
 
 /**
  * Normalizes the several shapes an example may be written in. A single example
- * is the common case, so `x-doc.example` accepts a bare code string; a list
- * needs `x-doc.examples`. Both spellings accept both shapes, because guessing
+ * is the common case, so `x-mjst.markdown.example` accepts a bare code string; a list
+ * needs `x-mjst.markdown.examples`. Both spellings accept both shapes, because guessing
  * wrong should not silently drop a code block from the docs.
  */
 export const asExamples = (value: unknown): readonly DocExample[] => {
@@ -42,18 +68,18 @@ const asNotes = (value: unknown): readonly string[] => {
   return entries.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
 }
 
-/** A `x-doc` member that must be one of a fixed set, or absent. */
+/** A `x-mjst` member that must be one of a fixed set, or absent. */
 const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined =>
   typeof value === 'string' && (allowed as readonly string[]).includes(value) ? (value as T) : undefined
 
 /**
- * Reads the `x-doc` keyword off a schema node. The schema is parsed JSON rather
- * than validated input, so every member is read defensively: a mistyped
- * `x-doc.order` should leave the property in schema order, not throw halfway
- * through a docs build.
+ * Reads a schema node's `x-mjst.markdown`, and the `x-mjst.hidden` beside it.
+ * The schema is parsed JSON rather than validated input, so every member is
+ * read defensively: a mistyped `x-mjst.markdown.order` should leave the
+ * property in schema order, not throw halfway through a docs build.
  */
 export const readDocMeta = (node: unknown): DocMeta => {
-  const doc = isObject(node) && isObject(node[DOC_KEY]) ? node[DOC_KEY] : {}
+  const doc = markdownOf(node)
   const page = stringExtension(doc['page'])
   const section = stringExtension(doc['section'])
   const type = stringExtension(doc['type'])
@@ -69,7 +95,7 @@ export const readDocMeta = (node: unknown): DocMeta => {
     ...(layout !== undefined && { layout }),
     ...(sort !== undefined && { sort }),
     ...(order !== undefined && { order }),
-    hidden: doc['hidden'] === true,
+    hidden: mjstOf(node)['hidden'] === true,
     heading: doc['heading'] !== false,
     // Both spellings are merged rather than one winning, so a schema that grows
     // a second example does not have to rewrite the first one.
@@ -80,8 +106,8 @@ export const readDocMeta = (node: unknown): DocMeta => {
 }
 
 /**
- * The prose for a node: the `x-doc` override when there is one, and the schema's
- * own `description` otherwise.
+ * The prose for a node: the `x-mjst.markdown` override when there is one, and
+ * the schema's own `description` otherwise.
  *
  * An override of `""` is honoured rather than treated as absent. A node that
  * only exists to pass a page or a section down to its children ends up printing
@@ -89,7 +115,7 @@ export const readDocMeta = (node: unknown): DocMeta => {
  * says "the section above already said this".
  */
 export const readDescription = (node: unknown): string => {
-  const doc = isObject(node) && isObject(node[DOC_KEY]) ? node[DOC_KEY] : {}
+  const doc = markdownOf(node)
   if (typeof doc['description'] === 'string') return doc['description']
   return asText(isObject(node) ? node['description'] : undefined)
 }

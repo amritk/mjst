@@ -558,13 +558,15 @@ const files = generateMarkdownFiles(schema, { language: 'javascript' })
 {
   "title": "Configuration",
   "description": "Pass a universal configuration object to fine-tune your API reference.",
-  "x-doc": {
-    "file": "configuration.md",
-    "language": "javascript",
-    "layout": "none",
-    "sections": [
-      { "id": "properties", "title": "Properties", "sort": "alphabetical" }
-    ]
+  "x-mjst": {
+    "markdown": {
+      "file": "configuration.md",
+      "language": "javascript",
+      "layout": "none",
+      "sections": [
+        { "id": "properties", "title": "Properties", "sort": "alphabetical" }
+      ]
+    }
   },
   "properties": {
     "darkMode": {
@@ -572,16 +574,18 @@ const files = generateMarkdownFiles(schema, { language: 'javascript' })
       "default": false,
       "description": "Whether dark mode is on or off initially (light mode).",
       "examples": [true],
-      "x-doc": { "section": "properties" }
+      "x-mjst": { "markdown": { "section": "properties" } }
     },
     "documentDownloadType": {
       "enum": ["json", "yaml", "both", "none"],
       "default": "both",
       "description": "Sets the file type of the document to download.",
       "examples": ["json"],
-      "x-doc": {
-        "section": "properties",
-        "footer": "Set it to `none` to hide the download button."
+      "x-mjst": {
+        "markdown": {
+          "section": "properties",
+          "footer": "Set it to `none` to hide the download button."
+        }
       }
     }
   }
@@ -640,12 +644,32 @@ the shape of the config file. A property nested at `targets.typescript.packageNa
 derives `{ targets: { typescript: { packageName: '@acme/api' } } }`, which is
 something you can paste.
 
-### The `x-doc` keyword
+### The `x-mjst` keyword
 
-Everything documentation-only lives under one vendor extension, so it never
-gets mistaken for something that changes validation.
+Everything documentation-only lives in mjst's one vendor extension, `x-mjst`,
+so it never gets mistaken for something that changes validation. It is the same
+object the type generators read their hints from (`brand`, `instanceOf`), and
+what a key means depends on where it sits:
 
-On the **root schema**:
+```json
+{
+  "x-mjst": { "markdown": { "pages": [{ "id": "advanced", "file": "advanced.md" }] } },
+  "properties": {
+    "userId": { "type": "string", "x-mjst": { "brand": "UserId", "markdown": { "page": "advanced" } } },
+    "debugToken": { "type": "string", "x-mjst": { "hidden": true } }
+  }
+}
+```
+
+- **`x-mjst.markdown`** holds what only this renderer reads: on the root it
+  configures the pages, on a property it documents that property. Keeping it
+  apart means a key like `type` or `title` is never mistaken for a hint to a
+  generator that has nothing to do with markdown.
+- **`x-mjst.hidden`** sits on `x-mjst` itself, because keeping an internal
+  option out of the docs is not about markdown in particular. `true` leaves
+  the property out entirely — no row, no heading, and its children with it.
+
+On the **root schema**, under `x-mjst.markdown`:
 
 | Member | Type | What it does |
 | --- | --- | --- |
@@ -661,7 +685,8 @@ On the **root schema**:
 | `sections` | `{ id, title?, description?, page?, layout?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. Its `layout` takes the same `'headings' \| 'table' \| 'none'` vocabulary a property's does, and defaults to `headings` — the root `layout` is the default for a property's *children*, not for a section. |
 | `example` / `examples` | see below | Code blocks under the page title. |
 
-On a **property** (and on any `$defs` entry a property references):
+On a **property** (and on any `$defs` entry a property references), under
+`x-mjst.markdown`:
 
 | Member | Type | What it does |
 | --- | --- | --- |
@@ -673,7 +698,6 @@ On a **property** (and on any `$defs` entry a property references):
 | `layout` | `'headings' \| 'table' \| 'none'` | How this property's children are documented. |
 | `sort` | `'schema' \| 'alphabetical'` | Order of this property's children. |
 | `order` | `number` | Sorts ahead of properties with a higher (or no) order. |
-| `hidden` | `boolean` | Keeps an internal option out of the docs entirely. |
 | `description` | `string` | Prose for the docs, when it should differ from the schema's `description`. |
 | `example` / `examples` | see below | Code blocks under the description. |
 | `note` / `notes` | `string` or `string[]` | Blockquotes above the examples. |
@@ -692,7 +716,7 @@ An **example** is either a code string, or an object:
 
 | Keyword | Where it lands |
 | --- | --- |
-| `title`, `description` | The page title, and each property's prose (full markdown, not just the first paragraph). A property name is rendered as a code span unless it is plain enough to survive a heading; an `x-doc.title` is prose and is not, having no row to be checked against |
+| `title`, `description` | The page title, and each property's prose (full markdown, not just the first paragraph). A property name is rendered as a code span unless it is plain enough to survive a heading; an `x-mjst.markdown.title` is prose and is not, having no row to be checked against |
 | `type`, `enum`, `const`, `anyOf` / `oneOf` / `allOf`, `items`, `additionalProperties` / `patternProperties` | The **Type:** label — `string[]`, `'json' \| 'yaml'`, `string \| null`, and `Record<string, T>` for a map-shaped object (one that describes its values rather than naming fields), `T` being the value shape's own label |
 | `default` | **Default:**, written in the page's language |
 | `examples` | The derived code example (the first one), plus **Examples:** for the rest. A tuple position past the first gets the inline list only — the positions before it are other shapes, and inventing them would produce a sample that does not validate |
@@ -701,8 +725,8 @@ An **example** is either a code string, or an object:
 | `format`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`, `minLength`, `maxLength`, `minItems`, `maxItems`, `uniqueItems` | **Constraints:** |
 | `properties`, `allOf`, `anyOf` / `oneOf`, `then` / `else`, `dependentSchemas` | The children. `allOf` branches all apply, so they contribute properties *and* requirements; alternatives and conditionals contribute properties only, and a field is required only when every alternative requires it. In the **Type:** label `allOf` reads as an intersection (`a & b`) and the alternatives as a union (`a \| b`); a branch that is itself a union is bracketed, so `(string \| number) & string` cannot be misread as the union it replaced |
 | `items`, `prefixItems`, `additionalProperties`, `patternProperties` | The children of a container — an array documents its item shape (every tuple position), a map documents its value shape (every pattern) under a `<name>` key. A container whose values are another container is followed as far as it goes, so a matrix or a list of maps documents the fields at the bottom of it. A node with named properties *and* a container documents both |
-| `$ref` / `$defs` / `$anchor` | Inlined before rendering — a JSON pointer (`#/$defs/x`), the empty pointer (`#`, the document itself, as a self-recursive schema writes it), or a plain-name fragment naming an `$anchor` (`#x`); a reference out of the document is not fetched. A sibling keyword at the ref site wins — except `properties` and `required`, which merge with the definition's (both applicators apply), and `x-doc`, which merges per key so a ref site can assign a page without discarding the definition's examples. A ref site's own `description` still wins over the definition's `x-doc.description` |
-| A recursive `$ref` | Collapsed where it repeats, so generation terminates. The truncation is labelled with the type its definition has (a `string \| { … }` definition stays `string \| object`, an `object[]` stays `object[]`), carries that definition's documentation the way any other ref site does — its prose, its `x-doc` type, layout, examples, whether it is hidden — carries what the definition says about the value itself (`deprecated`, `default`, `examples`, and every constraint keyword), and carries what it requires, so an alternative beside it keeps its **Required** markers. Five members stay behind, because they place and announce an occurrence rather than describe it, and a truncation is an occurrence with nothing underneath: `x-doc.page`, `section`, `title`, `heading` and `order`. A reference that resolves to the document itself — `#`, `#/`, or the root's own `$anchor` — carries nothing, the root being a page configuration rather than a definition. Reading what a definition requires follows a branch's ref-site keywords as well as its definition, refuses to re-enter a definition already on the path, and is worked out once per pointer. Past 512 levels of composition it stops with an error; past 10,000 nodes it reports nothing rather than refusing the page, so a `$defs` that composes in more ways than can be enumerated costs a **Required** marker and not the document |
+| `$ref` / `$defs` / `$anchor` | Inlined before rendering — a JSON pointer (`#/$defs/x`), the empty pointer (`#`, the document itself, as a self-recursive schema writes it), or a plain-name fragment naming an `$anchor` (`#x`); a reference out of the document is not fetched. A sibling keyword at the ref site wins — except `properties` and `required`, which merge with the definition's (both applicators apply), and `x-mjst`, which merges per key so a ref site can assign a page without discarding the definition's examples. A ref site's own `description` still wins over the definition's `x-mjst.markdown.description` |
+| A recursive `$ref` | Collapsed where it repeats, so generation terminates. The truncation is labelled with the type its definition has (a `string \| { … }` definition stays `string \| object`, an `object[]` stays `object[]`), carries that definition's documentation the way any other ref site does — its prose, its `x-mjst` type, layout, examples, whether it is hidden — carries what the definition says about the value itself (`deprecated`, `default`, `examples`, and every constraint keyword), and carries what it requires, so an alternative beside it keeps its **Required** markers. Five members stay behind, because they place and announce an occurrence rather than describe it, and a truncation is an occurrence with nothing underneath: `x-mjst.markdown.page`, `section`, `title`, `heading` and `order`. A reference that resolves to the document itself — `#`, `#/`, or the root's own `$anchor` — carries nothing, the root being a page configuration rather than a definition. Reading what a definition requires follows a branch's ref-site keywords as well as its definition, refuses to re-enter a definition already on the path, and is worked out once per pointer. Past 512 levels of composition it stops with an error; past 10,000 nodes it reports nothing rather than refusing the page, so a `$defs` that composes in more ways than can be enumerated costs a **Required** marker and not the document |
 | root `anyOf` / `oneOf` / `allOf` | Flattened into one property list, requirements included — an `allOf` branch that only restates `required` still marks the fields it names. A property reached through alternatives is only marked required when every branch that could be an object requires it |
 
 Each property renders in a fixed order, so a page reads as a reference rather
@@ -711,7 +735,7 @@ description → **Default:** → **Allowed values:** → **Examples:** →
 **Constraints:** → notes → code examples → footers → children.
 
 A page holds one top-level heading: its title. A schema with no `title` (and no
-`x-doc.title`, and no `title` option) has no `#` — its properties still start at
+`x-mjst.markdown.title`, and no `title` option) has no `#` — its properties still start at
 `##`, because promoting them would give a twelve-option config twelve `#`
 headings, which docs sites read as twelve pages. Under a `table` layout, a child
 that has a shape of its own gets a heading and a table below the row, carrying
@@ -727,21 +751,23 @@ overview table instead of a heading per property:
 
 ```json
 {
-  "x-doc": {
-    "sections": [{ "id": "properties", "title": "Required properties", "layout": "table" }]
+  "x-mjst": {
+    "markdown": {
+      "sections": [{ "id": "properties", "title": "Required properties", "layout": "table" }]
+    }
   },
   "required": ["organization"],
   "properties": {
     "organization": {
       "type": "string",
       "description": "Identity of the organization publishing the SDKs.",
-      "x-doc": { "section": "properties", "order": 1 }
+      "x-mjst": { "markdown": { "section": "properties", "order": 1 } }
     }
   }
 }
 ```
 
-The table follows the section's own order, so `x-doc.order` puts the required
+The table follows the section's own order, so `x-mjst.markdown.order` puts the required
 options at the top of it. Every property in it still gets the block a row cannot
 hold below the table — the rest of its prose, its notes, examples and children —
 and a section with `layout: 'none'` renders its prose and examples alone.
@@ -750,13 +776,15 @@ and a section with `layout: 'none'` renders its prose and examples alone.
 
 Every column has to earn its width, because the column a reader came for is
 **Description** and a narrow viewport gives it whatever the others leave. That
-is what the defaults do; the root `x-doc.table` is where a schema disagrees,
+is what the defaults do; the root `x-mjst.markdown.table` is where a schema disagrees,
 and every table on every page follows it:
 
 ```json
 {
-  "x-doc": {
-    "table": { "type": "never", "required": " _required_", "requiredFirst": true }
+  "x-mjst": {
+    "markdown": {
+      "table": { "type": "never", "required": " _required_", "requiredFirst": true }
+    }
   }
 }
 ```
@@ -766,7 +794,7 @@ and every table on every page follows it:
 | `type` | `auto` (default), `always`, `never` | The **Type** column. `auto` renders it only when a row says something with it — a table whose every row is `object`, or states no type at all, drops it, while one with enums, arrays or maps keeps it. Every row being `string` keeps it too: that is a fact about the options rather than the absence of one. `never` is for a reference whose readers do not think in types |
 | `default` | `auto` (default), `always`, `never` | The **Default** column. `auto` renders it when some property has one. A `null` default is the absence of a value, so it prints below the table instead of in it |
 | `required` | `column` (default), any other string | Where requiredness is said. `column` is a **Required** column with a ✅, dropped like every other column when no row fills it. Any other string is a suffix put right after a required property's name in the **Property** cell instead, as markdown or inline HTML: `" _required_"`, `"*"` for a reference with a legend of its own, `"<br><sub><i>required</i></sub>"` to put the word on a line under the name, or `""` for no mark at all. The suffix is appended exactly as written, so `"*"` hugs the name and `" *"` does not — the only changes are to what would break the row: a line ending becomes a space and a live `\|` is escaped. A suffix saves a column when only a few rows in many are required |
-| `requiredFirst` | `false` (default), `true` | Lists the required properties at the top of the table and the rest under them, for a reader skimming for what they have to fill in. Still one table: the order groups them and the column (or the suffix) still says which is which, so nothing is read twice. A stable partition, so `sort` and `x-doc.order` decide the order within each group — and the blocks below the table follow their rows, so they are reordered with them |
+| `requiredFirst` | `false` (default), `true` | Lists the required properties at the top of the table and the rest under them, for a reader skimming for what they have to fill in. Still one table: the order groups them and the column (or the suffix) still says which is which, so nothing is read twice. A stable partition, so `sort` and `x-mjst.markdown.order` decide the order within each group — and the blocks below the table follow their rows, so they are reordered with them |
 
 All of this is the table's shape only. A property rendered as a heading still
 gets its **Type:** and **Required** lines, which are prose rather than columns —
@@ -779,13 +807,15 @@ uninformative), so the values are not repeated.
 
 ### What a heading holds
 
-The root `x-doc.headings` does for headings what `x-doc.table` does for tables:
+The root `x-mjst.markdown.headings` does for headings what `x-mjst.markdown.table` does for tables:
 one declaration, and every property heading on every page follows it.
 
 ```json
 {
-  "x-doc": {
-    "headings": { "type": "never" }
+  "x-mjst": {
+    "markdown": {
+      "headings": { "type": "never" }
+    }
   }
 }
 ```
@@ -794,7 +824,7 @@ one declaration, and every property heading on every page follows it.
 | --- | --- | --- |
 | `type` | `auto` (default), `never` | The **Type:** line under a property's heading. `auto` prints it whenever the schema states a type. `never` is for a reference whose readers do not think in types, where the line under every heading is noise. An `enum` then gets its **Allowed values:** line back, because the label was the only other place its values appeared. **Required** stays either way, since requiredness is not a type |
 
-`never` is the only way to hide the line: an empty `x-doc.type` on a property
+`never` is the only way to hide the line: an empty `x-mjst.markdown.type` on a property
 counts as unset and falls back to the label the schema implies.
 
 A row links to the property's own heading wherever that heading is: the section
@@ -825,12 +855,14 @@ to — so a reader still sees every option in one place:
 
 ```json
 {
-  "x-doc": {
-    "file": "configuration.md",
-    "layout": "table",
-    "pages": [
-      { "id": "typescript", "file": "configuration/typescript.md", "title": "TypeScript" }
-    ]
+  "x-mjst": {
+    "markdown": {
+      "file": "configuration.md",
+      "layout": "table",
+      "pages": [
+        { "id": "typescript", "file": "configuration/typescript.md", "title": "TypeScript" }
+      ]
+    }
   },
   "properties": {
     "targets": {
@@ -838,7 +870,7 @@ to — so a reader still sees every option in one place:
       "properties": {
         "typescript": {
           "$ref": "#/$defs/typescriptTarget",
-          "x-doc": { "page": "typescript", "heading": false }
+          "x-mjst": { "markdown": { "page": "typescript", "heading": false } }
         }
       }
     }
@@ -851,11 +883,11 @@ That writes `configuration.md` (with a `typescript` row linking to
 *TypeScript*, holding the target's options).
 
 Placement mistakes are errors rather than silent omissions — a typo in
-`x-doc.page` would otherwise drop a property out of the docs, and nothing about
+`x-mjst.markdown.page` would otherwise drop a property out of the docs, and nothing about
 the output would look wrong. Generation refuses when:
 
 - a property names a page or a section the root never declares;
-- a property's `x-doc.page` disagrees with the page its section renders on;
+- a property's `x-mjst.markdown.page` disagrees with the page its section renders on;
 - two pages share an id, or resolve to the same file, or two sections share an id;
 - a page is written outside the output directory, or names no file at all;
 - the schema nests more than 512 levels deep, or follows composition that far,
@@ -867,7 +899,7 @@ Two realistic schemas and the markdown they generate are checked in:
 
 - [`fixtures/api-reference-config.schema.json`](./fixtures/api-reference-config.schema.json) → [one page](./fixtures/expected/api-reference-config/configuration.md)
 - [`fixtures/sdk-config.schema.json`](./fixtures/sdk-config.schema.json) → [three pages](./fixtures/expected/sdk-config/)
-- [`fixtures/deploy-config.schema.json`](./fixtures/deploy-config.schema.json) → [one page](./fixtures/expected/deploy-config/configuration.md), the same renderer under `x-doc.table: { "type": "never", "required": " _required_", "requiredFirst": true }`
+- [`fixtures/deploy-config.schema.json`](./fixtures/deploy-config.schema.json) → [one page](./fixtures/expected/deploy-config/configuration.md), the same renderer under `x-mjst.markdown.table: { "type": "never", "required": " _required_", "requiredFirst": true }`
 
 The tests compare the generator against those files. After a deliberate change,
 `bun run generate-fixtures` refreshes them — and the diff shows exactly how

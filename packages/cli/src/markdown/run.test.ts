@@ -52,7 +52,7 @@ describe('run', () => {
     const dir = tmp('markdown-table-style-')
     const schema = writeSchema(dir, {
       title: 'Config',
-      'x-doc': { layout: 'table' },
+      'x-mjst': { markdown: { layout: 'table' } },
       properties: {
         server: {
           type: 'object',
@@ -76,7 +76,7 @@ describe('run', () => {
   it('passes a required suffix through to the generator', async () => {
     const dir = tmp('markdown-required-suffix-')
     const schema = writeSchema(dir, {
-      'x-doc': { layout: 'table' },
+      'x-mjst': { markdown: { layout: 'table' } },
       properties: {
         server: {
           type: 'object',

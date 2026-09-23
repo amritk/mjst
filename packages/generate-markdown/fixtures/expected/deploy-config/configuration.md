@@ -1,6 +1,6 @@
 # Deploy configuration
 
-The same renderer under a different root `x-doc.table`: the options you have to fill in at the top of every table, and no **Type** column anywhere.
+The same renderer under a different root `x-mjst.markdown.table`: the options you have to fill in at the top of every table, and no **Type** column anywhere.
 
 A reference whose readers are writing YAML rather than TypeScript often has nothing to say with a type column — and a reader skimming for what is required should not have to read every row to find it.
 

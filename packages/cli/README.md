@@ -304,7 +304,7 @@ its own flags (and its own `--help`), independent of the generation flags above.
 
 ```bash
 # The prose reference: a heading, a type, the description and an example per
-# property, across as many pages as the schema's x-doc keyword declares
+# property, across as many pages as the schema's x-mjst keyword declares
 npx mjst markdown ./config.schema.json --out-dir ./docs
 
 # The other shape: one HTML table, spliced into an existing markdown file
@@ -315,7 +315,7 @@ npx mjst markdown ./config.schema.json --table --readme ./README.md
 | --- | --- |
 | `<schema>` | The JSON Schema to document (positional, required). |
 | `--out-dir` | Directory the prose reference pages are written to (default: the current directory). |
-| `--file` | Output path of the index page (default: the schema's `x-doc.file`, then `index.md`). |
+| `--file` | Output path of the index page (default: the schema's `x-mjst.file`, then `index.md`). |
 | `--title` | Page title (default: the schema's `title`). |
 | `--language` | Fence language for derived examples and literals (default: `json`). |
 | `--layout` | Default layout for nested properties: `headings` (default), `table`, or `none`. |

@@ -126,20 +126,20 @@ describe('flatten-root', () => {
 
   it('takes the title and docs config from a branch when the root has none', () => {
     const flattened = flattenRoot({
-      anyOf: [{ title: 'Config', 'x-doc': { language: 'javascript' }, properties: { a: {} } }],
+      anyOf: [{ title: 'Config', 'x-mjst': { markdown: { language: 'javascript' } }, properties: { a: {} } }],
     })
     expect(flattened.title).toBe('Config')
-    expect(flattened['x-doc']).toEqual({ language: 'javascript' })
+    expect(flattened['x-mjst']).toEqual({ markdown: { language: 'javascript' } })
   })
 
   it('keeps the root title and docs config over a branch one', () => {
     const flattened = flattenRoot({
       title: 'Root',
-      'x-doc': { language: 'yaml' },
-      anyOf: [{ title: 'Branch', 'x-doc': { language: 'javascript' }, properties: { a: {} } }],
+      'x-mjst': { markdown: { language: 'yaml' } },
+      anyOf: [{ title: 'Branch', 'x-mjst': { markdown: { language: 'javascript' } }, properties: { a: {} } }],
     })
     expect(flattened.title).toBe('Root')
-    expect(flattened['x-doc']).toEqual({ language: 'yaml' })
+    expect(flattened['x-mjst']).toEqual({ markdown: { language: 'yaml' } })
   })
 
   it('ignores branches that declare no properties', () => {

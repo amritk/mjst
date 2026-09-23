@@ -12,7 +12,12 @@ import { isSchemaObject } from './schema-guards'
 export const MJST_EXTENSION_KEY = 'x-mjst'
 
 /**
- * The shape of the `x-mjst` extension object.
+ * The shape of the `x-mjst` extension object, as the type generators read it.
+ *
+ * The object is contextual — what a key means depends on the node it sits on —
+ * and not every key is here: `@amritk/generate-markdown` reads its own from the
+ * same object (`hidden`, and its settings under `markdown`), and these readers
+ * leave them alone.
  *
  * - `instanceOf` names a JavaScript class the value must be an instance of at
  *   runtime (e.g. `'Date'`). It round-trips constructs like TypeBox's
