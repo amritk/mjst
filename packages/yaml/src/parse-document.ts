@@ -1193,6 +1193,12 @@ const isBadPlainStart = (c: number): boolean => c < 128 && PLAIN_START[c] !== 0
  *   the collection reports the missing separator.
  */
 const reportBadPlainStart = (state: State, pos: number, flow: boolean): void => {
+  // A problem already reported over this offset explains it better — the `,` in
+  // `&x,y` ran on from an anchor name (`BAD_ANCHOR`), and a `%x: 1` after `---`
+  // is a misplaced directive (`UNEXPECTED_DIRECTIVE`). A second report at the
+  // same character only adds noise.
+  const last = state.errors[state.errors.length - 1]
+  if (last !== undefined && last.start <= pos && pos < last.end) return
   const { src, len } = state
   const c = src.charCodeAt(pos)
   if (PLAIN_START[c] === 2) {
