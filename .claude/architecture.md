@@ -129,7 +129,7 @@ Resolves and inlines `$ref`s into a single dereferenced document — internal (`
 A tiny, dependency-free YAML parser built for diagnostics: every node maps back to an exact `line:column` source position. Used to load `.yaml`/`.yml` schema/config documents (e.g. via the `resolveRefsFromFile` `parse` callback) and by `@amritk/lint` to parse linted documents, while preserving the locations needed to point at the offending node in an error.
 
 - **Depends on:** nothing.
-- **Scope:** a pragmatic subset of YAML 1.2 sized for configs/OpenAPI — block & flow collections, block scalars (`|`/`>`), quoted/plain scalars, comments, and anchors. Out of scope by design: multi-document streams (only the first document is read), explicit `?` mapping keys, and exotic tags.
+- **Scope:** YAML 1.2 with the core schema, sized for configs/OpenAPI — block & flow collections, block scalars (`|`/`>`), quoted/plain scalars, comments (optionally collected), anchors/aliases and `<<` merge keys, explicit `?` keys and collection keys, `%YAML`/`%TAG` directives, the core and extended tags (`!!binary`, `!!timestamp`, `!!set`, `!!omap`), and multi-document streams (`parseDocument` reads the first document; `parseAllDocuments` reads them all). It passes 397 of the 402 YAML test suite cases; the rest are listed with reasons in `src/conformance-expected-failures.test-utils.ts`. Deliberately not done: YAML 1.1 scalar forms, schema selection, and recursive anchors (see the package README's Scope section).
 
 ### `@amritk/helpers` (`packages/helpers`)
 

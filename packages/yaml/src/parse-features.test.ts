@@ -257,11 +257,10 @@ describe('explicit ? / : mapping entries', () => {
 
   it('records the source range of an explicit key node', () => {
     const node = parseDocument('? name\n: value\n').contents
-    if (node?.kind === 'map') {
-      const key = node.items[0]?.key
-      // `name` begins at offset 2 (just past `? `) and ends before the newline.
-      expect([key?.start, key?.end]).toEqual([2, 6])
-    }
+    if (node?.kind !== 'map') throw new Error('expected a map')
+    const key = node.items[0]?.key
+    // `name` begins at offset 2 (just past `? `) and ends before the newline.
+    expect([key?.start, key?.end]).toEqual([2, 6])
   })
 
   it('does not over-report duplicates for distinct complex keys', () => {
@@ -375,12 +374,11 @@ describe('multi-line plain scalars in flow collections', () => {
 
   it('spans the source range from the first line to the last folded line', () => {
     const node = parseDocument('[a\n  b, c]\n').contents
-    if (node?.kind === 'seq') {
-      const first = node.items[0]
-      // `a` starts at offset 1; the folded scalar ends after `b` on line 2
-      // (offset 6), with the trailing break and `, c]` left to the sequence.
-      expect([first?.start, first?.end]).toEqual([1, 6])
-    }
+    if (node?.kind !== 'seq') throw new Error('expected a sequence')
+    const first = node.items[0]
+    // `a` starts at offset 1; the folded scalar ends after `b` on line 2
+    // (offset 6), with the trailing break and `, c]` left to the sequence.
+    expect([first?.start, first?.end]).toEqual([1, 6])
   })
 })
 

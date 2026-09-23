@@ -23,8 +23,9 @@ export const lineCounter = (source: string): LineCounter => {
   const lineStarts = [0]
   // Hop break to break with `indexOf` rather than reading every character:
   // `indexOf` is vectorized by the engine, which is worth roughly 3x here. That
-  // matters because every lint run builds this index right after a parse, and a
-  // per-character loop was costing ~14% of the combined time on a 2.7 MB spec.
+  // matters because a diagnostics consumer builds this index right after every
+  // parse, and a per-character loop was costing ~14% of the combined time on a
+  // 2.7 MB spec.
   let nl = source.indexOf('\n')
   let cr = source.indexOf('\r')
   while (nl !== -1 || cr !== -1) {
@@ -47,7 +48,9 @@ export const lineCounter = (source: string): LineCounter => {
   }
 
   const linePos = (offset: number): LinePos => {
-    const clamped = offset < 0 ? 0 : offset > length ? length : offset
+    // Written as `> 0` rather than `< 0` so a `NaN` offset (an arithmetic slip in
+    // the caller) clamps to the start instead of coming back as `col: NaN`.
+    const clamped = offset > 0 ? (offset > length ? length : offset) : 0
     let low = 0
     let high = lineStarts.length - 1
     while (low < high) {

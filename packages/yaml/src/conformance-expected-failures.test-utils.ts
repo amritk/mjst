@@ -17,8 +17,8 @@
  *  - **rejects** — a valid document reported as an error.
  *  - **output** — parses cleanly but produces a different value.
  *
- * What is left is the irreducible part: one case that turns on a deliberate
- * option default, and three where a richer JavaScript type is the better answer
+ * What is left is the irreducible part: two cases that turn on a deliberate
+ * option default (`uniqueKeys`), and three where a richer JavaScript type is the better answer
  * than the one JSON can write down.
  */
 export const EXPECTED_FAILURES: Record<string, string> = {

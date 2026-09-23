@@ -10,6 +10,7 @@ export type {
   YamlComment,
   YamlDocument,
   YamlError,
+  YamlErrorCode,
   YamlErrorKind,
   YamlMap,
   YamlNode,

@@ -12,6 +12,7 @@ import type {
   YamlComment,
   YamlDocument,
   YamlError,
+  YamlErrorCode,
   YamlMap,
   YamlNode,
   YamlPair,
@@ -449,11 +450,11 @@ const finishLineIfMidLine = (state: State): void => {
   }
 }
 
-const pushError = (state: State, code: string, message: string, start: number, end: number): void => {
+const pushError = (state: State, code: YamlErrorCode, message: string, start: number, end: number): void => {
   state.errors.push({ kind: 'error', code, message, start, end })
 }
 
-const pushWarning = (state: State, code: string, message: string, start: number, end: number): void => {
+const pushWarning = (state: State, code: YamlErrorCode, message: string, start: number, end: number): void => {
   state.warnings.push({ kind: 'warning', code, message, start, end })
 }
 
