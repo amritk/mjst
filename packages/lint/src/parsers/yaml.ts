@@ -4,6 +4,7 @@ import {
   isPair,
   isScalar,
   isSeq,
+  keyText,
   parseAllDocuments,
   type YamlDocument,
   type YamlNode,
@@ -29,56 +30,6 @@ import {
  */
 const pathKey = (path: JsonPath): string =>
   path.map((segment) => (typeof segment === 'number' ? `[${segment}]` : `.${segment}`)).join('')
-
-/**
- * Renders a collection (map/seq) mapping key in flow style, mirroring how
- * `@amritk/yaml`'s `toJS` projects one. This has to match that projection
- * exactly: the position index is keyed by path, and a path segment that differs
- * from the key the data actually carries points diagnostics at the wrong node —
- * or at nothing.
- */
-const serializeComplexKey = (node: YamlNode): string => {
-  if (isSeq(node)) {
-    return node.items.length === 0 ? '[]' : `[ ${node.items.map(flowText).join(', ')} ]`
-  }
-  if (isMap(node)) {
-    const pairs = node.items
-      .filter(isPair)
-      .map((pair) => `${flowText(pair.key)}: ${pair.value ? flowText(pair.value) : 'null'}`)
-    return pairs.length === 0 ? '{}' : `{ ${pairs.join(', ')} }`
-  }
-  return flowText(node)
-}
-
-/**
- * Renders a node as it reads inside a flow collection, where an empty scalar is
- * `null` rather than the `''` a JavaScript object key collapses to. Mirrors the
- * parser's own `flowText`.
- */
-const flowText = (node: YamlNode): string => {
-  if (isScalar(node)) {
-    const v = node.value
-    return typeof v === 'string' ? v : v === null ? 'null' : String(v)
-  }
-  if (isAlias(node)) return node.target ? flowText(node.target) : `*${node.source}`
-  return serializeComplexKey(node)
-}
-
-/**
- * Stringifies a mapping key into an index segment, matching `toJS`'s `keyText`
- * so a keyed path lines up with the projected data: an empty key is `''`, an
- * alias resolves through to the value it points at, and a collection key renders
- * in flow style. An alias with no anchor keeps its `*name` text, the same
- * fallback the projection uses.
- */
-const keyToString = (key: YamlNode): string => {
-  if (isScalar(key)) {
-    const v = key.value
-    return typeof v === 'string' ? v : v === null ? '' : String(v)
-  }
-  if (isAlias(key)) return key.target ? keyToString(key.target) : `*${key.source}`
-  return serializeComplexKey(key)
-}
 
 /**
  * Parses YAML (a JSON superset, so this handles both) into data plus a source
@@ -153,7 +104,7 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
         walkMerge(item.value, path)
         continue
       }
-      const childPath = [...path, keyToString(item.key)]
+      const childPath = [...path, keyText(item.key)]
       if (!index.has(pathKey(childPath))) walk(item.value, childPath)
     }
   }
@@ -193,7 +144,10 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
           merges.push(item.value)
           continue
         }
-        walk(item.value, [...path, keyToString(item.key)])
+        // `keyText` is the parser's own key renderer, so a path segment is exactly
+        // the key the projected data carries — and it shares the parser's work
+        // budget, so a key built from nested aliases cannot hang the index.
+        walk(item.value, [...path, keyText(item.key)])
       }
       // Merged keys fill positions the explicit keys above did not claim.
       for (const merge of merges) walkMerge(merge, path)
@@ -209,10 +163,35 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
       // Duplicate keys honor the configured severity; every other parser error is
       // a hard error.
       const severity = err.code === 'DUPLICATE_KEY' ? dupSeverity : DiagnosticSeverity.Error
-      pushError(severity, err.message, err.start, err.end)
+      // Carry the parser's stable code (`DUPLICATE_KEY`, `BAD_INDENT`, …) so a
+      // caller can branch on the kind of problem without matching the message,
+      // the same way `INCOMPATIBLE_VALUE` already does.
+      pushError(severity, err.message, err.start, err.end, err.code)
     }
     for (const warn of doc.warnings) {
-      pushError(DiagnosticSeverity.Warning, warn.message, warn.start, warn.end)
+      pushError(DiagnosticSeverity.Warning, warn.message, warn.start, warn.end, warn.code)
+    }
+  }
+
+  /**
+   * Projects one document to plain data, turning a failed projection into a
+   * diagnostic. `toJS` throws — catchably, by design — on a document whose
+   * aliases would expand past its budget (the "billion laughs" shape) or whose
+   * projection nests too deep. Letting that escape made a few hundred bytes of
+   * YAML throw straight out of `createDocument` and every lint entry point, while
+   * every other unusable document comes back as findings; `parseJson` reports its
+   * own too-deep case the same way. The finding sits at the start of the document
+   * that failed, and its value is `undefined`, as a JSON document's is when it
+   * cannot be read at all.
+   */
+  const project = (doc: YamlDocument): unknown => {
+    try {
+      return doc.toJS()
+    } catch (error) {
+      const at = doc.contents?.start ?? 0
+      const message = error instanceof Error ? error.message : String(error)
+      pushError(DiagnosticSeverity.Error, message, at, at, 'RESOURCE_EXHAUSTION')
+      return undefined
     }
   }
 
@@ -223,7 +202,7 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     data = docs.map((doc, i) => {
       walk(doc.contents, [i])
       collectProblems(doc)
-      return doc.toJS()
+      return project(doc)
     })
   } else {
     // Single document (or an empty stream): keep the flat, unprefixed shape.
@@ -231,7 +210,7 @@ export const parseYaml = <T = unknown>(source: string, options: IParserOptions =
     if (doc) {
       walk(doc.contents, [])
       collectProblems(doc)
-      data = doc.toJS()
+      data = project(doc)
     } else {
       data = null
     }
