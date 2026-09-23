@@ -49,6 +49,32 @@ describe('rehomeParserFile', () => {
     expect(result).toContain('export const parseDoc')
   })
 
+  // A member's JSDoc is the schema description verbatim. Read as code, the
+  // apostrophe opened a string that swallowed the closing braces, and the
+  // declaration ended early, leaving a stray `};` the file failed to parse on.
+  it('does not read quotes inside a comment in the declaration', () => {
+    const source = [
+      'export type Doc = "auto" | {',
+      "  /** The model's default limits. */",
+      '  limits?: {',
+      "    /** At most the model's window (`0.0` - `1.0`). */",
+      '    post?: number;',
+      '  };',
+      "  // the user's choice",
+      '  ratio: number;',
+      '};',
+      '',
+      'export const parseDoc = (): Doc => "auto";',
+    ].join('\n')
+
+    const result = rehomeParserFile(source, 'doc', '.parse')
+
+    expect(result).not.toContain('ratio')
+    expect(result).not.toContain('post?')
+    expect(result).not.toContain('};')
+    expect(result).toContain('export const parseDoc')
+  })
+
   it('does not stop at a brace or semicolon inside a string literal', () => {
     const source = ['export type Doc = "a;b" | "c}d";', '', 'export const parseDoc = (): Doc => "a;b";'].join('\n')
 

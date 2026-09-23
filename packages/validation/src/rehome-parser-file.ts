@@ -23,6 +23,12 @@ import { identifierMentions } from '@amritk/helpers/identifier-mentions'
  * object members has semicolons inside braces that a lazy pattern would stop at.
  * String literals in the body (an `enum` turned into `"a" | "b"`) can hold either
  * character, so they are skipped rather than counted.
+ *
+ * So are comments, and they have to be skipped before quotes are looked for: a
+ * member's JSDoc is the schema's `description` verbatim, and an apostrophe in
+ * prose (`the model's limit`) read as an opening quote swallowed the braces that
+ * followed, ended the declaration at a `;` inside it, and left the rest of the
+ * body behind as a stray `};` the file then failed to parse on.
  */
 const declarationEnd = (source: string, start: number): number => {
   let depth = 0
@@ -37,7 +43,15 @@ const declarationEnd = (source: string, start: number): number => {
       continue
     }
 
-    if (char === '"' || char === "'" || char === '`') quote = char
+    if (char === '/' && source[i + 1] === '*') {
+      const close = source.indexOf('*/', i + 2)
+      if (close === -1) return -1
+      i = close + 1
+    } else if (char === '/' && source[i + 1] === '/') {
+      const newline = source.indexOf('\n', i + 2)
+      if (newline === -1) return -1
+      i = newline
+    } else if (char === '"' || char === "'" || char === '`') quote = char
     else if (char === '{' || char === '[' || char === '(') depth++
     else if (char === '}' || char === ']' || char === ')') depth--
     else if (char === ';' && depth === 0) return i + 1
