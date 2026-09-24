@@ -1,5 +1,59 @@
 # @amritk/validation
 
+## 0.4.0
+
+### Minor Changes
+
+- 2247615: `coerceX` now coerces inside `anyOf`, `oneOf`, `allOf` and `if`/`then`/`else`, and beside a `$ref`. Before, a union coerced a scalar only when every branch was a plain scalar type. An object branch, a `$ref`, a constrained scalar or a nested union left the whole position untouched, so `{ enabled: "true" }` under `anyOf: [string, { enabled: boolean }]` was rejected, even though the same `{ type: "boolean" }` outside a union was coerced.
+
+  The order at a union is observable, so here it is:
+
+  1. A branch the value already matches, as written, wins, and nothing is coerced. Under `anyOf: [{ type: "string" }, { const: false }]`, `false` stays `false`. Ajv turns it into `"false"` because it coerces into the first branch that will take the value.
+  2. Otherwise each branch coerces the value its own way, and a result counts only if that branch then matches it. "Matches" is the validator's own verdict for that branch.
+  3. If the branches that match after coercion disagree on the value, nothing is coerced and the validator reports the value as written. If they agree, that value is taken. The order the branches were written in never changes the answer.
+
+  `allOf` coerces through each subschema in turn. `if`/`then`/`else` coerces toward `then` when the value, as it stands after the node's own properties were coerced, matches `if`, and toward `else` otherwise.
+
+  `coerceX` is faster than Ajv's `coerceTypes` on every case in the new `bench:validators:coerce` comparison, on Bun and on Node. Against Ajv cloning its input first, it is 3–36× faster on valid input, 1.4–2× on input that needs coercing, and 1.6–3.4× on input that cannot be coerced. Three changes make that happen:
+
+  - A valid document is answered by `isX` and handed back as the same object, without being walked, wherever `isX` is a standalone guard.
+  - Union branch tests are emitted as plain functions instead of closures.
+  - The walks only check `Object.hasOwn` on a value that is about to be written.
+
+  A boolean check of a `$ref` inside `validateX` (an `anyOf`/`oneOf`/`not`/`if` branch, or an array tail) now calls the target's `isX` instead of its `validateX`, so a branch that fails builds no errors. Such files now import `isX` too.
+
+  This changes behaviour. Values that used to be rejected under a union, an `allOf` or a condition may now be coerced and accepted. A union with a constrained scalar branch is now judged branch by branch: under `anyOf: [{ type: "string", minLength: 3 }, { type: "number" }]`, `"7"` becomes `7` where it used to stay `"7"` and fail. `coerceUnion` also counts two offered types that coerce to the same value as one reading, so `"1"` under `number | integer` becomes `1` instead of being declined.
+
+- 6aa5e62: The coercing `parseX` now returns exactly what `coerceX` returns whenever `coerceX` accepts the document, and only repairs what `coerceX` would reject. That holds through `anyOf`, `oneOf`, `allOf`, `if`/`then`/`else`, `$ref` and recursion, and a differential test pins it over random schemas.
+
+  Before, a union, `allOf` or `if` in a parser was checked but never coerced into:
+
+  - `{ enabled: "true" }` under an `allOf` of a `$ref`'d union came through untouched.
+  - `5` under `anyOf: [string, { const: false }]` was repaired to `""`.
+  - Some already-valid documents were rewritten: `{}` under `anyOf: [{ type: integer }, { allOf: [...] }]` became `1`.
+
+  A scalar definition reached through `$ref` (`{ type: "number" }`) repaired `"-1"` to `0`, where the same schema written inline as a property coerced it to `-1`.
+
+  How it works: a definition whose own tree has `anyOf`/`oneOf`/`allOf`/`if`/`not` now carries an exact test (`matchesX`) and the validator's coercion walk (`coerceXInput`) in front of its repairing parser. Every definition such a one reaches through `$ref` carries them too. The repairing parser becomes the private `_parseXRepair`, and the index barrel now leaves out any export whose name starts with `_`.
+
+  This changes behaviour and output:
+
+  - Parse output changes for schemas with combinators: documents that used to be repaired are now coerced, and already-valid ones are returned unchanged. Parser code grows for such schemas, to about twice its size on a large OpenAPI document. Schemas without combinators emit exactly what they did before.
+  - A scalar definition now coerces its value the way a property of the same type does.
+  - `strict` and `stripUnknown` parsers are unchanged.
+  - Generated validators test each `anyOf`/`oneOf`/`not`/`if` branch through a named, shared function instead of an IIFE. JavaScriptCore allocated that IIFE's closure on every call. On a union-heavy config this makes `coerceX` about 2× faster on Bun, and `validateX` gains the same way. Output size is unchanged within 0.3%.
+  - A boolean test of a `$ref` calls the target's `isX`, so a failing branch builds no errors.
+  - The parser no longer declares nested shape checks and `_every…` item loops that no fast path reads. They were `TS6133` errors under `noUnusedLocals` on 37 of the 38 such cases in the OpenAI spec.
+
+  `@amritk/helpers` adds `@amritk/helpers/coercion-runtime` (`coerceScalar`, `coerceUnion`, `valuesEqual`, `allUnique`, `everyItem`, `escapePointer`). It is byte-identical to the runtime a validator build emits, and a test enforces that.
+
+  `bench:validators:node` and `bench:parsers:node` run under Node again. They import the generator through the package entry instead of extensionless source paths.
+
+### Patch Changes
+
+- Updated dependencies [6aa5e62]
+  - @amritk/helpers@0.24.0
+
 ## 0.3.2
 
 ### Patch Changes

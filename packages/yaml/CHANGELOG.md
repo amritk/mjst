@@ -1,5 +1,73 @@
 # @amritk/yaml
 
+## 0.8.0
+
+### Minor Changes
+
+- 5c5f803: Tighten block-mapping keys and node properties.
+
+  Newly reported errors (these documents used to parse silently):
+
+  - Text between a quoted, alias, or flow-collection key and its `:` (`"a"b: 1`, `"a" &x : 1`, `"a" !!str : 1`) is now `UNEXPECTED_CONTENT`. It used to be dropped, losing the anchor or tag it held.
+  - Malformed anchor and alias names report the new `BAD_ANCHOR` code: an empty name (`a: & x`, `- &`, a lone `*`), or, in block context, an anchor name running into a flow indicator (`a: &x{b: 1}`, `&x,y`). The name now ends at the indicator, so `a: &x{b: 1}` projects to `{ a: { b: 1 } }` instead of `{ a: '1}' }`. An alias name now also ends at `[` and `{`. A bare `*` reports `BAD_ANCHOR` in place of `UNRESOLVED_ALIAS`.
+  - Node properties written before a `?` on its line (`&x ? a`) are now `BAD_PROPERTY`.
+
+  Fixed false errors on valid documents:
+
+  - Repeated plain `<<` merge keys in one mapping (`<<: *a` / `<<: *b`) are no longer reported as `DUPLICATE_KEY` while `merge` is on. A quoted `"<<"` stays an ordinary key, and so does `<<` with `merge: false`.
+  - A tab before a comment after a block indicator (`- \t#k: x`) is no longer reported as `TAB_INDENT`.
+
+- 798a95c: Type the diagnostic codes, fix `lineCounter` on a `NaN` offset, and bring the docs in line with the parser.
+
+  - **New `YamlErrorCode` type.** `YamlError.code` is now a union of every code the parser reports, instead of `string`, and the type is exported. A comparison against a misspelt code (`e.code === 'DUPLICATE_KEYS'`) now fails to typecheck. This can break code that builds its own `YamlError` objects with a code outside the union, or assigns an arbitrary `string` to `code`. Widen to `string` at that point if you need to.
+  - **`lineCounter(source).linePos(NaN)`** now returns `{ line: 1, col: 1 }` instead of `{ line: 1, col: NaN }`. `NaN` is clamped to the start, as a negative offset already was.
+  - **Docs.** The README's error table and AI.md now list every code under its real severity. `BAD_DIRECTIVE` and `DUPLICATE_DIRECTIVE` are errors for `%YAML` and warnings for `%TAG`. The docs now describe the current behaviour: strict tag coercion with `BAD_TAG_VALUE`, repeatable `<<` merge keys, bad escapes keeping their backslash, and column-0-only document markers. They also cover the `tag` / `anchor` fields on every node kind: a local tag keeps its `!`. The README's benchmark ratios now match its own tables, and its bundle-size note says which exports the probe imports.
+
+- 7f70372: Fix how document markers and the stream head are read, and make `parseDocument` read the first document exactly as `parseAllDocuments` does.
+
+  - `---` and `...` are document markers only at column 0. Indented, they are ordinary text: ` ---` is now the string `"---"`, `--- a` followed by `  ...` is `"a ..."`, and an indented `---` after a root collection is reported as stray content instead of silently ending the document.
+  - A column-0 `---` that carries a node (`--- b: 2`) now ends a root mapping instead of being read as a key called `--- b`, and `parseDocument` warns `MULTIPLE_DOCUMENTS` when the next document is written on its `---` line.
+  - `parseDocument('---\n---\na: 1\n')` now returns the empty first document with a `MULTIPLE_DOCUMENTS` warning instead of the second document's contents.
+  - `parseDocument` now reports what `parseAllDocuments` already did for the first document: `UNEXPECTED_DIRECTIVE` for directives with no `---` after them and for a `%` line after `---` (which is now kept as content, `{ "%x": 1 }`, instead of being dropped), `UNEXPECTED_CONTENT` for content after a `...`, and it reads the document that follows a leading `...` instead of returning `null`.
+  - `--- - a` and `--- ? a` now report `UNEXPECTED_CONTENT`, like `--- a: 1` already did: a block collection cannot start on the `---` line.
+  - A tab used to indent a root block mapping or sequence (`\ta: 1`, `\t- a`, `---\n\ta: 1`) now reports `TAB_INDENT`. A tab before a root flow collection or scalar (`\t[a]`, `\t{}`, `\t'~'`) stays valid.
+
+  Documents that used to parse cleanly can now report these errors, and a few values change (indented markers are text, a `%` line after `---` is kept).
+
+- bf3b98c: Tighten flow collections and plain-scalar starts to match YAML 1.2. Some documents that used to parse cleanly now report errors, and a few now produce different values:
+
+  - **New `BAD_SCALAR_START` errors.** A plain scalar can no longer start with a c-indicator. Previously only `@` and `` ` `` were rejected; now `a: ]`, `a: }`, `a: ,x`, `a: %x`, `[|]`, `[>]`, `[%]` and keys like `>k: 1` / `]k: 1` are rejected too. So is a `?` that is not followed by content (`a: ?`, `a: ? x`, `[?]`, `{?}`). `-1`, `?x`, `:x`, `x%y` and a `%` at the start of a continuation line are still accepted.
+  - **New `BAD_INDENT` errors.** Inside a flow collection opened from block context, continuation lines of quoted and plain scalars must be indented deeper than the enclosing block (`a: ["x\ny"]`, `a: {b: c\nd}`, `- [a\nb]`). Root flow collections, and so JSON, are not affected.
+  - **Escaped line breaks.** In a double-quoted scalar, `\` at the end of a line now goes through the same continuation-line checks as any other line break. The indentation check now gives the same result for LF and CRLF, and a column-0 `---`/`...` ends an unterminated scalar.
+  - **Changed values.** `[ ? a ]` is now `[{ a: null }]` (was `["a"]`), and `[ ? ]` is now `[{ "": null }]`. `{a:{b: 1}}` and `{a:[1]}` now parse as `{ a: { b: 1 } }` / `{ a: [1] }` instead of reporting an unterminated flow collection. `? a` / `: ? b` now gives a nested mapping `{ a: { b: null } }` (was the string `"? b"`).
+
+- 0d5bad4: Fix a crash, a slowdown, and several misreadings in the YAML parser.
+
+  - `parseDocument` and `parseAllDocuments` no longer throw a `RangeError` on a long chain of compact explicit keys (`? ? ? … a`). The chain now counts against the nesting limit and reports `DEPTH_LIMIT`. Chains under the limit parse in linear time; 900 levels used to take about 100ms.
+  - Node properties in front of a flow collection or quoted scalar are no longer read as a block mapping. `\t&x {a: b}` no longer reports `TAB_INDENT`, and `--- &x {a: b}`, `--- &x "a: b"` and `--- !!omap [a: 1]` no longer report `UNEXPECTED_CONTENT`.
+  - Properties at the start of a compact mapping on a `?` or `:` line are now read as properties. `? a\n: &x b: c` used to report `BAD_SCALAR_START` and key the entry `"&x b"`. It now gives `{ a: { b: c } }` with `b` anchored, the same way the package reads properties at the start of a line.
+  - **Behaviour change:** `BAD_MERGE` now reports a `<<` merge of a `!!set` or an `!!omap`. These project to a `Set` or a `Map`, so there is nothing to merge. Before, the merge silently added no keys. A merge that goes through a chain of aliases no longer reports a false `BAD_MERGE`.
+  - **Behaviour change:** `!!timestamp` now accepts the end-of-day time `24:00:00`, which becomes midnight of the next day. It rejects a zone offset outside 00–23 hours or 00–59 minutes, such as `+99:99`.
+  - **Behaviour change:** a `!!binary` mapping key is keyed by its base64 text again (`AQID`). The bytes had been stringified (`"1,2,3"`), which collided with a real `"1,2,3"` key.
+  - `nodeAtPath` now sees pairs replaced or keys renamed in place in mappings of 16 or more pairs, the same as in smaller mappings.
+  - `parseDocument` no longer warns `MULTIPLE_DOCUMENTS` when the rest of the stream is empty documents only (`a: 1\n...\n---\n`).
+  - A `BAD_TAG_VALUE` warning on an empty tagged node (`a: !!bool`) now covers the tag, instead of an empty span.
+  - **Behaviour change:** a tab before a compact `?` key (`- \t? a`, `: \t? b`) now reports `TAB_INDENT`, as a tab before `- ` already did.
+  - **Behaviour change:** an indented `%` line is document content, not a directive. It now reports `BAD_SCALAR_START` instead of being dropped as an unknown directive.
+
+- 5a0dc30: Scalar escapes, tags and merge keys no longer change data silently. Some previously accepted documents now report new problems, and some tagged values project differently:
+
+  - **Malformed double-quoted escapes are reported as `BAD_ESCAPE` errors.** This covers `\x`/`\u`/`\U` without exactly 2/4/8 hex digits (`"\u12"`), code points past U+10FFFF (`"\UFFFFFFFF"`), and a backslash before a non-ASCII character (`"\é"`). Any invalid escape, including ones already reported such as `"\."`, now keeps its backslash in the value (`"C:\Users"` stays `C:\Users` instead of becoming `C:Users`), which matches `yaml`. Escaped surrogate pairs (`"\ud83d\ude00"`) still combine into one character.
+  - **Core tags apply only to text in their own format.** Before, they forced whatever they were given. Now `!!int 1.9`, `!!int "12abc"`, `!!int .inf`, `!!null "x"`, `!!float true` and an empty `!!bool` keep the string as written (they used to become `1`, `12`, `Infinity`, `null`, `true` and `null`) and get a new `BAD_TAG_VALUE` **warning**. The same warning covers invalid `!!binary` base64, a `!!timestamp` that is not a YAML timestamp, `!!omap` entries that are not single pairs or that repeat a key, `!!set` members with values, and a collection tag on the wrong kind of node (`!!set [a]`). The projected values of `!!omap`, `!!set` and `!!binary` do not change.
+  - **`!!timestamp` follows the YAML timestamp format and reads a missing time zone as UTC.** It used to parse with `new Date()`, so `2001-12-14 21:59:43.10` depended on the host's time zone, and `Dec 14 2001` or `12/14/2001` were accepted. Dates that do not exist (`2001-02-30`) are no longer rolled over into the next month.
+  - **Tagged mapping keys are keyed by their tagged value.** `!!str 1.50: x` is the key `"1.50"`, not `"1.5"`, so `!!str 1.0` and `1` no longer produce a false `DUPLICATE_KEY` and lose data. `nodeAtPath` finds these keys by the same text.
+  - **Invalid merge sources are reported as a new `BAD_MERGE` error.** This covers `<<: 5`, `<<: [1, 2]`, an empty `<<:`, and aliases to non-mappings. They are still skipped when projecting.
+  - **An escaped line break followed by empty lines folds as the spec says.** Each empty line after a `\` continuation becomes a line feed, so `"a\` + empty line + `b"` is `"a\nb"` (as in PyYAML), not `"a b"`.
+
+### Patch Changes
+
+- 00c17a9: Faster path lookups and block scalar scanning. `nodeAtPath` now indexes mappings with 16 or more keys on first lookup (held weakly, rebuilt if the mapping's item count changes), so resolving every path of a large OpenAPI document is about 12x faster; results are unchanged, including duplicate keys resolving to the last pair. Block scalar lines in documents without `\r` are now found with a native `indexOf` search. Parsed values and positions are unchanged.
+
 ## 0.7.3
 
 ### Patch Changes

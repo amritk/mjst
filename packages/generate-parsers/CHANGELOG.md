@@ -1,5 +1,14 @@
 # @amritk/generate-parsers
 
+## 0.25.4
+
+### Patch Changes
+
+- Updated dependencies [2247615]
+- Updated dependencies [6aa5e62]
+  - @amritk/validation@0.4.0
+  - @amritk/helpers@0.24.0
+
 ## 0.25.3
 
 ### Patch Changes
