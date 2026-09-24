@@ -367,6 +367,26 @@ type NestingContext = {
    * blocks the fail-fast form anywhere blocks it for the whole function.
    */
   readonly failFast: FailFast
+  /**
+   * The prefix on every hoisted declaration this emission names — see
+   * {@link hoistPrefix}. Carried rather than derived because more than two
+   * emissions can land in one module: `validateX`, `checkX`, and the branch
+   * matchers the coercing half builds each count their hoisted names from zero.
+   */
+  readonly hoistNamespace: string
+  /**
+   * The name a yes/no test calls to ask a `$ref` target the same question —
+   * `isX` in a validator file. A parser file brings its own exact predicate for
+   * each definition under another name, since it has no `isX` to import.
+   */
+  readonly refGuard: (typeName: string) => string
+  /**
+   * The named yes/no tests this emission has hoisted, keyed by the subschema
+   * they test. Shared by reference across every context of one emission, like
+   * `hoisted`, so a branch met twice — once by a union's walk, once by the
+   * union itself — is emitted once and called twice.
+   */
+  readonly namedMatchers: Map<string, string>
 }
 
 /**
@@ -465,9 +485,11 @@ const blockFailFast = (ctx: NestingContext): void => {
  * from its own list — so the two halves of one file both wrote `_knownKeys0` and
  * the module had the name declared twice. The fail-fast half takes a prefix of
  * its own rather than a shared counter, because the two lists are built by
- * separate walks and nothing keeps their numbering in step.
+ * separate walks and nothing keeps their numbering in step. The coercing half's
+ * branch matchers ({@link createSubschemaMatcher}) take a third, for the same
+ * reason.
  */
-const hoistPrefix = (ctx: NestingContext): string => (ctx.failFast.on ? '_check' : '')
+const hoistPrefix = (ctx: NestingContext): string => ctx.hoistNamespace
 
 /**
  * The accessor a `type` check reads through, given where its report goes.
@@ -576,6 +598,9 @@ const createRootContext = (
   // is unreachable code the consumer's build rejects.
   branchErrors: branchErrors && !failFast.on,
   failFast,
+  hoistNamespace: failFast.on ? '_check' : '',
+  refGuard: guardName,
+  namedMatchers: new Map(),
 })
 
 /**
@@ -653,6 +678,14 @@ type Hoisted = {
   readonly declaration: string
   /** The emitted expression that reads it; present in the body iff the use survived. */
   readonly reference: string
+  /**
+   * Whether the declaration is code that can call another hoisted entry — a
+   * named branch test, whose body may test a nested branch by name. Only these
+   * are searched for further references: the other two forms carry
+   * schema-authored text (a pattern source, a key list) that must never be read
+   * as a use.
+   */
+  readonly calls?: boolean
 }
 
 /**
@@ -684,6 +717,24 @@ const readsBinding = (name: string, text: string): boolean => new RegExp(`\\b${n
 
 const readsObjBinding = (text: string): boolean => readsBinding('obj', text)
 
+/**
+ * The hoisted declarations `text` reads, in declaration order — following a
+ * named branch test into the tests it calls in turn, so a nested one is kept by
+ * the outer one that reads it even though the function body never names it.
+ */
+const keptHoisted = (hoisted: readonly Hoisted[], text: string): string[] => {
+  const kept = new Set<Hoisted>()
+  const scan = (source: string): void => {
+    for (const entry of hoisted) {
+      if (kept.has(entry) || !source.includes(entry.reference)) continue
+      kept.add(entry)
+      if (entry.calls === true) scan(entry.declaration)
+    }
+  }
+  scan(text)
+  return hoisted.filter((entry) => kept.has(entry)).map((entry) => entry.declaration)
+}
+
 const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // Only the function body is searched. Growing the search to include the kept
   // declarations — on the theory that one might read another — let a hoisted
@@ -691,7 +742,7 @@ const withHoisted = (hoisted: readonly Hoisted[], text: string): string => {
   // entry. Neither of the two hoisted forms reads the other, so there was nothing
   // to gain; a form that did would have to say so here rather than be discovered
   // by a substring.
-  const kept = hoisted.filter((entry) => text.includes(entry.reference)).map((entry) => entry.declaration)
+  const kept = keptHoisted(hoisted, text)
 
   // The rename touches the signature line and nothing else. A `replaceAll` over
   // the whole text would have rewritten a schema string that happens to spell
@@ -895,15 +946,15 @@ const generateKeywordChecks = (
     // A fail-fast body asks the target's own fail-fast half. It answers with the
     // very error `validateX` would have reported first for this position, so the
     // two agree on what the first error is, and it stops as soon as it has one.
-    // A yes/no match expression only needs to know the target failed, so it
-    // leaves its IIFE with `false`, asking the fail-fast half when this emission
-    // has one. A match expression that keeps its branch errors pushes them into
+    // A yes/no match expression only needs to know the target failed, so it asks
+    // the target's `isX` — a fail-fast guard that builds no error and no path —
+    // and leaves its IIFE with `false`. A match expression that keeps its branch errors pushes them into
     // its `_m`, where a `return` would leave the branch rather than the validator.
     const delegate =
       ctx.sink === FAIL_FAST_SINK
         ? [`  const _r = ${checkerName(target)}(${raw}, ${path})`, `  if (_r !== true) return _r`]
         : ctx.sink === MATCH_BOOL_SINK
-          ? [`  const _r = ${emittedName(target, ctx.failFast)}(${raw}, ${path})`, `  if (_r !== true) return false`]
+          ? [`  if (!${ctx.refGuard(target)}(${raw})) return false`]
           : [
               `  const _r = ${validatorName(target)}(${raw}, ${path})`,
               `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`,
@@ -1237,15 +1288,17 @@ const generateConstraintChecks = (
       // `return` out of the `for` being a `return` out of the validator.
       const failFast = ctx.sink === FAIL_FAST_SINK
       const target = refToName(itemSchema.$ref, suffix)
-      const onFailure = failFast
-        ? 'return _ir'
-        : ctx.sink === MATCH_BOOL_SINK
-          ? 'return false'
-          : `${ctx.sink}.push(..._ir.errors)`
+      const onFailure = failFast ? 'return _ir' : `${ctx.sink}.push(..._ir.errors)`
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
-      lines.push(`      const _ir = ${emittedName(target, ctx.failFast)}(${raw}[${iv}], ${itemPath})`)
-      lines.push(`      if (_ir !== true) ${onFailure}`)
+      // A yes/no test asks the target's guard, which builds nothing on the way to
+      // `false` — the same reason the named-property delegation does.
+      if (ctx.sink === MATCH_BOOL_SINK) {
+        lines.push(`      if (!${ctx.refGuard(target)}(${raw}[${iv}])) return false`)
+      } else {
+        lines.push(`      const _ir = ${emittedName(target, ctx.failFast)}(${raw}[${iv}], ${itemPath})`)
+        lines.push(`      if (_ir !== true) ${onFailure}`)
+      }
       lines.push(`    }`)
       lines.push(`  }`)
     } else if (isSchemaObject(itemSchema)) {
@@ -1516,6 +1569,9 @@ const generateValueCheckLines = (
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
     formats: ctx.formats,
+    hoistNamespace: ctx.hoistNamespace,
+    refGuard: ctx.refGuard,
+    namedMatchers: ctx.namedMatchers,
   }
 
   lines.push(...generateKeywordChecks('', raw, path, propSchema, suffix, valueCtx, presence))
@@ -1530,6 +1586,54 @@ const generateValueCheckLines = (
  * a `typeof` test in front of it means anything to the compiler.
  */
 const NARROWABLE_REFERENCE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[A-Za-z_$][\w$]*\]|\[\d+\])*$/
+
+/**
+ * A yes/no test for `sub` as a named function hoisted above the validator, or
+ * `'true'` when it accepts everything, or `null` when it cannot take that form.
+ *
+ * The test used to be an IIFE at every call site, `((): boolean => { … })()`,
+ * and JavaScriptCore allocates that closure on every call — about 50 ns a
+ * branch, which on a union-heavy document was a large share of validating it.
+ * A named function costs nothing to call. It is also emitted once per distinct
+ * subschema: the same branch tested by a union and by the walk that coerces into
+ * it is one function, called from both.
+ *
+ * `null` is a body that reports unconditionally (see {@link FailFast}): a
+ * `return false` there would leave the rest of it unreachable, so it keeps the
+ * buffered expression.
+ */
+const namedMatcher = (sub: JSONSchema, suffix: string, ctx: NestingContext): string | null => {
+  const key = JSON.stringify(sub)
+  const existing = ctx.namedMatchers.get(key)
+  if (existing !== undefined) return existing
+  const state: FailFast = { on: false, blocked: false }
+  const fnCtx: NestingContext = {
+    ...ctx,
+    objVar: 'obj',
+    pathPrefix: '${_path}',
+    depth: 0,
+    sink: MATCH_BOOL_SINK,
+    failFast: state,
+    branchErrors: false,
+  }
+  const checks = generateValueChecks('', 'input', '`${_path}`', sub, suffix, fnCtx, true)
+  if (checks.length === 0) return 'true'
+  if (state.blocked) return null
+  const body = checks.join('\n')
+  const name = `${hoistPrefix(ctx)}_match${ctx.namedMatchers.size}`
+  const declaration = [
+    `const ${name} = (${readsBinding('input', body) ? 'input' : '_input'}: unknown): boolean => {`,
+    // Some checks build a path for a key or an index before they know whether
+    // they fail. Nothing reports it here, so it is rooted at nothing.
+    ...(readsBinding('_path', body) ? [`  const _path = ''`] : []),
+    body,
+    `  return true`,
+    `}`,
+  ].join('\n')
+  ctx.namedMatchers.set(key, name)
+  ctx.hoisted.push({ declaration, reference: `${name}(`, calls: true })
+  return name
+}
 
 /**
  * A boolean expression that is `true` when `raw` matches `sub`. Reuses the value
@@ -1574,6 +1678,8 @@ const generateMatchesExpr = (
   const valuePath = branch === undefined ? '`${_path}`' : branch.path
   const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
   if (branch === undefined) {
+    const named = namedMatcher(sub, suffix, ctx)
+    if (named !== null) return named === 'true' ? 'true' : `${named}(${raw})`
     // Its own short-circuit state, so an unconditional report in here blocks this
     // expression alone. Branch errors are off because nothing here keeps any.
     const matchState: FailFast = { on: ctx.failFast.on, blocked: false }
@@ -1967,6 +2073,9 @@ const generateInlineObjectChecks = (
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
     formats: ctx.formats,
+    hoistNamespace: ctx.hoistNamespace,
+    refGuard: ctx.refGuard,
+    namedMatchers: ctx.namedMatchers,
   }
 
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
@@ -2026,6 +2135,9 @@ const generatePropertyNameChecks = (nameSchema: JSONSchema, suffix: string, ctx:
     rootSchema: ctx.rootSchema,
     sink: ctx.sink,
     formats: ctx.formats,
+    hoistNamespace: ctx.hoistNamespace,
+    refGuard: ctx.refGuard,
+    namedMatchers: ctx.namedMatchers,
   }
   const checks = generateValueChecks('', '_name', at, nameSchema, suffix, nameCtx, true)
   if (checks.length === 0) return []
@@ -3188,7 +3300,23 @@ export const generateBooleanGuard = (
   _suffix = '',
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats: ReadonlySet<string> = NO_FORMATS,
-): string => {
+): string => generateBooleanGuardSource(schema, typeName, unknownKeys, formats).code
+
+/**
+ * {@link generateBooleanGuard}, together with whether the guard it emitted stands
+ * on its own or falls back to calling `validateX`.
+ *
+ * The coercing half asks: it answers an already-valid document with one guard
+ * call, which is only a saving when the guard is a real fail-fast check. A
+ * fallback runs the whole validator and builds every error on the way to `false`,
+ * so there the coercer walks first instead.
+ */
+export const generateBooleanGuardSource = (
+  schema: JSONSchema,
+  typeName: string,
+  unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
+  formats: ReadonlySet<string> = NO_FORMATS,
+): { code: string; standalone: boolean } => {
   const name = guardName(typeName)
   const returns = typeDescribesEveryAcceptedValue(rewriteNullable(schema) as JSONSchema)
     ? `input is ${typeName}`
@@ -3211,16 +3339,16 @@ export const generateBooleanGuard = (
     // A `$ref`, a `const`/`enum` or an `x-mjst` hint beside the object keywords
     // is something the block form refuses too, so the answer is the fallback
     // either way — say so here rather than fall through to a leaf that would.
-    if (!objectRootIsSelfContained(rewritten)) return fallback
+    if (!objectRootIsSelfContained(rewritten)) return { code: fallback, standalone: false }
     const block = booleanObjectParts(rewritten, 'input', 'obj', ctx)
-    if (block === null) return fallback
+    if (block === null) return { code: fallback, standalone: false }
     // A guard that is one chain is the chain itself. One that hoists a nested
     // object or tests a key set is a sequence of early exits (see
     // {@link GuardBlock}), with `return true` once every test has passed.
     const body = isFlatGuardBlock(block)
       ? [`  return (`, block.conditions.map((part) => `    ${part}`).join(' &&\n'), `  )`]
       : [...renderGuardBlock(block, 'return false', '  ', 'lines', unknownKeys), `  return true`]
-    return [
+    const code = [
       `export const ${name} = (input: unknown): ${returns} => {`,
       // Same unused-local as the validator's hot guard: a node with no property
       // to read guards on the shape alone and never touches the narrowing.
@@ -3228,12 +3356,13 @@ export const generateBooleanGuard = (
       ...body,
       `}`,
     ].join('\n')
+    return { code, standalone: true }
   }
 
   // Non-object roots (scalar, enum, array) can often be expressed inline too.
   const expr = booleanLeafExpr(rewritten, 'input', ctx)
-  if (expr === null) return fallback
-  return `export const ${name} = (input: unknown): ${returns} => ${expr}`
+  if (expr === null) return { code: fallback, standalone: false }
+  return { code: `export const ${name} = (input: unknown): ${returns} => ${expr}`, standalone: true }
 }
 
 /**
@@ -3777,6 +3906,79 @@ export const generateCheckFunction = (
     `  return _r === true ? true : { valid: false, errors: _r.errors.slice(0, 1) }`,
     `}`,
   ].join('\n')
+}
+
+/**
+ * A yes/no matcher for subschemas, for generated code that has to ask "does this
+ * value satisfy that branch?" outside any validator body.
+ *
+ * The coercing half is the caller: a union only knows which branch a value was
+ * meant for by asking each branch, and the answer has to be the one `validateX`
+ * gives, or coercion would steer a value toward a branch the validator then
+ * rejects. So this hands out the very match expression the `anyOf` / `oneOf`
+ * emitters use, rather than a second opinion.
+ *
+ * Every expression built from one matcher shares one hoisted list, so the names
+ * it mints are unique across all of them; `hoistNamespace` keeps those names
+ * apart from the validator's own in the same module. `declarations` returns the
+ * hoisted lines a finished text actually reads, pruned the way
+ * {@link withHoisted} prunes a validator's.
+ */
+export const createSubschemaMatcher = (
+  suffix: string,
+  rootSchema: Record<string, unknown> | undefined,
+  formats: ReadonlySet<string>,
+  hoistNamespace: string,
+  refGuard: (typeName: string) => string = guardName,
+): {
+  /**
+   * The test for `sub` as the body of a function whose parameter is `input` —
+   * statements that `return false` at the first failure and `true` at the end —
+   * or a constant when the answer never depends on the value.
+   *
+   * A body rather than an expression because an expression here is an IIFE, and
+   * JavaScriptCore allocates the closure on every call: roughly 50 ns per branch
+   * tested, which on a union-heavy document was most of what coercing it cost.
+   */
+  test: (sub: JSONSchema) => boolean | string
+  /**
+   * The same test as a named function, hoisted with the rest and shared with
+   * every other test of the same subschema in this file — or a constant, or
+   * `null` for a body only the buffered form of {@link test} can express.
+   */
+  named: (sub: JSONSchema) => boolean | string | null
+  declarations: (text: string) => string[]
+} => {
+  const ctx: NestingContext = { ...createRootContext(rootSchema, formats), hoistNamespace, refGuard }
+  return {
+    test: (sub) => {
+      if (sub === false) return false
+      const rewritten = rewriteNullable(sub) as JSONSchema
+      const state: FailFast = { on: false, blocked: false }
+      // `required`: the caller hands over a value it already has, so an
+      // `undefined` is judged rather than waved through as an absent property.
+      const checks = generateValueChecks(
+        '',
+        'input',
+        '`${_path}`',
+        rewritten,
+        suffix,
+        { ...ctx, sink: MATCH_BOOL_SINK, failFast: state, branchErrors: false },
+        true,
+      )
+      if (checks.length === 0) return true
+      if (!state.blocked) return `${checks.join('\n')}\n  return true`
+      // A body that reports unconditionally cannot take the early-return form
+      // (see {@link FailFast}), so it keeps the buffered expression.
+      return `  return ${generateMatchesExpr('input', rewritten, suffix, ctx, true)}`
+    },
+    named: (sub) => {
+      if (sub === false) return false
+      const name = namedMatcher(rewriteNullable(sub) as JSONSchema, suffix, ctx)
+      return name === 'true' ? true : name
+    },
+    declarations: (text) => keptHoisted(ctx.hoisted, text),
+  }
 }
 
 /** The body of both halves: the same emitters, told which shape to take. */

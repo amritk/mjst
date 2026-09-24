@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { generate } from '@amritk/validation'
 import { TypeCompiler } from '@sinclair/typebox/compiler'
 import Ajv from 'ajv'
 import addFormats from 'ajv-formats'
 
-import { buildValidatorSchema } from '../../src/validators/index.ts'
 import { opsCell } from './measure.ts'
 import { BENCH_CASES } from './schemas.ts'
 import { LIBRARY_IDS, LIBRARY_LABELS, LIBRARY_PRELOADS, type LibraryId } from './validators.ts'
@@ -120,7 +120,7 @@ const run = async (): Promise<void> => {
 
     // Cold "prepare a validator" cost. Cheap and order-insensitive, so it stays
     // in-process rather than paying a spawn per measurement.
-    const mjstGen = await prepareMs(() => buildValidatorSchema(benchCase.schema, benchCase.typeName))
+    const mjstGen = await prepareMs(() => generate(benchCase.schema, benchCase.typeName))
     const ajvCompile = await prepareMs(() => makeAjv().compile(benchCase.schema as object))
     const typeboxCompile = await prepareMs(() => TypeCompiler.Compile(benchCase.typebox))
     console.log('\n  prepare-a-validator cost (one-shot):')

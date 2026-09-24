@@ -57,6 +57,59 @@ const stringifyScalars = (value: unknown): unknown => {
 }
 
 /**
+ * A hand-written config schema of the kind `--coerce` exists for: definitions
+ * reached through `$ref`, each an `anyOf` of a short string form and a long
+ * object form, an `allOf` extending one of them, and an option whose `false`
+ * means "off" beside a string branch.
+ *
+ * It is the shape the object cases above cannot show: every coercible scalar sits
+ * inside a union branch, where the value can only be coerced once the branch it
+ * was meant for is known.
+ */
+const configSchema: JSONSchema = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    get: { $ref: '#/$defs/method' },
+    post: { $ref: '#/$defs/method' },
+    upload: {
+      allOf: [
+        { $ref: '#/$defs/method' },
+        { anyOf: [{ type: 'string' }, { type: 'object', properties: { maxBytes: { type: 'integer' } } }] },
+      ],
+    },
+    webhookKeyOpt: { anyOf: [{ type: 'string' }, { const: false }] },
+  },
+  required: ['name'],
+  $defs: {
+    method: {
+      anyOf: [
+        { type: 'string' },
+        {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            endpoint: { type: 'string' },
+            retries: { type: 'integer', minimum: 0 },
+            timeout: { type: 'number' },
+            skip: { type: 'boolean' },
+          },
+          required: ['enabled'],
+        },
+      ],
+    },
+  },
+}
+
+const configValid = {
+  name: 'api',
+  get: { enabled: true, endpoint: '/items', retries: 3, timeout: 2.5, skip: false },
+  post: { enabled: false, retries: 0 },
+  upload: { enabled: true, endpoint: '/upload', maxBytes: 1048576 },
+  webhookKeyOpt: 'signing-key',
+}
+
+/**
  * The cases worth running head-to-head: a flat object, a nested one with an
  * array of objects, and the moltar shape the rest of the bench suite reports
  * against. The frozen and closed variants in {@link BENCH_CASES} are left out —
@@ -65,15 +118,25 @@ const stringifyScalars = (value: unknown): unknown => {
  */
 const CASE_NAMES = ['small (4 fields)', 'order (nested + array)', 'assert-loose'] as const
 
-export const COERCE_CASES: readonly CoerceCase[] = CASE_NAMES.map((name) => {
-  const benchCase = BENCH_CASES.find((candidate) => candidate.name === name)
-  if (!benchCase) throw new Error(`unknown bench case: ${name}`)
-  return {
-    name,
-    typeName: benchCase.typeName,
-    schema: benchCase.schema,
-    clean: benchCase.valid,
-    coercible: stringifyScalars(benchCase.valid),
-    unrepairable: benchCase.invalid,
-  }
-})
+export const COERCE_CASES: readonly CoerceCase[] = [
+  ...CASE_NAMES.map((name) => {
+    const benchCase = BENCH_CASES.find((candidate) => candidate.name === name)
+    if (!benchCase) throw new Error(`unknown bench case: ${name}`)
+    return {
+      name,
+      typeName: benchCase.typeName,
+      schema: benchCase.schema,
+      clean: benchCase.valid,
+      coercible: stringifyScalars(benchCase.valid),
+      unrepairable: benchCase.invalid,
+    }
+  }),
+  {
+    name: 'config (unions via $ref)',
+    typeName: 'Config',
+    schema: configSchema,
+    clean: configValid,
+    coercible: stringifyScalars(configValid),
+    unrepairable: { ...configValid, get: { enabled: 'maybe', retries: 'many' } },
+  },
+]

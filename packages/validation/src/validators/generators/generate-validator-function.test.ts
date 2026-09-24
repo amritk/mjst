@@ -2024,7 +2024,11 @@ describe('generate-validator-function', () => {
         },
       }
       const code = generateValidatorFunction(schema, 'Root')
-      expect(code).not.toContain('const _m')
+      expect(code).not.toContain('const _m:')
+      // A named function rather than an IIFE at the call site, whose closure
+      // JavaScriptCore would allocate on every call.
+      expect(code).not.toContain('((): boolean =>')
+      expect(code).toContain('const _match0 = (input: unknown): boolean => {')
       const v = evalValidator(code)
       expect(v({ u: 'ab' })).toBe(true)
       expect(v({ u: 3 })).toBe(true)

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { generate } from '@amritk/validation'
 
-import { buildSchema } from '../../src/parsers/index.ts'
 import { opsCell } from './measure.ts'
 import { LIBRARY_IDS, LIBRARY_LABELS, type LibraryId } from './parsers.ts'
 import { PARSE_CASES } from './schemas.ts'
@@ -112,18 +112,13 @@ const run = async (): Promise<void> => {
     // Cold "prepare a parser" cost. Only mjst has a build step (codegen); zod and
     // TypeBox author/interpret with no compile, so there is nothing to time.
     const mjstGen = await prepareMs(() =>
-      buildSchema(
-        parseCase.schema,
-        parseCase.typeName,
-        undefined,
-        false,
-        false,
-        true,
-        'package',
-        './',
-        false,
-        parseCase.mode === 'safe',
-      ),
+      // Through the package entry, so the bench runs under Node too: Bun resolves
+      // it to the sources, Node to the built `dist`.
+      generate(parseCase.schema, parseCase.typeName, {
+        modes: ['types', 'parseStrict'],
+        helpersMode: 'package',
+        stripUnknown: parseCase.mode === 'safe',
+      }),
     )
     console.log('\n  prepare-a-parser cost (one-shot):')
     console.log(`    mjst codegen (source)   ${mjstGen.toFixed(3)} ms`)

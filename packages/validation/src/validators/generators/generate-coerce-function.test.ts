@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
+import { buildValidatorSchema } from './build-schema'
 import { evaluateGenerated } from './evaluate-generated.test-utils'
 import { generateCoerceFunction } from './generate-coerce-function'
 import { generateValidatorFunction } from './generate-validator-function'
+import { linkGenerated } from './link-generated.test-utils'
 
 type Coerced = { valid: true; value: unknown } | { valid: false; errors: { path: string; keyword: string }[] }
 
@@ -12,6 +14,14 @@ const compile = (schema: Record<string, unknown>): ((input: unknown) => Coerced)
     generateValidatorFunction(schema as never, 'Root') + '\n\n' + generateCoerceFunction(schema as never, 'Root').code
   return evaluateGenerated(code)['coerceRoot'] as (input: unknown) => Coerced
 }
+
+/** The whole generated file set, linked, for a schema whose `$ref`s cross files. */
+const compileLinked = async (schema: Record<string, unknown>): Promise<(input: unknown) => Coerced> =>
+  linkGenerated(
+    await buildValidatorSchema(schema as never, 'Root', '', undefined, undefined, undefined, true),
+    'index',
+    'coerceRoot',
+  )
 
 describe('generate-coerce-function', () => {
   it('coerces a scalar property toward the type the schema declares', () => {
@@ -178,22 +188,246 @@ describe('generate-coerce-function', () => {
     })
   })
 
-  it('leaves a union it cannot reason about alone', () => {
-    // A branch carrying a `$ref` or a nested combinator is a shape this cannot
-    // enumerate candidates for, so the whole position is declined rather than
-    // coerced toward the branches it *can* read. (Asserted on the emitted code:
-    // a `$ref` compiles to a call into a sibling file, which the single-function
-    // harness does not build.)
+  // The shape that motivated union coercion: `plain` and `inUnion.enabled` are
+  // the same `{ type: 'boolean' }`, and only one of them sat under an `anyOf`.
+  // Through a `$ref`, so the branch test has to cross a file the same way the
+  // validator does.
+  it('coerces a scalar inside an object branch of a union', async () => {
+    const coerce = await compileLinked({
+      type: 'object',
+      properties: { plain: { type: 'boolean' }, inUnion: { $ref: '#/$defs/method' } },
+      $defs: {
+        method: {
+          anyOf: [
+            { type: 'string' },
+            {
+              type: 'object',
+              properties: { enabled: { type: 'boolean' }, endpoint: { type: 'string' } },
+              required: ['enabled'],
+            },
+          ],
+        },
+      },
+    })
+
+    expect(coerce({ plain: 'true' })).toEqual({ valid: true, value: { plain: true } })
+    expect(coerce({ inUnion: { enabled: 'true' } })).toEqual({ valid: true, value: { inUnion: { enabled: true } } })
+    expect(coerce({ inUnion: { enabled: true, endpoint: 42 } })).toEqual({
+      valid: true,
+      value: { inUnion: { enabled: true, endpoint: '42' } },
+    })
+    expect(coerce({ inUnion: 7 })).toEqual({ valid: true, value: { inUnion: '7' } })
+  })
+
+  // Coercing eagerly into the first branch is Ajv's behaviour, and it answers
+  // `"false"` here: the string branch takes the coerced value, and the `const`
+  // branch written for exactly this input is never reached. A config reading
+  // `keyOpt === false` then sees a truthy string.
+  it('prefers a branch that matches as written over coercing into an earlier one', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: { keyOpt: { anyOf: [{ type: 'string' }, { const: false }] } },
+    })
+
+    expect(coerce({ keyOpt: false })).toEqual({ valid: true, value: { keyOpt: false } })
+    expect(coerce({ keyOpt: 5 })).toEqual({ valid: true, value: { keyOpt: '5' } })
+  })
+
+  it('coerces through a union nested inside a union', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: {
+        auth: {
+          anyOf: [
+            { type: 'string' },
+            {
+              type: 'object',
+              properties: {
+                token: {
+                  anyOf: [{ const: false }, { type: 'object', properties: { ttl: { type: 'integer' } } }],
+                },
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    expect(coerce({ auth: { token: { ttl: '60' } } })).toEqual({ valid: true, value: { auth: { token: { ttl: 60 } } } })
+    // The inner union's `const` branch still wins as written, one level down.
+    expect(coerce({ auth: { token: false } })).toEqual({ valid: true, value: { auth: { token: false } } })
+    expect(coerce({ auth: 3 })).toEqual({ valid: true, value: { auth: '3' } })
+  })
+
+  it('judges a branch by all of its keywords, not only its type', () => {
+    // `"7"` is already a string, but not one the string branch takes, so the
+    // number branch is the only reading left.
+    const coerce = compile({
+      type: 'object',
+      properties: { d: { anyOf: [{ type: 'string', minLength: 3 }, { type: 'number' }] } },
+    })
+
+    expect(coerce({ d: '7' })).toEqual({ valid: true, value: { d: 7 } })
+    expect(coerce({ d: 'seven' })).toEqual({ valid: true, value: { d: 'seven' } })
+  })
+
+  it('coerces through oneOf the same way', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: {
+        d: {
+          oneOf: [
+            { type: 'object', properties: { kind: { const: 'a' }, n: { type: 'integer' } }, required: ['kind'] },
+            { type: 'object', properties: { kind: { const: 'b' }, n: { type: 'boolean' } }, required: ['kind'] },
+          ],
+        },
+      },
+    })
+
+    expect(coerce({ d: { kind: 'a', n: '2' } })).toEqual({ valid: true, value: { d: { kind: 'a', n: 2 } } })
+    expect(coerce({ d: { kind: 'b', n: 'true' } })).toEqual({ valid: true, value: { d: { kind: 'b', n: true } } })
+  })
+
+  // The tie-break, and it is observable. Two branches coercing the same input
+  // into two different values are two readings of what the caller meant; picking
+  // the first-declared one would make the answer depend on the order the union
+  // was written in, which `coerceUnion` already refuses to do for scalars.
+  it('declines when the branches disagree, and reports the value as written', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: {
+        d: {
+          anyOf: [
+            { type: 'object', properties: { a: { type: 'integer' } }, required: ['a'] },
+            { type: 'object', properties: { b: { type: 'boolean' } }, required: ['b'] },
+          ],
+        },
+      },
+    })
+
+    // Branch one makes `a` a number, branch two makes `b` a boolean, and each
+    // result satisfies its own branch. Neither is more right than the other.
+    const result = coerce({ d: { a: '1', b: 'true' } })
+
+    expect(result.valid).toBe(false)
+    // Either branch alone is unambiguous.
+    expect(coerce({ d: { a: '1' } })).toEqual({ valid: true, value: { d: { a: 1 } } })
+    expect(coerce({ d: { b: 'true' } })).toEqual({ valid: true, value: { d: { b: true } } })
+  })
+
+  it('takes a coercion two branches agree on', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: {
+        d: {
+          anyOf: [
+            { type: 'object', properties: { port: { type: 'integer' }, host: { type: 'string' } }, required: ['host'] },
+            { type: 'object', properties: { port: { type: 'integer' }, path: { type: 'string' } }, required: ['path'] },
+          ],
+        },
+      },
+    })
+
+    expect(coerce({ d: { port: '80', host: 'a', path: 'b' } })).toEqual({
+      valid: true,
+      value: { d: { port: 80, host: 'a', path: 'b' } },
+    })
+  })
+
+  it('takes a scalar coercion two offered types agree on', () => {
+    // Both readings of `"1"` are the number `1`, so there is nothing to choose
+    // between. Counting them as two answers declined a value with only one.
+    const coerce = compile({
+      type: 'object',
+      properties: { d: { anyOf: [{ type: 'number' }, { type: 'integer' }] }, e: { type: ['number', 'integer'] } },
+    })
+
+    expect(coerce({ d: '1', e: '2' })).toEqual({ valid: true, value: { d: 1, e: 2 } })
+  })
+
+  // The usual way to extend a definition. Every subschema has to hold, so each
+  // one's coercion is something the validator requires anyway.
+  it('coerces through every subschema of an allOf', async () => {
+    const coerce = await compileLinked({
+      type: 'object',
+      properties: {
+        server: {
+          allOf: [{ $ref: '#/$defs/base' }, { type: 'object', properties: { retries: { type: 'integer' } } }],
+        },
+      },
+      $defs: { base: { type: 'object', properties: { enabled: { type: 'boolean' } } } },
+    })
+
+    expect(coerce({ server: { enabled: 'true', retries: '3' } })).toEqual({
+      valid: true,
+      value: { server: { enabled: true, retries: 3 } },
+    })
+  })
+
+  it('coerces toward then when the value matches if, and toward else when it does not', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: {
+        auth: {
+          type: 'object',
+          properties: { kind: { type: 'string' } },
+          if: { properties: { kind: { const: 'token' } }, required: ['kind'] },
+          then: { properties: { ttl: { type: 'integer' } } },
+          else: { properties: { ttl: { type: 'boolean' } } },
+        },
+      },
+    })
+
+    expect(coerce({ auth: { kind: 'token', ttl: '60' } })).toEqual({
+      valid: true,
+      value: { auth: { kind: 'token', ttl: 60 } },
+    })
+    expect(coerce({ auth: { kind: 'basic', ttl: 'false' } })).toEqual({
+      valid: true,
+      value: { auth: { kind: 'basic', ttl: false } },
+    })
+  })
+
+  // `if` is read on the value after the node's own properties were coerced,
+  // since that is the value the validator reads it on.
+  it('judges if on the value its properties were coerced into', () => {
+    const coerce = compile({
+      type: 'object',
+      properties: { enabled: { type: 'boolean' } },
+      if: { properties: { enabled: { const: true } }, required: ['enabled'] },
+      then: { properties: { port: { type: 'integer' } } },
+    })
+
+    expect(coerce({ enabled: 'true', port: '80' })).toEqual({ valid: true, value: { enabled: true, port: 80 } })
+    expect(coerce({ enabled: 'false', port: '80' })).toEqual({ valid: true, value: { enabled: false, port: '80' } })
+  })
+
+  it('coerces the keywords beside a $ref as well as the target', async () => {
+    const coerce = await compileLinked({
+      type: 'object',
+      properties: { d: { $ref: '#/$defs/base', properties: { extra: { type: 'number' } } } },
+      $defs: { base: { type: 'object', properties: { flag: { type: 'boolean' } } } },
+    })
+
+    expect(coerce({ d: { flag: 'true', extra: '1.5' } })).toEqual({
+      valid: true,
+      value: { d: { flag: true, extra: 1.5 } },
+    })
+  })
+
+  it('emits no union walk when a branch accepts anything', () => {
     const { code } = generateCoerceFunction(
       {
         type: 'object',
-        properties: { d: { anyOf: [{ type: 'string' }, { $ref: '#/$defs/other' }] } },
+        properties: { d: { anyOf: [{ type: 'object', properties: { n: { type: 'integer' } } }, {}] } },
       } as never,
       'Root',
     )
 
-    expect(code).not.toContain('coerceUnion(')
+    // `{}` takes every value as written, so nothing under this union is ever
+    // coerced — and no branch test is left behind unread.
     expect(code).toContain('export const coerceRootValue = (input: unknown): unknown => input')
+    expect(code).not.toContain('_matches')
   })
 
   it('emits no walk at all for a schema with nothing to coerce', () => {

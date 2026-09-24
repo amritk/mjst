@@ -71,7 +71,40 @@ export type CoercionResult<T> = { valid: true; value: T } | { valid: false; erro
  * than rejecting it. Leading zeros (\`"007"\`) and exponents (\`"1e3"\`) stay: both
  * are ordinary ways to write a number in a YAML file, and neither is ambiguous.
  */
-const NUMERIC_STRING = /^[+-]?(?:\\d+|\\d*\\.\\d+)(?:[eE][+-]?\\d+)?$/
+const isNumericString = (text: string): boolean => {
+  // \`/^[+-]?(?:\\d+|\\d*\\.\\d+)(?:[eE][+-]?\\d+)?$/\`, walked by hand. The regex
+  // cost more than the rest of a number coercion put together — a string past
+  // its end reads \`NaN\` from \`charCodeAt\`, which fails every test below, so
+  // the scan needs no bounds checks of its own.
+  let i = 0
+  let c = text.charCodeAt(0)
+  if (c === 43 || c === 45) c = text.charCodeAt(++i)
+  let digits = 0
+  while (c >= 48 && c <= 57) {
+    digits++
+    c = text.charCodeAt(++i)
+  }
+  if (c === 46) {
+    c = text.charCodeAt(++i)
+    let fraction = 0
+    while (c >= 48 && c <= 57) {
+      fraction++
+      c = text.charCodeAt(++i)
+    }
+    if (fraction === 0) return false
+  } else if (digits === 0) return false
+  if (c === 101 || c === 69) {
+    c = text.charCodeAt(++i)
+    if (c === 43 || c === 45) c = text.charCodeAt(++i)
+    let exponent = 0
+    while (c >= 48 && c <= 57) {
+      exponent++
+      c = text.charCodeAt(++i)
+    }
+    if (exponent === 0) return false
+  }
+  return i === text.length
+}
 
 /**
  * One scalar, coerced toward \`type\`, or returned untouched when that is not
@@ -93,7 +126,7 @@ const NUMERIC_STRING = /^[+-]?(?:\\d+|\\d*\\.\\d+)(?:[eE][+-]?\\d+)?$/
  *    JSON value in its own right and usually means "not set"; turning it into an
  *    empty string, or an empty string into it, loses the distinction the document
  *    drew.
- *  - **Strings that are not cleanly numeric** ({@link NUMERIC_STRING}) — no
+ *  - **Strings that are not cleanly numeric** ({@link isNumericString}) — no
  *    whitespace padding, no \`0x\`/\`0o\`/\`0b\`, no \`Infinity\`, no trailing \`.\`.
  */
 export const coerceScalar = (value: unknown, type: string): unknown => {
@@ -103,7 +136,7 @@ export const coerceScalar = (value: unknown, type: string): unknown => {
     case 'number':
     case 'integer': {
       if (typeof value === 'boolean') return value ? 1 : 0
-      if (typeof value !== 'string' || !NUMERIC_STRING.test(value)) return value
+      if (typeof value !== 'string' || !isNumericString(value)) return value
       const asNumber = Number(value)
       if (!Number.isFinite(asNumber)) return value
       return type === 'integer' && asNumber % 1 !== 0 ? value : asNumber
@@ -119,7 +152,8 @@ export const coerceScalar = (value: unknown, type: string): unknown => {
 
 /**
  * One scalar at a position that offers several types — a \`type\` array, or a
- * union of scalar branches — coerced only when exactly one of them can take it.
+ * union of scalar branches — coerced only when every type that can take it
+ * agrees on the result.
  *
  * A value whose type is already one of the offered types is left alone: it is
  * what the schema asked for, and the question of coercion does not arise. That
@@ -128,10 +162,11 @@ export const coerceScalar = (value: unknown, type: string): unknown => {
  * leaving it a string under \`["string", "number"]\`. The answer should not depend
  * on the order someone wrote the union in.
  *
- * Otherwise every offered type is tried, and the coercion is taken only if it is
- * the only one that succeeds. \`true\` against \`number | string\` could be \`1\` or
- * \`"true"\` with equal justification, so it stays \`true\` and the validator says
- * what is wrong with it.
+ * Otherwise every offered type is tried, and the coercion is taken only if the
+ * types that succeed all agree on it. \`true\` against \`number | string\` could be
+ * \`1\` or \`"true"\` with equal justification, so it stays \`true\` and the
+ * validator says what is wrong with it. \`"1"\` against \`number | integer\` is \`1\`
+ * either way, so it is \`1\`.
  */
 export const coerceUnion = (value: unknown, types: readonly string[]): unknown => {
   const actual = value === null ? 'null' : typeof value
@@ -142,14 +177,13 @@ export const coerceUnion = (value: unknown, types: readonly string[]): unknown =
   }
 
   let coerced: unknown = value
-  let found = 0
   for (const type of types) {
     const candidate = coerceScalar(value, type)
     if (candidate === value) continue
-    coerced = candidate
-    found++
+    if (coerced === value) coerced = candidate
+    else if (candidate !== coerced) return value
   }
-  return found === 1 ? coerced : value
+  return coerced
 }
 
 /**

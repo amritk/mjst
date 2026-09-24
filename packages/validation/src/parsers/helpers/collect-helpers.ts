@@ -1,5 +1,5 @@
 /** Names (without `.ts`) of runtime helpers that can be embedded into generated output. */
-export type RuntimeHelperName = 'is-object' | 'validate-array' | 'validate-record' | 'has-ref'
+export type RuntimeHelperName = 'is-object' | 'validate-array' | 'validate-record' | 'has-ref' | 'coercion-runtime'
 
 /** Controls how generated parsers reference their runtime helpers. */
 export type HelpersMode = 'package' | 'embedded'
@@ -21,6 +21,9 @@ const PACKAGE_IMPORTS: Record<RuntimeHelperName, string> = {
   'validate-record': "import { validateRecord } from '@amritk/helpers/validate-record';",
   // hasRef has historically lived in the schema-guards subpath; preserve that for package mode.
   'has-ref': "import { hasRef } from '@amritk/helpers/schema-guards';",
+  // Never used: the coercion runtime exports several functions and a file imports
+  // only the ones it calls, so its line is built per file (see below).
+  'coercion-runtime': '',
 }
 
 const EMBEDDED_NAMED_EXPORTS: Record<RuntimeHelperName, string> = {
@@ -28,7 +31,23 @@ const EMBEDDED_NAMED_EXPORTS: Record<RuntimeHelperName, string> = {
   'validate-array': 'validateArray',
   'validate-record': 'validateRecord',
   'has-ref': 'hasRef',
+  'coercion-runtime': '',
 }
+
+/**
+ * The functions the exact, coercing half of a parser file can call, all from
+ * `@amritk/helpers/coercion-runtime`. A file imports only the ones it spells:
+ * an unused import is `TS6133` for a consumer with `noUnusedLocals`.
+ */
+const COERCION_RUNTIME = [
+  'coerceScalar',
+  'coerceUnion',
+  'valuesEqual',
+  'allUnique',
+  'everyItem',
+  'escapePointer',
+] as const
+const COERCION_RUNTIME_USAGE = /\b(coerceScalar|coerceUnion|valuesEqual|allUnique|everyItem|escapePointer)\(/g
 
 const embeddedImport = (helper: RuntimeHelperName, prefix: string, ext: 'js' | 'ts'): string =>
   // An explicit extension so the embedded-helper import resolves under Node ESM, not only Bun.
@@ -99,6 +118,25 @@ export const collectHelpers = (
   if (sawHasRef) {
     imports.push(importFor('has-ref'))
     used.add('has-ref')
+  }
+
+  const runtime = new Set<string>()
+  COERCION_RUNTIME_USAGE.lastIndex = 0
+  for (
+    let hit = COERCION_RUNTIME_USAGE.exec(parserFunction);
+    hit !== null;
+    hit = COERCION_RUNTIME_USAGE.exec(parserFunction)
+  ) {
+    runtime.add(hit[1] as string)
+  }
+  if (runtime.size > 0) {
+    const names = COERCION_RUNTIME.filter((name) => runtime.has(name)).join(', ')
+    imports.push(
+      mode === 'embedded'
+        ? `import { ${names} } from '${helpersImportPrefix}_helpers/coercion-runtime.${importExt}';`
+        : `import { ${names} } from '@amritk/helpers/coercion-runtime';`,
+    )
+    used.add('coercion-runtime')
   }
 
   return { imports, used }

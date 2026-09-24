@@ -70,7 +70,7 @@ bun add @amritk/helpers
 |:---|:---|:---|
 | `@amritk/helpers/generate-type-definition` | `generateTypeDefinition` | Render a TypeScript type from a schema node. |
 | `@amritk/helpers/mjst-extension` | `MJST_EXTENSION_KEY`, `getMjstInstanceOf`, `getMjstPrimitive`, `getMjstBrand` | Read the `x-mjst` vendor hints (`instanceOf`, `primitive`, `brand`) a schema carries. |
-| `@amritk/helpers/generate-index-barrel` | `generateIndexBarrel` | Render the `index.ts` barrel that re-exports every generated file. |
+| `@amritk/helpers/generate-index-barrel` | `generateIndexBarrel` | Render the `index.ts` barrel that re-exports every generated file. A name starting with `_` is for sibling files only and is left out. |
 | `@amritk/helpers/escape-regex-pattern` | `escapeRegexPattern`, `regexFlagsFor`, `regexLiteral` | Embed a JSON Schema `pattern` in a generated regex literal, validating it at generation time. |
 | `@amritk/helpers/quote-js-string` | `quoteJsString` | Quote a string as a JS literal, escaping only when needed. |
 | `@amritk/helpers/multiple-of-check` | `multipleOfPassExpr`, `multipleOfFailExpr` | Emit a `multipleOf` check that agrees with the runtime interpreter. |
@@ -84,6 +84,7 @@ bun add @amritk/helpers
 
 | Subpath | Exports | Purpose |
 |:---|:---|:---|
+| `@amritk/helpers/coercion-runtime` | `coerceScalar`, `coerceUnion`, `valuesEqual`, `allUnique`, `everyItem`, `escapePointer` | The validator's coercion and matching runtime, byte-identical to the copy in a validator build's `validation-result.ts`, for a coercing parser that has to agree with `coerceX`. |
 | `@amritk/helpers/is-object` | `isObject` | Narrow `unknown` → `Record<string, unknown>`. |
 | `@amritk/helpers/has-ref` | `hasRef` | Narrow a value to an object carrying a string `$ref`. |
 | `@amritk/helpers/validate-array` | `validateArray` | Validate array shape and items. |

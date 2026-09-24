@@ -161,6 +161,25 @@ and **rejects** undeclared keys (zod's `.strict()`):
 
 <sub>mjst parses in `strict` mode throughout (throwing on a type mismatch like the others), adding `stripUnknown` for parseSafe and `additionalProperties: false` for parseStrict; zod uses `.object`/`.strictObject` and TypeBox a `Clean+Assert`/`Assert` pipeline. Parity — identical parsed output, and rejection of every wrong-typed (and, in strict mode, extra-keyed) sample — is asserted before timing. ajv (`removeAdditional`) and typia (`assertPrune`) are excluded because they strip by mutating the input in place rather than returning a new value, which a reused input pool can't measure fairly. Reproduce with `cd packages/validation && bun run bench:parsers` (Bun) or `bun run bench:parsers:node` (Node). Unlike the validator table, the generated parser leads every case on both engines. ³ A strip parse of four declared keys builds one small object and nothing else, which is fast enough that the engine's inlining rather than the parser sets the number — read those cells as ratios.</sub>
 
+**Coercion** (`--coerce`) replaces Ajv compiled with `{ allErrors: true,
+coerceTypes: true }` — the usual way to read a YAML config or a query string
+whose numbers and booleans arrived as strings. Ajv coerces in place, so it is
+timed cloning its input first; `coerceX` never modifies its input, and hands a
+valid one straight back. How many times faster `coerceX` is:
+
+| schema | runtime | valid input | needs coercing | cannot be coerced |
+|:--|:--|--:|--:|--:|
+| small (4 fields) | Bun | 5.4× | 1.7× | 1.5× |
+| small (4 fields) | Node | 9.9× | 2.1× | 2.2× |
+| order (nested + array) | Bun | 11× | 1.6× | 1.9× |
+| order (nested + array) | Node | 8.4× | 1.8× | 2.2× |
+| assert-loose | Bun | 19× | 1.4× | 3.0× |
+| assert-loose | Node | 36× | 1.6× | 3.1× |
+| config (unions via `$ref`) | Bun | 7.2× | 1.7× | 3.7× |
+| config (unions via `$ref`) | Node | 5.2× | 1.5× | 4.6× |
+
+<sub>Bun 1.3.11 and Node 22.22 on Linux x64, each engine timed in its own process. Reproduce with `cd packages/validation && bun run bench:validators:coerce` (Bun) or `bun run bench:validators:coerce:node` (Node). Timed without the clone, on valid input where Ajv rewrites nothing, `coerceX` is still 1.2–3.3× ahead. It is also stricter where Ajv guesses — no `null` read as `""`/`0`/`false`, no `" "` read as `0` — and coerces inside `anyOf`/`oneOf`/`allOf`/`if` without Ajv's first-branch-wins rewrites; see [Moving off Ajv](./packages/validation/README.md#moving-off-ajv).</sub>
+
 ---
 
 ## Quick start

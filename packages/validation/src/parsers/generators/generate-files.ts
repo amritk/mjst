@@ -9,6 +9,7 @@ import {
 } from '#parsers/helpers/collect-helpers'
 import { collectImports, collectImportTypeNames, type ImportExtension } from '#parsers/helpers/collect-imports'
 
+import { type ExactHalf, exactHalfImports, repairParserName } from './generate-exact-half'
 import { generateParserFunction, generateShapeValidator } from './generate-parser-function'
 
 /**
@@ -108,6 +109,13 @@ type GenerateFileOptions = {
    * {@link UnknownKeysStrategy} for the trade-off between the two.
    */
   readonly unknownKeys?: UnknownKeysStrategy
+  /**
+   * The exact, coercing half this definition carries, planned across the whole
+   * build by `planExactHalves`: a coercing parser that agrees with `coerceX` on
+   * every document `coerceX` accepts. Absent for a strict, stripping or
+   * types-only build, and for a definition that needs none.
+   */
+  readonly exactHalf?: ExactHalf
 }
 
 /** Result of generating a single parser file. */
@@ -214,7 +222,9 @@ export const generateFile = (
     reservedNames,
     unknownKeys,
   )
+  const exactHalf = options?.exactHalf
   const parserFunction = generateParserFunction(schema, typeName, {
+    ...(exactHalf?.wrap === true ? { entryName: repairParserName(typeName) } : {}),
     useRefImports: true,
     typeSuffix,
     reservedNames,
@@ -227,7 +237,8 @@ export const generateFile = (
     ...(options?.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
     ...(options?.caseInsensitive !== undefined ? { caseInsensitive: options.caseInsensitive } : {}),
   })
-  const combinedFunctions = `${shapeValidator}\n\n${parserFunction}`
+  const combinedFunctions =
+    `${shapeValidator}\n\n${parserFunction}` + (exactHalf === undefined ? '' : `\n\n${exactHalf.code}`)
   const helpers: CollectedHelpers = collectHelpers(
     combinedFunctions,
     helpersMode,
@@ -245,6 +256,13 @@ export const generateFile = (
       // the functions the emitted code calls are one question about one text.
       usedIn: typeDefinition + '\n\n' + combinedFunctions,
     }),
+    ...(exactHalf === undefined
+      ? []
+      : exactHalfImports(schema, exactHalf.code, {
+          ...(options?.selfFilename !== undefined ? { selfFilename: options.selfFilename } : {}),
+          typeSuffix,
+          importExt,
+        })),
     ...helpers.imports,
   ]
 

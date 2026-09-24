@@ -75,8 +75,24 @@ describe('generate-parser-function', () => {
 
     const result = generateParserFunction(schema, 'StringType')
     expect(result).toBe(
-      'export const parseStringType = (input: unknown): StringType => typeof input === "string" ? input as StringType : "" as StringType;',
+      'export const parseStringType = (input: unknown): StringType => (typeof input === "string" ? input : (input !== undefined ? String(input) : "")) as StringType;',
     )
+  })
+
+  // A scalar definition coerces the way a property of the same type does. It
+  // used to repair `"-1"` to `0` through a `$ref` to `{ type: 'number' }` while
+  // the same schema inline as a property coerced it to `-1`.
+  it('coerces a scalar definition the way it coerces a property of that type', () => {
+    const parse = (type: string) =>
+      evalGenerated<(input: unknown) => unknown>(generateParserFunction({ type } as JSONSchema, 'T'), 'parseT')
+
+    expect(parse('number')('-1')).toBe(-1)
+    expect(parse('integer')('7')).toBe(7)
+    expect(parse('boolean')('true')).toBe(true)
+    expect(parse('string')(5)).toBe('5')
+    // A missing value takes the type's default, not a stringified `undefined`.
+    expect(parse('string')(undefined)).toBe('')
+    expect(parse('number')(undefined)).toBe(0)
   })
 
   it('handles schema with required fields', () => {

@@ -239,6 +239,23 @@ describe('coerced-vs-ajv', () => {
     }
   })
 
+  // The numeric-string grammar is scanned by hand because the regex was the
+  // single most expensive thing a number coercion did. The regex stays here as
+  // the specification, and the scan has to accept exactly what it accepts.
+  it('reads a numeric string exactly as the grammar says', () => {
+    const grammar = /^[+-]?(?:\d+|\d*\.\d+)(?:[eE][+-]?\d+)?$/
+    const rng = makeRng(0x5ca1)
+    const alphabet = ['0', '1', '7', '9', '+', '-', '.', 'e', 'E', ' ', 'x', 'a', '_']
+    const disagreements: string[] = []
+    for (let i = 0; i < 20_000; i++) {
+      const text = Array.from({ length: Math.floor(rng() * 7) }, () => pick(rng, alphabet)).join('')
+      const expected = grammar.test(text) && Number.isFinite(Number(text)) ? Number(text) : text
+      const actual = coerceScalar(text, 'number')
+      if (!Object.is(actual, expected)) disagreements.push(`${JSON.stringify(text)}: ${String(actual)}`)
+    }
+    expect(disagreements.slice(0, 10)).toEqual([])
+  })
+
   it('never invents a value for a scalar property of any coercible type', () => {
     for (const type of SCALARS) {
       assertNeverInvents(
@@ -345,7 +362,137 @@ describe('coerced-vs-ajv', () => {
     }
   })
 
-  // The one place this deliberately does not follow Ajv. Under `type: ['number',
+  // The two properties everything else rests on, over schemas built from every
+  // keyword coercion walks into. Ajv is not the oracle for the *value* here: it
+  // coerces in place while it tries each branch, so its answer under a union is
+  // often whatever the last branch it tried left behind. What is checked instead:
+  //
+  //  - anything accepted is valid by the schema itself, judged by an Ajv that
+  //    does not coerce. So accepting a document Ajv rejects is only ever
+  //    accepting a valid document Ajv's own coercion broke;
+  //  - a document that is already valid comes back as the very same object,
+  //    which is what lets `coerceX` answer valid input with the guard alone.
+  it('accepts only valid documents, and leaves a valid one untouched', { timeout: 120_000 }, () => {
+    const rng = makeRng(0xc0e7ce)
+    const leaf = (): Record<string, unknown> => {
+      if (rng() < 0.15) return { const: pick(rng, [false, true, 'x', 1]) }
+      const type = pick(rng, ['string', 'number', 'integer', 'boolean'] as const)
+      const node: Record<string, unknown> = { type }
+      if (rng() < 0.2 && (type === 'integer' || type === 'number')) node['minimum'] = 1
+      if (rng() < 0.2 && type === 'string') node['minLength'] = 2
+      return node
+    }
+    const node = (depth: number): Record<string, unknown> => {
+      if (depth <= 0 || rng() < 0.3) return leaf()
+      const roll = rng()
+      const branches = (): Record<string, unknown>[] =>
+        Array.from({ length: 2 + Math.floor(rng() * 2) }, () => node(depth - 1))
+      if (roll < 0.2) return { anyOf: branches() }
+      if (roll < 0.3) return { oneOf: branches() }
+      if (roll < 0.4) return { allOf: branches() }
+      if (roll < 0.5) return { type: 'array', items: node(depth - 1) }
+      const properties: Record<string, unknown> = {}
+      for (const key of ['a', 'b', 'c']) if (rng() < 0.7) properties[key] = node(depth - 1)
+      const object: Record<string, unknown> = { type: 'object', properties }
+      if (rng() < 0.3) object['required'] = ['a']
+      if (rng() < 0.25) {
+        object['if'] = { properties: { a: { const: pick(rng, [true, 'x', 1]) } }, required: ['a'] }
+        object['then'] = { properties: { b: node(depth - 1) } }
+        if (rng() < 0.5) object['else'] = { properties: { b: node(depth - 1) } }
+      }
+      return object
+    }
+
+    const problems: string[] = []
+    for (let i = 0; i < 400; i++) {
+      const schema = { type: 'object', properties: { d: node(3) } }
+      const exports = generated(schema)
+      const coerce = exports['coerceRoot'] as Coercer
+      const walk = exports['coerceRootValue'] as (input: unknown) => unknown
+      const validate = exports['validateRoot'] as (input: unknown) => unknown
+      const plain = new Ajv2020({ allErrors: true, strict: false }).compile(schema)
+      for (let j = 0; j < 15; j++) {
+        const value = { d: randomValue(rng, 3) }
+        const result = coerce(structuredClone(value))
+        if (result.valid && !plain(structuredClone(result.value))) {
+          problems.push(`accepted an invalid document: ${JSON.stringify(schema)} ${JSON.stringify(value)}`)
+        }
+        if (validate(value) === true && walk(value) !== value) {
+          problems.push(`rewrote a valid document: ${JSON.stringify(schema)} ${JSON.stringify(value)}`)
+        }
+      }
+    }
+    expect(problems, problems.slice(0, 5).join('\n')).toEqual([])
+  })
+
+  // `string | { … }` is the commonest shape in a hand-written config schema, and
+  // the scalars inside the object branch are exactly what a YAML file gets wrong.
+  it('agrees on scalars inside an object branch of a union', () => {
+    const method = {
+      anyOf: [
+        { type: 'string' },
+        {
+          type: 'object',
+          properties: { enabled: { type: 'boolean' }, endpoint: { type: 'string' }, retries: { type: 'integer' } },
+          required: ['enabled'],
+        },
+      ],
+    }
+    assertAgrees({ type: 'object', properties: { d: method } }, [
+      { d: { enabled: 'true' } },
+      { d: { enabled: true, endpoint: 42 } },
+      { d: { enabled: 'false', retries: '3' } },
+      { d: { enabled: 'nope' } },
+      { d: { endpoint: 'x' } },
+      { d: 7 },
+      { d: 'short' },
+      { d: { enabled: 1, retries: 'many' } },
+    ])
+    assertAgrees({ type: 'object', properties: { d: { anyOf: [{ const: 'off' }, method] } } }, [
+      { d: 'off' },
+      { d: { enabled: 'true', endpoint: 1 } },
+      { d: { enabled: 0 } },
+    ])
+  })
+
+  it('agrees on a union nested inside a union', () => {
+    assertAgrees(
+      {
+        type: 'object',
+        properties: {
+          d: {
+            anyOf: [
+              { type: 'string' },
+              {
+                type: 'object',
+                properties: {
+                  inner: { anyOf: [{ type: 'integer' }, { type: 'object', properties: { n: { type: 'number' } } }] },
+                },
+              },
+            ],
+          },
+        },
+      },
+      [{ d: { inner: '4' } }, { d: { inner: { n: '1.5' } } }, { d: { inner: 'x' } }, { d: 3 }, { d: { inner: 4 } }],
+    )
+  })
+
+  // The other place this deliberately does not follow Ajv, and the one with
+  // consequences. Ajv coerces into the first branch that will take the value, so
+  // `false` becomes `"false"` through the string branch and the `const: false`
+  // branch — written for exactly this input — is never reached. Code reading
+  // `keyOpt === false` then sees a truthy string. A branch the value already
+  // matches wins here, so the value comes through as written.
+  it('keeps a value a later branch takes as written, where ajv coerces it into an earlier one', () => {
+    const schema = { type: 'object', properties: { keyOpt: { anyOf: [{ type: 'string' }, { const: false }] } } }
+    const byAjv: Record<string, unknown> = { keyOpt: false }
+    new Ajv2020({ allErrors: true, coerceTypes: true }).compile(schema)(byAjv)
+
+    expect(byAjv).toEqual({ keyOpt: 'false' })
+    expect(compile(schema)({ keyOpt: false })).toEqual({ valid: true, value: { keyOpt: false } })
+  })
+
+  // A place this deliberately does not follow Ajv. Under `type: ['number',
   // 'string']` Ajv walks its own coercion list and turns `"1"` into `1`; under
   // `['string', 'number']` it leaves it a string. That is a rule about the order
   // of Ajv's list, not something the schema says, and quietly changing a value

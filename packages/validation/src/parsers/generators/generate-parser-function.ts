@@ -73,6 +73,12 @@ import {
  */
 type GenerateParserOptions = {
   /**
+   * The name to emit this definition's parser under, in place of `parseX`. Used
+   * when `parseX` is a wrapper that runs the exact, coercing half first and falls
+   * back to this parser only for a value no coercion can make valid.
+   */
+  readonly entryName?: string
+  /**
    * When true, properties with $ref will call the imported parser function
    * instead of inlining the validation logic. This is used when generating
    * files where each ref has its own separate file with a parser.
@@ -167,12 +173,24 @@ type PropertyEntry = {
 }
 
 /**
+ * The definition whose parser is being emitted under a private name, while
+ * {@link generateParserFunction} runs with `entryName`. Set and cleared around
+ * that one synchronous call, so no other emission can see it.
+ */
+let entryOverride: { readonly typeName: string; readonly name: string } | null = null
+
+/**
  * Generates the parser function name from a type name.
  * Converts "UserObject" to "parseUserObject".
+ *
+ * While a definition's parser is being emitted under a private name — the
+ * repairing half behind a coercing `parseX` — every reference to it takes that
+ * name, the declaration and a recursive call alike. The ~40 places that spell a
+ * parser's name all go through here, which is why the rename lives here rather
+ * than being threaded through each strategy.
  */
-const generateParserName = (typeName: string): string => {
-  return `parse${typeName}`
-}
+const generateParserName = (typeName: string): string =>
+  entryOverride !== null && entryOverride.typeName === typeName ? entryOverride.name : `parse${typeName}`
 
 /**
  * Object-literal key form that is safe for the runtime-dangerous name
@@ -620,6 +638,9 @@ const SCALAR_ROOT_CONSTRAINTS: readonly string[] = [
  * full constraint-aware coercion instead of the flat `typeof` form. An
  * unconstrained scalar keeps the flat form, which is both correct and smaller.
  */
+/** The scalar root types a coercing parser coerces the way it coerces a property of that type. */
+const COERCED_SCALAR_ROOT_TYPES: ReadonlySet<string> = new Set(['string', 'number', 'integer', 'boolean'])
+
 const isConstrainedScalarRoot = (schema: JSONSchema): boolean => {
   if (!isSchemaObject(schema) || !hasType(schema)) return false
   if (schema.type !== 'string' && schema.type !== 'number' && schema.type !== 'integer') return false
@@ -1317,13 +1338,15 @@ const generateNonObjectParser = (
     return `export const ${functionName} = (input: unknown): ${typeName} => {\n${assertion}\n  return ${returnExpr};\n};`
   }
 
-  // A constrained scalar definition (`$defs.slug`: a pattern-bounded string) gets
-  // the same constraint-aware coercion a *property* of that shape already got —
-  // keep the value when it clears every bound, otherwise fall back to a default
-  // built to satisfy them (`getDefaultValue` derives one from the pattern). The
-  // flat `typeof` cases below stayed correct only for an unconstrained scalar,
-  // and a `$ref` to a constrained one is how the gap reached real schemas.
-  if (isConstrainedScalarRoot(schema)) {
+  // A scalar definition (`$defs.slug`, `$defs.port`) gets the same coercion a
+  // *property* of that shape gets — keep the value when it clears every bound,
+  // coerce one written in the wrong type (`"-1"` for a number), and otherwise
+  // fall back to a default built to satisfy the bounds (`getDefaultValue` derives
+  // one from a pattern). The flat `typeof` cases this used to leave to the switch
+  // below repaired `"-1"` to `0`, where the same `{ type: 'number' }` as a
+  // property coerced it to `-1` — and a `$ref` to a scalar definition is how that
+  // reached real schemas.
+  if (isConstrainedScalarRoot(schema) || COERCED_SCALAR_ROOT_TYPES.has(schema.type as string)) {
     const expr = generateValidationExpression(
       '',
       schema,
@@ -1332,7 +1355,11 @@ const generateNonObjectParser = (
       unionCtx?.rootSchema,
       undefined,
       'input',
-      true,
+      // A parser's `input` can be `undefined` — a parent building the default for
+      // a missing required property calls `parseX(undefined)` — and coercing that
+      // to the string `"undefined"` is worse than the type's own default. The
+      // constrained path keeps what it always passed.
+      isConstrainedScalarRoot(schema),
       unionCtx?.caseInsensitive,
     )
     return `export const ${functionName} = (input: unknown): ${typeName} => (${expr}) as ${typeName};`
@@ -1937,6 +1964,12 @@ const generateObjectParser = (
   // too (each element runs through the item sub-parser via validateArray).
   const { objects: subTypeNames, arrayItems: subItemNames } = collectInlineSubTypes(schema, typeName, reservedNames)
   const preamble: string[] = []
+  /**
+   * Declarations only a fast path reads — a nested object's or an array item's
+   * shape check, and the item's `_every…` loop — keyed by the declaration, with
+   * the call that reads it.
+   */
+  const prunable = new Map<string, string>()
 
   for (const [key, subName] of subTypeNames) {
     const propSchema = schemaProps[key] as JSONSchema
@@ -1954,6 +1987,7 @@ const generateObjectParser = (
       reservedNames,
       unknownKeys,
     )
+    prunable.set(subShapeValidator, `${shapeValidatorName(subName)}(`)
     preamble.push(subShapeValidator)
     preamble.push(
       generateObjectParser(
@@ -1991,12 +2025,13 @@ const generateObjectParser = (
       reservedNames,
       unknownKeys,
     )
+    prunable.set(itemShapeValidator, `${shapeValidatorName(subName)}(`)
     preamble.push(itemShapeValidator)
     // Hand-rolled loop instead of Array.prototype.every on the guard path — the
     // callback protocol costs a few percent on element-heavy hot paths.
-    preamble.push(
-      `const _every${subName} = (arr: readonly unknown[]): boolean => {\n  for (let i = 0; i < arr.length; i++) if (!${shapeValidatorName(subName)}(arr[i])) return false;\n  return true;\n};`,
-    )
+    const everyLoop = `const _every${subName} = (arr: readonly unknown[]): boolean => {\n  for (let i = 0; i < arr.length; i++) if (!${shapeValidatorName(subName)}(arr[i])) return false;\n  return true;\n};`
+    prunable.set(everyLoop, `_every${subName}(`)
+    preamble.push(everyLoop)
     // A union `items` is dispatched, not built: the element goes to whichever
     // branch it already matches, and otherwise to the branch it scores best
     // against. `generateObjectParser` has no branch to build from, so it would
@@ -2995,8 +3030,32 @@ const generateObjectParser = (
   lines.push(`}`)
 
   const fn = lines.join('\n')
-  if (preamble.length === 0) return fn
-  return `${preamble.join('\n\n')}\n\n${fn}`
+  // An item's shape check and loop are read only by a fast path, and a parent
+  // whose own shape check is a stub emits none — which left both declared and
+  // unread, `TS6133` for a consumer with `noUnusedLocals` on every such array
+  // property of a large OpenAPI document. Each is kept while something that is
+  // itself kept calls it. The parent's shape check is emitted outside this
+  // function, so without its source nothing can be proven unread and nothing is
+  // dropped.
+  let kept = preamble
+  if (shapeValidatorSource !== undefined) {
+    let changed = true
+    while (changed) {
+      const current = kept
+      kept = current.filter((entry) => {
+        const call = prunable.get(entry)
+        return (
+          call === undefined ||
+          fn.includes(call) ||
+          shapeValidatorSource.includes(call) ||
+          current.some((other) => other !== entry && other.includes(call))
+        )
+      })
+      changed = kept.length !== current.length
+    }
+  }
+  if (kept.length === 0) return fn
+  return `${kept.join('\n\n')}\n\n${fn}`
 }
 
 /**
@@ -3915,7 +3974,13 @@ export const generateParserFunction = (
       ...(options.stripUnknown !== undefined ? { stripUnknown: options.stripUnknown } : {}),
     })
   }
-  return selectParserStrategy(schema, typeName, options)
+  if (options?.entryName === undefined) return selectParserStrategy(schema, typeName, options)
+  entryOverride = { typeName, name: options.entryName }
+  try {
+    return selectParserStrategy(schema, typeName, options)
+  } finally {
+    entryOverride = null
+  }
 }
 
 /**

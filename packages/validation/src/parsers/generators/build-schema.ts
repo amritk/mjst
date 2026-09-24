@@ -4,13 +4,14 @@ import { dirname, resolve as resolvePath } from 'node:path'
 import { foldNullable } from '@amritk/helpers/fold-nullable'
 import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
 import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
-import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
+import { type RefNode, walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { applySchemaExtensions } from '#parsers/helpers/apply-schema-extensions'
 import type { HelpersMode, RuntimeHelperName } from '#parsers/helpers/collect-helpers'
 import type { ImportExtension } from '#parsers/helpers/collect-imports'
 import type { SchemaExtensions } from '#parsers/types/schema-extensions'
 
+import { type ExactHalf, planExactHalves } from './generate-exact-half'
 import { generateFile } from './generate-files'
 
 /** An embedded runtime-helper file: the extension to write it under and its source. */
@@ -221,14 +222,36 @@ export const buildSchema = async (
   // once, for the whole document, so parsers accept null where the schema allows it.
   const foldedSchema = foldNullable(rootSchema)
 
+  // The graph is collected before anything is emitted, because whether one
+  // definition carries the exact half depends on the others: a definition a
+  // wrapped union reaches through `$ref` has to export the test and walk that
+  // union calls into.
+  const nodes: { node: RefNode; schema: JSONSchema }[] = []
   walkRefGraph(foldedSchema, rootTypeName, { typeSuffix, ...(schemas !== undefined ? { schemas } : {}) }, (node) => {
     // `index` is reserved for the barrel below, so never let a definition of
     // that name overwrite it.
     if (node.filename === 'index') return
-
     // Extensions are keyed by definition name, which is the node's filename for
     // both the root (the lowercased root type name) and every `$ref` target.
-    const extended = extensions ? applySchemaExtensions(node.schema, node.filename, extensions) : node.schema
+    nodes.push({
+      node,
+      schema: extensions ? applySchemaExtensions(node.schema, node.filename, extensions) : node.schema,
+    })
+  })
+
+  // Only a coercing parser that keeps what it was given has a `coerceX` to agree
+  // with: a strict one throws instead of coercing, and a stripping one changes the
+  // value on purpose.
+  const exactHalves =
+    typesOnly === true || strict === true || stripUnknown
+      ? new Map<string, ExactHalf>()
+      : planExactHalves(
+          nodes.map(({ node, schema }) => ({ typeName: node.typeName, schema, rootSchema: node.rootSchema })),
+          typeSuffix,
+        )
+
+  for (const { node, schema: extended } of nodes) {
+    const exactHalf = exactHalves.get(node.typeName)
     const result = generateFile(extended, node.typeName, {
       selfFilename: node.filename,
       typesOnly: typesOnly ?? false,
@@ -244,12 +267,13 @@ export const buildSchema = async (
       ...(strict !== undefined ? { strict } : {}),
       ...(stripUnknown ? { stripUnknown } : {}),
       ...(caseInsensitive ? { caseInsensitive } : {}),
+      ...(exactHalf !== undefined ? { exactHalf } : {}),
       unknownKeys,
     })
 
     files.push({ filename: `${node.filename}.ts`, content: result.content })
     for (const helper of result.usedHelpers) usedHelpers.add(helper)
-  })
+  }
 
   // In embedded mode, ship the runtime helper source files alongside the parsers so
   // the output directory is self-contained (no `@amritk/helpers` install required).
