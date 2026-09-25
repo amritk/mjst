@@ -1,5 +1,105 @@
 # @amritk/mjst
 
+## 0.26.0
+
+### Minor Changes
+
+- 10ea3b0: `mjst lint` no longer lints the salvage of a malformed `$ref`-referenced YAML file. A referenced file with a YAML parse error, or with more than one `---` document (of which only the first was read), is now reported as an `unresolved-ref` finding at the `$ref` that names it, with the file's path and the problem's `line:col` — so a run that used to pass on silently corrupted data now fails. Duplicate keys in a referenced YAML file are still accepted (last value wins), as in a referenced JSON file.
+
+  YAML parse errors from `mjst` AsyncAPI generation now name each problem's `path:line:col`, and a multi-document refusal points at the `---`/`...` marker the second document follows. The wording of both changed: `Failed to parse YAML: <path>:<line>:<col>: …` (the path is no longer repeated in the header) and `<path>:<line>:<col>: this file contains multiple YAML documents (another one follows this marker); …`. `unresolved-ref` messages and `Failed to resolve $refs` errors no longer start with a stray `Error: `.
+
+  The linted document (and an AsyncAPI or JSON Schema input) is no longer read and parsed a second time when it carries cross-file `$ref`s; on an 11 MB YAML spec this takes the resolve step from ~970 ms to ~550 ms.
+
+  A multi-document (`---`) root is now resolved one document at a time, each as a root of its own: `#/…` — and a `$ref` naming the root file, or one pointing back at it from a referenced file — means the document the reference is written in. Previously only the first document's `$ref`s were resolved (cross-file refs in later documents, including missing files, were silently skipped), and a stream with only internal refs resolved each `#/…` against the array of documents and reported it unresolved. The resolved view keeps the linted shape: an array of documents, addressed as `$[i]` in rules, whether or not a rule is `resolved`. Findings and `unresolved-ref`s land on the right document's lines; a failure inside a referenced file is anchored at the start of the document that pulled it in.
+
+  `@amritk/resolve-refs`: new `rootDocument` option on `resolveRefsFromFile` — the root's already-parsed value. When set, the root file is neither read nor parsed; its location still anchors relative refs, `allowedRoots`, and `origins`. The value is only read, never written to or aliased into the result.
+
+- d9e08e1: Harden the YAML parser adapter and the YAML edit model.
+
+  This is a `minor` because results change for documents that used to lint clean or fix cleanly: a document that previously passed can now get parser findings from the new `@amritk/yaml` diagnostics, findings in CR-only files move to different line numbers, and the edit model no longer treats a non-canonical index segment such as `'01'` as an index.
+
+  - A mapping key built from nested aliases no longer hangs linting: the position index now renders keys with `@amritk/yaml`'s budgeted `keyText` instead of its own unbounded copy.
+  - A document whose projection exhausts its budget (an alias bomb in values, or excessive projection depth) is reported as an error diagnostic at the start of that document, with `undefined` data, instead of throwing out of `createDocument`, `lint`, and the CLI.
+  - Parser-level YAML diagnostics now carry the parser's stable `code` (e.g. `DUPLICATE_KEY`, `UNKNOWN_DIRECTIVE`). Lint findings still report `code: 'parser'`.
+  - Line numbers treat a lone CR and CR LF as one line break each (YAML 1.2 §5.4), so positions in CR-only files match the parser; JSON positions follow the same rule.
+  - Fixes now apply under a null key (`~: 1`), an alias key (`*k : 1`), and a collection key (`? [a, b]`): the edit model addresses keys by the same text `toJS` projects. A sequence index segment must now be canonical (`'1'`, not `'01'` or `' 1'`), otherwise the edit is a no-op.
+
+- 7aad726: Resolve YAML finding positions on demand instead of indexing every node up front.
+
+  `parseYaml` used to walk the whole document after parsing to record a range for every path, which cost more than the parse itself on a large spec (on OpenAI's 2.8 MB OpenAPI document, lint's YAML parse drops from ~110 ms to ~40 ms, and a full `lintDocument` run with the OpenAPI ruleset from ~250 ms to ~140 ms). A lookup now walks from the root along the requested path and returns the same range the index did for every path — merged keys, merge lists, aliases, duplicate keys, multi-document streams, and the `closest` fallback included. Repeated candidates reached through aliased duplicate keys are folded and merged-key answers are cached, so a lookup stays linear in the document even for hostile alias and merge shapes, and a lookup that exhausts its work budget falls back to following the value `toJS` keeps rather than an unrelated shadowed node.
+
+  One deliberate change: a key brought in by `<<` now resolves to the value `toJS` takes it from. When a merge source itself merges (`s: &s {<<: *b, a: 1}` merged into `m`), its own `a` wins, as it does in the data; the index used to point at `b`'s `a`. A duplicated key inside a merge source likewise resolves to its last occurrence.
+
+  The opt-in `incompatibleValues` check now runs its own linear scan. A non-finite value reached through several aliases is reported once instead of once per alias path, a merged non-finite value that lands in the data behind a duplicate key, which the old walk skipped, is now reported, and merged values follow the same `toJS` rule as positions (so `{<<: {<<: *b, a: .inf}}` reports the `.inf` the data holds, and a value the source overrides is no longer reported).
+
+### Patch Changes
+
+- 2247615: `coerceX` now coerces inside `anyOf`, `oneOf`, `allOf` and `if`/`then`/`else`, and beside a `$ref`. Before, a union coerced a scalar only when every branch was a plain scalar type. An object branch, a `$ref`, a constrained scalar or a nested union left the whole position untouched, so `{ enabled: "true" }` under `anyOf: [string, { enabled: boolean }]` was rejected, even though the same `{ type: "boolean" }` outside a union was coerced.
+
+  The order at a union is observable, so here it is:
+
+  1. A branch the value already matches, as written, wins, and nothing is coerced. Under `anyOf: [{ type: "string" }, { const: false }]`, `false` stays `false`. Ajv turns it into `"false"` because it coerces into the first branch that will take the value.
+  2. Otherwise each branch coerces the value its own way, and a result counts only if that branch then matches it. "Matches" is the validator's own verdict for that branch.
+  3. If the branches that match after coercion disagree on the value, nothing is coerced and the validator reports the value as written. If they agree, that value is taken. The order the branches were written in never changes the answer.
+
+  `allOf` coerces through each subschema in turn. `if`/`then`/`else` coerces toward `then` when the value, as it stands after the node's own properties were coerced, matches `if`, and toward `else` otherwise.
+
+  `coerceX` is faster than Ajv's `coerceTypes` on every case in the new `bench:validators:coerce` comparison, on Bun and on Node. Against Ajv cloning its input first, it is 3–36× faster on valid input, 1.4–2× on input that needs coercing, and 1.6–3.4× on input that cannot be coerced. Three changes make that happen:
+
+  - A valid document is answered by `isX` and handed back as the same object, without being walked, wherever `isX` is a standalone guard.
+  - Union branch tests are emitted as plain functions instead of closures.
+  - The walks only check `Object.hasOwn` on a value that is about to be written.
+
+  A boolean check of a `$ref` inside `validateX` (an `anyOf`/`oneOf`/`not`/`if` branch, or an array tail) now calls the target's `isX` instead of its `validateX`, so a branch that fails builds no errors. Such files now import `isX` too.
+
+  This changes behaviour. Values that used to be rejected under a union, an `allOf` or a condition may now be coerced and accepted. A union with a constrained scalar branch is now judged branch by branch: under `anyOf: [{ type: "string", minLength: 3 }, { type: "number" }]`, `"7"` becomes `7` where it used to stay `"7"` and fail. `coerceUnion` also counts two offered types that coerce to the same value as one reading, so `"1"` under `number | integer` becomes `1` instead of being declined.
+
+- 6aa5e62: The coercing `parseX` now returns exactly what `coerceX` returns whenever `coerceX` accepts the document, and only repairs what `coerceX` would reject. That holds through `anyOf`, `oneOf`, `allOf`, `if`/`then`/`else`, `$ref` and recursion, and a differential test pins it over random schemas.
+
+  Before, a union, `allOf` or `if` in a parser was checked but never coerced into:
+
+  - `{ enabled: "true" }` under an `allOf` of a `$ref`'d union came through untouched.
+  - `5` under `anyOf: [string, { const: false }]` was repaired to `""`.
+  - Some already-valid documents were rewritten: `{}` under `anyOf: [{ type: integer }, { allOf: [...] }]` became `1`.
+
+  A scalar definition reached through `$ref` (`{ type: "number" }`) repaired `"-1"` to `0`, where the same schema written inline as a property coerced it to `-1`.
+
+  How it works: a definition whose own tree has `anyOf`/`oneOf`/`allOf`/`if`/`not` now carries an exact test (`matchesX`) and the validator's coercion walk (`coerceXInput`) in front of its repairing parser. Every definition such a one reaches through `$ref` carries them too. The repairing parser becomes the private `_parseXRepair`, and the index barrel now leaves out any export whose name starts with `_`.
+
+  This changes behaviour and output:
+
+  - Parse output changes for schemas with combinators: documents that used to be repaired are now coerced, and already-valid ones are returned unchanged. Parser code grows for such schemas, to about twice its size on a large OpenAPI document. Schemas without combinators emit exactly what they did before.
+  - A scalar definition now coerces its value the way a property of the same type does.
+  - `strict` and `stripUnknown` parsers are unchanged.
+  - Generated validators test each `anyOf`/`oneOf`/`not`/`if` branch through a named, shared function instead of an IIFE. JavaScriptCore allocated that IIFE's closure on every call. On a union-heavy config this makes `coerceX` about 2× faster on Bun, and `validateX` gains the same way. Output size is unchanged within 0.3%.
+  - A boolean test of a `$ref` calls the target's `isX`, so a failing branch builds no errors.
+  - The parser no longer declares nested shape checks and `_every…` item loops that no fast path reads. They were `TS6133` errors under `noUnusedLocals` on 37 of the 38 such cases in the OpenAI spec.
+
+  `@amritk/helpers` adds `@amritk/helpers/coercion-runtime` (`coerceScalar`, `coerceUnion`, `valuesEqual`, `allUnique`, `everyItem`, `escapePointer`). It is byte-identical to the runtime a validator build emits, and a test enforces that.
+
+  `bench:validators:node` and `bench:parsers:node` run under Node again. They import the generator through the package entry instead of extensionless source paths.
+
+- Updated dependencies [10ea3b0]
+- Updated dependencies [2247615]
+- Updated dependencies [d9e08e1]
+- Updated dependencies [7aad726]
+- Updated dependencies [6aa5e62]
+- Updated dependencies [5c5f803]
+- Updated dependencies [798a95c]
+- Updated dependencies [7f70372]
+- Updated dependencies [bf3b98c]
+- Updated dependencies [00c17a9]
+- Updated dependencies [0d5bad4]
+- Updated dependencies [5a0dc30]
+  - @amritk/resolve-refs@0.9.0
+  - @amritk/validation@0.4.0
+  - @amritk/lint@0.7.0
+  - @amritk/helpers@0.24.0
+  - @amritk/yaml@0.8.0
+  - @amritk/adapters@0.6.8
+  - @amritk/asyncapi@0.3.6
+  - @amritk/generate-examples@0.8.10
+
 ## 0.25.1
 
 ### Patch Changes

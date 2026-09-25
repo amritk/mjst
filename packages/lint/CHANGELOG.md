@@ -1,5 +1,39 @@
 # @amritk/lint
 
+## 0.7.0
+
+### Minor Changes
+
+- d9e08e1: Harden the YAML parser adapter and the YAML edit model.
+
+  This is a `minor` because results change for documents that used to lint clean or fix cleanly: a document that previously passed can now get parser findings from the new `@amritk/yaml` diagnostics, findings in CR-only files move to different line numbers, and the edit model no longer treats a non-canonical index segment such as `'01'` as an index.
+
+  - A mapping key built from nested aliases no longer hangs linting: the position index now renders keys with `@amritk/yaml`'s budgeted `keyText` instead of its own unbounded copy.
+  - A document whose projection exhausts its budget (an alias bomb in values, or excessive projection depth) is reported as an error diagnostic at the start of that document, with `undefined` data, instead of throwing out of `createDocument`, `lint`, and the CLI.
+  - Parser-level YAML diagnostics now carry the parser's stable `code` (e.g. `DUPLICATE_KEY`, `UNKNOWN_DIRECTIVE`). Lint findings still report `code: 'parser'`.
+  - Line numbers treat a lone CR and CR LF as one line break each (YAML 1.2 §5.4), so positions in CR-only files match the parser; JSON positions follow the same rule.
+  - Fixes now apply under a null key (`~: 1`), an alias key (`*k : 1`), and a collection key (`? [a, b]`): the edit model addresses keys by the same text `toJS` projects. A sequence index segment must now be canonical (`'1'`, not `'01'` or `' 1'`), otherwise the edit is a no-op.
+
+- 7aad726: Resolve YAML finding positions on demand instead of indexing every node up front.
+
+  `parseYaml` used to walk the whole document after parsing to record a range for every path, which cost more than the parse itself on a large spec (on OpenAI's 2.8 MB OpenAPI document, lint's YAML parse drops from ~110 ms to ~40 ms, and a full `lintDocument` run with the OpenAPI ruleset from ~250 ms to ~140 ms). A lookup now walks from the root along the requested path and returns the same range the index did for every path — merged keys, merge lists, aliases, duplicate keys, multi-document streams, and the `closest` fallback included. Repeated candidates reached through aliased duplicate keys are folded and merged-key answers are cached, so a lookup stays linear in the document even for hostile alias and merge shapes, and a lookup that exhausts its work budget falls back to following the value `toJS` keeps rather than an unrelated shadowed node.
+
+  One deliberate change: a key brought in by `<<` now resolves to the value `toJS` takes it from. When a merge source itself merges (`s: &s {<<: *b, a: 1}` merged into `m`), its own `a` wins, as it does in the data; the index used to point at `b`'s `a`. A duplicated key inside a merge source likewise resolves to its last occurrence.
+
+  The opt-in `incompatibleValues` check now runs its own linear scan. A non-finite value reached through several aliases is reported once instead of once per alias path, a merged non-finite value that lands in the data behind a duplicate key, which the old walk skipped, is now reported, and merged values follow the same `toJS` rule as positions (so `{<<: {<<: *b, a: .inf}}` reports the `.inf` the data holds, and a value the source overrides is no longer reported).
+
+### Patch Changes
+
+- Updated dependencies [5c5f803]
+- Updated dependencies [798a95c]
+- Updated dependencies [7f70372]
+- Updated dependencies [bf3b98c]
+- Updated dependencies [00c17a9]
+- Updated dependencies [0d5bad4]
+- Updated dependencies [5a0dc30]
+  - @amritk/yaml@0.8.0
+  - @amritk/runtime-validators@0.15.1
+
 ## 0.6.2
 
 ### Patch Changes
