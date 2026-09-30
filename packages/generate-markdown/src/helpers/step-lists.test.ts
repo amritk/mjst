@@ -112,6 +112,32 @@ describe('step-lists', () => {
     ])
   })
 
+  // The lead-in alone on its line: the next line continued its paragraph, so it
+  // must not open a list — or, indented deeper, a code block — in the body.
+  it('keeps the line after a lone lead-in paragraph text', () => {
+    expect(lists('1. **Install.**', '   3. Run it')[0]?.items[0]?.body).toBe('3\\. Run it')
+    expect(lists('1. **Install.**', '       continued')[0]?.items[0]?.body).toBe('continued')
+    // A line that does open a block stays one.
+    expect(lists('1. **Install.**', '   - npm')[0]?.items[0]?.body).toBe('- npm')
+  })
+
+  it('reads a tab after the marker', () => {
+    expect(lists('1.\t**Install.** x', '2.\t**Run.** y')[0]?.items).toEqual([
+      { lead: 'Install.', body: 'x' },
+      { lead: 'Run.', body: 'y' },
+    ])
+    // A bullet after a tab ends the steps rather than joining step A lazily.
+    expect(lists('1. **A.** x', '-\tbullet')[0]?.items[0]?.body).toBe('x')
+  })
+
+  it('ignores a list inside an HTML comment, a raw block or a block-level tag', () => {
+    expect(lists('<!--', '1. **A.** x', '-->')).toEqual([])
+    expect(lists('<pre>', '', '1. **A.** x', '</pre>')).toEqual([])
+    expect(lists('<div>', '1. **A.** x', '</div>')).toEqual([])
+    // A blank line ends a block-level tag, and markdown picks up again.
+    expect(lists('<details>', '', '1. **A.** x', '', '</details>')).toHaveLength(1)
+  })
+
   it('treats `1.` and `1)` as two lists', () => {
     expect(lists('1. **One.** a', '1) **Two.** b').map((list) => list.items.length)).toEqual([1, 1])
   })

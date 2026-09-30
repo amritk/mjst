@@ -1,3 +1,6 @@
+import { fenceMarker } from '#helpers/fence-marker'
+import { type HtmlBlockEnd, htmlBlockStart } from '#helpers/html-block'
+
 /** One item of a list that qualifies as steps: its bold lead-in, and the rest. */
 export type StepItem = {
   /** The text inside the bold lead-in, exactly as written. */
@@ -39,8 +42,8 @@ type RawItem = {
   readonly openFence: string | undefined
 }
 
-const ORDERED_MARKER = /^( {0,3})(\d{1,9})([.)])( *)/
-const BULLET_MARKER = /^( {0,3})([-+*])( *)/
+const ORDERED_MARKER = /^( {0,3})(\d{1,9})([.)])/
+const BULLET_MARKER = /^( {0,3})([-+*])/
 const THEMATIC_BREAK = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/
 const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/
 
@@ -51,9 +54,6 @@ const ATX_HEADING = /^ {0,3}#{1,6}(?:[ \t]|$)/
  * of it bold — is not mistaken for a title.
  */
 const LEAD_IN = /^\*\*(?![\s*])(.*?\S)\*\*[.:]?(?=\s|$)/
-
-/** A line that opens or closes a fenced block, with the run that delimits it. */
-const fenceMarker = (line: string): string | undefined => /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1]
 
 /**
  * True when the line closes the block `open` started: a run of the same
@@ -104,21 +104,24 @@ const itemMarker = (line: string): ItemMarker | undefined => {
   const ordered = ORDERED_MARKER.exec(line)
   const match = ordered ?? BULLET_MARKER.exec(line)
   if (match === null) return undefined
-  const indent = match[1] ?? ''
-  const spaces = (ordered ? match[4] : match[3]) ?? ''
-  const markerEnd = ordered ? indent.length + (match[2] ?? '').length + 1 : indent.length + 1
+  const markerEnd = match[0].length
   const rest = line.slice(markerEnd)
-  // A marker needs a space after it, or nothing at all: `1.5` and `-x` are text.
-  if (spaces.length === 0 && !isBlank(rest)) return undefined
-  // Five spaces or more is an indented code block inside the item, whose
+  const gapText = /^[ \t]*/.exec(rest)?.[0] ?? ''
+  // Measured in columns from where the marker ends, because a tab after it
+  // reaches the next tab stop, not four columns on.
+  const gapWidth = indentOf(' '.repeat(markerEnd) + gapText) - markerEnd
+  const blank = isBlank(rest)
+  // A marker needs whitespace after it, or nothing at all: `1.5` and `-x` are text.
+  if (gapWidth === 0 && !blank) return undefined
+  // Five columns or more is an indented code block inside the item, whose
   // content column is one past the marker; so is an item that starts empty.
-  const gap = spaces.length === 0 || spaces.length > 4 || isBlank(rest) ? 1 : spaces.length
+  const wide = gapWidth > 4
   return {
     delimiter: ordered ? (match[3] ?? '.') : (match[2] ?? '-'),
     ordered: ordered !== null,
     one: ordered !== null && Number(match[2]) === 1,
-    contentColumn: markerEnd + gap,
-    content: line.slice(Math.min(line.length, markerEnd + gap)),
+    contentColumn: markerEnd + (wide || blank ? 1 : gapWidth),
+    content: blank ? '' : wide ? ' '.repeat(gapWidth - 1) + rest.slice(gapText.length) : rest.slice(gapText.length),
   }
 }
 
@@ -133,6 +136,23 @@ const startsBlock = (line: string): boolean =>
   fenceMarker(line) !== undefined ||
   ATX_HEADING.test(line) ||
   /^ {0,3}[><]/.test(line)
+
+/**
+ * True when a line ends the paragraph above it rather than continuing it. Not
+ * every block start does: an ordered item that does not start at 1, an empty
+ * item, and an indented line all read as more of the paragraph.
+ */
+const interruptsParagraph = (line: string): boolean => {
+  const marker = itemMarker(line)
+  if (marker !== undefined) return marker.content.length > 0 && (!marker.ordered || marker.one)
+  return (
+    THEMATIC_BREAK.test(line) ||
+    fenceMarker(line) !== undefined ||
+    ATX_HEADING.test(line) ||
+    /^ {0,3}>/.test(line) ||
+    htmlBlockStart(line, true) !== undefined
+  )
+}
 
 /**
  * Reads one list from its first item to its last, the way CommonMark decides
@@ -224,9 +244,16 @@ const asParagraphText = (line: string): string => {
 const stepItem = ({ marker, lines, openFence }: RawItem): StepItem | undefined => {
   const lead = LEAD_IN.exec(marker.content)
   if (lead === null) return undefined
+  const [, ...later] = lines.map((line) => dedent(line, marker.contentColumn))
+  const sameLine = marker.content.slice(lead[0].length).replace(/^[ \t]+/, '')
+  // The body's first line is paragraph text when it continues the lead-in's
+  // paragraph: the rest of the lead-in's own line, or — when that is empty —
+  // the next line, unless that line opens a block of its own.
+  const next = later[0]
+  const continues = sameLine.length === 0 && next !== undefined && !isBlank(next) && !interruptsParagraph(next)
   const rest = [
-    asParagraphText(marker.content.slice(lead[0].length).replace(/^[ \t]+/, '')),
-    ...lines.slice(1).map((line) => dedent(line, marker.contentColumn)),
+    ...(sameLine.length > 0 ? [asParagraphText(sameLine)] : []),
+    ...(continues ? [asParagraphText(next.replace(/^[ \t]+/, '')), ...later.slice(1)] : later),
   ].map((line) => (isBlank(line) ? '' : line))
   const first = rest.findIndex((line) => line.length > 0)
   const last = rest.findLastIndex((line) => line.length > 0)
@@ -253,6 +280,7 @@ const stepItem = ({ marker, lines, openFence }: RawItem): StepItem | undefined =
 export const stepLists = (lines: readonly string[]): readonly StepList[] => {
   const found: StepList[] = []
   let fence: string | undefined
+  let html: HtmlBlockEnd | undefined
   let paragraph = false
   let index = 0
 
@@ -260,6 +288,21 @@ export const stepLists = (lines: readonly string[]): readonly StepList[] => {
     const line = lines[index] ?? ''
     if (fence !== undefined) {
       if (closesFence(line, fence)) fence = undefined
+      index += 1
+      continue
+    }
+    if (html !== undefined) {
+      if (html === 'blank' ? isBlank(line) : html(line)) html = undefined
+      index += 1
+      continue
+    }
+    // Raw HTML runs to its own end, and a list inside it is text the author
+    // kept out of markdown — converting one put tags inside a comment and
+    // left their closing halves outside it.
+    const block = htmlBlockStart(line, paragraph)
+    if (block !== undefined) {
+      html = block === 'blank' || !block(line) ? block : undefined
+      paragraph = false
       index += 1
       continue
     }

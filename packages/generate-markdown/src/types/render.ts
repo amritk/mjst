@@ -37,7 +37,8 @@ export type RenderContext = {
    * {@link RenderContext.anchors}: a docs site numbers its heading anchors
    * without counting the steps, so a step claiming `install` there would push
    * the heading below it to `install-1` in this package's links and nowhere
-   * else.
+   * else. It starts with every heading anchor on the page reserved, so a step
+   * never shares an id with a heading either.
    */
   readonly stepIds: PageAnchors
 }
@@ -69,6 +70,8 @@ export type PageAnchors = {
   readonly undoClaim: () => void
   /** The anchor a property's own heading claimed, for the row that links to it. */
   readonly anchorOf: (entry: DocEntry) => string | undefined
+  /** Every anchor taken so far, reserved ones included. */
+  readonly all: () => readonly string[]
 }
 
 /**

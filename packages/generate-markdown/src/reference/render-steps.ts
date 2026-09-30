@@ -12,13 +12,6 @@ import type { PageAnchors, RenderContext } from '#types/render'
 const FALLBACK_ID = 'step'
 
 /**
- * Where the step tags sit inside the list's wrapper. Indented for the reader of
- * the markdown, and by no more than three columns, past which CommonMark reads
- * the tag as an indented code block instead of HTML.
- */
-const STEP_INDENT = '  '
-
-/**
  * Fills `{id}` and `{title}` in one pass, so a title that happens to contain
  * `{id}` is printed as written rather than filled a second time.
  */
@@ -34,10 +27,13 @@ const stepsMarkup = (items: readonly StepItem[], steps: DocSteps, ids: PageAncho
     const slug = ids.claim(title)
     const id = slug.length > 0 ? slug : ids.claim(FALLBACK_ID)
     const attribute = escapeAttribute(title)
-    lines.push(`${STEP_INDENT}${fill(steps.stepOpen, id, attribute)}`)
+    // At column 0, never indented: after a body that ends in a bullet list, a
+    // tag indented to the bullet's content column is read as more of the last
+    // item, and the closing tag lands inside an `<li>`.
+    lines.push(fill(steps.stepOpen, id, attribute))
     // No blank lines for an empty body: they would only separate the two tags.
     if (body.length > 0) lines.push('', body, '')
-    lines.push(`${STEP_INDENT}${fill(steps.stepClose, id, attribute)}`)
+    lines.push(fill(steps.stepClose, id, attribute))
   }
   if (steps.close.length > 0) lines.push(steps.close)
   return lines

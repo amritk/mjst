@@ -884,18 +884,18 @@ The list above then renders as:
 
 ```html
 <scalar-steps>
-  <scalar-step id="create-an-access-token" title="Create an access token">
+<scalar-step id="create-an-access-token" title="Create an access token">
 
 Give it publish permission and turn 2FA bypass on.
 
-  </scalar-step>
-  <scalar-step id="add-it-as-a-repository-secret" title="Add it as a repository secret">
+</scalar-step>
+<scalar-step id="add-it-as-a-repository-secret" title="Add it as a repository secret">
 
 Name it `NPM_TOKEN`.
 
-  </scalar-step>
-  <scalar-step id="merge-the-release-pull-request" title="Merge the release pull request">
-  </scalar-step>
+</scalar-step>
+<scalar-step id="merge-the-release-pull-request" title="Merge the release pull request">
+</scalar-step>
 </scalar-steps>
 ```
 
@@ -909,25 +909,29 @@ These rules decide which lists convert:
 - **Only lead-in lists.** A top-level ordered list converts when every item
   starts with bold text (`N. **Title.** body…`). If any item lacks the lead-in,
   the whole list stays a markdown list. A list is never half converted, so the
-  author decides by how they write it. Lists inside a fence, a blockquote or
-  another list are left alone.
+  author decides by how they write it. Lists inside a fence, a blockquote,
+  another list or a raw HTML block (`<!-- … -->`, `<pre>`, a `<div>` with no
+  blank line after it) are left alone.
 - **Title.** `{title}` is the bold text with one trailing `.` or `:` removed.
-  Its inline markdown is stripped (backticks, emphasis, links, tags), and it is
-  HTML-escaped for an attribute value (`&`, `"`, `'`, `<`, `>`). Descriptions
-  are untrusted input here.
-- **Id.** `{id}` is the title slugged the way a heading anchor is. It is unique
-  among the page's steps: a repeat is numbered `-1`, `-2`. A title that slugs to
-  nothing becomes `step`. Step ids are counted apart from heading anchors,
-  because a docs site numbers its headings without counting steps. If your site
-  puts both in one id space, use a prefix in the template, such as
-  `id="step-{id}"`.
+  Its inline markdown is stripped (backticks, emphasis, links, tags) while a
+  code span's text is kept as written, and it is HTML-escaped for an attribute
+  value (`&`, `"`, `'`, `<`, `>`). Descriptions are untrusted input here.
+- **Id.** `{id}` is the title slugged the way a heading anchor is, and unique
+  on the page: a repeat is numbered `-1`, `-2`, and so is a step whose slug a
+  heading on the same page already has (`install-1` beside an `## install`).
+  The headings keep their anchors, since a docs site numbers them without
+  counting steps. A title that slugs to nothing becomes `step`.
 - **Body.** Everything after the lead-in, nested bullets and fences included,
   de-indented to column 0. A blank line follows the opening tag and precedes the
-  closing one, so the site parses the body as markdown. A step with nothing
-  after its title gets an empty body.
+  closing one, so the site parses the body as markdown. The tags themselves
+  sit at column 0: indented, a closing tag after a body that ends in a bullet
+  list would be read as part of the last bullet. A step with nothing after its
+  title gets an empty body.
 - **Where.** Property, page and section descriptions, notes, and footers. A
   table row keeps the one-paragraph summary it has always had. The rest of the
-  description, printed under the row, is converted.
+  description, printed under the row, is converted. When the row's summary is
+  itself part of a step list, the block under the row prints the whole list,
+  so the component is never split between the row and the block.
 
 `MarkdownOptions.steps` sets or overrides the members from code. A declaration
 missing one of the four members is an error, not silently read as off.

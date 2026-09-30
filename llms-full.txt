@@ -778,10 +778,11 @@ or `mjst markdown <schema> --table --readme <file>`.
    required, `""` allowed; `MarkdownOptions.steps` overrides per member) turns a
    top-level ordered list whose EVERY item opens with bold text
    (`1. **Title.** body`) into that markup. `{id}` is a slug of the title,
-   unique among the page's steps and counted apart from heading anchors.
-   `{title}` has its inline markdown stripped and is attribute-escaped. One item
-   without the lead-in keeps the whole list a list. Lists in fences are left
-   alone, and so are table-row summaries. Keep plain lists in the schema: JSDoc
+   unique on the page: it skips every heading anchor there (`install-1` beside
+   `## install`), and the headings keep theirs. `{title}` has its inline
+   markdown stripped and is attribute-escaped. One item without the lead-in
+   keeps the whole list a list. Lists in fences and raw HTML blocks are left
+   alone, and so are table-row summaries. Tags are emitted at column 0. Keep plain lists in the schema: JSDoc
    and hovers get the raw description, so never write the tags there.
 12. **Golden output is checked in.** `fixtures/expected/` is compared by
    `generate-markdown-files.test.ts`. After a deliberate renderer change run

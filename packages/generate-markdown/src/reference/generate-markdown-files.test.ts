@@ -5072,7 +5072,7 @@ describe('generate-markdown-files', () => {
     expect(content).not.toMatch(/^\d+\. \*\*/m)
     // A note stays one blockquote, steps and all.
     expect(content).toContain(
-      '> <scalar-steps>\n>   <scalar-step id="note-step" title="Note step">\n> \n> In the note.\n> \n>   </scalar-step>\n> </scalar-steps>',
+      '> <scalar-steps>\n> <scalar-step id="note-step" title="Note step">\n> \n> In the note.\n> \n> </scalar-step>\n> </scalar-steps>',
     )
   })
 
@@ -5086,8 +5086,30 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('```sh\nnpm i\n```\n\n  </scalar-step>')
+    expect(content).toContain('```sh\nnpm i\n```\n\n</scalar-step>')
     expect(content).toContain('## b')
+  })
+
+  // The heading comes after the step, so only a page that knows its headings
+  // before it renders the steps can keep the two apart.
+  it('keeps a step off the anchor of a heading further down the page', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS } },
+        properties: {
+          setup: { type: 'string', description: '1. **Install.** First.' },
+          install: { type: 'string' },
+        },
+      }),
+    )
+    expect(content).toContain('<scalar-step id="install-1" title="Install">')
+    expect(content).toContain('## install')
+  })
+
+  it('leaves a list inside raw HTML alone', () => {
+    const description = '<!--\n1. **Hidden.** x\n-->\n\n<div>\n1. **Raw.** y\n</div>'
+    const content = only(generateMarkdownFiles({ description, 'x-mjst': { markdown: { steps: SCALAR_STEPS } } }))
+    expect(content).toBe(`${description}\n`)
   })
 
   it('takes the step markup from the caller', () => {
@@ -5097,7 +5119,7 @@ describe('generate-markdown-files', () => {
         { steps: { open: '<Steps>', close: '</Steps>', stepOpen: '<Step title="{title}">', stepClose: '</Step>' } },
       ),
     )
-    expect(content).toBe('<Steps>\n  <Step title="Go">\n\nNow.\n\n  </Step>\n</Steps>\n')
+    expect(content).toBe('<Steps>\n<Step title="Go">\n\nNow.\n\n</Step>\n</Steps>\n')
   })
 
   // A row is one line: a component there would break the table, and the
@@ -5120,16 +5142,37 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
+    // The row's text is what it always was; it now links to the steps below.
     expect(content).toContain(
-      '| `listed` | `string` | 1. **Create a token.** Give it rights. 2. **Add it.** Name it. |',
+      '| [`listed`](#listed) | `string` | 1. **Create a token.** Give it rights. 2. **Add it.** Name it. |',
     )
     expect(content).toContain('| [`intro`](#intro) | `string` | Sets up releases. |')
-    expect(content).not.toContain('title="Create a token"')
-    expect(content).toContain('### intro\n\n<scalar-steps>\n  <scalar-step id="merge" title="Merge">')
+    expect(content).toContain('### listed\n\n<scalar-steps>\n<scalar-step id="create-a-token"')
+    expect(content).toContain('### intro\n\n<scalar-steps>\n<scalar-step id="merge" title="Merge">')
+  })
+
+  // A loose list is a paragraph per item: the row took item 1, and the block
+  // below printed a component starting at item 2.
+  it('renders a loose step list whole under the row that summarises its first item', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS, layout: 'table' } },
+        properties: {
+          release: {
+            type: 'object',
+            properties: { loose: { type: 'string', description: '1. **A.** x\n\n2. **B.** y' } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| [`loose`](#loose) | `string` | 1. **A.** x |')
+    expect(content).toContain('<scalar-step id="a" title="A">')
+    expect(content).toContain('<scalar-step id="b" title="B">')
   })
 
   // The docs site numbers its heading anchors without counting steps, so a
-  // step sharing a heading's name must not push that heading's link to `-1`.
+  // step sharing a heading's name must not push that heading's link to `-1` —
+  // and a step must not take a heading's id either, the two sharing one DOM.
   it('keeps step ids apart from the heading anchors rows link to', () => {
     const content = only(
       generateMarkdownFiles({
@@ -5145,7 +5188,7 @@ describe('generate-markdown-files', () => {
         },
       }),
     )
-    expect(content).toContain('<scalar-step id="deploy" title="Deploy">')
+    expect(content).toContain('<scalar-step id="deploy-1" title="Deploy">')
     expect(content).toContain('| [`deploy`](#deploy) |')
     expect(content).toContain('### deploy')
   })

@@ -45,18 +45,18 @@ describe('render-steps', () => {
         '**First release**',
         '',
         '<scalar-steps>',
-        '  <scalar-step id="create-an-access-token" title="Create an access token">',
+        '<scalar-step id="create-an-access-token" title="Create an access token">',
         '',
         'Give it publish permission and turn 2FA bypass on.',
         '',
-        '  </scalar-step>',
-        '  <scalar-step id="add-it-as-a-repository-secret" title="Add it as a repository secret">',
+        '</scalar-step>',
+        '<scalar-step id="add-it-as-a-repository-secret" title="Add it as a repository secret">',
         '',
         'Name it `NPM_TOKEN`.',
         '',
-        '  </scalar-step>',
-        '  <scalar-step id="merge-the-release-pull-request" title="Merge the release pull request">',
-        '  </scalar-step>',
+        '</scalar-step>',
+        '<scalar-step id="merge-the-release-pull-request" title="Merge the release pull request">',
+        '</scalar-step>',
         '</scalar-steps>',
       ].join('\n'),
     )
@@ -77,7 +77,7 @@ describe('render-steps', () => {
     expect(renderSteps(prose, context())).toBe(
       [
         '<scalar-steps>',
-        '  <scalar-step id="install" title="Install">',
+        '<scalar-step id="install" title="Install">',
         '',
         'Pick one:',
         '- npm',
@@ -87,10 +87,17 @@ describe('render-steps', () => {
         'npm i',
         '```',
         '',
-        '  </scalar-step>',
+        '</scalar-step>',
         '</scalar-steps>',
       ].join('\n'),
     )
+  })
+
+  // Indented to a bullet's content column, the closing tag was read as more of
+  // the last bullet and landed inside its `<li>`.
+  it('puts the tags at column 0 so a body ending in a bullet list stays closed', () => {
+    const out = renderSteps('1. **Install.** Pick:\n   - npm\n   - bun\n2. **Run.** Go.', context())
+    expect(out).toContain('- bun\n\n</scalar-step>\n<scalar-step id="run" title="Run">')
   })
 
   // Descriptions are untrusted: a quote in a title must not close the attribute.
@@ -127,11 +134,11 @@ describe('render-steps', () => {
         'Do this:',
         '',
         '<scalar-steps>',
-        '  <scalar-step id="go" title="Go">',
+        '<scalar-step id="go" title="Go">',
         '',
         'Now.',
         '',
-        '  </scalar-step>',
+        '</scalar-step>',
         '</scalar-steps>',
         '',
         'Then rest.',
@@ -146,6 +153,6 @@ describe('render-steps', () => {
       stepOpen: '<Step title="{title}">',
       stepClose: '</Step><!-- {id} -->',
     }
-    expect(renderSteps('1. **Go.** Now.', context(steps))).toBe('  <Step title="Go">\n\nNow.\n\n  </Step><!-- go -->')
+    expect(renderSteps('1. **Go.** Now.', context(steps))).toBe('<Step title="Go">\n\nNow.\n\n</Step><!-- go -->')
   })
 })

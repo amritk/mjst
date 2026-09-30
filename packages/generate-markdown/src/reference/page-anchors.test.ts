@@ -53,6 +53,21 @@ describe('page-anchors', () => {
     expect(anchors.claim('name-1')).toBe('name-1-1')
   })
 
+  // Nothing was claimed, so an undo must not reach back to the claim before.
+  it('gives back nothing after a heading that slugged to nothing', () => {
+    const anchors = pageAnchors()
+    anchors.claim('deploy')
+    anchors.claim('$')
+    anchors.undoClaim()
+    expect(anchors.claim('deploy')).toBe('deploy-1')
+  })
+
+  it('treats reserved anchors as taken without claiming them', () => {
+    const anchors = pageAnchors(['install'])
+    expect(anchors.claim('Install')).toBe('install-1')
+    expect(anchors.all()).toEqual(['install', 'install-1'])
+  })
+
   it('remembers the anchor a property heading claimed', () => {
     const anchors = pageAnchors()
     const scheme = entry('name')

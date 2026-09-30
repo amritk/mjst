@@ -39,4 +39,25 @@ describe('step-title', () => {
   it('does not escape HTML', () => {
     expect(stepTitle('Tom & "Jerry"')).toBe('Tom & "Jerry"')
   })
+
+  // Stripping tags before finding the code spans took the placeholder out of
+  // the middle of the title.
+  it('keeps tag- and link-like text inside a code span', () => {
+    expect(stepTitle('Replace `<your-key>` here.')).toBe('Replace <your-key> here')
+    expect(stepTitle('Write `[a](b)`')).toBe('Write [a](b)')
+  })
+
+  it('keeps an asterisk with space on both sides', () => {
+    expect(stepTitle('Multiply 2 * 3.')).toBe('Multiply 2 * 3')
+  })
+
+  // Decoded here so the attribute escapes it once, not twice.
+  it('decodes entities, but not inside a code span', () => {
+    expect(stepTitle('Tom &amp; Jerry &#169; &#x2014; &hellip;')).toBe('Tom & Jerry © — &hellip;')
+    expect(stepTitle('Write `&amp;`')).toBe('Write &amp;')
+  })
+
+  it('cannot forge a slot with a NUL of its own', () => {
+    expect(stepTitle('a\u00000\u0000 `b`')).toBe('a\ufffd0\ufffd b')
+  })
 })
