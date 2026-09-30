@@ -52,7 +52,7 @@ or `mjst markdown <schema> --table --readme <file>`.
    from, with each key meaning what its position says. Renderer settings go
    under `x-mjst.markdown` (`page`, `section`, `type`, `title`, `heading`,
    `layout`, `sort`, `order`, `example`/`examples`, `note`/`notes`, `footer`
-   on a property; `pages`, `sections`, `table`, `headings`, `language`… on the
+   on a property; `pages`, `sections`, `table`, `headings`, `steps`, `language`… on the
    root). `hidden` is not markdown-specific, so it sits on `x-mjst` itself:
    `"x-mjst": { "hidden": true }` (one under `markdown` throws). Do not post-process the generated
    markdown; edit the schema and regenerate. `layout`
@@ -115,7 +115,17 @@ or `mjst markdown <schema> --table --readme <file>`.
    the row already says everything. The anchors are claimed by the headings as
    they render — a repeat is numbered `#name-1` the way a docs site does — so a
    link is never derived from a property name by hand.
-11. **Golden output is checked in.** `fixtures/expected/` is compared by
+11. **Lead-in ordered lists can become a step component, opt in.** The root
+   `x-mjst.markdown.steps` (`{ open, close, stepOpen, stepClose }`, all four
+   required, `""` allowed; `MarkdownOptions.steps` overrides per member) turns a
+   top-level ordered list whose EVERY item opens with bold text
+   (`1. **Title.** body`) into that markup. `{id}` is a slug of the title,
+   unique among the page's steps and counted apart from heading anchors.
+   `{title}` has its inline markdown stripped and is attribute-escaped. One item
+   without the lead-in keeps the whole list a list. Lists in fences are left
+   alone, and so are table-row summaries. Keep plain lists in the schema: JSDoc
+   and hovers get the raw description, so never write the tags there.
+12. **Golden output is checked in.** `fixtures/expected/` is compared by
    `generate-markdown-files.test.ts`. After a deliberate renderer change run
    `bun run generate-fixtures` and read the diff — it is the review.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collapseLineEndings, escapeHtml } from '#helpers/escape-html'
+import { collapseLineEndings, escapeAttribute, escapeHtml } from '#helpers/escape-html'
 
 describe('escape-html', () => {
   // Every one of these ends a line for something that will read the output: CR
@@ -31,5 +31,11 @@ describe('escape-html', () => {
 
   it('collapses line endings on the way through', () => {
     expect(escapeHtml('a\rb')).toBe('a b')
+  })
+
+  // A quote left in would close the attribute, and the rest of the schema's
+  // prose would become attributes of its own.
+  it('escapes both quotes for an attribute value', () => {
+    expect(escapeAttribute(`a "b" 'c' <d> & e`)).toBe('a &quot;b&quot; &#39;c&#39; &lt;d&gt; &amp; e')
   })
 })

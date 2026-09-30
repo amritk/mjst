@@ -4,6 +4,7 @@ import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderProperty, summarisedBlocks } from '#reference/render-property'
 import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
+import { renderSteps } from '#reference/render-steps'
 import type { DocConfig } from '#types/doc'
 import type { PageModel, RenderContext } from '#types/render'
 
@@ -30,6 +31,8 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
     pageFiles,
     sections: new Map(config.sections.map((section) => [section.id, section])),
     anchors: pageAnchors(),
+    steps: config.steps,
+    stepIds: pageAnchors(),
   }
   const level = config.headingLevel
   const blocks: string[] = []
@@ -44,14 +47,14 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
   // as the page title, and every linter counts more than one as an error. A
   // schema that wants that heading gives itself a `title`.
   if (model.page.title !== undefined) blocks.push(renderHeading(level, proseHeading(model.page.title), context))
-  if (model.page.description !== undefined) blocks.push(trimDescription(model.page.description))
+  if (model.page.description !== undefined) blocks.push(renderSteps(trimDescription(model.page.description), context))
   blocks.push(...renderExamples(model.page.examples, config.language))
 
   for (const entry of model.entries) blocks.push(...renderProperty(entry, level + 1, context))
 
   for (const { section, entries } of model.sections) {
     if (section.title !== undefined) blocks.push(renderHeading(level + 1, proseHeading(section.title), context))
-    if (section.description !== undefined) blocks.push(trimDescription(section.description))
+    if (section.description !== undefined) blocks.push(renderSteps(trimDescription(section.description), context))
     blocks.push(...renderExamples(section.examples, config.language))
     // A section's own layout, never `config.layout`: that one is the default for
     // a *property's* children, and letting it reach sections too would collapse

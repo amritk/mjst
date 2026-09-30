@@ -14,12 +14,14 @@ export type {
   DocPage,
   DocSection,
   DocSort,
+  DocSteps,
   DocTable,
   DocTableColumn,
   DocTableRequired,
   GeneratedFile,
   MarkdownHeadingsOptions,
   MarkdownOptions,
+  MarkdownStepsOptions,
   MarkdownTableOptions,
 } from '#types/doc'
 export type { ConfigSchema, SchemaProperty } from '#types/schema'

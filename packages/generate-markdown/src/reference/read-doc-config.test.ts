@@ -251,4 +251,30 @@ describe('read-doc-config', () => {
     })
     expect(readDocConfig({ 'x-mjst': { markdown: { headings: { type: false } } } }).headings).toEqual({ type: 'auto' })
   })
+
+  it('leaves steps off unless something names them', () => {
+    expect(readDocConfig({}).steps).toBeUndefined()
+  })
+
+  it('reads the step markup the schema declares, and lets the caller override it per member', () => {
+    const steps = { open: '<steps>', close: '</steps>', stepOpen: '<step id="{id}">', stepClose: '</step>' }
+    const schema = { 'x-mjst': { markdown: { steps } } }
+    expect(readDocConfig(schema).steps).toEqual(steps)
+    expect(readDocConfig(schema, { steps: { open: '<ol-steps>' } }).steps).toEqual({ ...steps, open: '<ol-steps>' })
+    expect(readDocConfig({}, { steps }).steps).toEqual(steps)
+  })
+
+  // A wrapper-less component is a real choice, so `""` is a template.
+  it('accepts an empty template', () => {
+    const steps = { open: '', close: '', stepOpen: '<Step>', stepClose: '</Step>' }
+    expect(readDocConfig({ 'x-mjst': { markdown: { steps } } }).steps).toEqual(steps)
+  })
+
+  // Half a declaration quietly read as off would leave every list a list, and
+  // nothing in the output would say why.
+  it('refuses a declaration missing a member', () => {
+    expect(() =>
+      readDocConfig({ 'x-mjst': { markdown: { steps: { open: '<s>', stepOpen: '<t>', close: 5 } } } }),
+    ).toThrow(/missing `close`, `stepClose`/)
+  })
 })

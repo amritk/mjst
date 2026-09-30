@@ -11,6 +11,7 @@ import { deriveExample } from '#reference/derive-example'
 import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
+import { renderSteps } from '#reference/render-steps'
 import type { DocEntry, RenderContext } from '#types/render'
 
 /**
@@ -106,7 +107,7 @@ export const renderProperty = (
   // whole paragraphs of prose.
   const description = trimDescription(readDescription(prop))
   const prose = options.summarised ? remainingParagraphs(description) : description
-  if (prose.length > 0) blocks.push(prose)
+  if (prose.length > 0) blocks.push(renderSteps(prose, context))
 
   // Same rule for the default: the Default column skips a `null`, so a `null`
   // default is the row's omission rather than its content.
@@ -145,7 +146,9 @@ export const renderProperty = (
   // Every line of a note has to carry the `>` marker, and CommonMark counts a
   // bare CR as a line ending: a note holding one escaped the blockquote and the
   // rest of it became page structure.
-  for (const note of meta.notes) blocks.push(`> ${note.replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
+  for (const note of meta.notes) {
+    blocks.push(`> ${renderSteps(note, context).replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
+  }
 
   // A derived example is this package's convenience, not the author's content:
   // under a row it would give every leaf option in a table a heading and a
@@ -153,7 +156,7 @@ export const renderProperty = (
   // example the author wrote is content, and stays.
   const shown = derived === undefined ? meta.examples : options.summarised ? [] : [derived]
   blocks.push(...renderExamples(shown, context.language))
-  for (const footer of meta.footers) blocks.push(trimDescription(footer))
+  for (const footer of meta.footers) blocks.push(renderSteps(trimDescription(footer), context))
 
   const childLevelBase = titled ? level + 1 : level
   const layout = meta.layout ?? context.layout
@@ -188,10 +191,11 @@ export const renderProperty = (
     // A child documented elsewhere has no block here to consult, so the block it
     // gets there is rendered and thrown away — only whether it holds anything is
     // being asked, and that is a fact about the property rather than about the
-    // page it lands on. Against a registry of its own, because this page must
-    // not number an anchor for a heading it does not print.
+    // page it lands on. Against registries of its own, because this page must
+    // not number an anchor for a heading it does not print, nor a step id for
+    // a step it does not print.
     const summarised = (child: DocEntry): boolean => {
-      const otherPage = { ...context, anchors: pageAnchors() }
+      const otherPage = { ...context, anchors: pageAnchors(), stepIds: pageAnchors() }
       return (summaries.get(child) ?? summarisedBlocks(child, childLevelBase, otherPage)).length > 0
     }
     blocks.push(renderPropertyTable(ordered, context, { summarised }))

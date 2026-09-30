@@ -18,9 +18,18 @@ import type { DocEntry, PageAnchors, RenderContext } from '#types/render'
  * the render context is threaded rather than read from module state.
  */
 export const pageAnchors = (): PageAnchors => {
+  // Every anchor handed out, mapped to how many repeats of it have been
+  // numbered — github-slugger's bookkeeping, which is what a docs site runs.
   const taken = new Map<string, number>()
   const claimed = new Map<DocEntry, string>()
-  let last: { readonly base: string; readonly entry: DocEntry | undefined } | undefined
+  let last:
+    | {
+        readonly base: string
+        readonly anchor: string
+        readonly repeats: number | undefined
+        readonly entry: DocEntry | undefined
+      }
+    | undefined
 
   return {
     claim: (text, entry) => {
@@ -28,17 +37,25 @@ export const pageAnchors = (): PageAnchors => {
       // A heading of pure punctuation slugs to nothing. Counting it would be
       // counting the empty anchor a docs site gives every one of them.
       if (base.length === 0) return ''
-      const seen = taken.get(base) ?? 0
-      taken.set(base, seen + 1)
-      const anchor = seen === 0 ? base : `${base}-${seen}`
+      const repeats = taken.get(base)
+      // Numbered until the result is free, not just once: a page with two
+      // `deploy` headings and one titled `Deploy 1` would otherwise hand out
+      // `deploy-1` twice, and a docs site gives the third `deploy-1-1`.
+      let anchor = base
+      while (taken.has(anchor)) {
+        const next = (taken.get(base) ?? 0) + 1
+        taken.set(base, next)
+        anchor = `${base}-${next}`
+      }
+      taken.set(anchor, 0)
       if (entry !== undefined) claimed.set(entry, anchor)
-      last = { base, entry }
+      last = { base, anchor, repeats, entry }
       return anchor
     },
     undoClaim: () => {
       if (last === undefined) return
-      const seen = taken.get(last.base) ?? 0
-      if (seen > 0) taken.set(last.base, seen - 1)
+      taken.delete(last.anchor)
+      if (last.anchor !== last.base && last.repeats !== undefined) taken.set(last.base, last.repeats)
       if (last.entry !== undefined) claimed.delete(last.entry)
       last = undefined
     },

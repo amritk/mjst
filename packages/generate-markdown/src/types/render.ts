@@ -1,4 +1,4 @@
-import type { DocHeadings, DocLayout, DocPage, DocSection, DocSort, DocTable } from '#types/doc'
+import type { DocHeadings, DocLayout, DocPage, DocSection, DocSort, DocSteps, DocTable } from '#types/doc'
 import type { SchemaProperty } from '#types/schema'
 
 /**
@@ -30,6 +30,16 @@ export type RenderContext = {
   readonly sections: ReadonlyMap<string, DocSection>
   /** The anchors this page has handed out, so a row can link to one of them. */
   readonly anchors: PageAnchors
+  /** The markup lead-in ordered lists become, or undefined when the schema did not ask for it. */
+  readonly steps: DocSteps | undefined
+  /**
+   * The ids this page's steps have taken. A registry of their own rather than
+   * {@link RenderContext.anchors}: a docs site numbers its heading anchors
+   * without counting the steps, so a step claiming `install` there would push
+   * the heading below it to `install-1` in this package's links and nowhere
+   * else.
+   */
+  readonly stepIds: PageAnchors
 }
 
 /**

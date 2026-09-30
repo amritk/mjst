@@ -9,10 +9,12 @@ import type {
   DocPage,
   DocSection,
   DocSort,
+  DocSteps,
   DocTable,
   DocTableColumn,
   MarkdownHeadingsOptions,
   MarkdownOptions,
+  MarkdownStepsOptions,
   MarkdownTableOptions,
 } from '#types/doc'
 import type { ConfigSchema } from '#types/schema'
@@ -64,6 +66,36 @@ const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable
 const readHeadings = (value: unknown, options: MarkdownHeadingsOptions = {}): DocHeadings => {
   const headings = isObject(value) ? value : {}
   return { type: options.type ?? asOneOf(headings['type'], HEADING_TYPES) ?? 'auto' }
+}
+
+const STEP_MEMBERS = ['open', 'close', 'stepOpen', 'stepClose'] as const
+
+/**
+ * The step markup ordered lists become: the caller's choice, then the schema's,
+ * per member. Off unless one of them names it, so a schema that never heard of
+ * steps renders exactly what it always did.
+ *
+ * Half a declaration is refused rather than read as off. A list quietly left a
+ * list is output that looks finished, and nothing about it says the build
+ * dropped a `stepClose` somewhere. An empty string is a real template, though:
+ * `""` is how a site whose steps need no wrapper says so.
+ */
+const readSteps = (value: unknown, options: MarkdownStepsOptions = {}): DocSteps | undefined => {
+  const steps = isObject(value) ? value : {}
+  const read = (member: (typeof STEP_MEMBERS)[number]): string | undefined => {
+    const own = options[member] ?? steps[member]
+    return typeof own === 'string' ? own : undefined
+  }
+  const [open, close, stepOpen, stepClose] = STEP_MEMBERS.map(read)
+  const missing = STEP_MEMBERS.filter((member) => read(member) === undefined)
+  if (missing.length === STEP_MEMBERS.length) return undefined
+  if (open === undefined || close === undefined || stepOpen === undefined || stepClose === undefined) {
+    throw new Error(
+      '`x-mjst.markdown.steps` needs all of `open`, `close`, `stepOpen` and `stepClose` as strings; ' +
+        `missing ${missing.map((member) => `\`${member}\``).join(', ')}.`,
+    )
+  }
+  return { open, close, stepOpen, stepClose }
 }
 
 const asOneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | undefined =>
@@ -156,5 +188,6 @@ export const readDocConfig = (schema: ConfigSchema, options: MarkdownOptions = {
     headingLevel: Number.isFinite(headingLevel) ? Math.max(1, Math.trunc(headingLevel)) : 1,
     table: readTable(doc['table'], options.table),
     headings: readHeadings(doc['headings'], options.headings),
+    steps: readSteps(doc['steps'], options.steps),
   }
 }

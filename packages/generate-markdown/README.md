@@ -684,6 +684,7 @@ On the **root schema**, under `x-mjst.markdown`:
 | `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
 | `headings` | `{ type? }` | How every property rendered as a heading is laid out — `type` takes `'auto' \| 'never'`. See [What a heading holds](#what-a-heading-holds). Root only, like `table` |
 | `table` | `{ type?, default?, required?, requiredFirst? }` | How every property table on every page is laid out — `type` and `default` take `'auto' \| 'always' \| 'never'`, `required` takes `'column'` or a suffix for required names, and `requiredFirst` heads each table with the properties that have to be filled in. See [What a property table holds](#what-a-property-table-holds). Root only: a reference whose tables disagree about which columns exist reads as several references stapled together |
+| `steps` | `{ open, close, stepOpen, stepClose }` | Renders a top-level ordered list whose every item opens with a bold lead-in as the docs site's step component. Off unless declared. See [Steps](#steps). Root only, like `table` |
 | `sections` | `{ id, title?, description?, page?, layout?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. Its `layout` takes the same `'headings' \| 'table' \| 'none'` vocabulary a property's does, and defaults to `headings` — the root `layout` is the default for a property's *children*, not for a section. |
 | `example` / `examples` | see below | Code blocks under the page title. |
 
@@ -849,6 +850,88 @@ ordinary page, not a contrived one. A cross-page anchor is the one that is not
 numbered: a page's anchors are that page's to hand out, so a link into a page
 that repeats a name lands on the first of them.
 
+### Steps
+
+A setup walkthrough in a description has to be portable markdown, because the
+same text also becomes the JSDoc of generated types and an editor's hover. A
+numbered list is portable:
+
+```markdown
+1. **Create an access token.** Give it publish permission and turn 2FA bypass on.
+2. **Add it as a repository secret.** Name it `NPM_TOKEN`.
+3. **Merge the release pull request.**
+```
+
+Some docs sites have a richer component for this. The root
+`x-mjst.markdown.steps` names it, and only the markdown output uses it:
+
+```json
+{
+  "x-mjst": {
+    "markdown": {
+      "steps": {
+        "open": "<scalar-steps>",
+        "close": "</scalar-steps>",
+        "stepOpen": "<scalar-step id=\"{id}\" title=\"{title}\">",
+        "stepClose": "</scalar-step>"
+      }
+    }
+  }
+}
+```
+
+The list above then renders as:
+
+```html
+<scalar-steps>
+  <scalar-step id="create-an-access-token" title="Create an access token">
+
+Give it publish permission and turn 2FA bypass on.
+
+  </scalar-step>
+  <scalar-step id="add-it-as-a-repository-secret" title="Add it as a repository secret">
+
+Name it `NPM_TOKEN`.
+
+  </scalar-step>
+  <scalar-step id="merge-the-release-pull-request" title="Merge the release pull request">
+  </scalar-step>
+</scalar-steps>
+```
+
+| Member | What it is |
+| --- | --- |
+| `open` / `close` | Wrap the whole list. `""` leaves the wrapper out |
+| `stepOpen` / `stepClose` | Wrap each step. `{id}` and `{title}` are filled in both |
+
+These rules decide which lists convert:
+
+- **Only lead-in lists.** A top-level ordered list converts when every item
+  starts with bold text (`N. **Title.** body…`). If any item lacks the lead-in,
+  the whole list stays a markdown list. A list is never half converted, so the
+  author decides by how they write it. Lists inside a fence, a blockquote or
+  another list are left alone.
+- **Title.** `{title}` is the bold text with one trailing `.` or `:` removed.
+  Its inline markdown is stripped (backticks, emphasis, links, tags), and it is
+  HTML-escaped for an attribute value (`&`, `"`, `'`, `<`, `>`). Descriptions
+  are untrusted input here.
+- **Id.** `{id}` is the title slugged the way a heading anchor is. It is unique
+  among the page's steps: a repeat is numbered `-1`, `-2`. A title that slugs to
+  nothing becomes `step`. Step ids are counted apart from heading anchors,
+  because a docs site numbers its headings without counting steps. If your site
+  puts both in one id space, use a prefix in the template, such as
+  `id="step-{id}"`.
+- **Body.** Everything after the lead-in, nested bullets and fences included,
+  de-indented to column 0. A blank line follows the opening tag and precedes the
+  closing one, so the site parses the body as markdown. A step with nothing
+  after its title gets an empty body.
+- **Where.** Property, page and section descriptions, notes, and footers. A
+  table row keeps the one-paragraph summary it has always had. The rest of the
+  description, printed under the row, is converted.
+
+`MarkdownOptions.steps` sets or overrides the members from code. A declaration
+missing one of the four members is an error, not silently read as off.
+
 ### Splitting across files
 
 A property assigned to a page is documented there and nowhere else. In a table
@@ -923,8 +1006,8 @@ in CI or write them wherever the docs live.
 
 `options` overrides what the schema declares, for callers that want the same
 schema written somewhere else: `file`, `title`, `language`, `layout`, `sort`,
-`headingLevel`, and `table` (per member, so turning the **Type** column off does
-not restate the rest of the schema's choices).
+`headingLevel`, and `table`, `headings` and `steps` (per member, so turning the
+**Type** column off does not restate the rest of the schema's choices).
 
 ### `generateDocs(options?: GenerateDocsOptions): Promise<readonly GeneratedFile[]>`
 
