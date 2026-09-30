@@ -38,6 +38,8 @@ const context = (overrides: Partial<RenderContext> = {}): RenderContext => ({
     ['prose', section('prose', { layout: 'none' })],
   ]),
   anchors: pageAnchors(),
+  steps: undefined,
+  stepIds: pageAnchors(),
   ...overrides,
 })
 

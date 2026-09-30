@@ -115,6 +115,29 @@ export type DocHeadings = {
 }
 
 /**
+ * The markup a top-level ordered list becomes when every item opens with a bold
+ * lead-in (`1. **Create a token.** Give it publish rights.`). Declared once on the
+ * root `x-mjst.markdown.steps`, and off unless it is: the same description feeds
+ * the JSDoc of generated types and an editor's hover, which show a component tag
+ * as raw text, so the schema keeps the portable list and only this renderer
+ * turns it into the docs site's richer component.
+ *
+ * `stepOpen` and `stepClose` may name `{id}` — a slug of the step's title,
+ * unique among the page's steps — and `{title}`, the title with its inline
+ * markdown stripped and HTML-escaped for an attribute value.
+ */
+export type DocSteps = {
+  /** Opens the whole list, e.g. `<scalar-steps>`. */
+  readonly open: string
+  /** Closes the whole list, e.g. `</scalar-steps>`. */
+  readonly close: string
+  /** Opens one step, e.g. `<scalar-step id="{id}" title="{title}">`. */
+  readonly stepOpen: string
+  /** Closes one step, e.g. `</scalar-step>`. */
+  readonly stepClose: string
+}
+
+/**
  * The normalized `x-mjst` keyword of a single property. Everything here is
  * documentation-only: none of it changes what the schema validates, which is
  * why it lives under one vendor extension instead of leaking into the standard
@@ -224,6 +247,19 @@ export type MarkdownOptions = {
   readonly table?: MarkdownTableOptions | undefined
   /** Heading layout. Each member defaults to the schema's, then to the built-in. */
   readonly headings?: MarkdownHeadingsOptions | undefined
+  /** Step markup for ordered lists. Each member defaults to the schema's; unset everywhere means off. */
+  readonly steps?: MarkdownStepsOptions | undefined
+}
+
+/**
+ * The caller's half of {@link DocSteps}: every member optional, so a build can
+ * swap the component a schema names without restating its closing tags.
+ */
+export type MarkdownStepsOptions = {
+  readonly open?: string | undefined
+  readonly close?: string | undefined
+  readonly stepOpen?: string | undefined
+  readonly stepClose?: string | undefined
 }
 
 /** The caller's half of {@link DocHeadings}: every member optional. */
@@ -260,4 +296,6 @@ export type DocConfig = {
   readonly table: DocTable
   /** How every property rendered as a heading is laid out. */
   readonly headings: DocHeadings
+  /** The markup lead-in ordered lists become, or undefined to leave every list a list. */
+  readonly steps: DocSteps | undefined
 }

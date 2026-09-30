@@ -710,7 +710,7 @@ or `mjst markdown <schema> --table --readme <file>`.
    from, with each key meaning what its position says. Renderer settings go
    under `x-mjst.markdown` (`page`, `section`, `type`, `title`, `heading`,
    `layout`, `sort`, `order`, `example`/`examples`, `note`/`notes`, `footer`
-   on a property; `pages`, `sections`, `table`, `headings`, `language`… on the
+   on a property; `pages`, `sections`, `table`, `headings`, `steps`, `language`… on the
    root). `hidden` is not markdown-specific, so it sits on `x-mjst` itself:
    `"x-mjst": { "hidden": true }` (one under `markdown` throws). Do not post-process the generated
    markdown; edit the schema and regenerate. `layout`
@@ -773,7 +773,18 @@ or `mjst markdown <schema> --table --readme <file>`.
    the row already says everything. The anchors are claimed by the headings as
    they render — a repeat is numbered `#name-1` the way a docs site does — so a
    link is never derived from a property name by hand.
-11. **Golden output is checked in.** `fixtures/expected/` is compared by
+11. **Lead-in ordered lists can become a step component, opt in.** The root
+   `x-mjst.markdown.steps` (`{ open, close, stepOpen, stepClose }`, all four
+   required, `""` allowed; `MarkdownOptions.steps` overrides per member) turns a
+   top-level ordered list whose EVERY item opens with bold text
+   (`1. **Title.** body`) into that markup. `{id}` is a slug of the title,
+   unique on the page: it skips every heading anchor there (`install-1` beside
+   `## install`), and the headings keep theirs. `{title}` has its inline
+   markdown stripped and is attribute-escaped. One item without the lead-in
+   keeps the whole list a list. Lists in fences and raw HTML blocks are left
+   alone, and so are table-row summaries. Tags are emitted at column 0. Keep plain lists in the schema: JSDoc
+   and hovers get the raw description, so never write the tags there.
+12. **Golden output is checked in.** `fixtures/expected/` is compared by
    `generate-markdown-files.test.ts`. After a deliberate renderer change run
    `bun run generate-fixtures` and read the diff — it is the review.
 
@@ -1024,7 +1035,9 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
    `allowedRoots: ['./specs']` (or whatever contains both files) to allow it.
    `localRefs: false` refuses cross-file reads entirely.
 5. **JSON-only by default** (`JSON.parse`). For YAML pass a custom
-   `parse: (content, location) => …` (e.g. wrapping `@amritk/yaml`).
+   `parse: (content, location) => …` (e.g. wrapping `@amritk/yaml`). Already
+   parsed the root? Pass it as `rootDocument` and the file is not read or
+   parsed again (its path still anchors relative refs and `allowedRoots`).
 6. **`origins` exists only with `trackOrigins: true`.** Cycles are preserved (the
    cycle point stays a `$ref`), so output is not always fully flat. The remote
    cache is process-wide but credential-scoped and bounded (10 min TTL, 256

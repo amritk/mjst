@@ -1,5 +1,4 @@
-/** A line that opens or closes a fenced block, with the run that delimits it. */
-const fenceMarker = (line: string): string | undefined => /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1]
+import { fenceMarker } from '#helpers/fence-marker'
 
 /** True when the line is indented enough to be an indented code block. */
 const isIndentedCode = (line: string): boolean => /^(?: {4}|\t)/.test(line)

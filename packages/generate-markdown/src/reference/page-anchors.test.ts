@@ -15,6 +15,8 @@ const context = (anchors: PageAnchors): RenderContext => ({
   pageFiles: new Map([['index', 'configuration.md']]),
   sections: new Map(),
   anchors,
+  steps: undefined,
+  stepIds: pageAnchors(),
 })
 
 describe('page-anchors', () => {
@@ -27,6 +29,43 @@ describe('page-anchors', () => {
   it('numbers each repeat of an anchor', () => {
     const anchors = pageAnchors()
     expect([anchors.claim('name'), anchors.claim('name'), anchors.claim('name')]).toEqual(['name', 'name-1', 'name-2'])
+  })
+
+  // github-slugger's rule: a numbered repeat that a later heading already
+  // spells out is skipped, so no two headings share an anchor.
+  it('never hands out the same anchor twice', () => {
+    const anchors = pageAnchors()
+    expect([anchors.claim('name'), anchors.claim('name'), anchors.claim('name 1'), anchors.claim('name')]).toEqual([
+      'name',
+      'name-1',
+      'name-1-1',
+      'name-2',
+    ])
+  })
+
+  it('gives back a claim that had to skip a taken anchor', () => {
+    const anchors = pageAnchors()
+    anchors.claim('name')
+    anchors.claim('name-1')
+    expect(anchors.claim('name')).toBe('name-2')
+    anchors.undoClaim()
+    expect(anchors.claim('name')).toBe('name-2')
+    expect(anchors.claim('name-1')).toBe('name-1-1')
+  })
+
+  // Nothing was claimed, so an undo must not reach back to the claim before.
+  it('gives back nothing after a heading that slugged to nothing', () => {
+    const anchors = pageAnchors()
+    anchors.claim('deploy')
+    anchors.claim('$')
+    anchors.undoClaim()
+    expect(anchors.claim('deploy')).toBe('deploy-1')
+  })
+
+  it('treats reserved anchors as taken without claiming them', () => {
+    const anchors = pageAnchors(['install'])
+    expect(anchors.claim('Install')).toBe('install-1')
+    expect(anchors.all()).toEqual(['install', 'install-1'])
   })
 
   it('remembers the anchor a property heading claimed', () => {

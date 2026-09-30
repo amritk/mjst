@@ -1,4 +1,4 @@
-import { remainingParagraphs, trimDescription } from '#helpers/first-paragraph'
+import { firstParagraph, remainingParagraphs, trimDescription } from '#helpers/first-paragraph'
 import { formatInlineLiteral } from '#helpers/format-literal'
 import { asArray } from '#helpers/guards'
 import { propertyHeading } from '#helpers/heading-text'
@@ -6,11 +6,13 @@ import { inlineCode } from '#helpers/inline-code'
 import { readConstraints } from '#helpers/read-constraints'
 import { readDescription, readDocMeta } from '#helpers/read-doc-meta'
 import { referenceType, typeShowsEnum } from '#helpers/reference-type'
+import { stepLists } from '#helpers/step-lists'
 import { childEntries } from '#reference/child-entries'
 import { deriveExample } from '#reference/derive-example'
 import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
+import { renderSteps } from '#reference/render-steps'
 import type { DocEntry, RenderContext } from '#types/render'
 
 /**
@@ -45,6 +47,25 @@ const documentedElsewhere = (entry: DocEntry, context: RenderContext): boolean =
   const meta = readDocMeta(entry.prop)
   if (meta.section !== undefined) return true
   return meta.page !== undefined && meta.page !== context.page
+}
+
+/**
+ * The prose a block under a table row prints: whatever the row could not hold.
+ *
+ * Except when the row's paragraph is part of a list that renders as steps. A
+ * loose list is one paragraph per item, so the row took the first item and the
+ * block got a step component starting at the second — one list in two places,
+ * neither of them whole. The block prints the whole component instead, and the
+ * row keeps the summary it always had.
+ */
+const proseBelowRow = (description: string, context: RenderContext): string => {
+  const rest = remainingParagraphs(description)
+  if (context.steps === undefined) return rest
+  const row = firstParagraph(description).split('\n')[0] ?? ''
+  if (row.length === 0) return rest
+  const lines = description.replace(/\r\n?/g, '\n').split('\n')
+  const inList = stepLists(lines).some((list) => lines.slice(list.start, list.end).some((line) => line.trim() === row))
+  return inList ? description : rest
 }
 
 /** Comma-separated code spans, for the allowed-values and examples lines. */
@@ -105,8 +126,8 @@ export const renderProperty = (
   // rest of the description has appeared nowhere else, and dropping it lost
   // whole paragraphs of prose.
   const description = trimDescription(readDescription(prop))
-  const prose = options.summarised ? remainingParagraphs(description) : description
-  if (prose.length > 0) blocks.push(prose)
+  const prose = options.summarised ? proseBelowRow(description, context) : description
+  if (prose.length > 0) blocks.push(renderSteps(prose, context))
 
   // Same rule for the default: the Default column skips a `null`, so a `null`
   // default is the row's omission rather than its content.
@@ -145,7 +166,9 @@ export const renderProperty = (
   // Every line of a note has to carry the `>` marker, and CommonMark counts a
   // bare CR as a line ending: a note holding one escaped the blockquote and the
   // rest of it became page structure.
-  for (const note of meta.notes) blocks.push(`> ${note.replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
+  for (const note of meta.notes) {
+    blocks.push(`> ${renderSteps(note, context).replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
+  }
 
   // A derived example is this package's convenience, not the author's content:
   // under a row it would give every leaf option in a table a heading and a
@@ -153,7 +176,7 @@ export const renderProperty = (
   // example the author wrote is content, and stays.
   const shown = derived === undefined ? meta.examples : options.summarised ? [] : [derived]
   blocks.push(...renderExamples(shown, context.language))
-  for (const footer of meta.footers) blocks.push(trimDescription(footer))
+  for (const footer of meta.footers) blocks.push(renderSteps(trimDescription(footer), context))
 
   const childLevelBase = titled ? level + 1 : level
   const layout = meta.layout ?? context.layout
@@ -188,10 +211,11 @@ export const renderProperty = (
     // A child documented elsewhere has no block here to consult, so the block it
     // gets there is rendered and thrown away — only whether it holds anything is
     // being asked, and that is a fact about the property rather than about the
-    // page it lands on. Against a registry of its own, because this page must
-    // not number an anchor for a heading it does not print.
+    // page it lands on. Against registries of its own, because this page must
+    // not number an anchor for a heading it does not print, nor a step id for
+    // a step it does not print.
     const summarised = (child: DocEntry): boolean => {
-      const otherPage = { ...context, anchors: pageAnchors() }
+      const otherPage = { ...context, anchors: pageAnchors(), stepIds: pageAnchors() }
       return (summaries.get(child) ?? summarisedBlocks(child, childLevelBase, otherPage)).length > 0
     }
     blocks.push(renderPropertyTable(ordered, context, { summarised }))

@@ -5027,4 +5027,216 @@ describe('generate-markdown-files', () => {
       expect(generated, name).toEqual(goldenFiles(name))
     }
   })
+
+  it('leaves a lead-in list a list when the schema does not ask for steps', () => {
+    const content = only(generateMarkdownFiles({ title: 'Config', description: STEP_LIST }))
+    expect(content).toBe(`# Config\n\n${STEP_LIST}\n`)
+  })
+
+  it('renders lead-in lists as steps in every piece of full prose', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Config',
+        description: STEP_LIST,
+        'x-mjst': {
+          markdown: {
+            steps: SCALAR_STEPS,
+            sections: [{ id: 'setup', title: 'Setup', description: '1. **Section step.** In the section.' }],
+          },
+        },
+        properties: {
+          token: {
+            type: 'string',
+            description: 'The token.\n\n1. **Property step.** In the description.',
+            'x-mjst': {
+              markdown: {
+                section: 'setup',
+                note: '1. **Note step.** In the note.',
+                footer: '1. **Footer step.** In the footer.',
+              },
+            },
+          },
+        },
+      }),
+    )
+    for (const id of [
+      'create-an-access-token',
+      'add-it-as-a-repository-secret',
+      'section-step',
+      'property-step',
+      'note-step',
+      'footer-step',
+    ]) {
+      expect(content).toContain(`<scalar-step id="${id}"`)
+    }
+    expect(content).not.toMatch(/^\d+\. \*\*/m)
+    // A note stays one blockquote, steps and all.
+    expect(content).toContain(
+      '> <scalar-steps>\n> <scalar-step id="note-step" title="Note step">\n> \n> In the note.\n> \n> </scalar-step>\n> </scalar-steps>',
+    )
+  })
+
+  it('closes a fence left open in a step, so the page after it is not swallowed', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS } },
+        properties: {
+          a: { type: 'string', description: '1. **Run it.**\n   ```sh\n   npm i\n2. **Next.** b' },
+          b: { type: 'string', description: 'Later.' },
+        },
+      }),
+    )
+    expect(content).toContain('```sh\nnpm i\n```\n\n</scalar-step>')
+    expect(content).toContain('## b')
+  })
+
+  // The heading comes after the step, so only a page that knows its headings
+  // before it renders the steps can keep the two apart.
+  it('keeps a step off the anchor of a heading further down the page', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS } },
+        properties: {
+          setup: { type: 'string', description: '1. **Install.** First.' },
+          install: { type: 'string' },
+        },
+      }),
+    )
+    expect(content).toContain('<scalar-step id="install-1" title="Install">')
+    expect(content).toContain('## install')
+  })
+
+  it('leaves a list inside raw HTML alone', () => {
+    const description = '<!--\n1. **Hidden.** x\n-->\n\n<div>\n1. **Raw.** y\n</div>'
+    const content = only(generateMarkdownFiles({ description, 'x-mjst': { markdown: { steps: SCALAR_STEPS } } }))
+    expect(content).toBe(`${description}\n`)
+  })
+
+  it('takes the step markup from the caller', () => {
+    const content = only(
+      generateMarkdownFiles(
+        { description: '1. **Go.** Now.' },
+        { steps: { open: '<Steps>', close: '</Steps>', stepOpen: '<Step title="{title}">', stepClose: '</Step>' } },
+      ),
+    )
+    expect(content).toBe('<Steps>\n<Step title="Go">\n\nNow.\n\n</Step>\n</Steps>\n')
+  })
+
+  // A row is one line: a component there would break the table, and the
+  // summary a row holds stays exactly what it was.
+  it('leaves the summary in a table row as it is, and renders steps in the block below it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS, layout: 'table' } },
+        properties: {
+          release: {
+            type: 'object',
+            properties: {
+              listed: {
+                type: 'string',
+                description: '1. **Create a token.** Give it rights.\n2. **Add it.** Name it.',
+              },
+              intro: { type: 'string', description: 'Sets up releases.\n\n1. **Merge.** The version PR.' },
+            },
+          },
+        },
+      }),
+    )
+    // The row's text is what it always was; it now links to the steps below.
+    expect(content).toContain(
+      '| [`listed`](#listed) | `string` | 1. **Create a token.** Give it rights. 2. **Add it.** Name it. |',
+    )
+    expect(content).toContain('| [`intro`](#intro) | `string` | Sets up releases. |')
+    expect(content).toContain('### listed\n\n<scalar-steps>\n<scalar-step id="create-a-token"')
+    expect(content).toContain('### intro\n\n<scalar-steps>\n<scalar-step id="merge" title="Merge">')
+  })
+
+  // A loose list is a paragraph per item: the row took item 1, and the block
+  // below printed a component starting at item 2.
+  it('renders a loose step list whole under the row that summarises its first item', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS, layout: 'table' } },
+        properties: {
+          release: {
+            type: 'object',
+            properties: { loose: { type: 'string', description: '1. **A.** x\n\n2. **B.** y' } },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| [`loose`](#loose) | `string` | 1. **A.** x |')
+    expect(content).toContain('<scalar-step id="a" title="A">')
+    expect(content).toContain('<scalar-step id="b" title="B">')
+  })
+
+  // The docs site numbers its heading anchors without counting steps, so a
+  // step sharing a heading's name must not push that heading's link to `-1` —
+  // and a step must not take a heading's id either, the two sharing one DOM.
+  it('keeps step ids apart from the heading anchors rows link to', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS, layout: 'table' } },
+        properties: {
+          release: {
+            type: 'object',
+            properties: {
+              guide: { type: 'string', description: 'How.\n\n1. **Deploy.** Ship it.' },
+              deploy: { type: 'string', description: 'Where.', 'x-mjst': { markdown: { note: 'Careful.' } } },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('<scalar-step id="deploy-1" title="Deploy">')
+    expect(content).toContain('| [`deploy`](#deploy) |')
+    expect(content).toContain('### deploy')
+  })
+
+  it('numbers repeated step titles across the page, and only the steps it prints', () => {
+    const deploy = (body: string): { type: 'string'; description: string } => ({
+      type: 'string',
+      description: `Intro.\n\n1. **Deploy.** ${body}`,
+    })
+    const files = generateMarkdownFiles({
+      'x-mjst': {
+        markdown: {
+          steps: SCALAR_STEPS,
+          layout: 'table',
+          pages: [{ id: 'other', file: 'other.md' }],
+          sections: [{ id: 'moved', page: 'other', layout: 'table' }],
+        },
+      },
+      properties: {
+        release: {
+          type: 'object',
+          properties: {
+            // Documented in a table section on the other page: this one renders
+            // its block only to ask whether its row there links anywhere, and
+            // must not count its step.
+            moved: { ...deploy('elsewhere'), 'x-mjst': { markdown: { section: 'moved' } } },
+            here: deploy('here'),
+          },
+        },
+        later: { type: 'string', description: '1. **Deploy.** again\n2. **Deploy.** and again' },
+      },
+    })
+    const index = files.find((file) => file.filename === 'index.md')?.content ?? ''
+    expect(index.match(/id="deploy[^"]*"/g)).toEqual(['id="deploy"', 'id="deploy-1"', 'id="deploy-2"'])
+    expect(files.find((file) => file.filename === 'other.md')?.content).toContain('id="deploy"')
+  })
 })
+
+const SCALAR_STEPS = {
+  open: '<scalar-steps>',
+  close: '</scalar-steps>',
+  stepOpen: '<scalar-step id="{id}" title="{title}">',
+  stepClose: '</scalar-step>',
+}
+
+const STEP_LIST = [
+  '**First release**',
+  '',
+  '1. **Create an access token.** Give it publish permission and turn 2FA bypass on.',
+  '2. **Add it as a repository secret.** Name it `NPM_TOKEN`.',
+].join('\n')

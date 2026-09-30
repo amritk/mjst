@@ -20,3 +20,12 @@ export const collapseLineEndings = (value: string): string => value.replace(/[\r
  */
 export const escapeHtml = (value: string): string =>
   collapseLineEndings(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+/**
+ * Escapes text for a double- or single-quoted HTML attribute value. On top of
+ * what {@link escapeHtml} does, a quote has to go: an unescaped one closes the
+ * attribute, and whatever follows it in the schema's prose becomes attributes
+ * of its own — an `onmouseover`, say.
+ */
+export const escapeAttribute = (value: string): string =>
+  escapeHtml(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;')

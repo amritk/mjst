@@ -4,8 +4,9 @@ import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderProperty, summarisedBlocks } from '#reference/render-property'
 import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
+import { renderSteps } from '#reference/render-steps'
 import type { DocConfig } from '#types/doc'
-import type { PageModel, RenderContext } from '#types/render'
+import type { PageAnchors, PageModel, RenderContext } from '#types/render'
 
 /**
  * Renders one page: its title and prose, the properties that belong to the page
@@ -19,6 +20,23 @@ import type { PageModel, RenderContext } from '#types/render'
  * table under its own heading, or nothing at all beyond its prose.
  */
 export const renderPage = (model: PageModel, config: DocConfig, pageFiles: ReadonlyMap<string, string>): string => {
+  const draft = renderPass(model, config, pageFiles, pageAnchors())
+  if (config.steps === undefined) return draft.content
+  // Step ids share the page's id space with the headings, and a step renders
+  // before headings further down the page have claimed anything. The first
+  // pass is how the page learns every heading anchor it will carry, so the
+  // second can give each step an id no heading already has. Step ids never
+  // feed back into the headings, so the second pass numbers them identically.
+  return renderPass(model, config, pageFiles, pageAnchors(draft.anchors.all())).content
+}
+
+/** One render of a page, and the heading anchors it claimed on the way. */
+const renderPass = (
+  model: PageModel,
+  config: DocConfig,
+  pageFiles: ReadonlyMap<string, string>,
+  stepIds: PageAnchors,
+): { readonly content: string; readonly anchors: PageAnchors } => {
   const context: RenderContext = {
     language: config.language,
     layout: config.layout,
@@ -30,6 +48,8 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
     pageFiles,
     sections: new Map(config.sections.map((section) => [section.id, section])),
     anchors: pageAnchors(),
+    steps: config.steps,
+    stepIds,
   }
   const level = config.headingLevel
   const blocks: string[] = []
@@ -44,14 +64,14 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
   // as the page title, and every linter counts more than one as an error. A
   // schema that wants that heading gives itself a `title`.
   if (model.page.title !== undefined) blocks.push(renderHeading(level, proseHeading(model.page.title), context))
-  if (model.page.description !== undefined) blocks.push(trimDescription(model.page.description))
+  if (model.page.description !== undefined) blocks.push(renderSteps(trimDescription(model.page.description), context))
   blocks.push(...renderExamples(model.page.examples, config.language))
 
   for (const entry of model.entries) blocks.push(...renderProperty(entry, level + 1, context))
 
   for (const { section, entries } of model.sections) {
     if (section.title !== undefined) blocks.push(renderHeading(level + 1, proseHeading(section.title), context))
-    if (section.description !== undefined) blocks.push(trimDescription(section.description))
+    if (section.description !== undefined) blocks.push(renderSteps(trimDescription(section.description), context))
     blocks.push(...renderExamples(section.examples, config.language))
     // A section's own layout, never `config.layout`: that one is the default for
     // a *property's* children, and letting it reach sections too would collapse
@@ -89,5 +109,5 @@ export const renderPage = (model: PageModel, config: DocConfig, pageFiles: Reado
     for (const entry of entries) blocks.push(...renderProperty(entry, level + 2, context))
   }
 
-  return `${blocks.filter((block) => block.length > 0).join('\n\n')}\n`
+  return { content: `${blocks.filter((block) => block.length > 0).join('\n\n')}\n`, anchors: context.anchors }
 }
