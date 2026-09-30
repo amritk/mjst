@@ -81,7 +81,35 @@ describe('step-lists', () => {
   it('ends an item and its fence at an unindented line', () => {
     const [list] = lists('1. **One.**', '   ```', '   code', '```')
     expect(list?.end).toBe(3)
-    expect(list?.items[0]?.body).toBe('```\ncode')
+    expect(list?.items[0]?.body).toBe('```\ncode\n```')
+  })
+
+  // Out of the item nothing else would close it, and an open fence swallowed
+  // the step's closing tags and every property after it.
+  it('closes a fence the item ended inside', () => {
+    const [list] = lists('1. **Run.**', '   ```sh', '   npm i', '2. **Next.** b')
+    expect(list?.items.map((item) => item.body)).toEqual(['```sh\nnpm i\n```', 'b'])
+  })
+
+  // On the lead-in's line this text continued a paragraph; as the first line of
+  // a body it would open a block of its own.
+  it('keeps the text after a lead-in paragraph text', () => {
+    const bodies = lists(
+      '1. **Fence.** ```sh',
+      '2. **Heading.** # not a heading',
+      '3. **Quote.** > not a quote',
+      '4. **Bullet.** - not a list',
+      '5. **Ordered.** 2. not a list',
+      '6. **Tag.** <b>inline</b> stays',
+    )[0]?.items.map((item) => item.body)
+    expect(bodies).toEqual([
+      '\\```sh',
+      '\\# not a heading',
+      '\\> not a quote',
+      '\\- not a list',
+      '2\\. not a list',
+      '<b>inline</b> stays',
+    ])
   })
 
   it('treats `1.` and `1)` as two lists', () => {

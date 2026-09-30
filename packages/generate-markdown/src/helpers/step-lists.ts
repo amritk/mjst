@@ -29,8 +29,15 @@ type ItemMarker = {
   readonly content: string
 }
 
-/** A list item gathered from the source, before anyone asks whether it has a lead-in. */
-type RawItem = { readonly marker: ItemMarker; readonly lines: readonly string[] }
+/**
+ * A list item gathered from the source, before anyone asks whether it has a
+ * lead-in. `openFence` is the run of a fence the item ended inside, if any.
+ */
+type RawItem = {
+  readonly marker: ItemMarker
+  readonly lines: readonly string[]
+  readonly openFence: string | undefined
+}
 
 const ORDERED_MARKER = /^( {0,3})(\d{1,9})([.)])( *)/
 const BULLET_MARKER = /^( {0,3})([-+*])( *)/
@@ -186,7 +193,7 @@ const readList = (
 
     // Up to its last non-blank line: the blank lines after it sit between this
     // item and the next, or between the list and whatever follows it.
-    items.push({ marker, lines: lines.slice(itemStart, end) })
+    items.push({ marker, lines: lines.slice(itemStart, end), openFence: fence })
     const next = itemMarker(lines[index] ?? '')
     marker =
       next !== undefined && next.ordered === first?.ordered && next.delimiter === first.delimiter ? next : undefined
@@ -195,21 +202,38 @@ const readList = (
 }
 
 /**
+ * Keeps the text after a lead-in the paragraph text it was. On the lead-in's
+ * line it could only continue the paragraph the bold text opened; as the first
+ * line of a body it would open a block of its own — and a fence opened there
+ * never closes, so it swallowed the step's closing tags and the rest of the
+ * page. A backslash before the character that starts the block leaves the
+ * text as the reader saw it.
+ */
+const asParagraphText = (line: string): string => {
+  const ordered = /^(\d{1,9})([.)])/.exec(line)
+  if (ordered !== null && itemMarker(line) !== undefined) return `${ordered[1]}\\${line.slice(ordered[1]?.length)}`
+  return startsBlock(line) && !line.startsWith('<') ? `\\${line}` : line
+}
+
+/**
  * The item's lead-in and body, or undefined when it does not open with one.
  * The body is the rest of the first line followed by every later line
  * de-indented out of the item, so a nested list or a fence inside it comes out
  * at column 0, ready to be markdown of its own.
  */
-const stepItem = ({ marker, lines }: RawItem): StepItem | undefined => {
+const stepItem = ({ marker, lines, openFence }: RawItem): StepItem | undefined => {
   const lead = LEAD_IN.exec(marker.content)
   if (lead === null) return undefined
   const rest = [
-    marker.content.slice(lead[0].length).replace(/^[ \t]+/, ''),
+    asParagraphText(marker.content.slice(lead[0].length).replace(/^[ \t]+/, '')),
     ...lines.slice(1).map((line) => dedent(line, marker.contentColumn)),
   ].map((line) => (isBlank(line) ? '' : line))
   const first = rest.findIndex((line) => line.length > 0)
   const last = rest.findLastIndex((line) => line.length > 0)
-  return { lead: lead[1] ?? '', body: first === -1 ? '' : rest.slice(first, last + 1).join('\n') }
+  // CommonMark closes a fence left open at the end of the item. Out of the
+  // item nothing would, and it would run on through the closing tags.
+  const closing = openFence === undefined ? [] : [openFence]
+  return { lead: lead[1] ?? '', body: first === -1 ? '' : [...rest.slice(first, last + 1), ...closing].join('\n') }
 }
 
 /**

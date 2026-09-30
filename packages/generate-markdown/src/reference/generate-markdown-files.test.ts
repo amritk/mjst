@@ -5076,6 +5076,20 @@ describe('generate-markdown-files', () => {
     )
   })
 
+  it('closes a fence left open in a step, so the page after it is not swallowed', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { steps: SCALAR_STEPS } },
+        properties: {
+          a: { type: 'string', description: '1. **Run it.**\n   ```sh\n   npm i\n2. **Next.** b' },
+          b: { type: 'string', description: 'Later.' },
+        },
+      }),
+    )
+    expect(content).toContain('```sh\nnpm i\n```\n\n  </scalar-step>')
+    expect(content).toContain('## b')
+  })
+
   it('takes the step markup from the caller', () => {
     const content = only(
       generateMarkdownFiles(
