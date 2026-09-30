@@ -1,5 +1,12 @@
 # @amritk/mjst
 
+## 0.26.1
+
+### Patch Changes
+
+- Updated dependencies [d73d1af]
+  - @amritk/generate-markdown@0.12.0
+
 ## 0.26.0
 
 ### Minor Changes
