@@ -25,7 +25,7 @@ const context = (overrides: Partial<RenderContext> = {}): RenderContext => ({
   layout: 'table',
   sort: 'schema',
   table: DEFAULT_TABLE,
-  headings: { type: 'auto' },
+  headings: { type: 'auto', promoteBold: false },
   file: 'configuration.md',
   page: 'index',
   pageFiles: new Map([

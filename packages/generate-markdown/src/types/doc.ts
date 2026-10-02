@@ -112,6 +112,15 @@ export type DocHeadingType = 'auto' | 'never'
  */
 export type DocHeadings = {
   readonly type: DocHeadingType
+  /**
+   * Turns a paragraph that is nothing but bold text (`**First release**`) into
+   * a real heading, one level deeper than the heading that owns the prose — so
+   * a walkthrough's labels join the page's table of contents and can be linked
+   * to. Off unless the schema or the caller turns it on: the same description
+   * feeds JSDoc and an editor's hover, where the bold line is what an author
+   * has to write, so only this renderer promotes it.
+   */
+  readonly promoteBold: boolean
 }
 
 /**
@@ -265,6 +274,7 @@ export type MarkdownStepsOptions = {
 /** The caller's half of {@link DocHeadings}: every member optional. */
 export type MarkdownHeadingsOptions = {
   readonly type?: DocHeadingType | undefined
+  readonly promoteBold?: boolean | undefined
 }
 
 /**

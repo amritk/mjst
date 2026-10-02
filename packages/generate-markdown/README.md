@@ -682,7 +682,7 @@ On the **root schema**, under `x-mjst.markdown`:
 | `layout` | `'headings' \| 'table' \| 'none'` | Default layout for nested properties. Defaults to `headings`. |
 | `sort` | `'schema' \| 'alphabetical'` | Default property order. Defaults to `schema`. |
 | `pages` | `{ id, file, title?, description?, example? }[]` | Extra markdown files properties can be assigned to. The id `index` is reserved for the index page: declaring it configures that page (its file, title and examples) rather than adding another one. |
-| `headings` | `{ type? }` | How every property rendered as a heading is laid out — `type` takes `'auto' \| 'never'`. See [What a heading holds](#what-a-heading-holds). Root only, like `table` |
+| `headings` | `{ type?, promoteBold? }` | How every property rendered as a heading is laid out — `type` takes `'auto' \| 'never'` — and whether bold-only paragraphs in descriptions become headings (`promoteBold`, off by default). See [What a heading holds](#what-a-heading-holds) and [Bold labels](#bold-labels). Root only, like `table` |
 | `table` | `{ type?, default?, required?, requiredFirst? }` | How every property table on every page is laid out — `type` and `default` take `'auto' \| 'always' \| 'never'`, `required` takes `'column'` or a suffix for required names, and `requiredFirst` heads each table with the properties that have to be filled in. See [What a property table holds](#what-a-property-table-holds). Root only: a reference whose tables disagree about which columns exist reads as several references stapled together |
 | `steps` | `{ open, close, stepOpen, stepClose }` | Renders a top-level ordered list whose every item opens with a bold lead-in as the docs site's step component. Off unless declared. See [Steps](#steps). Root only, like `table` |
 | `sections` | `{ id, title?, description?, page?, layout?, sort?, example? }[]` | `##` groupings inside a page. A section with no properties still renders, which is how a prose-only intro moves into the schema. Its `layout` takes the same `'headings' \| 'table' \| 'none'` vocabulary a property's does, and defaults to `headings` — the root `layout` is the default for a property's *children*, not for a section. |
@@ -826,6 +826,7 @@ one declaration, and every property heading on every page follows it.
 | Member | Values | What it decides |
 | --- | --- | --- |
 | `type` | `auto` (default), `never` | The **Type:** line under a property's heading. `auto` prints it whenever the schema states a type. `never` is for a reference whose readers do not think in types, where the line under every heading is noise. An `enum` then gets its **Allowed values:** line back, because the label was the only other place its values appeared. **Required** stays either way, since requiredness is not a type |
+| `promoteBold` | `false` (default), `true` | Turns a paragraph that is nothing but bold text into a real heading one level under the heading that owns it. See [Bold labels](#bold-labels) |
 
 `never` is the only way to hide the line: an empty `x-mjst.markdown.type` on a property
 counts as unset and falls back to the label the schema implies.
@@ -935,6 +936,78 @@ These rules decide which lists convert:
 
 `MarkdownOptions.steps` sets or overrides the members from code. A declaration
 missing one of the four members is an error, not silently read as off.
+
+### Bold labels
+
+A description that walks through a setup in parts cannot label those parts with
+`#` headings. The same text becomes JSDoc and an editor's hover, where headings
+render badly, and a hard-coded level is wrong wherever the description ends up
+nested. So authors label each part with a paragraph of bold text:
+
+```markdown
+**First release**
+
+1. **Create an npm access token.** …
+
+**Switch to trusted publishing**
+
+1. **Register the trusted publisher.** …
+```
+
+Set `promoteBold` on the root `x-mjst.markdown.headings` and the markdown output
+turns those labels into real headings. They then show up in the docs site's
+table of contents and can be linked to. JSDoc and hovers still get the bold text:
+
+```json
+{
+  "x-mjst": {
+    "markdown": {
+      "headings": { "type": "auto", "promoteBold": true }
+    }
+  }
+}
+```
+
+Under `### npm` the description above renders as:
+
+```markdown
+#### First release
+
+1. **Create an npm access token.** …
+
+#### Switch to trusted publishing
+
+1. **Register the trusted publisher.** …
+```
+
+These rules decide which paragraphs are promoted:
+
+- **Only labels.** A top-level paragraph that is exactly one bold span
+  (`**Text**` or `__Text__`), optionally followed by a `:`, with nothing else in
+  it. A bold span that opens a longer paragraph is a lead-in and stays bold. So
+  does a bold-only paragraph inside a fence, a blockquote or callout, a list, a
+  raw HTML block or a step body.
+- **Level.** One deeper than the heading that owns the prose, which is the level
+  that heading's own children render at: the labels under `### npm` are `####`,
+  siblings of `#### authMethod`. Page and section descriptions, notes and footers
+  follow the same rule. Under a property with `heading: false` the labels take
+  the level its children use. The level is capped at 6.
+- **Text.** The bold text, inline markdown kept, with one trailing `.` or `:`
+  removed.
+- **Anchors.** Labels claim anchors the way every heading on the page does, so a
+  repeated label is numbered `-1`, `-2`. A label that comes before a property
+  heading of the same name takes the plain anchor, and the property's row links
+  to the numbered one its heading got. Step ids skip label anchors as they skip
+  every other heading's.
+- **Table rows.** A row keeps its one-paragraph summary. When that summary is a
+  label, the row still shows the bold text, and the block under the row opens
+  with the label as a heading. A label with nothing after it has nothing to
+  label, so it stays in the row only.
+- **Steps.** A label directly above a lead-in list is still a label: it is
+  promoted and the list under it converts to steps as usual.
+
+`MarkdownOptions.headings.promoteBold` sets or overrides it from code. A value
+that is not a boolean is an error, not silently read as off.
 
 ### Splitting across files
 

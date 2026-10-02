@@ -9,7 +9,7 @@ const context = (anchors: PageAnchors): RenderContext => ({
   layout: 'table',
   sort: 'schema',
   table: { type: 'auto', default: 'auto', required: 'column', requiredFirst: false },
-  headings: { type: 'auto' },
+  headings: { type: 'auto', promoteBold: false },
   file: 'configuration.md',
   page: 'index',
   pageFiles: new Map([['index', 'configuration.md']]),

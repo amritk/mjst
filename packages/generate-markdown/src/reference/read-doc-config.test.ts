@@ -230,17 +230,18 @@ describe('read-doc-config', () => {
   })
 
   it('labels every heading with its type unless told otherwise', () => {
-    expect(readDocConfig({}).headings).toEqual({ type: 'auto' })
+    expect(readDocConfig({}).headings).toEqual({ type: 'auto', promoteBold: false })
   })
 
   it('reads the heading layout the schema declares, and lets the caller override it', () => {
     expect(readDocConfig({ 'x-mjst': { markdown: { headings: { type: 'never' } } } }).headings).toEqual({
       type: 'never',
+      promoteBold: false,
     })
     expect(
       readDocConfig({ 'x-mjst': { markdown: { headings: { type: 'never' } } } }, { headings: { type: 'auto' } })
         .headings,
-    ).toEqual({ type: 'auto' })
+    ).toEqual({ type: 'auto', promoteBold: false })
   })
 
   // `always` is a table-column word: a heading with no type to state has
@@ -248,8 +249,33 @@ describe('read-doc-config', () => {
   it('ignores a heading member it does not understand', () => {
     expect(readDocConfig({ 'x-mjst': { markdown: { headings: { type: 'always' } } } }).headings).toEqual({
       type: 'auto',
+      promoteBold: false,
     })
-    expect(readDocConfig({ 'x-mjst': { markdown: { headings: { type: false } } } }).headings).toEqual({ type: 'auto' })
+    expect(readDocConfig({ 'x-mjst': { markdown: { headings: { type: false } } } }).headings).toEqual({
+      type: 'auto',
+      promoteBold: false,
+    })
+  })
+
+  it('reads promoteBold from the schema, and lets the caller override it', () => {
+    const schema = { 'x-mjst': { markdown: { headings: { promoteBold: true } } } }
+    expect(readDocConfig(schema).headings).toEqual({ type: 'auto', promoteBold: true })
+    expect(readDocConfig(schema, { headings: { promoteBold: false } }).headings.promoteBold).toBe(false)
+    expect(readDocConfig({}, { headings: { promoteBold: true } }).headings.promoteBold).toBe(true)
+    // Overriding one member keeps the schema's other one.
+    expect(readDocConfig(schema, { headings: { type: 'never' } }).headings).toEqual({
+      type: 'never',
+      promoteBold: true,
+    })
+  })
+
+  // A string that looks like a yes, quietly read as off, would leave every
+  // label bold with nothing in the output to say why.
+  it('refuses a promoteBold that is not a boolean', () => {
+    expect(() => readDocConfig({ 'x-mjst': { markdown: { headings: { promoteBold: 'true' } } } })).toThrow(
+      /`x-mjst\.markdown\.headings\.promoteBold` must be `true` or `false`; got "true"/,
+    )
+    expect(() => readDocConfig({ 'x-mjst': { markdown: { headings: { promoteBold: 1 } } } })).toThrow(/got 1/)
   })
 
   it('leaves steps off unless something names them', () => {

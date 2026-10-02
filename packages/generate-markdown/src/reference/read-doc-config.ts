@@ -61,11 +61,22 @@ const readTable = (value: unknown, options: MarkdownTableOptions = {}): DocTable
 
 /**
  * The heading layout every page renders with: the caller's choice, then the
- * schema's, then the built-in — which labels every heading with its type.
+ * schema's, then the built-in — which labels every heading with its type and
+ * leaves bold paragraphs bold.
+ *
+ * `promoteBold` is refused rather than read as off when it is not a boolean,
+ * for the reason a half-declared `steps` is: a `"promoteBold": "true"` quietly
+ * ignored leaves every label bold, and nothing in the output says why.
  */
 const readHeadings = (value: unknown, options: MarkdownHeadingsOptions = {}): DocHeadings => {
   const headings = isObject(value) ? value : {}
-  return { type: options.type ?? asOneOf(headings['type'], HEADING_TYPES) ?? 'auto' }
+  const promoteBold: unknown = options.promoteBold ?? headings['promoteBold'] ?? false
+  if (typeof promoteBold !== 'boolean') {
+    throw new Error(
+      `\`x-mjst.markdown.headings.promoteBold\` must be \`true\` or \`false\`; got ${JSON.stringify(promoteBold)}.`,
+    )
+  }
+  return { type: options.type ?? asOneOf(headings['type'], HEADING_TYPES) ?? 'auto', promoteBold }
 }
 
 const STEP_MEMBERS = ['open', 'close', 'stepOpen', 'stepClose'] as const

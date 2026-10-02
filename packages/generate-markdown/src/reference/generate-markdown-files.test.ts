@@ -5225,6 +5225,231 @@ describe('generate-markdown-files', () => {
     expect(index.match(/id="deploy[^"]*"/g)).toEqual(['id="deploy"', 'id="deploy-1"', 'id="deploy-2"'])
     expect(files.find((file) => file.filename === 'other.md')?.content).toContain('id="deploy"')
   })
+
+  it('leaves bold labels bold unless the schema asks for promoteBold', () => {
+    const schema = {
+      title: 'Config',
+      description: LABELLED,
+      properties: { npm: { type: 'string', description: LABELLED } },
+    }
+    const content = only(generateMarkdownFiles(schema))
+    expect(content).toBe(`# Config\n\n${LABELLED}\n\n## npm\n\n**Type:** \`string\`\n\n${LABELLED}\n`)
+    const off = { ...schema, 'x-mjst': { markdown: { headings: { promoteBold: false } } } }
+    expect(only(generateMarkdownFiles(off))).toBe(content)
+  })
+
+  it('promotes a label one level under the property heading that owns it, beside its children', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { headings: { promoteBold: true } } },
+        properties: {
+          publish: {
+            type: 'object',
+            properties: {
+              npm: {
+                type: 'object',
+                description: `Publishes to npm.\n\n${LABELLED}`,
+                properties: { authMethod: { type: 'string' } },
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain(
+      '### npm\n\n**Type:** `object`\n\nPublishes to npm.\n\n#### First release\n\nCreate a token.\n\n#### Switch to trusted publishing\n\nRegister it.\n\n#### authMethod',
+    )
+    expect(content).not.toContain('**First release**')
+  })
+
+  it('promotes labels in page and section prose, notes and footers to the level their properties render at', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Config',
+        description: '**Page label**\n\nPage text.',
+        'x-mjst': {
+          markdown: {
+            headings: { promoteBold: true },
+            sections: [{ id: 'publishing', title: 'Publishing', description: '**Section label**\n\nSection text.' }],
+          },
+        },
+        properties: {
+          npm: {
+            type: 'string',
+            'x-mjst': {
+              markdown: {
+                section: 'publishing',
+                note: '**Note label**\n\nNote text.',
+                footer: '**Footer label**\n\nFooter text.',
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('# Config\n\n## Page label\n\nPage text.')
+    expect(content).toContain('## Publishing\n\n### Section label\n\nSection text.\n\n### npm')
+    expect(content).toContain('> #### Note label\n> \n> Note text.')
+    expect(content).toContain('#### Footer label\n\nFooter text.')
+  })
+
+  it('puts the labels of a heading-less property at the level its children use', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { headings: { promoteBold: true } } },
+        properties: {
+          targets: {
+            type: 'object',
+            description: '**Label**\n\nText.',
+            'x-mjst': { markdown: { heading: false } },
+            properties: { typescript: { type: 'string' } },
+          },
+        },
+      }),
+    )
+    expect(content).toBe('## Label\n\nText.\n\n## typescript\n\n**Type:** `string`\n')
+  })
+
+  it('caps a deeply nested label at level six', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { headings: { promoteBold: true } } },
+        properties: {
+          a: {
+            type: 'object',
+            properties: {
+              b: {
+                type: 'object',
+                properties: {
+                  c: { type: 'object', properties: { d: { type: 'object', description: '**Deep**\n\nText.' } } },
+                },
+              },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('##### d\n\n**Type:** `object`\n\n###### Deep\n\nText.')
+  })
+
+  it('leaves lead-ins, and labels inside fences, blockquotes, lists and steps, as they are', () => {
+    const description = [
+      '**Note.** A lead-in to a longer paragraph.',
+      '',
+      '```md',
+      '**Fenced**',
+      '```',
+      '',
+      '> **Quoted**',
+      '',
+      '- **Listed**',
+      '',
+      '1. **Create a token.** Give it rights.',
+      '',
+      '   **In the step**',
+    ].join('\n')
+    const content = only(
+      generateMarkdownFiles({
+        description,
+        'x-mjst': { markdown: { headings: { promoteBold: true }, steps: SCALAR_STEPS } },
+      }),
+    )
+    expect(content).not.toMatch(/^#/m)
+    for (const bold of ['**Note.**', '**Fenced**', '> **Quoted**', '- **Listed**', '**In the step**']) {
+      expect(content).toContain(bold)
+    }
+  })
+
+  it('numbers repeated labels and a label named like a property, and links the row to the right one', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { headings: { promoteBold: true }, layout: 'table' } },
+        properties: {
+          npm: {
+            type: 'object',
+            description: '**authMethod**\n\nPick one.\n\n**Setup**\n\nOne.\n\n**Setup**\n\nTwo.',
+            properties: {
+              authMethod: { type: 'string', description: 'How.', 'x-mjst': { markdown: { note: 'Careful.' } } },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('### authMethod\n\nPick one.\n\n### Setup\n\nOne.\n\n### Setup\n\nTwo.')
+    // The label printed first, so it holds `#authmethod`, and the row links
+    // past it to the property's own heading.
+    expect(content).toContain('| [`authMethod`](#authmethod-1) | `string` | How. |')
+    expect(content).toContain('### authMethod\n\n> Careful.')
+  })
+
+  it('keeps a step off the anchor of a promoted label', () => {
+    const content = only(
+      generateMarkdownFiles({
+        description: '**Install**\n\n1. **Install.** Run it.',
+        'x-mjst': { markdown: { headings: { promoteBold: true }, steps: SCALAR_STEPS } },
+      }),
+    )
+    expect(content).toContain('## Install\n\n<scalar-steps>\n<scalar-step id="install-1" title="Install">')
+  })
+
+  it('promotes a label above a step list and converts the list after it', () => {
+    const content = only(
+      generateMarkdownFiles({
+        title: 'Config',
+        description: STEP_LIST,
+        'x-mjst': { markdown: { headings: { promoteBold: true }, steps: SCALAR_STEPS } },
+      }),
+    )
+    expect(content).toBe(
+      [
+        '# Config',
+        '',
+        '## First release',
+        '',
+        '<scalar-steps>',
+        '<scalar-step id="create-an-access-token" title="Create an access token">',
+        '',
+        'Give it publish permission and turn 2FA bypass on.',
+        '',
+        '</scalar-step>',
+        '<scalar-step id="add-it-as-a-repository-secret" title="Add it as a repository secret">',
+        '',
+        'Name it `NPM_TOKEN`.',
+        '',
+        '</scalar-step>',
+        '</scalar-steps>',
+        '',
+      ].join('\n'),
+    )
+  })
+
+  // A row is one line, and a heading cannot go in one.
+  it('leaves a label summary in its row as it is, and promotes it in the block below', () => {
+    const content = only(
+      generateMarkdownFiles({
+        'x-mjst': { markdown: { headings: { promoteBold: true }, layout: 'table' } },
+        properties: {
+          release: {
+            type: 'object',
+            properties: {
+              token: { type: 'string', description: '**First release**\n\nCreate a token.' },
+              bare: { type: 'string', description: '**Only a label**' },
+            },
+          },
+        },
+      }),
+    )
+    expect(content).toContain('| [`token`](#token) | `string` | **First release** |')
+    expect(content).toContain('### token\n\n#### First release\n\nCreate a token.')
+    // A label with nothing under it labels nothing, so there is no block.
+    expect(content).toContain('| `bare` | `string` | **Only a label** |')
+    expect(content).not.toContain('Only a label\n')
+  })
+
+  it('takes promoteBold from the caller', () => {
+    const content = only(generateMarkdownFiles({ description: LABELLED }, { headings: { promoteBold: true } }))
+    expect(content).toBe('## First release\n\nCreate a token.\n\n## Switch to trusted publishing\n\nRegister it.\n')
+  })
 })
 
 const SCALAR_STEPS = {
@@ -5239,4 +5464,14 @@ const STEP_LIST = [
   '',
   '1. **Create an access token.** Give it publish permission and turn 2FA bypass on.',
   '2. **Add it as a repository secret.** Name it `NPM_TOKEN`.',
+].join('\n')
+
+const LABELLED = [
+  '**First release**',
+  '',
+  'Create a token.',
+  '',
+  '**Switch to trusted publishing**',
+  '',
+  'Register it.',
 ].join('\n')

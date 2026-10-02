@@ -1,3 +1,4 @@
+import { boldLabels } from '#helpers/bold-labels'
 import { firstParagraph, remainingParagraphs, trimDescription } from '#helpers/first-paragraph'
 import { formatInlineLiteral } from '#helpers/format-literal'
 import { asArray } from '#helpers/guards'
@@ -12,7 +13,7 @@ import { deriveExample } from '#reference/derive-example'
 import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
-import { renderSteps } from '#reference/render-steps'
+import { renderProse } from '#reference/render-prose'
 import type { DocEntry, RenderContext } from '#types/render'
 
 /**
@@ -56,16 +57,28 @@ const documentedElsewhere = (entry: DocEntry, context: RenderContext): boolean =
  * loose list is one paragraph per item, so the row took the first item and the
  * block got a step component starting at the second — one list in two places,
  * neither of them whole. The block prints the whole component instead, and the
- * row keeps the summary it always had.
+ * row keeps the summary it always had. The same goes for a row whose paragraph
+ * is a bold label the block promotes to a heading.
  */
 const proseBelowRow = (description: string, context: RenderContext): string => {
   const rest = remainingParagraphs(description)
-  if (context.steps === undefined) return rest
-  const row = firstParagraph(description).split('\n')[0] ?? ''
-  if (row.length === 0) return rest
+  if (context.steps === undefined && !context.headings.promoteBold) return rest
+  const row = firstParagraph(description)
+  const rowLine = row.split('\n')[0] ?? ''
+  if (rowLine.length === 0) return rest
   const lines = description.replace(/\r\n?/g, '\n').split('\n')
-  const inList = stepLists(lines).some((list) => lines.slice(list.start, list.end).some((line) => line.trim() === row))
-  return inList ? description : rest
+  const inList =
+    context.steps !== undefined &&
+    stepLists(lines).some((list) => lines.slice(list.start, list.end).some((line) => line.trim() === rowLine))
+  // A row whose summary is a label summarises the prose under it, and the
+  // block is where that prose goes — so the block opens with the label as its
+  // heading, rather than with a section whose title only the row printed. A
+  // label with nothing after it labels nothing, and the block stays empty.
+  const labelled =
+    context.headings.promoteBold &&
+    rest.length > 0 &&
+    boldLabels(lines).some((label) => lines.slice(label.start, label.end).join('\n').trim() === row)
+  return inList || labelled ? description : rest
 }
 
 /** Comma-separated code spans, for the allowed-values and examples lines. */
@@ -103,6 +116,9 @@ export const renderProperty = (
   const blocks: string[] = []
 
   const titled = meta.heading || options.summarised === true
+  // Where this property's children render, and so where the labels in its own
+  // prose go: one level under its heading, or its own level when it has none.
+  const childLevel = titled ? level + 1 : level
   // Through `propertyHeading` rather than built here, so the anchor this
   // heading claims is slugged from the very text it renders — and through
   // `renderHeading`, so the row above knows where the property landed.
@@ -127,7 +143,7 @@ export const renderProperty = (
   // whole paragraphs of prose.
   const description = trimDescription(readDescription(prop))
   const prose = options.summarised ? proseBelowRow(description, context) : description
-  if (prose.length > 0) blocks.push(renderSteps(prose, context))
+  if (prose.length > 0) blocks.push(renderProse(prose, childLevel, context))
 
   // Same rule for the default: the Default column skips a `null`, so a `null`
   // default is the row's omission rather than its content.
@@ -167,7 +183,7 @@ export const renderProperty = (
   // bare CR as a line ending: a note holding one escaped the blockquote and the
   // rest of it became page structure.
   for (const note of meta.notes) {
-    blocks.push(`> ${renderSteps(note, context).replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
+    blocks.push(`> ${renderProse(note, childLevel, context).replace(/\r\n?/g, '\n').replace(/\n/g, '\n> ')}`)
   }
 
   // A derived example is this package's convenience, not the author's content:
@@ -176,9 +192,8 @@ export const renderProperty = (
   // example the author wrote is content, and stays.
   const shown = derived === undefined ? meta.examples : options.summarised ? [] : [derived]
   blocks.push(...renderExamples(shown, context.language))
-  for (const footer of meta.footers) blocks.push(renderSteps(trimDescription(footer), context))
+  for (const footer of meta.footers) blocks.push(renderProse(trimDescription(footer), childLevel, context))
 
-  const childLevelBase = titled ? level + 1 : level
   const layout = meta.layout ?? context.layout
   if (layout === 'none') return blocks
 
@@ -206,7 +221,7 @@ export const renderProperty = (
     const summaries = new Map(
       ordered
         .filter((child) => !documentedElsewhere(child, context))
-        .map((child) => [child, summarisedBlocks(child, childLevelBase, context)] as const),
+        .map((child) => [child, summarisedBlocks(child, childLevel, context)] as const),
     )
     // A child documented elsewhere has no block here to consult, so the block it
     // gets there is rendered and thrown away — only whether it holds anything is
@@ -216,7 +231,7 @@ export const renderProperty = (
     // a step it does not print.
     const summarised = (child: DocEntry): boolean => {
       const otherPage = { ...context, anchors: pageAnchors(), stepIds: pageAnchors() }
-      return (summaries.get(child) ?? summarisedBlocks(child, childLevelBase, otherPage)).length > 0
+      return (summaries.get(child) ?? summarisedBlocks(child, childLevel, otherPage)).length > 0
     }
     blocks.push(renderPropertyTable(ordered, context, { summarised }))
     for (const child of ordered) blocks.push(...(summaries.get(child) ?? []))
@@ -224,7 +239,7 @@ export const renderProperty = (
   }
   // With no heading of its own this property occupies its parent's level, so
   // its children stay where they would have been.
-  for (const child of children) blocks.push(...renderProperty(child, childLevelBase, context))
+  for (const child of children) blocks.push(...renderProperty(child, childLevel, context))
   return blocks
 }
 
