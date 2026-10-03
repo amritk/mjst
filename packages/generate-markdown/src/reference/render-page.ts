@@ -4,7 +4,7 @@ import { pageAnchors, renderHeading } from '#reference/page-anchors'
 import { renderExamples } from '#reference/render-examples'
 import { renderProperty, summarisedBlocks } from '#reference/render-property'
 import { renderPropertyTable, tableOrder } from '#reference/render-property-table'
-import { renderSteps } from '#reference/render-steps'
+import { renderProse } from '#reference/render-prose'
 import type { DocConfig } from '#types/doc'
 import type { PageAnchors, PageModel, RenderContext } from '#types/render'
 
@@ -64,14 +64,21 @@ const renderPass = (
   // as the page title, and every linter counts more than one as an error. A
   // schema that wants that heading gives itself a `title`.
   if (model.page.title !== undefined) blocks.push(renderHeading(level, proseHeading(model.page.title), context))
-  if (model.page.description !== undefined) blocks.push(renderSteps(trimDescription(model.page.description), context))
+  // Labels in prose sit one level below the heading that owns it, which is
+  // where that heading's properties render — the page's at `level + 1`, a
+  // section's at `level + 2`, whether or not a title is printed above them.
+  if (model.page.description !== undefined) {
+    blocks.push(renderProse(trimDescription(model.page.description), level + 1, context))
+  }
   blocks.push(...renderExamples(model.page.examples, config.language))
 
   for (const entry of model.entries) blocks.push(...renderProperty(entry, level + 1, context))
 
   for (const { section, entries } of model.sections) {
     if (section.title !== undefined) blocks.push(renderHeading(level + 1, proseHeading(section.title), context))
-    if (section.description !== undefined) blocks.push(renderSteps(trimDescription(section.description), context))
+    if (section.description !== undefined) {
+      blocks.push(renderProse(trimDescription(section.description), level + 2, context))
+    }
     blocks.push(...renderExamples(section.examples, config.language))
     // A section's own layout, never `config.layout`: that one is the default for
     // a *property's* children, and letting it reach sections too would collapse

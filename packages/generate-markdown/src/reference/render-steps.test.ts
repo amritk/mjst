@@ -16,7 +16,7 @@ const context = (steps: DocSteps | undefined = SCALAR): RenderContext => ({
   layout: 'headings',
   sort: 'schema',
   table: { type: 'auto', default: 'auto', required: 'column', requiredFirst: false },
-  headings: { type: 'auto' },
+  headings: { type: 'auto', promoteBold: false },
   file: 'index.md',
   page: 'index',
   pageFiles: new Map([['index', 'index.md']]),

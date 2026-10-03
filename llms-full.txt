@@ -784,7 +784,21 @@ or `mjst markdown <schema> --table --readme <file>`.
    keeps the whole list a list. Lists in fences and raw HTML blocks are left
    alone, and so are table-row summaries. Tags are emitted at column 0. Keep plain lists in the schema: JSDoc
    and hovers get the raw description, so never write the tags there.
-12. **Golden output is checked in.** `fixtures/expected/` is compared by
+12. **Bold-only paragraphs can become headings, opt in.** The root
+   `x-mjst.markdown.headings.promoteBold` (`true`/`false`, default `false`; a
+   non-boolean throws; `MarkdownOptions.headings.promoteBold` overrides) turns
+   a top-level paragraph that is exactly one bold span (`**Text**` or
+   `__Text__`, an optional trailing `:`) into a heading one level under the
+   heading that owns the prose, i.e. where that heading's children render
+   (capped at 6; `heading: false` uses its children's level). Page and section
+   descriptions, notes and footers too. A bold lead-in to a longer paragraph,
+   and bold paragraphs in fences, blockquotes, lists, raw HTML or step bodies
+   stay bold. One trailing `.` or `:` is dropped, inline markdown kept. Labels
+   claim page anchors like any heading (repeats numbered, step ids skip them).
+   A table row keeps its summary; when that summary is a label, the block under
+   the row prints it as a heading. Write the bold label in the schema, never a
+   `#` heading: JSDoc and hovers get the raw description.
+13. **Golden output is checked in.** `fixtures/expected/` is compared by
    `generate-markdown-files.test.ts`. After a deliberate renderer change run
    `bun run generate-fixtures` and read the diff — it is the review.
 
