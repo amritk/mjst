@@ -74,9 +74,9 @@ add one more entry point to the validator half and work under either flag.
 ## Common flags
 
 `--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
-`--validators` / `--validators-only`, `--examples`, `--message-contracts`,
-`--discriminator`, `--types-only`, `--build`, `--strict`, `--strip-unknown`,
-`--unknown-keys count-keys|count-enumerable`, `--readonly`,
+`--validators` / `--validators-only`, `--branch-errors`, `--examples`,
+`--message-contracts`, `--discriminator`, `--types-only`, `--build`, `--strict`,
+`--strip-unknown`, `--unknown-keys count-keys|count-enumerable`, `--readonly`,
 `--import-ext ts|js`, `--config <path>`, `--resolve-remote` /
 `--allowed-hosts` (SSRF-guarded remote `$ref`s).
 
@@ -516,14 +516,16 @@ Every mode is reachable from `mjst` without dropping to the programmatic API:
 |:---|:---|
 | `types` | `--types-only` (alone), otherwise always emitted |
 | `guard`, `validate` | `--validators`, or `--validators-only` for no parser |
-| `check` | `--check` |
-| `coerce` | `--coerce` |
-| `repair` | `--repair` (emits `coerceX` too) |
+| `check` | `--validators --check` |
+| `coerce` | `--validators --coerce` |
+| `repair` | `--validators --repair` (emits `coerceX` too) |
 | `parse` | the default on any run that is not `--types-only`/`--validators-only` |
 | `parseStrict` | `--strict` |
 
 `--validators-only` is this package's own default (`['types', 'guard', 'validate']`)
 spelled as a flag: everything that judges a document, nothing that builds one.
+`--check`, `--coerce` and `--repair` shape the validator half, so the CLI rejects
+any of them without one of those two flags.
 
 ## Gotchas — where agents fail
 
@@ -555,10 +557,10 @@ spelled as a flag: everything that judges a document, nothing that builds one.
    validateX(v)` pays for both passes and is no faster than `validateX`.
 
 8. **It emits each engine's exact bytes.** A single-mode build is byte-identical
-   to what that engine emitted when it was its own package, so there is no runtime
-   difference to reason about and no speedup to claim — do not tell a user this is
-   faster. What it changes is that the whole matrix comes out as one type instead
-   of two, and that a build asking for no validator mode ships no
+   to what the engine that owns that mode emits when called directly, so there is
+   no runtime difference to reason about and no speedup to claim — do not tell a
+   user this is faster. What it changes is that the whole matrix comes out as one
+   type instead of two, and that a build asking for no validator mode ships no
    `validation-result.ts`.
 
 9. **`coerceX` is not Ajv's `coerceTypes`, on purpose.** It never modifies its
@@ -699,8 +701,8 @@ or `mjst markdown <schema> --table --readme <file>`.
    is that same flow with the paths spelled out. `generateMarkdownFiles()` takes
    a schema and returns `GeneratedFile[]` like the other generators in this
    repo, touching no files.
-2. **The table splices between markers.** If `README.md` exists but lacks BOTH
-   `<!-- config-table-start -->` and `<!-- config-table-end -->`,
+2. **The table splices between markers.** If `README.md` exists but lacks
+   either `<!-- config-table-start -->` or `<!-- config-table-end -->`,
    `generateMarkdown` **throws** rather than overwrite hand-written content. The
    prose pages have no such deal: `generateDocs` owns them and overwrites them
    wholesale.
@@ -826,9 +828,11 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    check `if (result !== true)`; the failure case is `{ valid: false, errors }`.
 2. **`assert(schema, value)` — the value is the 2nd positional arg.** `validate`
    and `validateGuard` take only the schema and return a function.
-3. **Only local `$ref`s resolve** (`#/$defs/x`, `#anchor`, incl. recursion).
-   Remote / cross-file refs are NOT fetched — bundle first with
-   `@amritk/resolve-refs`, then validate the dereferenced document.
+3. **Nothing is fetched.** Same-document `$ref`s resolve (`#/$defs/x`,
+   `#anchor`, `$id` base URIs, incl. recursion). A ref into another document
+   resolves only if you pass that document, already loaded, in
+   `{ schemas: { [uri]: doc } }` — or bundle first with `@amritk/resolve-refs`.
+   A URI nobody supplied throws.
 4. **`format` is opt-in.** Unlisted formats are treated as annotations (like
    Ajv); pass `{ formats: 'all' }` or a list to enforce. `customFormats` adds
    checkers of your own (`{ customFormats: { phone: /^\d+$/ } }`), and those are
@@ -855,10 +859,12 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    it's the way to give `@amritk/api` route `params`/`query`/`body` nominal ids.
 
 Exports: `validate`, `validateGuard`, `assert`, `checkSchema`, `isSchemaError`,
-`isValidationLimitError`, and the types `Validator`, `Guard`, `ValidationError`,
-`ValidationResult`, `FromSchema`, `Infer`, `ValidateOptions`, `SchemaIssue`,
-`FormatDefinition`. Subpaths: `/parse` (coercing parser) and `/metaschema` (the
-2020-12 dialect documents). Install: `bun add @amritk/runtime-validators`.
+`schemaError`, `isValidationLimitError`, and the types `Validator`, `Guard`,
+`Check`, `ValidationError`, `ValidationResult`, `ValidationFailedError`,
+`FromSchema`, `Infer`, `ValidateOptions`, `ValidateLimits`, `SchemaIssue`,
+`FormatDefinition`. Subpaths: `/parse` (the coercing `parse`, plus
+`coerceScalar`, its string-to-scalar table) and `/metaschema` (the 2020-12
+dialect documents). Install: `bun add @amritk/runtime-validators`.
 
 ---
 
@@ -892,12 +898,14 @@ const jsonSchema = await adapter.toJSONSchema(User) // always await
 3. **`getAdapter('json')` throws** — `'json'` is a valid `SourceFormat` but has no
    adapter (JSON Schema is read directly). Only `typebox` / `zod` / `valibot` /
    `effect` / `avro` resolve.
-4. **Source libraries are optional peer deps**, imported dynamically. **Zod must
-   be v4+** (`toJSONSchema` doesn't exist earlier). Always `await` — even
+4. **Source libraries are optional peer deps**, imported dynamically. **Zod 4+
+   is preferred** (native `toJSONSchema`); Zod 3 works only with the
+   `zod-to-json-schema` package installed alongside it. Always `await` — even
    TypeBox's synchronous path is typed to allow a Promise.
 5. **Unrepresentable constructs widen to `{}`** with a stderr `[mjst]` warning
-   (Effect throws on nested ones). `date` / `bigint` become `x-mjst` hints. Pass
-   `{ strict: true }` to throw instead of widening.
+   (Effect throws instead, on any leaf it cannot rescue). `date` / `bigint`
+   become `x-mjst` hints. Pass `{ strict: true }` to throw instead of widening
+   (Zod, Valibot, Avro).
 6. **Avro takes a parsed `.avsc`, not a module, and needs no peer dep.** Pick the
    encoding deliberately: `avroToJsonSchema(avro)` describes the idiomatic
    decoded object (nullable unions, base64 bytes, defaulted fields optional);
@@ -1016,8 +1024,8 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 ## Gotchas — where agents fail
 
 1. **`resolveRefs` is in-memory only.** It does NOT load other files/URLs —
-   external refs stay in place and are pushed to `errors` (the ref becomes `{}`).
-   Use `resolveRefsFromFile` for cross-file/remote.
+   external refs stay in place and are pushed to `errors` (the `{ $ref }` node is
+   kept as written, not inlined). Use `resolveRefsFromFile` for cross-file/remote.
 2. **Errors are collected, never thrown.** A missing file, refused host, or bad
    URL lands on `result.errors` while the rest still resolves. Always check it.
    Each error's `path` is where the offending reference was written in the
@@ -1211,8 +1219,8 @@ if (node && isObjectSchema(node) && hasProperties(node)) {
 4. **Two similar guards:** `isSchemaObject` narrows to a non-boolean schema;
    `isObjectSchema` narrows to a `type: object` schema. Don't confuse them.
 5. **Some modules are copied verbatim into generated output** (`is-object`,
-   `safe-accessor`, `validate-array`, `validate-record`) — intentionally
-   dependency-free and minimal, not general-purpose validators.
+   `has-ref`, `validate-array`, `validate-record`, `coercion-runtime`) —
+   intentionally dependency-free and minimal, not general-purpose validators.
 
 Notable subpaths: `/resolve-ref`, `/extract-refs`, `/schema-guards`,
 `/ref-to-name`, `/ref-to-filename`, `/upgrade-draft07-schema`,
