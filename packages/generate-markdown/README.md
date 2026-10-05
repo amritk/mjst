@@ -984,7 +984,7 @@ the output would look wrong. Generation refuses when:
 
 ### Working examples
 
-Two realistic schemas and the markdown they generate are checked in:
+Three realistic schemas and the markdown they generate are checked in:
 
 - [`fixtures/api-reference-config.schema.json`](./fixtures/api-reference-config.schema.json) → [one page](./fixtures/expected/api-reference-config/configuration.md)
 - [`fixtures/sdk-config.schema.json`](./fixtures/sdk-config.schema.json) → [three pages](./fixtures/expected/sdk-config/)
@@ -1001,6 +1001,12 @@ every adopter's docs would change.
 ### `generateMarkdown(): Promise<void>`
 
 No arguments. Reads from `${cwd}/config.schema.json` and writes to `${cwd}/README.md`.
+
+### `generateConfigTable(options?: GenerateConfigTableOptions): Promise<string>`
+
+The same flow with the paths spelled out: `schemaPath` (default
+`${cwd}/config.schema.json`) and `readmePath` (default `${cwd}/README.md`).
+Returns the path it wrote, and creates the target's directory when it is missing.
 
 ### `generateMarkdownFiles(schema: unknown, options?: MarkdownOptions): readonly GeneratedFile[]`
 
@@ -1035,7 +1041,7 @@ do before rendering.
 ## Related packages
 
 - [`@amritk/mjst`](../cli) — uses this package to keep its README's flag table in sync with `config.schema.json`
-- [`@amritk/validation`](../parsers) — sibling generator for TypeScript types, validators and parsers
+- [`@amritk/validation`](../validation) — sibling generator for TypeScript types, validators and parsers
 
 ---
 

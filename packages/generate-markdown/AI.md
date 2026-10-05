@@ -41,8 +41,8 @@ or `mjst markdown <schema> --table --readme <file>`.
    is that same flow with the paths spelled out. `generateMarkdownFiles()` takes
    a schema and returns `GeneratedFile[]` like the other generators in this
    repo, touching no files.
-2. **The table splices between markers.** If `README.md` exists but lacks BOTH
-   `<!-- config-table-start -->` and `<!-- config-table-end -->`,
+2. **The table splices between markers.** If `README.md` exists but lacks
+   either `<!-- config-table-start -->` or `<!-- config-table-end -->`,
    `generateMarkdown` **throws** rather than overwrite hand-written content. The
    prose pages have no such deal: `generateDocs` owns them and overwrites them
    wholesale.
