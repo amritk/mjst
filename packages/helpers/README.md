@@ -70,7 +70,7 @@ bun add @amritk/helpers
 | Subpath | Exports | Purpose |
 |:---|:---|:---|
 | `@amritk/helpers/generate-type-definition` | `generateTypeDefinition` | Render a TypeScript type from a schema node. |
-| `@amritk/helpers/mjst-extension` | `MJST_EXTENSION_KEY`, `getMjstInstanceOf`, `getMjstPrimitive`, `getMjstBrand` | Read the `x-mjst` vendor hints (`instanceOf`, `primitive`, `brand`) a schema carries. |
+| `@amritk/helpers/mjst-extension` | `MJST_EXTENSION_KEY`, `MjstExtension`, `hasMjstHint`, `getMjstInstanceOf`, `getMjstPrimitive`, `getMjstBrand`, `getMjstDiscriminator` | Read the `x-mjst` vendor hints (`instanceOf`, `primitive`, `brand`) a schema carries, and the message `discriminator` an AsyncAPI channel names. |
 | `@amritk/helpers/generate-index-barrel` | `generateIndexBarrel` | Render the `index.ts` barrel that re-exports every generated file. A name starting with `_` is for sibling files only and is left out. |
 | `@amritk/helpers/identifier-mentions` | `identifierMentions` | Ask whether emitted source names an identifier, ignoring comments, strings, and regex literals — decides which `$ref` imports a generated file keeps. |
 | `@amritk/helpers/get-default-value` | `getDefaultValue` | The fallback value (as source text) a parser or repairing validator substitutes for missing data: `default` > `const` > first `enum` > first usable `examples` entry > first union branch > `pattern` > type. `default` and `examples` are used only when they match the declared type. |

@@ -101,7 +101,8 @@ The remote path has always been default-deny; the local path now matches it.
   planted in the tree cannot be used to escape it. The root document itself is
   exempt: it is the file you explicitly named.
 - **The session cache is credential-scoped.** Its key covers the request headers,
-  the `fetch`/`parse` callbacks, and the transfer limits, so a document fetched
+  the `fetch`/`parse` callbacks, the transfer limits, and the host guards
+  (`allowPrivateHosts`, `allowedHosts`, `verifyDns`), so a document fetched
   with one tenant's token is invisible to a call carrying different (or no)
   credentials — and no caller inherits another's `fetch`. In-flight coalescing
   uses the same key.

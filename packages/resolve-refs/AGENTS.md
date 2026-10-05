@@ -16,14 +16,16 @@ bun run --filter='@amritk/resolve-refs' types:check
 ## Invariants — do not break these
 
 - **Errors are collected on `result.errors`, never thrown.** A missing file,
-  refused host, refused path, bad ref, or over-deep document becomes `{}` and is
-  reported while the rest resolves. Preserve this — callers depend on partial
+  refused host, refused path, bad ref, or over-deep subtree is left in place as
+  written (the `$ref` node is kept, nothing is inlined) and reported while the
+  rest resolves. Preserve this — callers depend on partial
   resolution. Every recursive walk in this package is depth-capped for exactly
   this reason; a new one needs the same cap (`DEFAULT_MAX_DEPTH`).
 - **Default-deny SSRF guard**: `isPrivateHost` (sync, URL-only) plus
   `assertPublicHost` (async, resolves the name) refuse loopback / private /
   link-local / cloud-metadata hosts unless explicitly allowed. `isPrivateHost`
-  must stay synchronous and pure — the CLI and `@amritk/lint` call it directly.
+  must stay synchronous and pure — it is a public export, and `assertPublicHost`
+  reuses it to judge every address a name resolves to.
   Security-sensitive: change only with tests, and keep the default denying.
 - **Default-deny local reads**: a local `$ref` must resolve under
   `dirname(rootLocation)` (or an explicit `allowedRoots`). The root document

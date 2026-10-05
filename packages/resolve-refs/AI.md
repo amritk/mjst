@@ -26,8 +26,8 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 ## Gotchas — where agents fail
 
 1. **`resolveRefs` is in-memory only.** It does NOT load other files/URLs —
-   external refs stay in place and are pushed to `errors` (the ref becomes `{}`).
-   Use `resolveRefsFromFile` for cross-file/remote.
+   external refs stay in place and are pushed to `errors` (the `{ $ref }` node is
+   kept as written, not inlined). Use `resolveRefsFromFile` for cross-file/remote.
 2. **Errors are collected, never thrown.** A missing file, refused host, or bad
    URL lands on `result.errors` while the rest still resolves. Always check it.
    Each error's `path` is where the offending reference was written in the

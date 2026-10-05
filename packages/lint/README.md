@@ -129,7 +129,7 @@ One thing `restrictTo` does not cover: a regular expression a ruleset writes —
 
 ### Auto-fix
 
-`fixDocument` runs the linter and applies a `FixerRegistry` — fixers keyed by rule `code` that map a finding to a formatting-preserving text edit — to a fixpoint, then re-lints:
+`fixDocument` runs the linter and applies a `FixerRegistry` — fixers keyed by rule `code` that map a finding to a formatting-preserving text edit — to a fixpoint, then reports the findings that remain:
 
 ```ts
 import { fixDocument, type FixerRegistry } from '@amritk/lint'
@@ -161,7 +161,7 @@ const { output, applied } = await fixDocument(source, {
 })
 ```
 
-Fixing runs to a fixpoint, capped at 10 passes. The result reports how that ended: **`converged`** is `false` when the cap was hit while the document was still changing (usually two fixers undoing each other), and **`passes`** counts the passes that changed something. `applied` is de-duplicated by rule code and path, so a report can safely say "fixed N problems".
+Fixing runs to a fixpoint, capped at 10 passes. `remaining` comes from the pass that found nothing left to fix, so a run that converges does not lint the fixed document a second time; only one that hits the cap does. The result reports how that ended: **`converged`** is `false` when the cap was hit while the document was still changing (usually two fixers undoing each other), and **`passes`** counts the passes that changed something. `applied` is de-duplicated by rule code and path, so a report can safely say "fixed N problems".
 
 ### Rendering findings
 
@@ -199,6 +199,7 @@ A ruleset is a plain object (authored as YAML, JSON, or a JS module):
 | `functions` / `functionsDir` | Custom functions to load by name (default dir `functions/`). |
 | `overrides` | Per-file-glob rule tweaks. |
 | `aliases` | Reusable `given` fragments referenced as `#alias`. |
+| `parserOptions` | YAML parser strictness, each set to a severity. `duplicateKeys` reports a repeated key (default `error`; `off` allows it, and the last value wins). `incompatibleValues` is off by default and reports `.nan` / `.inf` / `-.inf`, which `JSON.stringify` silently turns into `null`. Parser findings carry the code `parser`. |
 
 Built-in functions: `alphabetical`, `casing`, `defined`, `enumeration`, `falsy`, `length`, `or`, `pattern`, `schema`, `truthy`, `undefined`, `unreferencedReusableObject`, `xor`, `typedEnum`.
 
