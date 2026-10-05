@@ -2,9 +2,10 @@
 
 > **Deprecated.** Use [`@amritk/validation`](https://www.npmjs.com/package/@amritk/validation) instead.
 >
-> This release is a compatibility shim: `buildValidatorSchema` keeps its signature and emits
-> byte-identical output, so upgrading to it breaks nothing. It is the last
-> release of this package.
+> This package is now a compatibility shim: `buildValidatorSchema` keeps its
+> signature and forwards to `generate()` in `@amritk/validation`, so upgrading to
+> it breaks no call site. It gets no new features; its output follows the engine
+> it forwards to.
 
 ## What this was
 
@@ -51,3 +52,7 @@ Both hand back `{ filename, content }[]`. The positional arguments become named
 options — see the
 [`@amritk/validation` README](https://github.com/amritk/mjst/tree/main/packages/validation#readme)
 for the full table.
+
+The flags that switched extra functions in are now modes: `coerce: true` is
+`'coerce'`, `repair: true` is `'repair'`, and `check: true` is `'check'`, each
+added to `'guard'` and `'validate'`.

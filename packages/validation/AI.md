@@ -85,10 +85,10 @@ any of them without one of those two flags.
    validateX(v)` pays for both passes and is no faster than `validateX`.
 
 8. **It emits each engine's exact bytes.** A single-mode build is byte-identical
-   to what the engine that owns that mode emits when called directly, so there is no runtime
-   difference to reason about and no speedup to claim — do not tell a user this is
-   faster. What it changes is that the whole matrix comes out as one type instead
-   of two, and that a build asking for no validator mode ships no
+   to what the engine that owns that mode emits when called directly, so there is
+   no runtime difference to reason about and no speedup to claim — do not tell a
+   user this is faster. What it changes is that the whole matrix comes out as one
+   type instead of two, and that a build asking for no validator mode ships no
    `validation-result.ts`.
 
 9. **`coerceX` is not Ajv's `coerceTypes`, on purpose.** It never modifies its

@@ -17,7 +17,7 @@
 
 ## Overview
 
-[`@amritk/validation`](../parsers) writes validator **source files** at build time from a schema you already have. This package is its runtime sibling: it validates against a schema **you only discover at runtime** — a plugin config, a user-supplied schema, an OpenAPI fragment.
+[`@amritk/validation`](../validation) writes validator **source files** at build time from a schema you already have. This package is its runtime sibling: it validates against a schema **you only discover at runtime** — a plugin config, a user-supplied schema, an OpenAPI fragment.
 
 It is an **eval-free interpreter**: it reads the schema itself, with **no `new Function`, no code generation, and no build step**. Each schema node is specialized into a closure the first time a validation actually reaches it — a tree of ordinary functions, not generated source — so the keyword dispatch happens once per node rather than once per value. That buys two things. First, **zero startup cost** — there is nothing to compile up front, so building a validator is essentially free and you only pay for the part of the schema your data actually reaches. Second, it **runs anywhere** — under a strict `Content-Security-Policy` (no `unsafe-eval`), on Cloudflare Workers, in React Native/Hermes, and in any sandbox that forbids `eval`/`new Function`, all of which rule out a code-generating validator.
 
@@ -158,7 +158,7 @@ wins: on Bun it runs `validate` about **2.3–6.7×** faster per call, on Node
 schema, where this interpreter is about **1.2×** *faster* than Ajv's compiled
 function. If you validate the same schema against a high-throughput stream,
 compile it once with Ajv (or use this repo's build-time
-[`@amritk/validation`](../parsers)) — nothing that stops short of emitting a
+[`@amritk/validation`](../validation)) — nothing that stops short of emitting a
 function will match generated straight-line code, and this package does not
 pretend otherwise.
 
@@ -173,12 +173,12 @@ ahead of time**.
 
 What keeps the interpreter lean:
 
-- **A hot/cold split.** Collecting errors is not free even when there are none: the error-mode step carries the path string it would need to report a failure and cannot short-circuit, because a later failure is another error to name. So `validate` and `assert` run the boolean guard first and only fall through to the error-collecting half once something has actually failed — the same split [`@amritk/validation`](../parsers) emits. Valid input is 1.75–2.4× faster than collecting outright; invalid input pays a second walk, which is the right way round for a validator that says "yes" far more often than "no". The error-collecting half is built on first use, so a validator never handed anything invalid never builds one.
+- **A hot/cold split.** Collecting errors is not free even when there are none: the error-mode step carries the path string it would need to report a failure and cannot short-circuit, because a later failure is another error to name. So `validate` and `assert` run the boolean guard first and only fall through to the error-collecting half once something has actually failed — the same split [`@amritk/validation`](../validation) emits. Valid input is 1.75–2.4× faster than collecting outright; invalid input pays a second walk, which is the right way round for a validator that says "yes" far more often than "no". The error-collecting half is built on first use, so a validator never handed anything invalid never builds one.
 - **No compile step up front.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up. A node is specialized the first time a validation reaches it, so a one-shot check never pays for the `$defs` it does not touch. A `pattern` is the exception: every one in the document is compiled and screened when the validator is built, so `pattern: "("` is named there rather than thrown out of a validation months later.
 - **Every per-node question answered once.** Which keywords a node carries, its property key list, its `required` set, its compiled `pattern`s, which type-specific checks can possibly apply — all of it is settled when the node is specialized and closed over by its step, instead of being rediscovered on every value.
 - **Lazy, reused caches.** The one thing a node cannot settle is where a `$ref` points when the document declares `$id`s, because that depends on the base URI in scope at call time. Those targets are memoized the first time they are followed and reused on later calls.
 - **Nothing built for errors that never happen.** The error array and every failure message are created only when a failure is actually recorded and will actually be read, so valid input — and the whole guard path — never builds one. That is not the same as zero allocation: `unevaluatedProperties`/`unevaluatedItems` allocate an annotation tracker, and `uniqueItems` builds a `Set` past eight primitive elements. A branch probe (`anyOf`, `oneOf`, `not`, `if`, `contains`, `propertyNames`) runs in the guard's own context, or in the one boolean-mode child an error-collecting validator keeps for its lifetime, and the run context itself is reused across calls — so a validator that has been called once allocates nothing more for valid input. Everything genuinely reusable — property keys, the `required` set, compiled `patternProperties`, dependency entry lists — is memoized per schema node instead of rebuilt per call.
-- **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats, limits, schemas)`.
+- **A `WeakMap` cache** keyed by schema object, so `validate(sameSchema)` hands back the same validator (with its warm caches) per `(mode, formats, customFormats, strict, limits, schemas)`.
 
 > Benchmarks live in [`bench/`](./bench) and run a correctness parity check against Ajv on every case; `bun run bench` times them on Bun and `bun run bench:node` on Node, against the built package. Correctness is further locked down by [`src/differential.test.ts`](./src/differential.test.ts), a differential fuzz that compares the interpreter's verdict against Ajv's across ~240k random and mutated values (20 schema shapes × 12k values, zero divergences) — so "fast" never comes at the cost of "correct".
 
@@ -264,7 +264,7 @@ const parseQuery = parse({
 
 parseQuery({ page: '3', verbose: 'true' }) // { ok: true, value: { page: 3, verbose: true } }
 parseQuery({})                             // { ok: true, value: { page: 1 } }
-parseQuery({ page: 'abc' })                // { ok: false, errors: [{ message: 'must be integer', path: '/page' }] }
+parseQuery({ page: 'abc' })                // { ok: false, errors: [{ message: 'must be integer', path: '/page', keyword: 'type', params: { type: 'integer' } }] }
 ```
 
 **Coercion never decides a verdict.** It converts, then defers — the validator
@@ -570,7 +570,7 @@ Either way the split holds: `resolve-refs` owns the network and its policy,
 ## Related packages
 
 - [`@amritk/resolve-refs`](../resolve-refs) — inline cross-file and remote `$ref`s before validating
-- [`@amritk/validation`](../parsers) — the build-time counterpart: generated validator and parser source files, plus the type definitions
+- [`@amritk/validation`](../validation) — the build-time counterpart: generated validator and parser source files, plus the type definitions
 - [`@amritk/mjst`](../cli) — CLI wrapper around the generators
 
 ---
