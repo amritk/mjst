@@ -21,7 +21,7 @@ mjst already contains every hard piece; none of them knows about HTTP yet:
 | Runtime validation of a schema declared in code | `@amritk/runtime-validators` — eval-free, zero startup cost |
 | Zero-allocation happy path | `validateGuard` (boolean guard) + `validate` (error collector) split |
 | Handler typing from a schema literal | `FromSchema` (type-level mirror of the interpreter) |
-| Maximum steady-state throughput | `@amritk/generate-validators` build-time codegen |
+| Maximum steady-state throughput | `@amritk/validation` build-time codegen |
 | Schemas authored in Zod/TypeBox/Valibot/Effect | `@amritk/adapters` |
 | OpenAPI documents | **free**: OpenAPI 3.1+'s schema dialect *is* JSON Schema Draft 2020-12, so contract schemas embed verbatim |
 
@@ -92,7 +92,8 @@ Two type-level decisions worth recording:
   error bookkeeping.
 - **Two-tier router.** Fully-static paths live in a flat
   `Map<'METHOD /path', route>` (one concat + one get). Only parameterized
-  routes pay a per-segment scan, after a single `split('/')`.
+  routes pay a per-segment scan, after one `indexOf` walk splits the path
+  (faster than `split('/')` on a fresh request substring).
 - **Lazy transport parsing.** `ApiRequest.searchParams` and `readBody` are
   thunks; a route that declares no query/body schema never parses them. The
   Node adapter splits the query string with `indexOf` and never touches the
@@ -106,7 +107,7 @@ Two type-level decisions worth recording:
   and empty params — the miss path allocates nothing either.
 - **Pluggable engine ceiling.** The `compile` hook accepts any
   `(schema) → { guard, collect }`, so hot routes can swap the interpreter for
-  `@amritk/generate-validators` output (~48M ops/s on small shapes vs the
+  `@amritk/validation` output (~48M ops/s on small shapes vs the
   interpreter's ~2M) with no pipeline changes. Response validation is off by
   default in production; when on, it reuses the same guard-first structure.
 
@@ -130,7 +131,8 @@ far above what a single Node/Bun process serves in practice.
 - `path` strings are already OpenAPI templates — no rewriting.
 - `params` / `query` object schemas unroll into per-property Parameter
   Objects; path parameters are forced `required: true` per spec.
-- `request.body` becomes `requestBody` with `application/json` content.
+- `request.body` becomes `requestBody` under the media type its `bodyType`
+  selects (`application/json` by default).
 - Each response gets its spec-mandated `description` (defaulted when omitted)
   and its schema embedded verbatim.
 - The document is built lazily, cached, and served at `GET /openapi.json` by
@@ -214,19 +216,22 @@ no eval, small bundle → faster cold start):
   closures; the pathname is sliced from `request.url` by hand (a `new URL()`
   parse benchmarked at ~a fifth of adapter cost and is now avoided in
   `toFetchHandler` too).
-- **Inlined validation** — `@amritk/generate-validators` output pasted into
-  the route body; param coercion unrolled per key from the coercion plan.
+- **Inlined validation** — boolean guards emitted by the compiler's own
+  `compile/generate-guard-source.ts` for the subset it reproduces exactly
+  (the interpreter elsewhere); param coercion unrolled per key from the
+  coercion plan.
 - **Schema-derived serializers** — fast-json-stringify-style string building
   from the response schemas (`'{"id":' + body.id + …`), with `JSON.stringify`
-  only where escaping matters. Needs a new `@amritk/generate-serializers`
-  generator; user handlers are wrapped, never rewritten.
+  only where escaping matters. Shipped in-package as
+  `compile/generate-serializer-source.ts`; user handlers are wrapped, never
+  rewritten.
 - **Static router** — the method/path dispatch emitted as a plain `if`/switch
   over string compares, shared `ResponseInit` constants.
 - **Precomputed OpenAPI** — the document serialized to a static JSON string at
   build time, served with zero per-request work.
 
 The runtime package stays the no-build-step path (and the fallback for routes
-the compile step cannot see); `mjst compile` becomes the opt-in ceiling. Same
+the compile step cannot see); `mjst compile-api` is the opt-in ceiling. Same
 contract, three engines: interpreter → generated validators → fully compiled
 routes.
 
@@ -322,6 +327,9 @@ in both engines, pinned by the differential corpus:
   (custom-validator parity), `validateResponses` parity,
   `fetchToNodeHandler` bridge, and the `mjst compile-api` CLI subcommand.
 - **Bundler**: esbuild + Rollup strip plugins; line-preserving transform.
+  (The per-bundler plugins were later removed: `@amritk/api/bundler` now
+  exports only `stripContractFields` and `isScannableId`, wired into each
+  bundler's own hook.)
 - **CORS**: setup-time throw on `'*'` + credentials.
 
 ## Shipped: OpenAPI 3.2 (2026-08)
@@ -353,10 +361,11 @@ express before.
   with no codegen at all. External consumers still generate from the served
   document with whatever tooling they use.
 
-Not covered by 3.2, and still open: **WebSocket messages.** `itemSchema` is
-one schema, one direction, on a response body; a socket needs two independent
-flows and a discriminated union of message types per direction, and OpenAPI
-has no vocabulary for either. See the realtime note in the roadmap.
+Not covered by 3.2: **WebSocket messages.** `itemSchema` is one schema, one
+direction, on a response body; a socket needs two independent flows and a
+discriminated union of message types per direction, and OpenAPI has no
+vocabulary for either. Since shipped outside the document — see realtime
+message contracts, next.
 
 ## Shipped: realtime message contracts (2026-08)
 
@@ -456,22 +465,24 @@ distributes over the key with an explicit conditional instead.
 - **Generated-validator integration sugar.** `mjst compile-api` now wraps
   `compileToModule`; the remaining sugar is a mode that also emits a
   ready-made `compile` function (schema-identity → generated validator),
-  closing the loop with `@amritk/generate-validators` automatically
+  closing the loop with `@amritk/validation` automatically
   (`compileExport` provides the seam).
 - **Deferred from the review pass** (design-heavy, not fixes): client
   retry/interceptor chain and opt-in client-side validation; per-route body
   limits; base-path mounting of the API itself; `deepObject` query style;
-  request charset decoding; a server-side handler timeout (a blanket
-  timeout would kill legitimate long-lived SSE/token streams — needs a
-  per-route design); webpack/Turbopack strip plugin (the exported
+  request charset decoding; webpack/Turbopack strip plugin (the exported
   `stripContractFields` covers it via a ~5-line loader); compiled-module
-  source maps; watch mode for `compile-api`.
-- **Content negotiation, inbound.** Raw *outbound* statuses shipped
-  (`contentType` above); multipart/form-data request bodies remain manual
-  via `readBytes`.
-- **`$ref` / components.** Shared schemas could be hoisted into
-  `components.schemas` (via `@amritk/resolve-refs` knowledge of the ref graph)
-  instead of inlined per operation, shrinking large documents.
+  source maps; watch mode for `compile-api`. (The server-side handler
+  timeout from this list shipped as the per-route `withTimeout(ms, handler,
+  onTimeout)` wrapper, since a blanket timeout would kill legitimate
+  long-lived SSE/token streams.)
+- ~~**Content negotiation, inbound.**~~ Shipped: raw *outbound* statuses
+  (`contentType` above), and `request.bodyType` (`'form'`, `'multipart'`,
+  `'text'`, `'bytes'`) for request bodies, in both engines.
+- ~~**`$ref` / components.**~~ Shipped: a titled schema reused across
+  contracts is hoisted into `components.schemas` and referenced with `$ref`
+  (schemas with internal `$ref`s are always hoisted, refs re-rooted), without
+  a dependency on `@amritk/resolve-refs`.
 - **First-class Fastify plugin.** The Node handler works via raw req/res, but
   a plugin registering per-route would let Fastify's own router carry the
   matching.
@@ -506,13 +517,15 @@ distributes over the key with an explicit conditional instead.
   reusable session/role check. Both engines run guards identically (the
   compiled module threads the live `contract.guards` through a shared
   `runGuards` in the same order); the differential corpus pins the parity,
-  including an async guard and a throwing guard down `onError`. Guards are
-  excluded from the contracts hash — like `handler` and `refine`, they are
-  imported and called live. Guards attach in one place — the `guards` field —
-  and the denial status stays *declared on the contract* rather than derived
-  from the guard: the contract remains the single source of truth for the wire,
-  so OpenAPI, response validation, and the typed `createClient` all agree with
-  nothing to reconcile. (An earlier `protectedRoute` that merged a guard's
+  including an async guard and a throwing guard down `onError`. Guard
+  *bodies* are excluded from the contracts hash — like `handler` and `refine`,
+  they are imported and called live — but their count is fingerprinted, and a
+  compiled module whose routes gained or lost a guard throws at init. Guards
+  attach in one place — the `guards` field — and the denial status stays
+  *declared on the contract* rather than derived from the guard: the contract
+  remains the single source of truth for the wire, so OpenAPI, response
+  validation, and the typed `createClient` all agree with nothing to
+  reconcile. (An earlier `protectedRoute` that merged a guard's
   declared responses onto the route was dropped: it added a second calling
   convention and could not keep the browser `createClient` in sync without a
   manual fragment spread, so it fought the contract-first grain for a marginal

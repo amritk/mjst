@@ -2408,7 +2408,8 @@ const handler = toFetchHandler(api, {
 const workerHandler = toFetchHandler(api, {
   mounts: { '/api/auth': (request, env) => makeAuth(env as Env).handler(request) },
 })
-// Express instead: app.all('/api/auth/*splat', toNodeHandler(auth)); app.use(toNodeHandler(api))
+// Express instead: app.all('/api/auth/*splat', betterAuthNodeHandler(auth)); app.use(toNodeHandler(api))
+// (betterAuthNodeHandler is Better Auth's own `toNodeHandler` from 'better-auth/node', renamed on import.)
 // (Express 4: '/api/auth/*' — the bare '*' throws under Express 5's path parser.)
 // Compiled: compileToModule({ ..., mounts: { '/api/auth': 'authMountHandler' } })
 ```
