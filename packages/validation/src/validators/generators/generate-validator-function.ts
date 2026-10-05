@@ -977,7 +977,11 @@ const generateKeywordChecks = (
 
   // const — value must equal the fixed value exactly.
   if (hasConst(schema)) {
-    const mismatch = constMismatchCondition(raw, schema.const)
+    // Through the same cast as a type test, for the same reason: inside a named
+    // matcher every check is a `return false`, and an earlier `enum` or `const`
+    // narrows the value to a literal union that a later one cannot overlap with.
+    // That is `TS2367` in the consumer's build, for a schema that is satisfiable.
+    const mismatch = constMismatchCondition(typeTestAccessor(raw, ctx), schema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
     lines.push(`  if (${presence}${mismatch}) {`)
     lines.push(`    ${pushError(ctx.sink, msg, path, 'const', JSON.stringify({ allowedValue: schema.const }))}`)
@@ -987,7 +991,7 @@ const generateKeywordChecks = (
   // enum — value must be one of the listed members.
   if (hasEnum(schema)) {
     const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
-    lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], raw)}) {`)
+    lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], typeTestAccessor(raw, ctx))}) {`)
     lines.push(
       `    ${pushError(ctx.sink, JSON.stringify(`must be one of: ${label}`), path, 'enum', JSON.stringify({ allowedValues: schema.enum }))}`,
     )

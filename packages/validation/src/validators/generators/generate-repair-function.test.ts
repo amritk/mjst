@@ -287,6 +287,59 @@ describe('repairX', () => {
     expect(result.value).toEqual({ fixed: 'x', p_one: 'x' })
   })
 
+  it('leaves a map value alone when the error is about its key', async () => {
+    // A `propertyNames` failure is reported at the key's own position, the same
+    // pointer a wrong value there would carry. Overwriting the value cannot fix
+    // the key, and claiming the key's error as repaired would be a lie.
+    const { repair } = await build({
+      type: 'object',
+      propertyNames: { pattern: '^[a-z]+$' },
+      additionalProperties: objectSchema({ name: { type: 'string' } }, ['name']),
+    })
+
+    const result = repair({ Bad: { name: 'fine' }, good: {} })
+
+    expect(result.valid).toBe(false)
+    expect(result.value).toEqual({ Bad: { name: 'fine' }, good: { name: '' } })
+    expect(result.repairs).toHaveLength(1)
+    expect(result.repairs[0]).toMatchObject({ keyword: 'required', path: '/good' })
+    expect(result.errors).toEqual([expect.objectContaining({ keyword: 'pattern', path: '/Bad' })])
+  })
+
+  it('does not repair a key that several patterns claim', async () => {
+    // The validator applies every pattern a key matches, and the error does not
+    // say which one it broke, so repairing toward either could break the other.
+    const { repair } = await build({
+      type: 'object',
+      patternProperties: { '^a': { type: 'string' }, b$: { type: 'string', minLength: 3, default: 'bbb' } },
+    })
+
+    const both = repair({ ab: 'x' })
+    expect(both.valid).toBe(false)
+    expect(both.value).toEqual({ ab: 'x' })
+    expect(both.repairs).toEqual([])
+
+    // One pattern alone is unambiguous.
+    const one = repair({ zb: 'x' })
+    expect(one.valid).toBe(true)
+    expect(one.value).toEqual({ zb: 'bbb' })
+  })
+
+  it('keeps an index position on the array side of a typeless schema', async () => {
+    // With no `type`, one node can carry array and object keywords. An index has
+    // to be answered by the array keywords, never by `additionalProperties`.
+    const { repair } = await build({
+      prefixItems: [{ minLength: 3 }],
+      additionalProperties: { type: 'integer', default: 7 },
+    })
+
+    const result = repair(['x'])
+
+    expect(result.valid).toBe(false)
+    expect(result.value).toEqual(['x'])
+    expect(result.repairs).toEqual([])
+  })
+
   it('terminates rather than spinning when the schema cannot satisfy itself', async () => {
     // `minLength` above `maxLength` is unsatisfiable, so whatever the fallback
     // table offers will fail again. The loop must refuse the second attempt and

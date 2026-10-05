@@ -94,9 +94,11 @@ cannot be coerced, and reports the validator's own errors as the repairs.
 
 That makes `repairX` an autofix tool rather than a stricter validator. It accepts
 documents `validateX` rejects (a missing required name gets one; an unknown
-`enum` value becomes the first member), and gating on an empty `repairs` gives
-exactly the verdicts `coerceX` gives. To reject a bad config, use `coerceX`. To
-hand back a fixed one, use `repairX`.
+`enum` value becomes the first member), and accepting only `valid` with an empty
+`repairs` gives exactly the verdicts `coerceX` gives. An empty `repairs` alone is
+not enough: a document nothing could repair comes back with none either, and
+`valid: false`. To reject a bad config, use `coerceX`. To hand back a fixed one,
+use `repairX`.
 
 **`parseX` agrees with `coerceX`.** Wherever `coerceX` accepts a document, the
 coercing `parseX` returns the very same value — through a union, an `allOf`, an

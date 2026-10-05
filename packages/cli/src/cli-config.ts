@@ -139,9 +139,10 @@ export type CliConfig = {
    * outstanding.
    *
    * Repair is an autofix tool, not a stricter validator: it accepts documents
-   * `validateX` rejects, by repairing them. Gating on an empty `repairs` gives
-   * exactly the verdicts `coerceX` gives, so a config loader that must reject a
-   * typo wants `coerceX`, and `repairX` is for producing a fixed document.
+   * `validateX` rejects, by repairing them. Accepting only `valid` with an empty
+   * `repairs` gives exactly the verdicts `coerceX` gives, so a config loader that
+   * must reject a typo wants `coerceX`, and `repairX` is for producing a fixed
+   * document.
    *
    * Implies `coerce` — repairing runs after coercion, so a value merely written
    * in the wrong type is right before the validator sees it and never counts as

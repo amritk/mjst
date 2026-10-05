@@ -156,7 +156,13 @@ export const generateValidatorFile = (
         standaloneGuard,
       }).code
     : ''
-  const repairer = options?.repair === true ? generateRepairFunction(schema, typeName, typeSuffix).code : ''
+  const repairer =
+    options?.repair === true
+      ? generateRepairFunction(schema, typeName, typeSuffix, {
+          ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
+          formats,
+        }).code
+      : ''
 
   const appended = [checker, coercer, repairer].filter((part) => part !== '')
   const body = validatorFunction + booleanGuard + (appended.length === 0 ? '' : '\n\n' + appended.join('\n\n'))

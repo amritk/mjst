@@ -5,6 +5,9 @@ import { refToName } from '@amritk/helpers/ref-to-name'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
+import { NO_FORMATS } from './enforced-keywords'
+import { createSubschemaMatcher } from './generate-validator-function'
+
 /**
  * The name of the position-lookup half generated for a `$ref`'s target. A repair
  * has to cross a file boundary the same way validation and coercion do.
@@ -28,6 +31,28 @@ type RepairContext = {
   readonly helpers: string[]
   /** Supplies the next unique suffix for a walker. */
   next: () => number
+  /** The validator's own yes/no test for a subschema, for `propertyNames`. */
+  readonly matcher: ReturnType<typeof createSubschemaMatcher>
+}
+
+/**
+ * A named test of a key against `propertyNames`, `true` when every key passes,
+ * or `false` when none does.
+ *
+ * It is the validator's own test, so the walker and `validateX` agree on which
+ * keys are wrong. A body only the buffered form can express gets a function of
+ * its own here, as the coercer does it.
+ */
+const keyTest = (nameSchema: JSONSchema, ctx: RepairContext): boolean | string => {
+  const named = ctx.matcher.named(nameSchema)
+  if (named !== null) return named
+  const body = ctx.matcher.test(nameSchema)
+  if (typeof body !== 'string') return body
+  const name = `_repairKey${ctx.next()}`
+  const parameter = /\binput\b/.test(body) ? 'input' : '_input'
+  const path = /\b_path\b/.test(body) ? [`  const _path = ''`] : []
+  ctx.helpers.push([`const ${name} = (${parameter}: unknown): boolean => {`, ...path, body, `}`].join('\n'))
+  return name
 }
 
 /**
@@ -77,7 +102,7 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
     .map(([key, child]) => [key, emitWalker(child, ctx)] as const)
     .filter((entry): entry is readonly [string, string] => entry[1] !== null)
 
-  // Map positions: a key the schema did not name is reached through the first
+  // Map positions: a key the schema did not name is reached through the
   // `patternProperties` entry whose regex it matches, and only when none does,
   // through a schema-form `additionalProperties`. That is the same division the
   // validator and the coercer draw, so a repair lands on the subschema that
@@ -120,11 +145,28 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
     // it toward the wrong subschema.
     const declared = mapped ? Object.keys(properties) : children.map(([key]) => key)
     const indexed = tupleWalkers.some((walker) => walker !== null) || itemsWalker !== null
+    // A schema with no `type` can carry array and object keywords at once, and an
+    // index segment says nothing about which of the two the value was. Once a map
+    // can answer, an index stays with the array keywords whenever there are any,
+    // which is what it did before the map existed.
+    const arrayKeywords = tuple.length > 0 || (typeof items === 'object' && items !== null && !Array.isArray(items))
+    const indexBlock = indexed || (mapped && arrayKeywords)
+
+    // A key that fails `propertyNames` is reported at its own position, the same
+    // pointer a wrong value there is reported at. Replacing the value cannot fix
+    // the key, so that position is not answered at all: otherwise a valid value
+    // was overwritten and the key's error listed as repaired. Deeper positions
+    // are about the value and stay repairable.
+    const nameSchema = readKey(node, 'propertyNames')
+    const keyCheck = nameSchema === undefined ? true : keyTest(nameSchema as JSONSchema, ctx)
 
     // A bare `additionalProperties` map answers every key the same way, so the
     // key itself is never read.
-    const readsHead = declared.length > 0 || indexed || (mapped && patterns.length > 0)
+    const readsHead =
+      declared.length > 0 || indexBlock || (mapped && patterns.length > 0) || typeof keyCheck === 'string'
     lines.push(`  const [${readsHead ? 'head' : ''}, ...rest] = segments as [string, ...string[]]`)
+    if (keyCheck === false) lines.push(`  if (rest.length === 0) return null`)
+    if (typeof keyCheck === 'string') lines.push(`  if (rest.length === 0 && !${keyCheck}(head)) return null`)
 
     if (declared.length > 0) {
       const walkers = new Map(children)
@@ -139,7 +181,7 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
     // Array positions arrive as decimal index segments. The tuple positions the
     // schema named are answered by their own walkers; everything past them is
     // `items`, which is one schema for every remaining index.
-    if (indexed) {
+    if (indexBlock) {
       lines.push(`  const index = Number(head)`)
       lines.push(`  if (Number.isInteger(index) && index >= 0) {`)
       tupleWalkers.forEach((walker, position) => {
@@ -149,22 +191,36 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
       if (itemsWalker !== null) {
         lines.push(`    if (index >= ${tuple.length}) return ${itemsWalker}(rest)`)
       }
+      if (mapped && arrayKeywords) lines.push(`    return null`)
       lines.push(`  }`)
     }
 
-    if (mapped) {
+    if (mapped && patterns.length > 0) {
       // Compiled once at module load, and by `new RegExp` for the same reason the
       // validator does it: the source is schema text, and a literal would let it
       // close a comment or start a new one.
-      patterns.forEach((pattern, index) => {
+      const regexNames = patterns.map((pattern, index) => {
         const regexName = `_repairPattern${id}_${index}`
         ctx.helpers.push(
           `const ${regexName} = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(regexFlagsFor(pattern.source))})`,
         )
-        lines.push(
-          `  if (${regexName}.test(head)) return ${pattern.walker === null ? 'null' : `${pattern.walker}(rest)`}`,
-        )
+        return regexName
       })
+      const answer = (walker: string | null): string => (walker === null ? 'null' : `${walker}(rest)`)
+      const only = patterns[0]
+      if (patterns.length === 1 && only !== undefined) {
+        lines.push(`  if (${regexNames[0]}.test(head)) return ${answer(only.walker)}`)
+      } else {
+        // The validator applies *every* pattern a key matches, so a key two
+        // patterns claim has to satisfy both, and the error says nothing about
+        // which one it broke. Repairing toward either could fail the other, so
+        // such a key is not answered; one pattern alone is unambiguous.
+        lines.push(`  const claims = [${regexNames.join(', ')}].filter((pattern) => pattern.test(head))`)
+        lines.push(`  if (claims.length > 1) return null`)
+        patterns.forEach((pattern, index) => {
+          lines.push(`  if (claims[0] === ${regexNames[index]}) return ${answer(pattern.walker)}`)
+        })
+      }
     }
   }
 
@@ -193,16 +249,33 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
  * then can its own children be judged. A position is repaired at most once, so
  * the loop terminates on progress rather than on the pass cap.
  */
-export const generateRepairFunction = (schema: JSONSchema, typeName: string, typeSuffix = ''): { code: string } => {
+export const generateRepairFunction = (
+  schema: JSONSchema,
+  typeName: string,
+  typeSuffix = '',
+  options: {
+    /** The whole document, for a `propertyNames` test that reads a `$ref`'s target. */
+    readonly rootSchema?: Record<string, unknown>
+    /** The `format` names the validator enforces, so a key test agrees with it. */
+    readonly formats?: ReadonlySet<string>
+  } = {},
+): { code: string } => {
   const helpers: string[] = []
   let counter = 0
-  const ctx: RepairContext = { typeSuffix, helpers, next: () => counter++ }
+  const matcher = createSubschemaMatcher(
+    typeSuffix,
+    options.rootSchema ?? (isSchemaObject(schema) ? (schema as Record<string, unknown>) : undefined),
+    options.formats ?? NO_FORMATS,
+    '_repair',
+  )
+  const ctx: RepairContext = { typeSuffix, helpers, next: () => counter++, matcher }
 
   const walker = emitWalker(schema, ctx)
   const lookupName = `repair${typeName}At`
+  const declarations = [...matcher.declarations(helpers.join('\n')), ...helpers]
 
   const parts = [
-    ...(helpers.length > 0 ? [helpers.join('\n\n'), ''] : []),
+    ...(declarations.length > 0 ? [declarations.join('\n\n'), ''] : []),
     `export const ${lookupName}: RepairLookup = ${walker === null ? '() => null' : walker}`,
     '',
     `export const repair${typeName} = (input: unknown, _path = ''): RepairResult<${typeName}> => {`,
