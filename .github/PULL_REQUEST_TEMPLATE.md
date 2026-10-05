@@ -12,9 +12,9 @@
 
 - [ ] `bun run test` passes
 - [ ] `bun run check` passes
-- [ ] `bun run build` passes
+- [ ] `bun run build` and `bun run types:check` pass
 - [ ] READMEs regenerated if `config.schema.json` changed (`bun run generate-readmes`)
-- [ ] Changeset added (`bunx changeset`) if this affects a published package
+- [ ] Changeset added (`bunx changeset`, or `bunx changeset --empty` if no published package changed)
 
 ## Related issues
 

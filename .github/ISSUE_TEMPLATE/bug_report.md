@@ -17,7 +17,7 @@ labels: bug
 ```
 
 ```bash
-mjst --schema ./schema.json --outDir ./out
+mjst --schema ./schema.json --out-dir ./out
 ```
 
 ## Expected output

@@ -20,17 +20,20 @@ You'll need [Bun](https://bun.sh) — the repo pins 1.4 via `packageManager` in 
 | `bun run check` | Lint with biome |
 | `bun run format` | Auto-format with biome |
 | `bun run build` | Build all publishable packages |
+| `bun run types:check` | Type-check every package (run after `build` — cross-package imports resolve through each sibling's built `.d.ts`) |
 
 ## Workflow
 
 1. Create a branch off `main`.
 2. Make your changes. Add tests for new behaviour.
-3. Run `bun run check`, `bun run test`, and `bun run build` locally.
+3. Run `bun run check`, `bun run test`, `bun run build`, and `bun run types:check` locally.
 4. Add a changeset describing your change:
    ```bash
    bunx changeset
    ```
-   Pick the affected packages and a semver bump. The release workflow turns this into a version PR + npm publish on merge to `main`.
+   Pick the affected packages and a semver bump. The release workflow turns this into a version PR + npm publish on merge to `main`. A change that touches no published package (docs, tooling, CI) still gets one: `bunx changeset --empty`.
+
+   Never pick `major`. Every package is on the `0.x` line, and changesets resolves a `major` there to `1.0.0` — a breaking change gets `minor`, with what breaks spelled out in the summary. CI enforces this with `bun run versions:check`.
 5. Open a pull request.
 
 ## Code style
