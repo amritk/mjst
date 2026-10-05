@@ -2079,13 +2079,49 @@ describe('generate-validator-function', () => {
       }
     })
 
-    // On, the buffer is still created only by a branch that has something to put
-    // in it, so a value matching the first branch allocates nothing extra.
-    it('creates the branch buffer lazily so a matching value allocates nothing', () => {
-      const code = withBranchErrors({ anyOf: [{ type: 'string' }, { type: 'number' }] }, 'Doc')
+    // On, a value the union accepts must cost what it costs with the option off.
+    // Collecting while testing allocated an error array per branch on every
+    // evaluation, and an inline collecting closure inside a map walk made the
+    // engine allocate a scope per key, valid or not: `--branch-errors` went from
+    // free to several times slower on a map of unions.
+    it('tests branches exactly as it does with branch errors off, explaining only after a failure', () => {
+      const schema = {
+        type: 'object',
+        additionalProperties: { anyOf: [{ type: 'string' }, { const: false }] },
+      }
+      const off = generateValidatorFunction(schema as never, 'Doc')
+      const on = withBranchErrors(schema, 'Doc')
 
-      expect(code).toContain('let _br: ValidationError[][] | null = null')
-      expect(code).toContain('(_br ??= []).push(_m)')
+      const guard = off.split('\n').find((line) => line.includes('if (!(_match'))
+      expect(guard).toBeDefined()
+      expect(on).toContain(guard)
+      // No closure anywhere in the validator body: the explanations are hoisted.
+      const signature = on.indexOf('export const validateDoc')
+      const body = on.slice(on.indexOf('\n', signature))
+      expect(body).not.toContain('=>')
+      expect(on).toMatch(/const _explain\d+ = \(input: unknown, _path: string\): ValidationError\[\] =>/)
+    })
+
+    it('reports branch errors at the path of a value under a map key', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            type: 'object',
+            additionalProperties: {
+              anyOf: [{ type: 'string' }, { type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }],
+            },
+          },
+          'Doc',
+        ),
+      )
+
+      expect(v({ k: 'ok', 'x/y': { a: 7 } })).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '/x~1y', keyword: 'anyOf', params: {} },
+          { message: 'must be string', path: '/x~1y/a', keyword: 'type', params: { type: 'string' } },
+        ],
+      })
     })
 
     it('explains a failing anyOf with the branch that describes the value kind', () => {

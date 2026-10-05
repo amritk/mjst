@@ -207,6 +207,86 @@ describe('repairX', () => {
     expect(validate(result.value)).toBe(true)
   })
 
+  it('repairs a position reached through an additionalProperties map key', async () => {
+    const entry = objectSchema({ name: { type: 'string' } }, ['name'])
+    const { repair, validate } = await build({
+      type: 'object',
+      properties: {
+        staticProp: entry,
+        inArray: { type: 'array', items: entry },
+        inMap: { type: 'object', additionalProperties: entry },
+      },
+    })
+
+    // A wrong type and a missing `required` under an arbitrary key, the two ways
+    // a keyed-map config is most often wrong.
+    const wrongType = repair({ inMap: { anyKey: { name: null } } })
+    expect(wrongType.valid).toBe(true)
+    expect(wrongType.value).toEqual({ inMap: { anyKey: { name: '' } } })
+    expect(wrongType.repairs[0]).toMatchObject({ keyword: 'type', path: '/inMap/anyKey/name' })
+
+    const missing = repair({ inMap: { anyKey: {} } })
+    expect(missing.valid).toBe(true)
+    expect(missing.value).toEqual({ inMap: { anyKey: { name: '' } } })
+    expect(validate(missing.value)).toBe(true)
+  })
+
+  it('repairs through an additionalProperties $ref, nested maps deep', async () => {
+    const schema: JSONSchema = {
+      type: 'object',
+      properties: { resources: { type: 'object', additionalProperties: { $ref: '#/$defs/resource' } } },
+      $defs: {
+        resource: {
+          type: 'object',
+          properties: {
+            methods: { type: 'object', additionalProperties: objectSchema({ paginated: { type: 'boolean' } }, []) },
+            subresources: { type: 'object', additionalProperties: { $ref: '#/$defs/resource' } },
+          },
+        },
+      },
+    }
+    const { repair, validate } = await build(schema)
+
+    const result = repair({
+      resources: { beta: { subresources: { tunnels: { methods: { list: { paginated: { nope: 1 } } } } } } },
+    })
+
+    expect(result.valid).toBe(true)
+    expect(result.repairs[0]).toMatchObject({ path: '/resources/beta/subresources/tunnels/methods/list/paginated' })
+    expect(validate(result.value)).toBe(true)
+  })
+
+  it('repairs a patternProperties key toward its pattern, and any other key toward additionalProperties', async () => {
+    const { repair } = await build({
+      type: 'object',
+      patternProperties: { '^n_': { type: 'integer', minimum: 7 } },
+      additionalProperties: { type: 'string', minLength: 2 },
+    })
+
+    const result = repair({ n_count: 1, label: 'x' })
+
+    expect(result.valid).toBe(true)
+    expect(result.value).toEqual({ n_count: 7, label: 'xx' })
+  })
+
+  it('never repairs a declared or pattern-claimed key toward additionalProperties', async () => {
+    // Neither `fixed` nor the `^p_` pattern offers anything to repair toward. A
+    // lookup that fell through to `additionalProperties` would "fix" both with
+    // its default — a value from a subschema that never applied to them.
+    const { repair } = await build({
+      type: 'object',
+      properties: { fixed: { minLength: 3 } },
+      patternProperties: { '^p_': { minLength: 3 } },
+      additionalProperties: { type: 'string', default: 'abcd' },
+    })
+
+    const result = repair({ fixed: 'x', p_one: 'x' })
+
+    expect(result.valid).toBe(false)
+    expect(result.repairs).toEqual([])
+    expect(result.value).toEqual({ fixed: 'x', p_one: 'x' })
+  })
+
   it('terminates rather than spinning when the schema cannot satisfy itself', async () => {
     // `minLength` above `maxLength` is unsatisfiable, so whatever the fallback
     // table offers will fail again. The loop must refuse the second attempt and

@@ -113,10 +113,12 @@ export type CliConfig = {
    * branch listed before a `const: false` one.
    *
    * A document that is already valid is answered by `isX` alone where that is a
-   * standalone guard, and handed back as the very same object. Against Ajv
-   * cloning its input first — which it must to leave the caller's document
-   * alone — `coerceX` runs 5–36× faster on valid input and 1.4–2.1× faster on
-   * input that needs coercing (`bench:validators:coerce`).
+   * standalone guard, and handed back as the very same object. Where the caller
+   * cannot let Ajv mutate its input, so Ajv has to clone it first, `coerceX` runs
+   * 5–36× faster on valid input and 1.4–2.1× faster on input that needs coercing
+   * (`bench:validators:coerce`). Where the caller owns the document and lets Ajv
+   * coerce it in place, there is no clone to save, and on a large document Ajv
+   * can come out modestly ahead.
    *
    * Requires `validators`. `validateX` and `isX` are unchanged either way.
    */
@@ -136,6 +138,11 @@ export type CliConfig = {
    * comes back invalid carrying both the repairs applied and the errors still
    * outstanding.
    *
+   * Repair is an autofix tool, not a stricter validator: it accepts documents
+   * `validateX` rejects, by repairing them. Gating on an empty `repairs` gives
+   * exactly the verdicts `coerceX` gives, so a config loader that must reject a
+   * typo wants `coerceX`, and `repairX` is for producing a fixed document.
+   *
    * Implies `coerce` — repairing runs after coercion, so a value merely written
    * in the wrong type is right before the validator sees it and never counts as
    * a repair. Requires `validators`.
@@ -147,11 +154,11 @@ export type CliConfig = {
    * in anyOf" that names no field and no reason.
    *
    * Off by default, and off costs nothing — the generated code is exactly what
-   * it would be without the option. On, each branch keeps what it complained
-   * about, which is a push per *failing* branch and one lazily-created array per
-   * combinator that had one. A valid instance fails no branch and allocates
-   * nothing, but the branches are still handed a collector, so measure before
-   * turning it on in a hot path.
+   * it would be without the option. On, a combinator that passes costs what it
+   * costs with the option off: its branches are tested by the same functions.
+   * Only an `anyOf` / `oneOf` that has already failed asks its branches again,
+   * this time for what each one complained about, so the price is paid on
+   * invalid input alone.
    *
    * Requires `validators`.
    */

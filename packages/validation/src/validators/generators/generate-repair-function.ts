@@ -1,3 +1,4 @@
+import { regexFlagsFor } from '@amritk/helpers/escape-regex-pattern'
 import { getDefaultValue } from '@amritk/helpers/get-default-value'
 import { readKey } from '@amritk/helpers/read-key'
 import { refToName } from '@amritk/helpers/ref-to-name'
@@ -76,6 +77,23 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
     .map(([key, child]) => [key, emitWalker(child, ctx)] as const)
     .filter((entry): entry is readonly [string, string] => entry[1] !== null)
 
+  // Map positions: a key the schema did not name is reached through the first
+  // `patternProperties` entry whose regex it matches, and only when none does,
+  // through a schema-form `additionalProperties`. That is the same division the
+  // validator and the coercer draw, so a repair lands on the subschema that
+  // produced the error. Every pattern is kept, walker or not, because a key one
+  // claims is not `additionalProperties`'s to answer even when it has nothing to
+  // repair toward.
+  const patternProperties = schemaMap(node, 'patternProperties') ?? {}
+  const patterns = Object.entries(patternProperties).map(([source, child]) => ({
+    source,
+    walker: emitWalker(child, ctx),
+  }))
+  const additional = readKey(node, 'additionalProperties')
+  const additionalWalker =
+    typeof additional === 'object' && additional !== null ? emitWalker(additional as JSONSchema, ctx) : null
+  const mapped = additionalWalker !== null || patterns.some((pattern) => pattern.walker !== null)
+
   const prefixItems = readKey(node, 'prefixItems')
   const tuple = Array.isArray(prefixItems) ? (prefixItems as JSONSchema[]) : []
   const tupleWalkers = tuple.map((item) => emitWalker(item, ctx))
@@ -84,7 +102,8 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
   const itemsWalker =
     typeof items === 'object' && items !== null && !Array.isArray(items) ? emitWalker(items as JSONSchema, ctx) : null
 
-  const hasChildren = children.length > 0 || itemsWalker !== null || tupleWalkers.some((walker) => walker !== null)
+  const hasChildren =
+    children.length > 0 || mapped || itemsWalker !== null || tupleWalkers.some((walker) => walker !== null)
   if (own === null && !hasChildren) return null
 
   const id = ctx.next()
@@ -95,18 +114,31 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
   ]
 
   if (hasChildren) {
-    lines.push(`  const [head, ...rest] = segments as [string, ...string[]]`)
+    // Once a map can answer, every declared key has to be claimed here, the ones
+    // with nothing to repair included: a declared property is never an
+    // `additionalProperties` position, and letting it fall through would repair
+    // it toward the wrong subschema.
+    const declared = mapped ? Object.keys(properties) : children.map(([key]) => key)
+    const indexed = tupleWalkers.some((walker) => walker !== null) || itemsWalker !== null
 
-    if (children.length > 0) {
+    // A bare `additionalProperties` map answers every key the same way, so the
+    // key itself is never read.
+    const readsHead = declared.length > 0 || indexed || (mapped && patterns.length > 0)
+    lines.push(`  const [${readsHead ? 'head' : ''}, ...rest] = segments as [string, ...string[]]`)
+
+    if (declared.length > 0) {
+      const walkers = new Map(children)
       lines.push(`  switch (head) {`)
-      for (const [key, walker] of children) lines.push(`    case ${JSON.stringify(key)}: return ${walker}(rest)`)
+      for (const key of declared) {
+        const walker = walkers.get(key)
+        lines.push(`    case ${JSON.stringify(key)}: return ${walker === undefined ? 'null' : `${walker}(rest)`}`)
+      }
       lines.push(`  }`)
     }
 
     // Array positions arrive as decimal index segments. The tuple positions the
     // schema named are answered by their own walkers; everything past them is
     // `items`, which is one schema for every remaining index.
-    const indexed = tupleWalkers.some((walker) => walker !== null) || itemsWalker !== null
     if (indexed) {
       lines.push(`  const index = Number(head)`)
       lines.push(`  if (Number.isInteger(index) && index >= 0) {`)
@@ -119,9 +151,26 @@ const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
       }
       lines.push(`  }`)
     }
+
+    if (mapped) {
+      // Compiled once at module load, and by `new RegExp` for the same reason the
+      // validator does it: the source is schema text, and a literal would let it
+      // close a comment or start a new one.
+      patterns.forEach((pattern, index) => {
+        const regexName = `_repairPattern${id}_${index}`
+        ctx.helpers.push(
+          `const ${regexName} = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(regexFlagsFor(pattern.source))})`,
+        )
+        lines.push(
+          `  if (${regexName}.test(head)) return ${pattern.walker === null ? 'null' : `${pattern.walker}(rest)`}`,
+        )
+      })
+    }
   }
 
-  lines.push(`  return null`, `}`)
+  // Every key no pattern claimed belongs to `additionalProperties`, so when there
+  // is one it is the last word rather than `null`.
+  lines.push(additionalWalker === null ? `  return null` : `  return ${additionalWalker}(rest)`, `}`)
   ctx.helpers.push(lines.join('\n'))
   return name
 }
