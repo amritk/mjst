@@ -44,14 +44,16 @@ Every mode is reachable from `mjst` without dropping to the programmatic API:
 |:---|:---|
 | `types` | `--types-only` (alone), otherwise always emitted |
 | `guard`, `validate` | `--validators`, or `--validators-only` for no parser |
-| `check` | `--check` |
-| `coerce` | `--coerce` |
-| `repair` | `--repair` (emits `coerceX` too) |
+| `check` | `--validators --check` |
+| `coerce` | `--validators --coerce` |
+| `repair` | `--validators --repair` (emits `coerceX` too) |
 | `parse` | the default on any run that is not `--types-only`/`--validators-only` |
 | `parseStrict` | `--strict` |
 
 `--validators-only` is this package's own default (`['types', 'guard', 'validate']`)
 spelled as a flag: everything that judges a document, nothing that builds one.
+`--check`, `--coerce` and `--repair` shape the validator half, so the CLI rejects
+any of them without one of those two flags.
 
 ## Gotchas — where agents fail
 
@@ -83,7 +85,7 @@ spelled as a flag: everything that judges a document, nothing that builds one.
    validateX(v)` pays for both passes and is no faster than `validateX`.
 
 8. **It emits each engine's exact bytes.** A single-mode build is byte-identical
-   to what that engine emitted when it was its own package, so there is no runtime
+   to what the engine that owns that mode emits when called directly, so there is no runtime
    difference to reason about and no speedup to claim — do not tell a user this is
    faster. What it changes is that the whole matrix comes out as one type instead
    of two, and that a build asking for no validator mode ships no

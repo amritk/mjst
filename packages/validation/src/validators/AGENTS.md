@@ -5,8 +5,8 @@ coercer and repairer engine inside `@amritk/validation`. Repo-wide rules:
 [`../../../../AGENTS.md`](../../../../AGENTS.md). Consuming the package? See
 [`AI.md`](../../AI.md).
 
-Generates lightweight predicate validators (`validateFoo`) + types from a JSON
-Schema. It is internal: nothing outside `@amritk/validation` imports it, and
+Generates lightweight predicate validators (`validateFoo`, `isFoo`, and on
+request `checkFoo`, `coerceFoo`, `repairFoo`) + types from a JSON Schema. It is internal: nothing outside `@amritk/validation` imports it, and
 `src/generate.ts` is its only caller.
 
 ## Commands

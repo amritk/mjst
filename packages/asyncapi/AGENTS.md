@@ -35,6 +35,12 @@ bun run --filter='@amritk/asyncapi' types:check
 - **Extracted schemas are self-contained.** Every `#/components/schemas/...`
   ref is rebased into the message's own `$defs` (components copied
   transitively, normalized). Nothing downstream may need the source document.
+- **Normalized components are shared, so never write into them.** One
+  extraction keeps a `NormalizeSchemaCache` (see `normalize-schema.ts`) so a
+  component referenced by many messages is upgraded once; every message reads the
+  same normalized object. That is only safe because the ref rewrite builds new
+  objects — mutating a `normalizeSchema` result in place would leak into every
+  other message that references the component.
 - **Both majors, one model.** 2.x and 3.0 normalize into the 3.0-shaped
   `AsyncApiModel`; version-specific walking stays in `extract-channels-v2.ts` /
   `extract-channels-v3.ts`.

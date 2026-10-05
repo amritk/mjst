@@ -52,19 +52,19 @@ Express, Fastify, Koa, NestJS (Node) — with a
 - Node: [`node:http`](#nodehttp) · [Express](#express) · [Fastify](#fastify) · [Koa](#koa) · [NestJS](#nestjs) · [anything else](#anything-else)
 
 **Requests and responses**
-- [Options (`createApi`)](#options-createapi) · [Validation semantics](#validation-semantics) · [String formats](#string-formats) · [Branded IDs](#branded-ids-nominal-types-for-params) · [Cross-field refinement](#cross-field-refinement)
+- [Options (`createApi`)](#options-createapi) · [Validation semantics](#validation-semantics) · [String formats](#string-formats) · [Branded IDs](#branded-ids-nominal-types-for-params) · [Cross-field refinement](#cross-field-refinement) · [Streaming responses: documenting each item](#streaming-responses-documenting-each-item)
 - [Form and multipart bodies](#form-and-multipart-bodies) · [Raw text and binary bodies](#raw-text-and-binary-bodies) · [Raw request bodies and size limits](#raw-request-bodies-and-size-limits)
 - [Streaming and raw responses](#streaming-and-raw-responses) · [Returning a raw `Response`](#returning-a-raw-response-escape-hatch) · [Multiple `set-cookie` headers](#multiple-set-cookie-headers) · [The platform request: `request.raw`](#the-platform-request-requestraw)
 
 **Middleware, security, state**
 - [Hooks: CORS, rate limits, security headers](#hooks-cors-rate-limits-security-headers) · [Built-in security hooks](#built-in-security-hooks) · [Signed cookies](#signed-cookies)
-- [Framework-parity helpers](#framework-parity-helpers) · [Client-side auth refresh](#client-side-auth-refresh) · [Per-request state: `locals`](#per-request-state-locals)
+- [Framework-parity helpers](#framework-parity-helpers) · [Realtime: WebTransport with a WebSocket fallback](#realtime-webtransport-with-a-websocket-fallback) · [Client-side auth refresh](#client-side-auth-refresh) · [Per-request state: `locals`](#per-request-state-locals)
 
 **Engines**
 - [Plugging in generated validators](#plugging-in-generated-validators) · [Development: hot reloading](#development-hot-reloading) · [Production: the compiled engine](#production-the-compiled-engine)
 
 **Integration recipes**
-- [App context: Drizzle, sessions](#app-context-drizzle-sessions-anything-per-request) · [Guards](#guards-authorize-once-declare-the-outcome) · [Deny-by-default: `secureRoutes`](#deny-by-default-secureroutes) · [Auth: Better Auth](#auth-better-auth) · [Sessions: a production setup](#sessions-a-production-setup)
+- [App context: Drizzle, sessions](#app-context-drizzle-sessions-anything-per-request) · [Guards](#guards-authorize-once-declare-the-outcome) · [Route-scoped response hooks](#route-scoped-response-hooks) · [Deny-by-default: `secureRoutes`](#deny-by-default-secureroutes) · [Auth: Better Auth](#auth-better-auth) · [Sessions: a production setup](#sessions-a-production-setup)
 - [Observability](#observability-metrics-and-request-logs) · [OpenAPI: servers, auth schemes, components](#openapi-servers-auth-schemes-shared-components) · [Error reporting: Sentry](#error-reporting-sentry) · [Typed client for external consumers](#typed-client-for-external-consumers) · [Schemas from Zod, TypeBox, Valibot, Effect](#schemas-from-zod-typebox-valibot-effect)
 
 **About**
@@ -776,6 +776,7 @@ running a fetch handler (including a compiled module's `fetch` export) on
 | `routes` | — | The route contracts (from `defineRoute`). Duplicate `method + path` shapes throw at startup. |
 | `info` | placeholder | OpenAPI `info` block (`title`, `version`, `description`). |
 | `openApiPath` | `/openapi.json` | Where the document is served. `false` disables serving. |
+| `openApiGuards` | — | Guards gating the served document, which is answered before route matching and so sits outside `secureRoutes`. See [Deny-by-default](#deny-by-default-secureroutes). |
 | `compile` | runtime-validators | Swap the validation engine — see below. |
 | `formats` | — | String `format`s to assert: `'all'`, or a list like `['uuid', 'email']`. Off by default — see [String formats](#string-formats). |
 | `context` | — | Per-request app context factory (database handles, sessions). See [App context](#app-context-drizzle-sessions-anything-per-request). |
@@ -908,8 +909,10 @@ declare `refine`, which runs (sync or async — a returned promise is awaited)
 **after** every declared slot has validated — so its inputs are already typed
 and coerced — and **before** the context factory and handler. Returned issues reject the request through the
 standard `validation_failed` envelope (and the `validationFailed` formatter),
-with your own `path`/`message`; `undefined` or `[]` accepts it. A thrown
-refine takes the `onError` path like any handler error:
+with your own `path`/`message`; `undefined` or `[]` accepts it. Each issue's
+`keyword` is `'refine'` (with empty `params`), so a client switching on
+`keyword` sees a refinement as its own kind rather than a schema keyword. A
+thrown refine takes the `onError` path like any handler error:
 
 ```ts
 const chat = defineRoute({
@@ -1845,6 +1848,7 @@ throughput, generate validators with `@amritk/validation` at build time and rout
 the hot schemas to them:
 
 ```ts
+import { validate, validateGuard } from '@amritk/runtime-validators'
 import { isUser, validateUser } from './generated/user'
 
 const api = createApi({
@@ -1940,23 +1944,31 @@ Everything `createApi`/`toFetchHandler` accept has a compiled equivalent that
 references *exports of your routes module*, so both engines execute the same
 values: `contextExport`, `mounts`, `onRequestExports`, `onResponseExports`,
 `errorsExport`, `onErrorExport`, `observeExport`, `observeUnmatchedExport`,
-`compileExport` (a custom `ValidatorCompiler` — the compiled counterpart of
-`compile`, so generated validators behave identically in production),
-`validateResponses` (the same reply-contract net as the runtime engine, for
-staging builds), `maxBodyBytes`, and the OpenAPI extras (`servers`,
-`securitySchemes`, `security`, `tags`). Contract features (`refine`,
+`openApiGuardExports`, `compileExport` (a custom `ValidatorCompiler` — the
+compiled counterpart of `compile`, so generated validators behave identically
+in production), `formats`, `validateResponses` (the same reply-contract net as
+the runtime engine, for staging builds), `maxBodyBytes`, and the OpenAPI extras
+(`servers`, `securitySchemes`, `security`, `tags`). Contract features (`refine`,
 `string[]` headers, `request.raw`, `locals`) work identically in both — the
 differential corpus pins each one.
 
 Staleness is detected, not silent: the emitted module bakes a
 `contractsHash` and recomputes it over the imported routes at init — a
 schema or path edited after compilation logs a one-line
-`[@amritk/api] Stale compiled module` message via `console.error` (never a
-throw) until you regenerate. The
+`[@amritk/api] Stale compiled module` message via `console.error` (not a
+throw) until you regenerate. Enforcement is the exception: adding or removing a
+guard, security guard, `refine`, or route `onResponse` hook changes which code
+the module had to emit, so that mismatch **throws** at init rather than serve
+an endpoint without a check the app believes it has. Rewriting a guard's body
+is not staleness, since the module imports and calls it live. The
 `mjst compile-api` CLI subcommand wraps the build step
 (`mjst compile-api ./src/routes.ts --out src/api.compiled.ts`), and
 `fetchToNodeHandler` bridges the compiled `fetch` export onto
-`node:http`/Express so Node deployments get the compiled fast path too.
+`node:http`/Express so Node deployments get the compiled fast path too. It
+rebuilds the absolute `request.url` from the `Host` header only when that header
+is a plain host name or IP literal with an optional port; anything else (a `/`,
+`?`, `#`, `@`, or `\` that would move the routed path) becomes `localhost`, so a
+client cannot steer routing through `Host`.
 
 ```ts
 // scripts/compile-api.ts — the build step

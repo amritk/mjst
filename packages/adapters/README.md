@@ -291,7 +291,7 @@ So: want a generated `Date`? Author `Schema.DateFromSelf`. Want a string that Ef
 ## Related packages
 
 - [`@amritk/mjst`](../cli) — CLI that ingests these formats via `--input <format>`
-- [`@amritk/validation`](../parsers) · [`@amritk/generate-markdown`](../generate-markdown) · [`@amritk/generate-examples`](../generate-examples) — the generators these adapters feed
+- [`@amritk/validation`](../validation) · [`@amritk/generate-markdown`](../generate-markdown) · [`@amritk/generate-examples`](../generate-examples) — the generators these adapters feed
 - [`@amritk/helpers`](../helpers) — defines the shared `x-mjst` extension
 
 ---

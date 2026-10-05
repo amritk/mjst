@@ -40,8 +40,8 @@ if (node && isObjectSchema(node) && hasProperties(node)) {
 4. **Two similar guards:** `isSchemaObject` narrows to a non-boolean schema;
    `isObjectSchema` narrows to a `type: object` schema. Don't confuse them.
 5. **Some modules are copied verbatim into generated output** (`is-object`,
-   `safe-accessor`, `validate-array`, `validate-record`) — intentionally
-   dependency-free and minimal, not general-purpose validators.
+   `has-ref`, `validate-array`, `validate-record`, `coercion-runtime`) —
+   intentionally dependency-free and minimal, not general-purpose validators.
 
 Notable subpaths: `/resolve-ref`, `/extract-refs`, `/schema-guards`,
 `/ref-to-name`, `/ref-to-filename`, `/upgrade-draft07-schema`,
