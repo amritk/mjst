@@ -566,19 +566,6 @@ const pushError = (sink: string, message: string, path: string, keyword: string,
 /** The IIFE-local buffer a match expression's checks report through. */
 const MATCH_ERROR_SINK = '_m'
 
-/**
- * Where a branch of a reported combinator sends its errors, and where the value
- * it is judging lives. Passed only by `anyOf` / `oneOf`, which surface the
- * branch errors; every other match expression asks a yes/no question and throws
- * them away.
- */
-type BranchCollector = {
-  /** The emitted name of the `ValidationError[][]` the branch appends to. */
-  buffer: string
-  /** The emitted path expression for the value the branch is judging. */
-  path: string
-}
-
 const createRootContext = (
   rootSchema?: Record<string, unknown>,
   formats: ReadonlySet<string> = NO_FORMATS,
@@ -990,7 +977,11 @@ const generateKeywordChecks = (
 
   // const — value must equal the fixed value exactly.
   if (hasConst(schema)) {
-    const mismatch = constMismatchCondition(raw, schema.const)
+    // Through the same cast as a type test, for the same reason: inside a named
+    // matcher every check is a `return false`, and an earlier `enum` or `const`
+    // narrows the value to a literal union that a later one cannot overlap with.
+    // That is `TS2367` in the consumer's build, for a schema that is satisfiable.
+    const mismatch = constMismatchCondition(typeTestAccessor(raw, ctx), schema.const)
     const msg = JSON.stringify(`must be ${JSON.stringify(schema.const)}`)
     lines.push(`  if (${presence}${mismatch}) {`)
     lines.push(`    ${pushError(ctx.sink, msg, path, 'const', JSON.stringify({ allowedValue: schema.const }))}`)
@@ -1000,7 +991,7 @@ const generateKeywordChecks = (
   // enum — value must be one of the listed members.
   if (hasEnum(schema)) {
     const label = (schema.enum as unknown[]).map((v) => JSON.stringify(v)).join(', ')
-    lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], raw)}) {`)
+    lines.push(`  if (${presence}!${enumMembershipExpr(schema.enum as unknown[], typeTestAccessor(raw, ctx))}) {`)
     lines.push(
       `    ${pushError(ctx.sink, JSON.stringify(`must be one of: ${label}`), path, 'enum', JSON.stringify({ allowedValues: schema.enum }))}`,
     )
@@ -1636,6 +1627,48 @@ const namedMatcher = (sub: JSONSchema, suffix: string, ctx: NestingContext): str
 }
 
 /**
+ * The hoisted function that says why a value fails `sub`, for a reported
+ * `anyOf` / `oneOf` to choose its explanation from, or `null` when `sub` has no
+ * checks to explain anything with.
+ *
+ * It is the error-keeping twin of {@link namedMatcher}: the same checks, but
+ * every one reports into a local array that is handed back, so a failing branch
+ * can name the field that is wrong. It is hoisted rather than inlined for the
+ * same reason the matcher is, and for one more. An inline closure captures the
+ * locals of the validator it sits in, and an engine has to keep a captured local
+ * somewhere a closure can reach. Inside a loop over a map that meant a fresh
+ * scope on every iteration, whether the closure ever ran or not, and valid input
+ * paid for it: with `--branch-errors` on, a union-heavy document validated
+ * several times slower than with it off.
+ *
+ * The value's path comes in as `_path`, so the errors say where the value lives
+ * rather than where the function was declared.
+ */
+const namedBranchErrors = (sub: JSONSchema, suffix: string, ctx: NestingContext): string | null => {
+  if (!isSchemaObject(sub)) return null
+  // Keyed apart from the matchers that share the map: those keys are a bare
+  // schema, which never starts with this prefix.
+  const key = `explain:${JSON.stringify(sub)}`
+  const existing = ctx.namedMatchers.get(key)
+  if (existing !== undefined) return existing
+  const fnCtx: NestingContext = { ...ctx, objVar: 'obj', pathPrefix: '${_path}', depth: 0, sink: MATCH_ERROR_SINK }
+  const checks = generateValueChecks('', 'input', '`${_path}`', sub, suffix, fnCtx, true)
+  if (checks.length === 0) return null
+  const body = checks.join('\n')
+  const name = `${hoistPrefix(ctx)}_explain${ctx.namedMatchers.size}`
+  const declaration = [
+    `const ${name} = (${readsBinding('input', body) ? 'input' : '_input'}: unknown, _path: string): ValidationError[] => {`,
+    `  const ${MATCH_ERROR_SINK}: ValidationError[] = []`,
+    body,
+    `  return ${MATCH_ERROR_SINK}`,
+    `}`,
+  ].join('\n')
+  ctx.namedMatchers.set(key, name)
+  ctx.hoisted.push({ declaration, reference: `${name}(`, calls: true })
+  return name
+}
+
+/**
  * A boolean expression that is `true` when `raw` matches `sub`. Reuses the value
  * checks but collects their errors into a throwaway local buffer, so the same
  * logic that produces error messages also answers the yes/no question the
@@ -1654,7 +1687,6 @@ const generateMatchesExpr = (
   suffix: string,
   ctx: NestingContext,
   required = false,
-  branch?: BranchCollector,
 ): string => {
   if (sub === true) return 'true'
   if (sub === false) return 'false'
@@ -1669,34 +1701,21 @@ const generateMatchesExpr = (
   // The branch's checks report into the IIFE-local buffer rather than the
   // validator's `errors`, so the expression stays a pure yes/no answer. Each
   // nested match IIFE declares its own `_m`, so the innermost one always wins.
-  // Where the branch's errors say they are. A caller that discards them passes
-  // nothing and gets the validator's own root, which is what every call site did
-  // while the errors went nowhere; a caller that *reports* them has to say where
-  // the value being judged actually lives, or the paths come out relative to the
-  // wrong thing — `/verb` for a union under `/method`, which is neither where the
-  // mistake is nor a pointer into the instance at all.
-  const valuePath = branch === undefined ? '`${_path}`' : branch.path
+  // Nothing reports these errors, so they are rooted at the validator's own path.
+  const valuePath = '`${_path}`'
   const binding = value === raw ? '' : `const ${value}: unknown = ${raw}\n`
-  if (branch === undefined) {
-    const named = namedMatcher(sub, suffix, ctx)
-    if (named !== null) return named === 'true' ? 'true' : `${named}(${raw})`
-    // Its own short-circuit state, so an unconditional report in here blocks this
-    // expression alone. Branch errors are off because nothing here keeps any.
-    const matchState: FailFast = { on: ctx.failFast.on, blocked: false }
-    const matchCtx: NestingContext = { ...ctx, sink: MATCH_BOOL_SINK, failFast: matchState, branchErrors: false }
-    const boolChecks = generateValueChecks('', value, valuePath, sub, suffix, matchCtx, required)
-    if (boolChecks.length === 0) return 'true'
-    if (!matchState.blocked) return `((): boolean => {\n${binding}${boolChecks.join('\n')}\n    return true })()`
-  }
+  const named = namedMatcher(sub, suffix, ctx)
+  if (named !== null) return named === 'true' ? 'true' : `${named}(${raw})`
+  // Its own short-circuit state, so an unconditional report in here blocks this
+  // expression alone. Branch errors are off because nothing here keeps any.
+  const matchState: FailFast = { on: ctx.failFast.on, blocked: false }
+  const matchCtx: NestingContext = { ...ctx, sink: MATCH_BOOL_SINK, failFast: matchState, branchErrors: false }
+  const boolChecks = generateValueChecks('', value, valuePath, sub, suffix, matchCtx, required)
+  if (boolChecks.length === 0) return 'true'
+  if (!matchState.blocked) return `((): boolean => {\n${binding}${boolChecks.join('\n')}\n    return true })()`
   const checks = generateValueChecks('', value, valuePath, sub, suffix, { ...ctx, sink: MATCH_ERROR_SINK }, required)
   if (checks.length === 0) return 'true'
-  const body = checks.join('\n')
-  // Keeping what the branch complained about, instead of dropping it on the
-  // floor, is what lets a failing combinator name the field that is wrong. Only a
-  // branch that failed has anything to contribute, and the buffer it reports into
-  // is declared in the block enclosing this expression.
-  const collect = branch === undefined ? '' : `\n    if (_m.length !== 0) (${branch.buffer} ??= []).push(_m)`
-  return `((): boolean => { const _m: ValidationError[] = []\n${binding}${body}${collect}\n    return _m.length === 0 })()`
+  return `((): boolean => { const _m: ValidationError[] = []\n${binding}${checks.join('\n')}\n    return _m.length === 0 })()`
 }
 
 /**
@@ -1792,53 +1811,47 @@ const generateUnevaluatedChecks = (
  * for itself.
  */
 /**
- * The buffer a combinator's branches report their errors into.
+ * A combinator's failure report, with the branch errors that explain it.
  *
- * Block-scoped at every use, which is what lets the name stay the same
- * everywhere: two sibling combinators in one scope each get their own block
- * rather than a duplicate declaration, and a combinator nested inside a branch
- * declares its own inside that branch's IIFE — the same way each match
- * expression declares its own `_m`.
- */
-const BRANCH_BUFFER = '_br'
-
-/**
- * Appends the branch errors worth reporting to the ones already collected.
+ * The branches are tested twice, and on purpose. `guard` is the plain yes/no
+ * test, made of the same named matchers the validator uses without branch errors,
+ * so a value the combinator accepts costs exactly what it would with the option
+ * off. Only once it has failed are the branches asked again, through
+ * {@link namedBranchErrors}, this time for what each one complained about.
+ * Collecting during the test instead meant an error array per branch on every
+ * evaluation, valid input included. A failing combinator is the error path, and
+ * a second look at its branches is cheap next to building the report.
  *
- * A `for…of` rather than a spread because every emitted report starts with
- * `(errors ??= [])`: two of them on consecutive lines are not separated by ASI,
- * and the pair fused into a single call that swallowed the first error.
+ * `explain` holds one hoisted function name per branch that has anything to say.
+ * Every emitted line starts with a keyword or with the report's own
+ * `(errors ??= [])`, which only ever follows the opening brace, so none of them
+ * can fuse with the line before it.
  */
-const selectBranchErrorsLine = (path: string, ctx: NestingContext): string =>
-  `for (const _e of selectBranchErrors(${BRANCH_BUFFER} ?? [], ${path})) ${ctx.sink}.push(_e)`
-
-/**
- * A combinator's failure report, wrapped in the block that scopes its branch
- * buffer. `guard` is the condition under which the combinator has failed;
- * evaluating it is what runs the branches and fills the buffer.
- *
- * The buffer starts `null` and is created by the first branch that has
- * something to put in it. Declaring it as an array instead cost 40% of the
- * throughput of a valid instance against a union-rooted schema — the commonest
- * shape there is — because the allocation happened on every evaluation while
- * only a *failing* branch ever fills one, and a value that matches the first
- * branch fails none.
- */
-const branchBufferBlock = (
+const branchErrorsReport = (
   guard: string,
+  raw: string,
+  explain: readonly string[],
   message: string,
   keyword: string,
   path: string,
   ctx: NestingContext,
 ): string[] => [
-  `  {`,
-  `    let ${BRANCH_BUFFER}: ValidationError[][] | null = null`,
-  `    if (${guard}) {`,
-  `      ${pushError(ctx.sink, message, path, keyword)}`,
-  `      ${selectBranchErrorsLine(path, ctx)}`,
-  `    }`,
+  `  if (${guard}) {`,
+  `    ${pushError(ctx.sink, message, path, keyword)}`,
+  ...(explain.length === 0
+    ? []
+    : [
+        `    const _bp = ${path}`,
+        `    const _br: ValidationError[][] = []`,
+        `    for (const _b of [${explain.map((name) => `${name}(${raw}, _bp)`).join(', ')}]) if (_b.length !== 0) _br.push(_b)`,
+        `    for (const _e of selectBranchErrors(_br, _bp)) ${ctx.sink}.push(_e)`,
+      ]),
   `  }`,
 ]
+
+/** The branch-explaining functions for a reported combinator's branches. */
+const branchExplainers = (branches: readonly JSONSchema[], suffix: string, ctx: NestingContext): string[] =>
+  branches.map((branch) => namedBranchErrors(branch, suffix, ctx)).filter((name): name is string => name !== null)
 
 const generateCombinatorChecks = (
   key: string,
@@ -1856,8 +1869,7 @@ const generateCombinatorChecks = (
   }
 
   if (hasAnyOf(schema) && schema.anyOf.length > 0) {
-    const collector = ctx.branchErrors ? { buffer: BRANCH_BUFFER, path } : undefined
-    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx, true, collector))
+    const conds = schema.anyOf.map((b) => generateMatchesExpr(raw, b, suffix, ctx, true))
     // A branch that matches everything (`true`, `{}`, an annotation-only schema)
     // makes the whole `anyOf` vacuous. Emitting it anyway produced
     // `if (!(… || true))`, whose body TypeScript knows is unreachable — 58
@@ -1866,7 +1878,15 @@ const generateCombinatorChecks = (
     if (!conds.includes('true')) {
       if (ctx.branchErrors) {
         lines.push(
-          ...branchBufferBlock(`!(${conds.join(' || ')})`, `'must match a schema in anyOf'`, 'anyOf', path, ctx),
+          ...branchErrorsReport(
+            `!(${conds.join(' || ')})`,
+            raw,
+            branchExplainers(schema.anyOf, suffix, ctx),
+            `'must match a schema in anyOf'`,
+            'anyOf',
+            path,
+            ctx,
+          ),
         )
       } else {
         const condition = `!(${conds.join(' || ')})`
@@ -1879,8 +1899,7 @@ const generateCombinatorChecks = (
   }
 
   if (hasOneOf(schema) && schema.oneOf.length > 0) {
-    const collector = ctx.branchErrors ? { buffer: BRANCH_BUFFER, path } : undefined
-    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx, true, collector)} ? 1 : 0)`)
+    const conds = schema.oneOf.map((b) => `(${generateMatchesExpr(raw, b, suffix, ctx, true)} ? 1 : 0)`)
     // Only a *zero*-match failure has branches worth explaining: when more than
     // one matched, every branch the value matched is correct on its own terms and
     // the ones that did not are beside the point. The interpreter splits the same
@@ -1891,12 +1910,15 @@ const generateCombinatorChecks = (
       lines.push(`    ${pushError(ctx.sink, message, path, 'oneOf')}`)
       lines.push(`  }`)
     } else {
+      // Collected only on the zero-match path, for the same reason as `anyOf`:
+      // see {@link branchErrorsReport}.
+      const explain = branchExplainers(schema.oneOf, suffix, ctx)
       lines.push(`  {`)
-      lines.push(`    let ${BRANCH_BUFFER}: ValidationError[][] | null = null`)
       lines.push(`    const _n = ${conds.join(' + ')}`)
-      lines.push(`    if (_n === 0) {`)
-      lines.push(`      ${pushError(ctx.sink, message, path, 'oneOf')}`)
-      lines.push(`      ${selectBranchErrorsLine(path, ctx)}`)
+      const report = branchErrorsReport('_n === 0', raw, explain, message, 'oneOf', path, ctx).map(
+        (line) => `  ${line}`,
+      )
+      lines.push(...report.slice(0, -1))
       lines.push(`    } else if (_n !== 1) {`)
       lines.push(`      ${pushError(ctx.sink, message, path, 'oneOf')}`)
       lines.push(`    }`)

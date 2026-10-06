@@ -492,10 +492,74 @@ describe('generated-code-types', () => {
   // `MAX_REPAIR_PASSES`, each of which has to be imported by the same
   // asked-of-the-emitted-text rule the other halves use.
   it('emits type-correct repairing validator files too', { timeout: 120_000 }, async () => {
+    // Map shapes, where the position lookup reads the key: a pattern, several
+    // overlapping ones, a `propertyNames` test (named, constant, and through a
+    // `$ref`), and a schema with array and object keywords at once.
+    const maps: ReadonlyArray<readonly [string, JSONSchema]> = [
+      ['map-of-objects', { type: 'object', additionalProperties: { type: 'object', required: ['n'] } }],
+      ['one-pattern', { type: 'object', patternProperties: { '^a': { type: 'string' } } }],
+      [
+        'overlapping-patterns',
+        { type: 'object', patternProperties: { '^a': { type: 'string' }, b$: { type: 'string', minLength: 3 } } },
+      ],
+      [
+        'property-names',
+        { type: 'object', propertyNames: { pattern: '^[a-z]+$' }, additionalProperties: { type: 'string' } },
+      ],
+      ['property-names-false', { type: 'object', propertyNames: false, additionalProperties: { type: 'string' } }],
+      [
+        'property-names-ref',
+        {
+          type: 'object',
+          propertyNames: { $ref: '#/$defs/key' },
+          additionalProperties: { type: 'integer' },
+          $defs: { key: { type: 'string', maxLength: 3 } },
+        },
+      ],
+      ['typeless-tuple-and-map', { prefixItems: [{ minLength: 3 }], additionalProperties: { type: 'integer' } }],
+    ]
+
     const sources = new Map<string, string>()
-    for (const [name, schema] of CASES) {
+    for (const [name, schema] of [...CASES, ...maps]) {
       const files = await buildValidatorSchema(schema, 'Doc', '', undefined, undefined, undefined, false, false, true)
       for (const file of files) sources.set(`/repair-${name}/${file.filename}`, file.content)
+    }
+
+    expect(typeErrors(sources)).toEqual([])
+  })
+
+  // Branch errors test each union branch with the same named matchers the plain
+  // validator uses, and inside one every check is a `return false`, which
+  // narrows the value for the checks after it. Two `enum`s under an `allOf`
+  // narrowed it to literals the second could not overlap with: `TS2367`, for a
+  // schema `"b"` satisfies.
+  it('emits type-correct branch-explaining validator files too', { timeout: 120_000 }, async () => {
+    const narrowing: ReadonlyArray<readonly [string, JSONSchema]> = [
+      [
+        'overlapping-enums-in-a-branch',
+        { anyOf: [{ allOf: [{ enum: ['a', 'b'] }, { enum: ['b', 'c'] }] }, { type: 'number' }] },
+      ],
+      [
+        'overlapping-enums-in-a-one-of-property',
+        {
+          type: 'object',
+          properties: { p: { oneOf: [{ allOf: [{ enum: ['a', 'b'] }, { enum: ['b', 'c'] }] }, { type: 'number' }] } },
+        },
+      ],
+      [
+        'enum-then-const-in-a-branch',
+        { anyOf: [{ allOf: [{ enum: ['a', 'b'] }, { const: 'b' }] }, { type: 'number' }] },
+      ],
+      [
+        'union-under-a-map',
+        { type: 'object', additionalProperties: { anyOf: [{ type: 'string' }, { type: 'object', required: ['a'] }] } },
+      ],
+    ]
+
+    const sources = new Map<string, string>()
+    for (const [name, schema] of [...CASES, ...narrowing]) {
+      const files = await buildValidatorSchema(schema, 'Doc', '', undefined, undefined, undefined, false, true)
+      for (const file of files) sources.set(`/branch-${name}/${file.filename}`, file.content)
     }
 
     expect(typeErrors(sources)).toEqual([])

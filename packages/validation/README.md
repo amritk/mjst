@@ -92,6 +92,14 @@ never fails. Coercion moves a value that is already right but written in the
 wrong type; repair also substitutes a value the schema supplies for one that
 cannot be coerced, and reports the validator's own errors as the repairs.
 
+That makes `repairX` an autofix tool rather than a stricter validator. It accepts
+documents `validateX` rejects (a missing required name gets one; an unknown
+`enum` value becomes the first member), and accepting only `valid` with an empty
+`repairs` gives exactly the verdicts `coerceX` gives. An empty `repairs` alone is
+not enough: a document nothing could repair comes back with none either, and
+`valid: false`. To reject a bad config, use `coerceX`. To hand back a fixed one,
+use `repairX`.
+
 **`parseX` agrees with `coerceX`.** Wherever `coerceX` accepts a document, the
 coercing `parseX` returns the very same value — through a union, an `allOf`, an
 `if`, a `$ref`, recursion included — and it only repairs what `coerceX` would
@@ -119,11 +127,12 @@ schemas with `anyOf`, `oneOf`, `allOf` and `if`/`then`/`else` checks every
 accepted document against an Ajv that does not coerce. Where the two differ, it
 is on purpose:
 
-- **`null` is never coerced**, in either direction. Ajv reads `null` as `""`, `0`
-  or `false` for a string, number or boolean field, and reads those back as
-  `null`. A `null` usually means "not set", and turning it into a real value
-  erases that. Here it goes to the validator as written, and the validator
-  rejects it.
+- **`null` is never coerced**, in either direction, and it is the difference
+  you will meet most: on a real config corpus it was nearly every case where Ajv
+  accepted and `coerceX` did not. Ajv reads `null` as `""`, `0` or `false` for a
+  string, number or boolean field, and reads those back as `null`. A `null`
+  usually means "not set", and turning it into a real value erases that. Here it
+  goes to the validator as written, and the validator rejects it.
 - **Only clean numerals become numbers.** `" "`, `" 1 "`, `"0x10"`, `"Infinity"`
   and `"1."` are rejected. Ajv turns them into `0`, `1`, `16`, a value JSON
   cannot hold, and `1`. `"007"` and `"1e3"` are still coerced.
@@ -146,8 +155,8 @@ is on purpose:
 document has to clone it first. `coerceX` returns a new value that shares
 everything it did not touch, or the input itself when nothing needed coercing.
 
-**It is faster.** Against Ajv cloning first, so both leave the caller's document
-alone (`bun run bench:validators:coerce`, or
+**It is faster where the input has to survive.** Against Ajv cloning first, so
+both leave the caller's document alone (`bun run bench:validators:coerce`, or
 `bench:validators:coerce:node`):
 
 | schema | runtime | valid input | needs coercing | cannot be coerced |
@@ -166,7 +175,11 @@ each engine timed in its own process (Bun 1.3.11, Node 22.22, Linux x64). A
 valid document is the common case and the widest gap: where `isX` is a
 standalone guard, `coerceX` answers it with that guard and hands the input
 straight back, without walking it. On valid input Ajv rewrites nothing, so it can
-also be timed without the clone; `coerceX` is still ahead there, by 1.2–3.3×.
+also be timed without the clone; `coerceX` is still ahead there on these
+schemas, by 1.2–3.3×, but not on every one: on a large, union-heavy document
+that the caller lets Ajv coerce in place, Ajv can come out modestly ahead. The
+gap above is the clone, so it is real exactly where the caller cannot let Ajv
+mutate its input.
 The config case is the shape `--coerce` exists for: every coercible scalar sits
 inside a union reached through `$ref`, and every union branch is tested by a
 named function rather than a closure built per call.</sub>
