@@ -68,9 +68,9 @@ add one more entry point to the validator half and work under either flag.
 ## Common flags
 
 `--schema` / `--schema-dir`, `--out-dir` / `--out-file`, `--input`,
-`--validators` / `--validators-only`, `--examples`, `--message-contracts`,
-`--discriminator`, `--types-only`, `--build`, `--strict`, `--strip-unknown`,
-`--unknown-keys count-keys|count-enumerable`, `--readonly`,
+`--validators` / `--validators-only`, `--branch-errors`, `--examples`,
+`--message-contracts`, `--discriminator`, `--types-only`, `--build`, `--strict`,
+`--strip-unknown`, `--unknown-keys count-keys|count-enumerable`, `--readonly`,
 `--import-ext ts|js`, `--config <path>`, `--resolve-remote` /
 `--allowed-hosts` (SSRF-guarded remote `$ref`s).
 

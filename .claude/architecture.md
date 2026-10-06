@@ -9,10 +9,10 @@
 ```
 mjst/
 ├── packages/
-│   ├── cli/                   # @amritk/mjst — command-line interface (generate + lint)
+│   ├── cli/                   # @amritk/mjst — command-line interface (generate, lint, compile-api, markdown)
 │   ├── api/                   # @amritk/api — contract-first HTTP API layer (routes, validation, OpenAPI, typed client)
 │   ├── lint/                  # @amritk/lint — format-agnostic JSON/YAML style-guide linter
-│   ├── parsers/               # @amritk/validation — one generator surface: types, guards, validators, coercers, repairers, parsers
+│   ├── validation/            # @amritk/validation — one generator surface: types, guards, validators, coercers, repairers, parsers
 │   ├── runtime-validators/    # @amritk/runtime-validators — eval-free runtime schema interpreter
 │   ├── generate-examples/     # @amritk/generate-examples — fast-check arbitrary + example generator
 │   ├── generate-markdown/     # @amritk/generate-markdown — schema → markdown docs (README table + prose reference)
@@ -20,8 +20,13 @@ mjst/
 │   ├── asyncapi/              # @amritk/asyncapi — extract message schemas from AsyncAPI documents
 │   ├── resolve-refs/          # @amritk/resolve-refs — inline internal/cross-file/remote $refs
 │   ├── yaml/                  # @amritk/yaml — tiny YAML parser with exact source positions
-│   └── helpers/               # @amritk/helpers — shared schema utilities + runtime
+│   ├── helpers/               # @amritk/helpers — shared schema utilities + runtime
+│   ├── generate-parsers/      # retired — CHANGELOG + deprecation notice only (private)
+│   └── generate-validators/   # retired — CHANGELOG + deprecation notice only (private)
 ├── .claude/                   # Developer guidelines
+├── docs/                      # Design docs and plans
+├── fixtures/                  # Shared test corpora (JSON Schema Test Suite, OpenAPI, AsyncAPI)
+├── scripts/                   # Release, bench and llms.txt tooling
 ├── .changeset/                # Changesets config (release automation)
 ├── .github/                   # CI, release, issue & PR templates
 └── package.json               # Workspace root (private)
@@ -31,15 +36,15 @@ mjst/
 
 ### `@amritk/mjst` (`packages/cli`)
 
-Command-line entry point. Reads CLI flags and/or a JSON config file, loads a schema, runs the generator, and writes TypeScript output. It also carries a `lint` subcommand (`mjst lint <files>`) that lints JSON/YAML documents via `@amritk/lint` and prints a compact `file:line:col` report.
+Command-line entry point. Reads CLI flags and/or a JSON config file, loads a schema, runs the generator, and writes TypeScript output. It also carries three subcommands, each with its own flags and `--help`: `lint` (`mjst lint <files>`) lints JSON/YAML documents via `@amritk/lint` and prints a compact `file:line:col` report; `compile-api` (`mjst compile-api <module> --out <file>`) compiles `@amritk/api` route contracts into a fetch-handler module; `markdown` (`mjst markdown <schema> --out-dir <dir>`) renders a schema's prose reference via `@amritk/generate-markdown`. The generation pipeline is loaded lazily, so `--help`, `--version` and the subcommands don't pay for its import graph.
 
-- **Depends on:** `@amritk/validation`, `@amritk/lint`, and `@amritk/generate-markdown` (which the `markdown` subcommand and `scripts/generate-readme.ts` both use)
+- **Depends on:** `@amritk/validation`, `@amritk/generate-examples`, `@amritk/adapters` and `@amritk/asyncapi` (generation inputs and outputs), `@amritk/lint`, `@amritk/api` (`compile-api`), `@amritk/resolve-refs` and `@amritk/yaml` (loading), and `@amritk/generate-markdown` (which the `markdown` subcommand and `scripts/generate-readme.ts` both use)
 - **Bin:** `mjst` → `dist/cli.js` (built for the Node target)
 - **Config schema:** `config.schema.json` — also drives the CLI README table via `@amritk/generate-markdown`. The `lint` subcommand has its own independent flags (see the CLI README).
 
 ### `@amritk/api` (`packages/api`)
 
-Contract-first, framework-agnostic HTTP API layer. Each route declares its method, path, request schemas, and response schemas once; from that one contract the package derives typed handlers (`FromSchema`), runtime request/response validation, an OpenAPI 3.1 document (contract schemas embed verbatim — 3.1's dialect *is* Draft 2020-12), and a typed fetch client (`createClient`, no codegen). Two engines execute the same contracts: the **runtime engine** (`createApi` — eval-free, powered by `@amritk/runtime-validators`, for development and CSP-restricted platforms) and the **compiled engine** (`compileToModule` — emits a fused fetch-handler module with inlined guards, schema-derived serializers, and a precomputed OpenAPI string, for production/Cloudflare Workers). A differential test corpus holds the two engines observationally identical. Adapters: `toFetchHandler` (Bun, Workers, Deno, Hono, Next.js) and `toNodeHandler` (node:http, Express/Connect). `@amritk/api/client` is the browser-safe entry — the client surface (`createClient`, `defineContract`, the opt-in serializers, error predicates, type helpers, client-side auth helpers) with an import graph that touches no server module or `node:*` built-in (pinned by a test), so frontends bundle it without externalization warnings; the client's non-JSON pieces (`pathParams: buildParamPath`, `queryParams: toSearchParams`, `cookies: appendCookies`, form/multipart serializers) are registered opt-ins, so a JSON-only static-path app bundles none of them. `@amritk/api/bundler` ships contract-slimming build plugins for browser bundles, and `@amritk/api/dev` ships hot reloading for the development server (`createHotApi` — a stable `Api` whose build is swapped atomically, keeping the socket and process state; `watchPaths` — the debounced filesystem seam; `importFresh` — the module re-import, whole-graph on Node 22.15+ via a `node:module` resolve hook). Bundler and dev are one-way entries: they may import the runtime, never the reverse, so `node:fs` never reaches the graph that ships to Workers and browsers.
+Contract-first, framework-agnostic HTTP API layer. Each route declares its method, path, request schemas, and response schemas once; from that one contract the package derives typed handlers (`FromSchema`), runtime request/response validation, an OpenAPI 3.2 document (contract schemas embed verbatim — 3.2's dialect *is* Draft 2020-12), and a typed fetch client (`createClient`, no codegen). Two engines execute the same contracts: the **runtime engine** (`createApi` — eval-free, powered by `@amritk/runtime-validators`, for development and CSP-restricted platforms) and the **compiled engine** (`compileToModule` — emits a fused fetch-handler module with inlined guards, schema-derived serializers, and a precomputed OpenAPI string, for production/Cloudflare Workers). A differential test corpus holds the two engines observationally identical. Adapters: `toFetchHandler` (Bun, Workers, Deno, Hono, Next.js) and `toNodeHandler` (node:http, Express/Connect). `@amritk/api/client` is the browser-safe entry — the client surface (`createClient`, `defineContract`, the opt-in serializers, error predicates, type helpers, client-side auth helpers) with an import graph that touches no server module or `node:*` built-in (pinned by a test), so frontends bundle it without externalization warnings; the client's non-JSON pieces (`pathParams: buildParamPath`, `queryParams: toSearchParams`, `cookies: appendCookies`, form/multipart serializers) are registered opt-ins, so a JSON-only static-path app bundles none of them. `@amritk/api/bundler` ships contract-slimming build plugins for browser bundles, and `@amritk/api/dev` ships hot reloading for the development server (`createHotApi` — a stable `Api` whose build is swapped atomically, keeping the socket and process state; `watchPaths` — the debounced filesystem seam; `importFresh` — the module re-import, whole-graph on Node 22.15+ via a `node:module` resolve hook). Bundler and dev are one-way entries: they may import the runtime, never the reverse, so `node:fs` never reaches the graph that ships to Workers and browsers.
 
 - **Depends on:** `@amritk/runtime-validators` (its single runtime dependency, by design — integrations connect through seams: `context`, `mounts`, hooks, `onError`).
 - **Design docs:** `docs/api-framework-plan.md` (architecture + roadmap).
@@ -80,8 +85,9 @@ The runtime counterpart to the validator engine in `@amritk/validation`. Instead
 
 - **Depends on:** `json-schema-typed` (types only). Deliberately self-contained — no `@amritk/helpers` — so the runtime stays slim. `ajv` / `ajv-formats` are dev-only, for the benchmark suite and the differential fuzz test.
 - **Consumed by:** `@amritk/lint` — its built-in `schema` rule function validates a matched node against an arbitrary runtime-supplied JSON Schema through this interpreter.
-- **Entry points:** `validate(schema)` → error-collecting validator (`true | { valid: false, errors }`); `validateGuard(schema)` → zero-allocation boolean type guard. Both go through `src/interpreter/prepare.ts` (a `WeakMap` cache over the interpreter). One opt-in subpath sits beside them:
+- **Entry points:** `validate(schema)` → error-collecting validator (`true | { valid: false, errors }`); `validateGuard(schema)` → zero-allocation boolean type guard; `assert(schema, value)` → the value typed to the schema (`FromSchema`), or a thrown `ValidationFailedError` carrying the errors. All go through `src/interpreter/prepare.ts` (a `WeakMap` cache over the interpreter). `checkSchema(schema)` reports what a *schema* fails to say (an unknown keyword, a keyword whose value is the wrong shape) — the interpreter itself stays permissive, as JSON Schema says to be, and the `strict` option turns those issues into a refusal to build. Two opt-in subpaths sit beside them:
   - **`@amritk/runtime-validators/parse`** — `parse(schema)` → a *parser*: it coerces its input toward the schema, then validates the result, returning `{ ok: true, value } | { ok: false, errors }`. The counterpart to `validate` for data that did not arrive as JSON — HTTP query strings, path segments, headers, form bodies, env vars, CSV — where every scalar is a string and `{ type: 'integer' }` against `'42'` is describing the same thing. Coercion is string→scalar only, applied only where a subschema names a *single* scalar `type` (a union, `anyOf`, `oneOf` or `if` leaves the target ambiguous and is never converted at, because `'42'` is valid under the string branch of each); absent object properties are filled from their `default`, deep-copied. Input is never mutated, and a value that already has the declared types is returned by identity. Coercion never decides a verdict — the validator judges the coerced value in full, so a parse can only accept what a validation would. `coerceScalar` is exported from here as the monorepo's single copy of the string→scalar table; `@amritk/api` imports it rather than restating it.
+  - **`@amritk/runtime-validators/metaschema`** — the official Draft 2020-12 dialect metaschema and its seven vocabulary metaschemas, transcribed verbatim, ready to pass as `ValidateOptions.schemas` so `$ref: "https://json-schema.org/draft/2020-12/schema"` resolves ("is this a valid schema?") and `$vocabulary` is honored. A subpath rather than the main entry because it is ~9 KB of specification text most callers never need; `metaschema.test.ts` holds the copy against the one Ajv vendors.
 - **Design notes:** the schema is specialized into a tree of closures — one step per node, built lazily the first time a validation reaches that node (`src/interpreter/compile.ts`, over the shared predicates and run state in `src/interpreter/runtime.ts`). Partial evaluation, not code generation: there is no `eval` and no `new Function`, so the specialized form runs under a strict CSP. Building a validator stays free and a one-shot check never specializes the `$defs` it does not touch, which is what keeps the cold-start win; a cyclic schema terminates for free, because building a node only creates its children's records. What stays per-call is what the *run* decides rather than the node: the dynamic scope (`$dynamicRef`), scoped `$ref` resolution in a document with `$id`s, and error collection. The error array is allocated lazily so valid input never allocates, and the guard path short-circuits on first failure. Parity with Ajv is enforced by `src/differential.test.ts` (~240k random/mutated values). OpenAPI `nullable: true` is honored (null accepted regardless of type).
 
 ### `@amritk/generate-examples` (`packages/generate-examples`)
@@ -97,7 +103,7 @@ Generates **test data** from a schema. For each schema node it emits a type defi
 Renders a `config.schema.json` as documentation, in two shapes:
 
 - **The README table** (`generateMarkdown`) — one HTML `<table>` of the config reference, spliced into a `README.md` between marker comments. Used to keep the CLI / generator READMEs in sync with their config schemas. Reads the `x-cli-flag` and `x-icon` extension keywords.
-- **A prose reference** (`generateMarkdownFiles` → `GeneratedFile[]`, `generateDocs` for the filesystem) — a heading, a **Type:**, the description and a code example per property, split across as many markdown files as the schema asks for. Driven by the shared `x-mjst` vendor extension, read by position: renderer settings live under `x-mjst.markdown` (on the root they configure the pages, on a property they document it) and `x-mjst.hidden` keeps a property out of the docs. `pages` and `sections` place a property, `example`/`note`/`footer` carry the prose a JSON Schema keyword has nowhere to put, `type` overrides a label JSON Schema cannot spell (`(heading: Heading) => string`), and `layout` picks headings, a table, or nothing for a property's children. Examples are derived from a property's `examples` and wrapped back into the shape of the config file when the schema does not supply one. Golden output for two realistic schemas lives in `packages/generate-markdown/fixtures/expected/` and is regenerated with `bun run generate-fixtures`.
+- **A prose reference** (`generateMarkdownFiles` → `GeneratedFile[]`, `generateDocs` for the filesystem) — a heading, a **Type:**, the description and a code example per property, split across as many markdown files as the schema asks for. Driven by the shared `x-mjst` vendor extension, read by position: renderer settings live under `x-mjst.markdown` (on the root they configure the pages, on a property they document it) and `x-mjst.hidden` keeps a property out of the docs. `pages` and `sections` place a property, `example`/`note`/`footer` carry the prose a JSON Schema keyword has nowhere to put, `type` overrides a label JSON Schema cannot spell (`(heading: Heading) => string`), and `layout` picks headings, a table, or nothing for a property's children. Examples are derived from a property's `examples` and wrapped back into the shape of the config file when the schema does not supply one. Golden output for three realistic schemas lives in `packages/generate-markdown/fixtures/expected/` and is regenerated with `bun run generate-fixtures`.
 
 ### `@amritk/adapters` (`packages/adapters`)
 
@@ -160,15 +166,15 @@ JSON Schema file
   @amritk/mjst (src/cli.ts)
        │  parses CLI args / config, loads schema
        ▼
-  generate()                       ← parsers/src/generate.ts
+  generate()                       ← validation/src/generate.ts
        │  runs each engine the requested modes need
        ▼
-  buildSchema()                    ← parsers/src/parsers/generators/build-schema.ts
+  buildSchema()                    ← validation/src/parsers/generators/build-schema.ts
        │  traverses $ref graph
        │  resolves $dynamicRef via @amritk/helpers
        │  applies schema extensions
        ▼
-  generateFiles()                  ← parsers/src/parsers/generators/generate-files.ts
+  generateFiles()                  ← validation/src/parsers/generators/generate-files.ts
   (per schema node)
        ├─ generateTypeDefinition() ← TypeScript type shape
        ├─ generateParserFunction() ← runtime coercion/validation (skipped with --types-only)
@@ -190,7 +196,7 @@ JSON Schema file
 - **Conformance suites:** the packages that implement a spec are measured against
   that spec's official test suite, with an expected-failure list naming every case
   they do not pass and why — `packages/yaml` against the YAML test suite, and
-  `runtime-validators` / `parsers` (both engines) /
+  `runtime-validators` / `validation` (both engines) /
   `resolve-refs` against the vendored JSON Schema Test Suite
   (`fixtures/json-schema-test-suite`). Each fails when a case moves in *either*
   direction, so a boundary can never move silently.

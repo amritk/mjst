@@ -19,10 +19,12 @@ bun run --filter='@amritk/runtime-validators' test
   must run under a strict CSP. (For codegen'd straight-line validators, that's
   `@amritk/validation` — a different package.)
 - **`validate` success is the literal `true`**; `{ valid: false; errors }` on
-  failure. `validateGuard` returns a boolean type guard; `assert(schema, value)`
+  failure. `validateGuard` returns a boolean type guard (a non-narrowing `Check`
+  for a typeless schema with only object/array keywords); `assert(schema, value)`
   returns the typed value or throws. Keep these three shapes.
-- **Only local `$ref`s resolve** (`#/$defs/x`, `#anchor`, recursion). Remote/
-  cross-file is out of scope — bundle with `@amritk/resolve-refs` first.
+- **Never fetch.** Same-document `$ref`s resolve on their own; another document
+  resolves only when the caller hands it over in `options.schemas`, or bundles
+  with `@amritk/resolve-refs` first. `validate` stays synchronous and I/O-free.
 - `format` enforcement is opt-in (annotations by default), matching Ajv.
 - Consumed from **`dist`** (not `src`) in the monorepo's vitest aliases because
   of internal `@/` path rewrites — a build must run first (root `pretest`

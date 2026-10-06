@@ -74,6 +74,7 @@ so no two can disagree about whether a document is valid.
 | `types` | — | — | — | — |
 | `guard` | `isX(input): input is X` | — | a boolean | the first problem |
 | `validate` | `validateX(input)` | — | every error | the end |
+| `check` | `checkX(input)` | — | the first error | the first problem |
 | `coerce` | `coerceX(input)` | coerced | every error | the end |
 | `repair` | `repairX(input)` | repaired | repairs **and** errors | the end |
 | `parse` | `parseX(input)` | repaired | nothing | never fails |
@@ -84,7 +85,9 @@ it stops at the first thing wrong and builds no error object, which on invalid
 input is dramatically cheaper than reporting. `validate` is the other half: every
 error, each with a JSON Pointer, the keyword that rejected the value, and that
 keyword's own values. Reach for `guard` when the answer is a branch and
-`validate` when a human or an API client has to be told what to fix.
+`validate` when a human or an API client has to be told what to fix. `check` sits
+between them: `checkX` returns the same result type as `validateX`, holding only
+the error `validateX` would have reported first, and walks no further.
 
 **Coerce and repair, with or without the errors.** `coerceX` and `repairX` hand
 back the value *and* the diagnostics; `parseX` hands back only the value and
@@ -209,9 +212,16 @@ holding it (`/readme`). `params.additionalProperty` names the key in both.
 | `options.readonly` | `boolean` | `false` | Emit `readonly` type members. |
 | `options.caseInsensitive` | `boolean` | `false` | Normalize a mis-cased string onto an `enum` member it matches. |
 | `options.helpersMode` | `'package' \| 'embedded'` | `'package'` | Where the parser half gets its runtime helpers. |
+| `options.helpersImportPrefix` | `string` | `'./'` | Prefix on emitted-helper import specifiers, when `helpersMode` is `'embedded'`. |
 | `options.extensions` | `SchemaExtensions` | — | Schema extensions, passed through to the parser half. |
+| `options.importExt` | `'js' \| 'ts'` | `'js'` | Extension on every emitted relative import. `'ts'` emits the on-disk paths, so the output runs under Node's type stripping with no build step. |
+| `options.logWarnings` | `boolean` | `false` | Print the parser half's warnings about the schema, such as a keyword it cannot enforce. |
 
 Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; content: string }`.
+
+The package also exports `ALL_MODES` (every mode but `parseStrict`, for a caller
+who wants the lot) and the types `Mode`, `GenerateOptions`, `GeneratedFile` and
+`ImportExtension`.
 
 ---
 
@@ -221,6 +231,8 @@ Returns: `Promise<GeneratedFile[]>` where `GeneratedFile = { filename: string; c
 config.ts         the type, plus isX / validateX / coerceX / repairX
 config.parse.ts   parseX, importing the type from ./config.js
 validation-result.ts   the shared error and result types, and the runtime helpers
+formats.ts        the format checks, only when `formats` enforces one the schema names
+_helpers/         the parser's runtime helpers, only when `helpersMode` is 'embedded'
 index.ts          a barrel over all of it
 ```
 

@@ -8,7 +8,8 @@ static import so the package can be bundled, and so it runs where
 `createRequire` does not exist (Workers, Deno). The build fails if a `.json`
 file and its module drift apart. They back the `asyncapi-schema` and
 `asyncapi-3-document-unresolved` rules, and the AsyncAPI Schema
-Object subschema each one carries backs `asyncapi-payload`.
+Object subschema each one carries backs `asyncapi-payload` and
+`asyncapi-3-payload`.
 
 | File | Version | Source |
 | --- | --- | --- |

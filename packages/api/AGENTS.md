@@ -5,7 +5,7 @@ Contributor guide for AI agents editing **this package**. Repo-wide rules:
 [`AI.md`](./AI.md).
 
 Contract-first HTTP API layer: JSON Schema routes → typed handlers, runtime
-validation, OpenAPI 3.1, and a derived typed client.
+validation, OpenAPI 3.2, and a derived typed client.
 
 ## Commands
 

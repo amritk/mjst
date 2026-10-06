@@ -59,6 +59,7 @@ bun add @amritk/helpers
 | `@amritk/helpers/prune-external-schemas` | `pruneExternalSchemas` | Drop the grafted documents nothing references. |
 | `@amritk/helpers/extract-dynamic-anchor-defs` | `extractDynamicAnchorDefs` | Collect a `#/...` ref for every subschema carrying a `$dynamicAnchor`. |
 | `@amritk/helpers/fold-nullable` | `foldNullable` | Rewrite OpenAPI 3.0 `nullable: true` into a `null` member of `type`. |
+| `@amritk/helpers/referenced-conditional` | `referencedConditional` | The `if`/`then` definition an `allOf` member's local `$ref` points at, so the type emitter and the import collectors agree on what gets inlined. |
 | `@amritk/helpers/derive-root-type-name` | `deriveRootTypeName` | Turn a schema `title` into a PascalCase root type name. |
 | `@amritk/helpers/read-key` | `readKey`, `declaresKey` | Read an author-chosen name (`$defs` entry, config key) off a map, treating inherited names such as `__proto__` as absent. |
 | `@amritk/helpers/assign-key` | `assignKey` | Assign a key on a rebuilt object without letting `__proto__` reach the prototype setter. |
@@ -69,8 +70,12 @@ bun add @amritk/helpers
 | Subpath | Exports | Purpose |
 |:---|:---|:---|
 | `@amritk/helpers/generate-type-definition` | `generateTypeDefinition` | Render a TypeScript type from a schema node. |
-| `@amritk/helpers/mjst-extension` | `MJST_EXTENSION_KEY`, `getMjstInstanceOf`, `getMjstPrimitive`, `getMjstBrand` | Read the `x-mjst` vendor hints (`instanceOf`, `primitive`, `brand`) a schema carries. |
+| `@amritk/helpers/mjst-extension` | `MJST_EXTENSION_KEY`, `MjstExtension`, `hasMjstHint`, `getMjstInstanceOf`, `getMjstPrimitive`, `getMjstBrand`, `getMjstDiscriminator` | Read the `x-mjst` vendor hints (`instanceOf`, `primitive`, `brand`) a schema carries, and the message `discriminator` an AsyncAPI channel names. |
 | `@amritk/helpers/generate-index-barrel` | `generateIndexBarrel` | Render the `index.ts` barrel that re-exports every generated file. A name starting with `_` is for sibling files only and is left out. |
+| `@amritk/helpers/identifier-mentions` | `identifierMentions` | Ask whether emitted source names an identifier, ignoring comments, strings, and regex literals — decides which `$ref` imports a generated file keeps. |
+| `@amritk/helpers/get-default-value` | `getDefaultValue` | The fallback value (as source text) a parser or repairing validator substitutes for missing data: `default` > `const` > first `enum` > first usable `examples` entry > first union branch > `pattern` > type. `default` and `examples` are used only when they match the declared type. |
+| `@amritk/helpers/generate-default-from-pattern` | `generateDefaultFromPattern` | Build a fallback string that is guaranteed to match a `pattern` (and length bounds), or `null`. |
+| `@amritk/helpers/unknown-keys-strategy` | `UnknownKeysStrategy`, `UNKNOWN_KEYS_STRATEGIES`, `DEFAULT_UNKNOWN_KEYS`, `isUnknownKeysStrategy` | How a generated fast path proves a closed object has no extra key: `'count-keys'` (default) or `'count-enumerable'`. |
 | `@amritk/helpers/escape-regex-pattern` | `escapeRegexPattern`, `regexFlagsFor`, `regexLiteral` | Embed a JSON Schema `pattern` in a generated regex literal, validating it at generation time. |
 | `@amritk/helpers/quote-js-string` | `quoteJsString` | Quote a string as a JS literal, escaping only when needed. |
 | `@amritk/helpers/multiple-of-check` | `multipleOfPassExpr`, `multipleOfFailExpr` | Emit a `multipleOf` check that agrees with the runtime interpreter. |
@@ -113,7 +118,7 @@ Most helpers have a colocated test file (`*.test.ts`) — read those for canonic
 
 ## Related packages
 
-- [`@amritk/validation`](../parsers) — primary consumer
+- [`@amritk/validation`](../validation) — primary consumer
 - [`@amritk/mjst`](../cli) — the CLI surface
 
 ---

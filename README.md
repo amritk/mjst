@@ -25,10 +25,10 @@ mjst is a monorepo of JSON Schema (Draft 2020-12) tooling for TypeScript. At its
 | Output | Description |
 |:---|:---|
 | **Parsers** | Runtime functions that validate and coerce unknown input into typed values |
-| **Validators** | Error-collecting `validateX` functions plus flat `isX` boolean type guards |
+| **Validators** | Error-collecting `validateX` functions plus flat `isX` boolean type guards — and, on request, first-error `checkX`, Ajv-style coercing `coerceX`, and `repairX`, which repairs what it can and reports what it repaired |
 | **Type definitions** | TypeScript types matching the schema, with documentation comments (compiled to `.d.ts` under `--build`) |
 | **Test data** | fast-check arbitraries for property testing, plus concrete example values |
-| **Markdown** | A configuration-reference table rendered from a schema's properties |
+| **Markdown** | A configuration-reference table for a README, or a multi-page prose reference, rendered from a schema's properties |
 
 Around the generators sits a wider toolbox:
 

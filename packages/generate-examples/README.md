@@ -137,12 +137,14 @@ const res = await fetch('/users', { method: 'POST', body: JSON.stringify(userExa
 
 `type` — including multi-type unions like `['string', 'null']` —
 (string/number/integer/boolean/null/array/object), `properties`,
-`required`, `items`, `minItems`/`maxItems`, `uniqueItems`,
+`required`, `additionalProperties`, `items`, `prefixItems`,
+`minItems`/`maxItems`, `uniqueItems`,
 `minLength`/`maxLength`, `pattern`, `format`, `minimum`/`maximum`,
 `exclusiveMinimum`/`exclusiveMaximum`, `multipleOf`, `enum` (filtered by sibling
 constraints), `const`, `minProperties`/`maxProperties`, `patternProperties`,
 `propertyNames`, `dependentRequired`, `dependentSchemas`, `contains`,
-`oneOf`/`anyOf`, `if`/`then`/`else`, `not`, `$ref`, and the `x-mjst` extension
+`minContains`, `allOf` (merged into one schema), `oneOf`/`anyOf`,
+`if`/`then`/`else`, `not`, `$ref`, and the `x-mjst` extension
 (`Date`, `bigint`). `if`/`then`/`else`, `not`, and `oneOf` exclusivity are
 enforced by validating generated candidates against the schema and
 retrying/rejecting. Unsupported constructs degrade to `fc.anything()` in
@@ -179,7 +181,7 @@ The value falls short for three reasons:
   asking for `minLength: 50000000` yields a capped value and a warning rather than
   a 50 MB literal. `FooArbitrary` still honours the real bound.
 
-Two more shapes worth knowing about, both of which keep the generated file
+A few more shapes worth knowing about, each of which keeps the generated file
 compiling rather than making it correct:
 
 - A schema can require a key its **generated type never declares** — `required`
@@ -188,12 +190,13 @@ compiling rather than making it correct:
   index signature. The example keeps the key (a fixture missing what its schema
   demands is broken data) and is emitted as `… as Foo`, since a bare object
   literal with an excess property fails to compile.
-- An authored `default` or `examples[0]` is used **only when it satisfies its own
-  schema**. A hint that does not (`{ type: 'string', default: 42 }` — common in
-  documents whose field types changed after the hint was written) is ignored in
-  favour of a structurally derived value, because the generated type follows the
-  schema and would reject the hint outright. `const` is always honoured: the type
-  is the const's own literal type, so the two cannot disagree.
+- An authored `examples[0]` (or, when there are no `examples`, the `default`) is
+  used **only when it satisfies its own schema**. A hint that does not
+  (`{ type: 'string', default: 42 }` — common in documents whose field types
+  changed after the hint was written) is ignored in favour of a structurally
+  derived value, because the generated type follows the schema and would reject
+  the hint outright. `const` is always honoured: the type is the const's own
+  literal type, so the two cannot disagree.
 - An **unsatisfiable range** (`minLength: 10, maxLength: 2`) collapses onto its
   upper bound in the arbitrary. Every bounded `fc.*` combinator asserts
   `min <= max` and throws at *import*, which would take down every other export in

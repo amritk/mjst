@@ -24,6 +24,13 @@ bun run --filter='@amritk/yaml' types:check
   coerce.
 - **Errors are collected on `doc.errors` / `doc.warnings`, not thrown.**
   `parseDocument` = first document only; `parseAllDocuments` for `---` streams.
+- **Every diagnostic code is a member of `YamlErrorCode`** (`src/types.ts`), and
+  `pushError` / `pushWarning` accept nothing else. A new code goes into that
+  union and into the README's code table (and AI.md's list) in the same change.
+- **Nesting is attacker-controlled.** Every recursive path counts against
+  `MAX_PARSE_DEPTH` and reports `DEPTH_LIMIT`; a deep document must never throw
+  a `RangeError` out of the parser. A new recursive construct needs the same
+  guard.
 - This is a documented **subset**, not full YAML 1.2 conformance — scope new
   features against tooling needs, not spec completeness.
 

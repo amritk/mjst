@@ -18,9 +18,11 @@ bun run --filter='@amritk/adapters' types:check
 - **No barrel export — one subpath per adapter.** Each `@amritk/adapters/<name>`
   maps to a single file. `getAdapter` is the runtime dispatcher. Don't add a `.`
   root entry.
-- **Source libraries (zod/valibot/effect/typebox) are optional peer deps,
-  imported dynamically** inside each adapter — never import them at module top
-  level, or you'll force every consumer to install all four. Avro has no peer
+- **Source libraries (zod/valibot/effect, plus `zod-to-json-schema` and
+  `@valibot/to-json-schema`) are optional peer deps, imported dynamically**
+  inside each adapter — never import them at module top level, or you'll force
+  every consumer to install all of them. TypeBox is never imported at all (its
+  schemas are plain JSON Schema objects). Avro has no peer
   dep at all and must keep it that way: an `.avsc` is JSON, so the conversion is
   implemented here rather than delegated.
 - **Avro's two encodings are both load-bearing — never collapse them.** `'json'`
@@ -35,6 +37,7 @@ bun run --filter='@amritk/adapters' types:check
 - **`getAdapter('json')` must throw** (JSON needs no adapter). Keep the error
   actionable.
 - Unrepresentable constructs widen to `{}` with a `[mjst]` stderr warning
-  (Effect throws on nested ones); `strict: true` throws instead. Keep both modes.
+  (Effect throws instead, on any leaf it cannot rescue); `strict: true` throws
+  instead. Keep both modes.
 
 Add a changeset for every change (`bunx changeset`).

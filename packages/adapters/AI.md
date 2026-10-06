@@ -28,12 +28,14 @@ const jsonSchema = await adapter.toJSONSchema(User) // always await
 3. **`getAdapter('json')` throws** — `'json'` is a valid `SourceFormat` but has no
    adapter (JSON Schema is read directly). Only `typebox` / `zod` / `valibot` /
    `effect` / `avro` resolve.
-4. **Source libraries are optional peer deps**, imported dynamically. **Zod must
-   be v4+** (`toJSONSchema` doesn't exist earlier). Always `await` — even
+4. **Source libraries are optional peer deps**, imported dynamically. **Zod 4+
+   is preferred** (native `toJSONSchema`); Zod 3 works only with the
+   `zod-to-json-schema` package installed alongside it. Always `await` — even
    TypeBox's synchronous path is typed to allow a Promise.
 5. **Unrepresentable constructs widen to `{}`** with a stderr `[mjst]` warning
-   (Effect throws on nested ones). `date` / `bigint` become `x-mjst` hints. Pass
-   `{ strict: true }` to throw instead of widening.
+   (Effect throws instead, on any leaf it cannot rescue). `date` / `bigint`
+   become `x-mjst` hints. Pass `{ strict: true }` to throw instead of widening
+   (Zod, Valibot, Avro).
 6. **Avro takes a parsed `.avsc`, not a module, and needs no peer dep.** Pick the
    encoding deliberately: `avroToJsonSchema(avro)` describes the idiomatic
    decoded object (nullable unions, base64 bytes, defaulted fields optional);

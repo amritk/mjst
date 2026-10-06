@@ -32,9 +32,11 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    check `if (result !== true)`; the failure case is `{ valid: false, errors }`.
 2. **`assert(schema, value)` — the value is the 2nd positional arg.** `validate`
    and `validateGuard` take only the schema and return a function.
-3. **Only local `$ref`s resolve** (`#/$defs/x`, `#anchor`, incl. recursion).
-   Remote / cross-file refs are NOT fetched — bundle first with
-   `@amritk/resolve-refs`, then validate the dereferenced document.
+3. **Nothing is fetched.** Same-document `$ref`s resolve (`#/$defs/x`,
+   `#anchor`, `$id` base URIs, incl. recursion). A ref into another document
+   resolves only if you pass that document, already loaded, in
+   `{ schemas: { [uri]: doc } }` — or bundle first with `@amritk/resolve-refs`.
+   A URI nobody supplied throws.
 4. **`format` is opt-in.** Unlisted formats are treated as annotations (like
    Ajv); pass `{ formats: 'all' }` or a list to enforce. `customFormats` adds
    checkers of your own (`{ customFormats: { phone: /^\d+$/ } }`), and those are
@@ -61,7 +63,9 @@ const user = assert(schema, { id: 1, name: 'Ada' }) // returns typed value OR th
    it's the way to give `@amritk/api` route `params`/`query`/`body` nominal ids.
 
 Exports: `validate`, `validateGuard`, `assert`, `checkSchema`, `isSchemaError`,
-`isValidationLimitError`, and the types `Validator`, `Guard`, `ValidationError`,
-`ValidationResult`, `FromSchema`, `Infer`, `ValidateOptions`, `SchemaIssue`,
-`FormatDefinition`. Subpaths: `/parse` (coercing parser) and `/metaschema` (the
-2020-12 dialect documents). Install: `bun add @amritk/runtime-validators`.
+`schemaError`, `isValidationLimitError`, and the types `Validator`, `Guard`,
+`Check`, `ValidationError`, `ValidationResult`, `ValidationFailedError`,
+`FromSchema`, `Infer`, `ValidateOptions`, `ValidateLimits`, `SchemaIssue`,
+`FormatDefinition`. Subpaths: `/parse` (the coercing `parse`, plus
+`coerceScalar`, its string-to-scalar table) and `/metaschema` (the 2020-12
+dialect documents). Install: `bun add @amritk/runtime-validators`.

@@ -3,8 +3,10 @@
 Contributor guide for AI agents editing **this package**. Repo-wide rules:
 [`../../AGENTS.md`](../../AGENTS.md). Consuming the package? See [`AI.md`](./AI.md).
 
-Renders an HTML config-reference table from a `config.schema.json` into a
-`README.md`. Used by the CLI package's `generate-readme` script.
+Renders a `config.schema.json` as documentation: an HTML config-reference
+table spliced into a `README.md` (used by the CLI package's `generate-readme`
+script), or a multi-page prose reference (`generateMarkdownFiles` /
+`generateDocs`, behind `mjst markdown`).
 
 ## Commands
 

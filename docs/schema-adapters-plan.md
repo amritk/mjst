@@ -8,10 +8,10 @@ Effect Schema — into mjst, instead of only hand-written JSON Schema files.
 ## Key insight
 
 The whole generation pipeline is already JSON-Schema-centric. `buildSchema()`
-(`packages/generate-parsers/src/generators/build-schema.ts`) takes a
+(`packages/validation/src/parsers/generators/build-schema.ts`) takes a
 `JSONSchema` (Draft 2020-12) and everything downstream operates on that. The
 **only** place that assumes JSON-on-disk is the CLI, which does `readFile` +
-`JSON.parse` (`packages/cli/src/cli.ts:58-60`).
+`JSON.parse` (now in `packages/cli/src/load-schema.ts`).
 
 So an adapter is a thin "source schema → JSON Schema 2020-12" converter that
 runs *before* `buildSchema`. The core generators stay untouched. Most target
@@ -24,6 +24,7 @@ reimplementations:
 | Zod        | Zod 4 `z.toJSONSchema()`, with a `zod-to-json-schema` fallback for Zod 3 (optional peer deps) | ✅ implemented |
 | Valibot    | `@valibot/to-json-schema` (optional peer dep) | ✅ implemented |
 | Effect     | `JSONSchema.make` (optional peer dep)         | ✅ implemented |
+| Avro       | converted in full here (an `.avsc` is plain JSON; no peer dep) | ✅ implemented |
 
 ## The real work: input loading, not conversion
 
@@ -38,6 +39,9 @@ and select which export is the schema. This is the part that needs design:
 ## Proposed shape
 
 ### 1. Adapter interface (`@amritk/generate-parsers` or a new `@amritk/adapters`)
+
+> Shipped in `@amritk/adapters`. The real `SourceFormat` also has `'avro'` and
+> `'asyncapi'`, and `toJSONSchema` takes an optional `{ strict?: boolean }`.
 
 ```ts
 // SourceFormat is the user-facing name; 'json' is the existing default.
@@ -63,6 +67,7 @@ who only use JSON pull in nothing extra.
 Alternative (simpler v1): put all adapters in one `@amritk/adapters` package
 with the source libs as optional peers. Easier to start, slightly heavier.
 **Recommendation:** start with one package, split later if dep weight matters.
+*(Done: everything ships in one `@amritk/adapters` package, one subpath per adapter.)*
 
 ### 3. CLI wiring
 
@@ -139,12 +144,12 @@ it and generators read it from one source of truth.
 
 - **Types** (`@amritk/helpers/generate-type-definition`): emit the class name
   directly (`Date`).
-- **Parsers** (`generate-parsers`): validity is `value instanceof Date`; in
-  non-strict mode invalid values are coerced when a coercer is known
-  (`Date` → `new Date(value)`), otherwise fall back to the default. Strict mode
-  throws on a non-instance.
-- **Validators** (`generate-validators`): emit an `instanceof` check with a
-  `must be <Class>` error.
+- **Parsers** (`@amritk/validation`, formerly `generate-parsers`): validity is
+  `value instanceof Date`; in non-strict mode invalid values are coerced when a
+  coercer is known (`Date` → `new Date(value)`), otherwise fall back to the
+  default. Strict mode throws on a non-instance.
+- **Validators** (`@amritk/validation`, formerly `generate-validators`): emit an
+  `instanceof` check with a `must be <Class>` error.
 
 ### Adapter responsibility
 
@@ -163,7 +168,10 @@ own `override` hook, keyed on Zod 3's `ZodFirstPartyTypeKind` type names.
 ## Open questions
 
 - `.ts` module loading under plain Node — require a loader, or auto-register
-  `tsx`? Affects DX significantly.
+  `tsx`? Affects DX significantly. *(Resolved: no auto-registration; a failed
+  `.ts` import tells the user to run via `bunx` or Node with `--import tsx`.)*
 - Export selection convention — default export, single named export, or always
-  require `--export`?
-- One `@amritk/adapters` package vs one package per library.
+  require `--export`? *(Resolved: `--export <name>`, else the default export,
+  else the sole named export; anything else throws.)*
+- One `@amritk/adapters` package vs one package per library. *(Resolved: one
+  package.)*

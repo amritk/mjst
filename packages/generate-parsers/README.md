@@ -2,9 +2,10 @@
 
 > **Deprecated.** Use [`@amritk/validation`](https://www.npmjs.com/package/@amritk/validation) instead.
 >
-> This release is a compatibility shim: `buildSchema` keeps its signature and emits
-> byte-identical output, so upgrading to it breaks nothing. It is the last
-> release of this package.
+> This package is now a compatibility shim: `buildSchema` keeps its signature and
+> forwards to `generate()` in `@amritk/validation`, so upgrading to it breaks no
+> call site. It gets no new features; its output follows the engine it forwards
+> to.
 
 ## What this was
 

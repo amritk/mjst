@@ -57,6 +57,15 @@ bun run --filter='@amritk/lint' types:check
 - **Depth is attacker-controlled.** Walkers over document data are iterative, and
   the parsers cap nesting (`MAX_NESTING_DEPTH`) and report a diagnostic; a
   malformed document must never throw out of `lintDocument`.
+- **YAML positions are found per lookup, and must land where `toJS` does.**
+  `parsers/yaml-locator.ts` walks from the root along the path on each
+  `getLocationForJsonPath` call rather than indexing every node up front. The
+  node it returns has to be the one whose projection is the value at that path —
+  aliases, last-wins duplicate keys, and merge precedence
+  (`parsers/yaml-merge-key.ts`) included — and `yaml-lazy-positions.test.ts`
+  checks that over every fixture. Each lookup runs under a visit budget
+  (`MAX_LOOKUP_VISITS`) so hostile alias and duplicate-key shapes stay linear;
+  keep new work inside it.
 - **The OpenAPI and AsyncAPI meta-schemas are generated modules.** Edit the
   vendored `.json`, then run `node scripts/generate-schema-modules.mjs`; the
   build fails on drift. Keep the imports static so the subpaths stay
