@@ -370,10 +370,17 @@ export const escapePointer = (key: string): string =>
  * was rejected on the value's *identity* (a \`const\` or \`enum\` on the value or
  * one of its own properties), the remaining one is the variant the author meant.
  *
- * Nothing is reported when no branch stands out, which is as much as can be said
- * honestly: "the branch with the fewest errors" would answer here too, and
- * answers wrongly on \`oneOf: [aReference, theActualThing]\`, where "you did not
- * write a $ref" is one complaint and the real mistake is two.
+ * When every branch rejected the value's kind, no branch was meant, but the
+ * kinds they wanted together are what the union accepts, so that is reported as
+ * one \`type\` error: "must be object or boolean" for a \`true\` written as the
+ * string \`'true'\`. \`total\` is how many branches the combinator has, and the kinds
+ * are only named when all of them were heard from. A branch that could not
+ * explain itself might have accepted this kind, and then the list would be wrong.
+ *
+ * Otherwise nothing is reported when no branch stands out, which is as much as
+ * can be said honestly: "the branch with the fewest errors" would answer here
+ * too, and answers wrongly on \`oneOf: [aReference, theActualThing]\`, where "you
+ * did not write a $ref" is one complaint and the real mistake is two.
  *
  * \`path\` is where the combinator was applied, so a segment below it is a direct
  * property of the value being judged. \`@amritk/runtime-validators\` selects the
@@ -383,6 +390,7 @@ export const escapePointer = (key: string): string =>
 export const selectBranchErrors = (
   branches: readonly (readonly ValidationError[])[],
   path: string,
+  total?: number,
 ): readonly ValidationError[] => {
   const candidates: (readonly ValidationError[])[] = []
   for (const errors of branches) {
@@ -390,6 +398,7 @@ export const selectBranchErrors = (
     if (!errors.some((error) => error.keyword === 'type' && error.path === path)) candidates.push(errors)
   }
   if (candidates.length === 1) return candidates[0] as readonly ValidationError[]
+  if (candidates.length === 0) return branches.length === total ? acceptedKinds(branches, path) : []
 
   let selected: readonly ValidationError[] | null = null
   let rejectedOnIdentity = 0
@@ -411,6 +420,36 @@ export const selectBranchErrors = (
   }
 
   return selected !== null && rejectedOnIdentity === candidates.length - 1 ? selected : []
+}
+
+/**
+ * One \`type\` error naming every kind the branches asked for, in branch order and
+ * once each. A branch's own \`type\` may be a list, and a nested union reports its
+ * kinds as a list too, so both are read flat.
+ */
+const acceptedKinds = (
+  branches: readonly (readonly ValidationError[])[],
+  path: string,
+): readonly ValidationError[] => {
+  const kinds: string[] = []
+  for (const errors of branches) {
+    for (const error of errors) {
+      if (error.keyword !== 'type' || error.path !== path) continue
+      const type = error.params['type']
+      for (const kind of Array.isArray(type) ? type : [type]) {
+        if (typeof kind === 'string' && !kinds.includes(kind)) kinds.push(kind)
+      }
+    }
+  }
+  if (kinds.length === 0) return []
+  return [
+    {
+      message: 'must be ' + kinds.join(' or '),
+      path,
+      keyword: 'type',
+      params: { type: kinds.length === 1 ? kinds[0] : kinds },
+    },
+  ]
 }
 
 /**

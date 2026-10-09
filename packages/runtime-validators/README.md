@@ -236,6 +236,17 @@ That works through `$ref`s, which is what a compile-time `discriminator` analysi
 could not do. With no discriminator, nothing extra is reported — a guess would be
 worse than the silence.
 
+The exception is a value of a kind that no branch accepts, such as `'true'` or `1`
+against an object-or-`false` union. No branch was meant, but the kinds the branches
+wanted are what the union accepts, so that is added as one `type` error:
+
+```ts
+[
+  { message: 'must match a schema in anyOf', path: '/homebrew', keyword: 'anyOf', params: {} },
+  { message: 'must be object or boolean', path: '/homebrew', keyword: 'type', params: { type: ['object', 'boolean'] } },
+]
+```
+
 ### `validateGuard<T>(schema, options?)`
 
 Builds a boolean type guard `(input: unknown) => input is T`. Same options as `validate`; it short-circuits on the first failure and never builds an error object or message, so it is the faster of the two when you only need yes/no. `T` is inferred from a schema written `as const`; pass it explicitly to override. One exception to the narrowing: a schema with no `type` (nor `enum`, `const`, or `$ref`) that carries only object- or array-shaped keywords also accepts non-objects, so its guard is a plain `(input: unknown) => boolean` rather than an `input is T` predicate — declare a `type` to get a narrowing guard (`Infer` recovers the described type either way).

@@ -2250,22 +2250,115 @@ describe('generate-validator-function', () => {
       })
     })
 
-    it('says nothing extra when no branch describes the value at all', () => {
-      const v = evalValidator(
-        generateValidatorFunction(
-          { anyOf: [{ type: 'string' }, { type: 'number' }] } as never,
-          'Scalar',
-          '',
-          undefined,
-          undefined,
-          undefined,
-          true,
-        ),
-      )
+    it('names the accepted kinds when no branch describes the value at all', () => {
+      const v = evalValidator(withBranchErrors({ anyOf: [{ type: 'string' }, { type: 'number' }] }, 'Scalar'))
 
       expect(v(true)).toEqual({
         valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+          { message: 'must be string or number', path: '', keyword: 'type', params: { type: ['string', 'number'] } },
+        ],
+      })
+    })
+
+    // The shape from a real config schema: the long form is an object, the short
+    // form opts out with `false`. A `"true"` string or a `1` matches neither kind,
+    // and the combinator error alone named no field and no reason.
+    it('names the accepted kinds for a value written as the wrong kind', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            type: 'object',
+            properties: {
+              homebrew: {
+                anyOf: [
+                  { type: 'object', properties: { tapRepo: { type: 'string' } }, required: ['tapRepo'] },
+                  { type: 'boolean', const: false },
+                ],
+              },
+            },
+          },
+          'Publish',
+        ),
+      )
+
+      for (const homebrew of ['true', 1]) {
+        expect(v({ homebrew })).toEqual({
+          valid: false,
+          errors: [
+            { message: 'must match a schema in anyOf', path: '/homebrew', keyword: 'anyOf', params: {} },
+            {
+              message: 'must be object or boolean',
+              path: '/homebrew',
+              keyword: 'type',
+              params: { type: ['object', 'boolean'] },
+            },
+          ],
+        })
+      }
+      // A value of a kind some branch accepts still gets that branch's errors.
+      expect(v({ homebrew: {} })).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '/homebrew', keyword: 'anyOf', params: {} },
+          {
+            message: "must have required property 'tapRepo'",
+            path: '/homebrew',
+            keyword: 'required',
+            params: { missingProperty: 'tapRepo' },
+          },
+        ],
+      })
+    })
+
+    it('flattens the kinds of a nested union and of a multi-type branch', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          { anyOf: [{ type: ['string', 'null'] }, { anyOf: [{ type: 'string' }, { type: 'array' }] }] },
+          'Nested',
+        ),
+      )
+
+      const result = v(1) as { errors: unknown[] }
+      expect(result.errors.at(-1)).toEqual({
+        message: 'must be string or null or array',
+        path: '',
+        keyword: 'type',
+        params: { type: ['string', 'null', 'array'] },
+      })
+    })
+
+    // `false` has nothing to explain, so the union was not heard from in full and
+    // the list of kinds it accepts cannot be trusted. Nothing is claimed.
+    it('names no kinds when a branch could not explain itself', () => {
+      const v = evalValidator(withBranchErrors({ anyOf: [{ type: 'string' }, false] }, 'Partial'))
+
+      expect(v(1)).toEqual({
+        valid: false,
         errors: [{ message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} }],
+      })
+    })
+
+    it('names a single accepted kind without a list', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            oneOf: [
+              { type: 'object', required: ['a'] },
+              { type: 'object', required: ['b'] },
+            ],
+          },
+          'Either',
+        ),
+      )
+
+      expect(v('x')).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+          { message: 'must be object', path: '', keyword: 'type', params: { type: 'object' } },
+        ],
       })
     })
 

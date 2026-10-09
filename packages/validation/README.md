@@ -136,6 +136,13 @@ is on purpose:
   string, number or boolean field, and reads those back as `null`. A `null`
   usually means "not set", and turning it into a real value erases that. Here it
   goes to the validator as written, and the validator rejects it.
+
+  Before switching, check what your callers do with a rejected document. If one
+  treats rejection as absence (returns `undefined`, falls back to a default),
+  a single `null` deep inside a block makes the whole block vanish without an
+  error. Ajv's coercion used to hide that. Either let the schema say `null` is
+  allowed (`type: ['string', 'null']`), drop `null`s before validating, or have
+  the caller surface the errors instead of discarding the value.
 - **Only clean numerals become numbers.** `" "`, `" 1 "`, `"0x10"`, `"Infinity"`
   and `"1."` are rejected. Ajv turns them into `0`, `1`, `16`, a value JSON
   cannot hold, and `1`. `"007"` and `"1e3"` are still coerced.
@@ -207,7 +214,7 @@ holding it (`/readme`). `params.additionalProperty` names the key in both.
 | `options.schemas` | `Record<string, unknown>` | — | Documents you have already loaded, keyed by the URI a `$ref` names them by. |
 | `options.unknownKeys` | `'count-keys' \| 'count-enumerable'` | `'count-keys'` | How a closed object's fast path proves it carries no undeclared key. |
 | `options.formats` | `'all' \| string[]` | — | String `format`s the validators enforce. Unset leaves `format` an annotation. |
-| `options.branchErrors` | `boolean` | `false` | Explain a failing `anyOf` / `oneOf` with the branch it plainly meant. |
+| `options.branchErrors` | `boolean` | `false` | Explain a failing `anyOf` / `oneOf` with the branch it plainly meant, or with the kinds it accepts when no branch takes the value's kind. |
 | `options.stripUnknown` | `boolean` | `false` | Build each parsed result from the declared properties only. |
 | `options.readonly` | `boolean` | `false` | Emit `readonly` type members. |
 | `options.caseInsensitive` | `boolean` | `false` | Normalize a mis-cased string onto an `enum` member it matches. |

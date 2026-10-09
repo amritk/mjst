@@ -1815,7 +1815,10 @@ const generateUnevaluatedChecks = (
  * evaluation, valid input included. A failing combinator is the error path, and
  * a second look at its branches is cheap next to building the report.
  *
- * `explain` holds one hoisted function name per branch that has anything to say.
+ * `explain` holds one hoisted function name per branch that has anything to say,
+ * and `total` is how many branches the combinator has. `selectBranchErrors` only
+ * names the accepted kinds when it heard from every one of them, so a branch
+ * with no explainer keeps it from claiming to know what the union accepts.
  * Every emitted line starts with a keyword or with the report's own
  * `(errors ??= [])`, which only ever follows the opening brace, so none of them
  * can fuse with the line before it.
@@ -1824,6 +1827,7 @@ const branchErrorsReport = (
   guard: string,
   raw: string,
   explain: readonly string[],
+  total: number,
   message: string,
   keyword: string,
   path: string,
@@ -1837,7 +1841,7 @@ const branchErrorsReport = (
         `    const _bp = ${path}`,
         `    const _br: ValidationError[][] = []`,
         `    for (const _b of [${explain.map((name) => `${name}(${raw}, _bp)`).join(', ')}]) if (_b.length !== 0) _br.push(_b)`,
-        `    for (const _e of selectBranchErrors(_br, _bp)) ${ctx.sink}.push(_e)`,
+        `    for (const _e of selectBranchErrors(_br, _bp, ${total})) ${ctx.sink}.push(_e)`,
       ]),
   `  }`,
 ]
@@ -1875,6 +1879,7 @@ const generateCombinatorChecks = (
             `!(${conds.join(' || ')})`,
             raw,
             branchExplainers(schema.anyOf, suffix, ctx),
+            schema.anyOf.length,
             `'must match a schema in anyOf'`,
             'anyOf',
             path,
@@ -1908,7 +1913,7 @@ const generateCombinatorChecks = (
       const explain = branchExplainers(schema.oneOf, suffix, ctx)
       lines.push(`  {`)
       lines.push(`    const _n = ${conds.join(' + ')}`)
-      const report = branchErrorsReport('_n === 0', raw, explain, message, 'oneOf', path, ctx).map(
+      const report = branchErrorsReport('_n === 0', raw, explain, schema.oneOf.length, message, 'oneOf', path, ctx).map(
         (line) => `  ${line}`,
       )
       lines.push(...report.slice(0, -1))

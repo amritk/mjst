@@ -1215,6 +1215,11 @@ const isKindMismatch = (error: ValidationError): boolean => error.keyword === 't
  * describe an object, so both survive the first step, neither is an identity
  * rejection, and nothing is reported. When no branch stands out this reports
  * nothing extra, which is exactly as much as can be said honestly.
+ *
+ * The one exception is a value whose kind no branch accepts. Then no branch was
+ * meant, but the kinds the branches wanted are what the union accepts, and
+ * saying so is honest and useful: "must be object or boolean" for a `true`
+ * written as the string `'true'`, where the combinator error alone named nothing.
  */
 const selectedBranchErrors = (
   ctx: InterpreterContext,
@@ -1224,6 +1229,7 @@ const selectedBranchErrors = (
   scope: DynamicScope,
 ): readonly ValidationError[] | null => {
   const candidates: ValidationError[][] = []
+  const errorsByBranch: ValidationError[][] = []
   for (const node of nodes) {
     const sub = newErrorContext(ctx)
     node.run(sub, value, '', null, depth + 1, scope)
@@ -1232,12 +1238,14 @@ const selectedBranchErrors = (
     // `oneOf` failed for having matched more than one. Nothing to explain.
     if (errors === null) return null
 
+    errorsByBranch.push(errors)
     if (!errors.some(isKindMismatch)) candidates.push(errors)
   }
 
   // Exactly one branch was talking about this kind of value at all, so there is
   // nothing left to discriminate between — it is the one the author meant.
   if (candidates.length === 1) return candidates[0] as ValidationError[]
+  if (candidates.length === 0) return acceptedKinds(errorsByBranch)
 
   let selected: ValidationError[] | null = null
   let rejectedOnIdentity = 0
@@ -1252,6 +1260,34 @@ const selectedBranchErrors = (
   }
 
   return selected !== null && rejectedOnIdentity === candidates.length - 1 ? selected : null
+}
+
+/**
+ * One `type` error naming every kind the branches asked for, in branch order and
+ * once each, or `null` when none of them named one. A branch's own `type` may be
+ * a list, and a nested union reports its kinds as a list too, so both are read
+ * flat. The generated validators' `selectBranchErrors` builds the same error.
+ */
+const acceptedKinds = (errorsByBranch: readonly ValidationError[][]): ValidationError[] | null => {
+  const kinds: string[] = []
+  for (const errors of errorsByBranch) {
+    for (const error of errors) {
+      if (!isKindMismatch(error)) continue
+      const type = error.params['type']
+      for (const kind of Array.isArray(type) ? type : [type]) {
+        if (typeof kind === 'string' && !kinds.includes(kind)) kinds.push(kind)
+      }
+    }
+  }
+  if (kinds.length === 0) return null
+  return [
+    {
+      message: `must be ${kinds.join(' or ')}`,
+      path: '',
+      keyword: 'type',
+      params: { type: kinds.length === 1 ? kinds[0] : kinds },
+    },
+  ]
 }
 
 /**
