@@ -136,14 +136,6 @@ const hasOwnCheck = (objVar: string, key: string): string => {
 const missingCheck = (objVar: string, key: string): string => `!(${hasOwnCheck(objVar, key)})`
 
 /**
- * Returns the TypeScript typeof string for a JSON Schema primitive type.
- */
-const typeofString = (type: string): string => {
-  if (type === 'integer') return 'number'
-  return type
-}
-
-/**
  * Generates the inline condition that is TRUE when `accessor` does NOT equal the
  * `const` value. Primitives compare with `!==`; objects/arrays compare with the
  * runtime `valuesEqual` helper so a reordered-but-equal value still matches (the
@@ -1009,9 +1001,7 @@ const generateKeywordChecks = (
       const wrongType = wrongTypeCondition(typeTestAccessor(raw, ctx), t)
       if (wrongType) {
         lines.push(`  if (${presence === '' ? wrongType : `${presence}(${wrongType})`}) {`)
-        lines.push(
-          `    ${pushError(ctx.sink, `'must be ${typeofString(t)}'`, path, 'type', JSON.stringify({ type: t }))}`,
-        )
+        lines.push(`    ${pushError(ctx.sink, `'must be ${t}'`, path, 'type', JSON.stringify({ type: t }))}`)
         lines.push(`  }`)
       }
     }
@@ -1030,7 +1020,7 @@ const generateKeywordChecks = (
         .map((c) => `(${c})`)
         .join(' && ')
       if (allWrong) {
-        const label = typeArray.map((t) => typeofString(t)).join(' or ')
+        const label = typeArray.join(' or ')
         lines.push(`  if (${presence === '' ? allWrong : `${presence}(${allWrong})`}) {`)
         lines.push(
           `    ${pushError(ctx.sink, JSON.stringify(`must be ${label}`), path, 'type', JSON.stringify({ type: schema.type }))}`,
@@ -1572,11 +1562,14 @@ const generateValueCheckLines = (
 
 /**
  * An accessor TypeScript will narrow: a plain identifier, a dotted member chain,
- * or an index by a numeric literal or a `const` variable. Anything else — an
- * accessor reading through a cast, above all — has to be bound to a local before
- * a `typeof` test in front of it means anything to the compiler.
+ * or an index by a string literal, a numeric literal or a `const` variable. The
+ * string-literal index is the form {@link safeAccessor} emits for every plain
+ * property name. Anything else — an accessor reading through a cast, above all —
+ * has to be bound to a local before a `typeof` test in front of it means anything
+ * to the compiler.
  */
-const NARROWABLE_REFERENCE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\[[A-Za-z_$][\w$]*\]|\[\d+\])*$/
+const NARROWABLE_REFERENCE =
+  /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*|\["[A-Za-z_$][\w$]*"\]|\[[A-Za-z_$][\w$]*\]|\[\d+\])*$/
 
 /**
  * A yes/no test for `sub` as a named function hoisted above the validator, or
@@ -1692,7 +1685,7 @@ const generateMatchesExpr = (
   if (sub === false) return 'false'
   if (!isSchemaObject(sub)) return 'true'
   // A `typeof` test narrows a stable *reference*, and almost every call site
-  // passes one — `obj.a`, `_item0`, a `for…in` key index. The `unevaluated*`
+  // passes one — `obj["a"]`, `_item0`, a `for…in` key index. The `unevaluated*`
   // coverage sweep does not: it reads through a cast, `(input as Record<…>)[k]`,
   // and TypeScript will not carry a narrowing across two spellings of that, so a
   // constrained check behind it emitted `.length` on `unknown` and the generated
@@ -1822,7 +1815,11 @@ const generateUnevaluatedChecks = (
  * evaluation, valid input included. A failing combinator is the error path, and
  * a second look at its branches is cheap next to building the report.
  *
- * `explain` holds one hoisted function name per branch that has anything to say.
+ * `explain` holds one hoisted function name per branch that has anything to say,
+ * and `total` is how many branches the combinator has. `selectBranchErrors` only
+ * names the accepted kinds when it heard from every one of them. A branch with
+ * no explainer is known here, so the count is passed only when every branch has
+ * one. Without it the helper never claims to know what the union accepts.
  * Every emitted line starts with a keyword or with the report's own
  * `(errors ??= [])`, which only ever follows the opening brace, so none of them
  * can fuse with the line before it.
@@ -1831,6 +1828,7 @@ const branchErrorsReport = (
   guard: string,
   raw: string,
   explain: readonly string[],
+  total: number,
   message: string,
   keyword: string,
   path: string,
@@ -1844,7 +1842,7 @@ const branchErrorsReport = (
         `    const _bp = ${path}`,
         `    const _br: ValidationError[][] = []`,
         `    for (const _b of [${explain.map((name) => `${name}(${raw}, _bp)`).join(', ')}]) if (_b.length !== 0) _br.push(_b)`,
-        `    for (const _e of selectBranchErrors(_br, _bp)) ${ctx.sink}.push(_e)`,
+        `    for (const _e of selectBranchErrors(_br, _bp${explain.length === total ? `, ${total}` : ''})) ${ctx.sink}.push(_e)`,
       ]),
   `  }`,
 ]
@@ -1882,6 +1880,7 @@ const generateCombinatorChecks = (
             `!(${conds.join(' || ')})`,
             raw,
             branchExplainers(schema.anyOf, suffix, ctx),
+            schema.anyOf.length,
             `'must match a schema in anyOf'`,
             'anyOf',
             path,
@@ -1915,7 +1914,7 @@ const generateCombinatorChecks = (
       const explain = branchExplainers(schema.oneOf, suffix, ctx)
       lines.push(`  {`)
       lines.push(`    const _n = ${conds.join(' + ')}`)
-      const report = branchErrorsReport('_n === 0', raw, explain, message, 'oneOf', path, ctx).map(
+      const report = branchErrorsReport('_n === 0', raw, explain, schema.oneOf.length, message, 'oneOf', path, ctx).map(
         (line) => `  ${line}`,
       )
       lines.push(...report.slice(0, -1))
@@ -3525,7 +3524,7 @@ const generateScalarValidator = (
         .map((c) => `(${c})`)
         .join(' && ')
       if (allWrong) {
-        const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
+        const label = rootTypeArray.join(' or ')
         checks.push(`  if (${allWrong}) {`)
         checks.push(
           `    ${pushError(ctx.sink, JSON.stringify(`must be ${label}`), rootPath, 'type', JSON.stringify({ type: schema.type }))}`,
@@ -3537,9 +3536,7 @@ const generateScalarValidator = (
       const wrongType = wrongTypeCondition(typeTestAccessor('input', ctx), t)
       if (wrongType) {
         checks.push(`  if (${wrongType}) {`)
-        checks.push(
-          `    ${pushError(ctx.sink, `'must be ${typeofString(t)}'`, rootPath, 'type', JSON.stringify({ type: t }))}`,
-        )
+        checks.push(`    ${pushError(ctx.sink, `'must be ${t}'`, rootPath, 'type', JSON.stringify({ type: t }))}`)
         checks.push(`  }`)
       }
     }
@@ -3581,7 +3578,7 @@ const generateScalarValidator = (
       .map((c) => `(${c})`)
       .join(' && ')
     if (allWrong) {
-      const label = rootTypeArray.map((t) => typeofString(t)).join(' or ')
+      const label = rootTypeArray.join(' or ')
       checks.push(`  if (${allWrong}) {`)
       checks.push(
         `    ${pushError(ctx.sink, JSON.stringify(`must be ${label}`), rootPath, 'type', JSON.stringify({ type: schema.type }))}`,
@@ -3622,7 +3619,6 @@ const generateScalarValidator = (
   if (hasType(schema)) {
     const t = schema.type as string
     const wrongType = wrongTypeCondition('input', t)
-    const typLabel = typeofString(t)
 
     // Reuse the shared constraint emitter — the per-property path already handles
     // string (pattern, min/maxLength), number/integer (bounds, multipleOf) and
@@ -3652,7 +3648,7 @@ const generateScalarValidator = (
       return [
         `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
         `  if (${wrongType}) {`,
-        `    ${returnError(`'must be ${typLabel}'`, '_path', 'type', JSON.stringify({ type: schema.type }))}`,
+        `    ${returnError(`'must be ${t}'`, '_path', 'type', JSON.stringify({ type: schema.type }))}`,
         `  }`,
         `  return true`,
         `}`,
@@ -3666,7 +3662,7 @@ const generateScalarValidator = (
       [
         `export const ${vName} = (input: unknown, _path = ''): ValidationResult => {`,
         `  if (${wrongType}) {`,
-        `    ${returnError(`'must be ${typLabel}'`, '_path', 'type', JSON.stringify({ type: schema.type }))}`,
+        `    ${returnError(`'must be ${t}'`, '_path', 'type', JSON.stringify({ type: schema.type }))}`,
         `  }`,
         ...(readsBinding('_root', constraintLines.join('\n')) ? [`  const _root: unknown = input`] : []),
         ...errorsBinding(failFast),

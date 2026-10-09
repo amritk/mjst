@@ -675,6 +675,34 @@ describe('generator/interpreter branch-error parity', () => {
 
   it('agrees on a union that matched too many branches', () => {
     assertSameErrors({ oneOf: [{ type: 'string' }, { type: 'string', minLength: 3 }] }, ['abcd', 'ab', 7])
+    // The number branch rejected the string's kind, but two branches accepted it,
+    // so neither side may answer "must be number".
+    assertSameErrors({ oneOf: [{ type: 'string' }, { type: 'string', minLength: 1 }, { type: 'number' }] }, [
+      'ab',
+      true,
+    ])
+  })
+
+  it('agrees on the kinds a union accepts when no branch takes the value', () => {
+    assertSameErrors(
+      {
+        type: 'object',
+        properties: {
+          homebrew: {
+            anyOf: [
+              {
+                type: 'object',
+                properties: { tapRepo: { type: 'string', pattern: '^[^/]+/[^/]+$' } },
+                required: ['tapRepo'],
+              },
+              { type: 'boolean', const: false },
+            ],
+          },
+          either: { anyOf: [{ type: ['string', 'null'] }, { type: 'integer' }] },
+        },
+      },
+      [{ homebrew: 'true' }, { homebrew: 1 }, { homebrew: true }, { homebrew: { tapRepo: 'nope' } }, { either: 1.5 }],
+    )
   })
 
   it('agrees on a union of unions', () => {

@@ -1571,12 +1571,62 @@ describe('validate', () => {
     ])
   })
 
-  it('says nothing extra when no branch describes the value at all', () => {
-    // Every branch wanted a different kind of value, so none of them has anything
-    // to say about this one beyond what the combinator error already said.
+  it('names the accepted kinds when no branch describes the value at all', () => {
+    // Every branch wanted a different kind of value, so none of them was meant,
+    // but together they say what the union accepts, which is the useful part.
     const result = validate({ anyOf: [{ type: 'string' }, { type: 'number' }] })(true)
     expect(result === true ? [] : result.errors).toEqual([
       { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+      { message: 'must be string or number', path: '', keyword: 'type', params: { type: ['string', 'number'] } },
+    ])
+  })
+
+  it('names the accepted kinds for a value written as the wrong kind', () => {
+    const validator = validate({
+      type: 'object',
+      properties: {
+        homebrew: {
+          anyOf: [
+            { type: 'object', properties: { tapRepo: { type: 'string' } }, required: ['tapRepo'] },
+            { type: 'boolean', const: false },
+          ],
+        },
+      },
+    })
+
+    for (const homebrew of ['true', 1]) {
+      expect(validator({ homebrew })).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '/homebrew', keyword: 'anyOf', params: {} },
+          {
+            message: 'must be object or boolean',
+            path: '/homebrew',
+            keyword: 'type',
+            params: { type: ['object', 'boolean'] },
+          },
+        ],
+      })
+    }
+  })
+
+  it('flattens the kinds of a nested union and of a multi-type branch', () => {
+    const result = validate({
+      anyOf: [{ type: ['string', 'null'] }, { anyOf: [{ type: 'string' }, { type: 'array' }] }],
+    })(1)
+    expect(result === true ? [] : result.errors.at(-1)).toEqual({
+      message: 'must be string or null or array',
+      path: '',
+      keyword: 'type',
+      params: { type: ['string', 'null', 'array'] },
+    })
+  })
+
+  it('names no kinds when a oneOf fails by matching more than one branch', () => {
+    // Two branches accepted the string, so "must be number" would be false.
+    const result = validate({ oneOf: [{ type: 'string' }, { type: 'string', minLength: 1 }, { type: 'number' }] })('ab')
+    expect(result === true ? [] : result.errors).toEqual([
+      { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
     ])
   })
 

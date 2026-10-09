@@ -23,7 +23,7 @@ describe('generate-validator-function', () => {
     expect(code).toContain('export const validateInfo')
     expect(code).toContain('!("name" in obj)')
     expect(code).toContain("must have required property 'name'")
-    expect(code).toContain("typeof obj.name !== 'string'")
+    expect(code).toContain('typeof obj["name"] !== \'string\'')
     expect(code).toContain('must be string')
   })
 
@@ -34,8 +34,8 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Stats')
 
-    expect(code).toContain('obj.count !== undefined')
-    expect(code).toContain("typeof obj.count !== 'number'")
+    expect(code).toContain('obj["count"] !== undefined')
+    expect(code).toContain('typeof obj["count"] !== \'number\'')
     expect(code).toContain('must be number')
   })
 
@@ -47,7 +47,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Config')
 
-    expect(code).toContain("typeof obj.enabled !== 'boolean'")
+    expect(code).toContain('typeof obj["enabled"] !== \'boolean\'')
     expect(code).toContain('must be boolean')
   })
 
@@ -198,8 +198,8 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Record')
 
-    expect(code).toContain('obj.kind !== "user"')
-    expect(code).toContain('obj.version !== 2')
+    expect(code).toContain('obj["kind"] !== "user"')
+    expect(code).toContain('obj["version"] !== 2')
     expect(code).toContain('must be \\"user\\"')
   })
 
@@ -210,7 +210,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Record')
 
-    expect(code).toContain('!valuesEqual(obj.meta, {"a":1})')
+    expect(code).toContain('!valuesEqual(obj["meta"], {"a":1})')
   })
 
   it('dedupes scalar-item uniqueItems with a bare Set', () => {
@@ -220,7 +220,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('new Set(obj.tags as unknown[]).size !== obj.tags.length')
+    expect(code).toContain('new Set(obj["tags"] as unknown[]).size !== obj["tags"].length')
     // A `JSON.stringify` projection would cost a string per element and print
     // both `NaN` and `null` as `"null"`, so `[NaN, null]` came back a duplicate
     // pair. `Set` membership is SameValueZero, which is JSON Schema's equality
@@ -242,7 +242,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('!allUnique(obj.rows as unknown[])')
+    expect(code).toContain('!allUnique(obj["rows"] as unknown[])')
     // The key-order-sensitive stringify projection must NOT drive the dedupe here.
     expect(code).not.toContain('map((_u) => JSON.stringify(_u))')
   })
@@ -254,7 +254,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('!allUnique(obj.anything as unknown[])')
+    expect(code).toContain('!allUnique(obj["anything"] as unknown[])')
   })
 
   it('generates a top-level const validator', () => {
@@ -314,9 +314,9 @@ describe('generate-validator-function', () => {
 
     // A strict bound flips the pass condition from `>=`/`<=` to `>`/`<`, so the
     // boundary itself is rejected. The check is the negated pass condition.
-    expect(code).toContain('!(obj.n > 0)')
+    expect(code).toContain('!(obj["n"] > 0)')
     expect(code).toContain('must be > 0')
-    expect(code).toContain('!(obj.n < 10)')
+    expect(code).toContain('!(obj["n"] < 10)')
     expect(code).toContain('must be < 10')
   })
 
@@ -430,7 +430,7 @@ describe('generate-validator-function', () => {
     const code = generateValidatorFunction(schema, 'Event')
 
     expect(code).toContain('!("createdAt" in obj)')
-    expect(code).toContain('!(obj.createdAt instanceof Date)')
+    expect(code).toContain('!(obj["createdAt"] instanceof Date)')
     expect(code).toContain('must be Date')
   })
 
@@ -441,7 +441,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Event')
 
-    expect(code).toContain('obj.createdAt !== undefined && !(obj.createdAt instanceof Date)')
+    expect(code).toContain('obj["createdAt"] !== undefined && !(obj["createdAt"] instanceof Date)')
   })
 
   it('generates an instanceof check for a top-level x-mjst Date schema', () => {
@@ -459,7 +459,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Account')
 
-    expect(code).toContain('typeof obj.balance !== "bigint"')
+    expect(code).toContain('typeof obj["balance"] !== "bigint"')
     expect(code).toContain('must be bigint')
   })
 
@@ -470,7 +470,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Account')
 
-    expect(code).toContain('obj.balance !== undefined && typeof obj.balance !== "bigint"')
+    expect(code).toContain('obj["balance"] !== undefined && typeof obj["balance"] !== "bigint"')
   })
 
   it('generates a typeof check for a top-level x-mjst bigint schema', () => {
@@ -881,8 +881,8 @@ describe('generate-validator-function', () => {
       expect(code).toContain("typeof input === 'object' && input !== null &&")
       expect(code).not.toContain('!Array.isArray(input)')
       // Identifier keys use dotted access in the guard.
-      expect(code).toContain("typeof obj.name === 'string'")
-      expect(code).toContain("typeof obj.age === 'number'")
+      expect(code).toContain('typeof obj["name"] === \'string\'')
+      expect(code).toContain('typeof obj["age"] === \'number\'')
     })
 
     it('keeps !Array.isArray in the guard when no required field check would reject an array', () => {
@@ -1054,7 +1054,7 @@ describe('generate-validator-function', () => {
 
       // The nested object is read once into a local, and the count is taken on
       // that local; the open root has no count of its own.
-      const hoisted = 'const _n0 = obj.meta as Record<string, unknown>'
+      const hoisted = 'const _n0 = obj["meta"] as Record<string, unknown>'
       expect(code).toContain(hoisted)
       expect(code).toContain('  if (Object.keys(_n0).length !== 2) return validateOuterErrors(input, _path)')
       expect(code).not.toContain('Object.keys(obj)')
@@ -1195,16 +1195,16 @@ describe('generate-validator-function', () => {
       // array for `p`).
       expect(code).toContain(
         '  )) return validateWrapErrors(input, _path)\n' +
-          '  const _n0 = obj.p as Record<string, unknown>\n' +
+          '  const _n0 = obj["p"] as Record<string, unknown>\n' +
           '  if (!(\n' +
           "    typeof _n0 === 'object' && _n0 !== null &&\n" +
-          "    typeof _n0.n === 'string'\n" +
+          '    typeof _n0["n"] === \'string\'\n' +
           '  )) return validateWrapErrors(input, _path)\n' +
           '  return true',
       )
       // Once in the guard; the cold path below it reads whatever it needs.
       const guardText = code.slice(code.indexOf('export const validateWrap'))
-      expect(guardText.split('obj.p').length - 1).toBe(1)
+      expect(guardText.split('obj["p"]').length - 1).toBe(1)
       expect(guardText).not.toContain('as Record<string, unknown>).')
 
       const validate = evalValidator(code)
@@ -1256,11 +1256,11 @@ describe('generate-validator-function', () => {
       for (const source of [hot, guardCode]) {
         // One local per nested object, each loaded from its parent's local, and
         // every member read goes through a local — no cast expression anywhere.
-        expect(source).toContain('const _n0 = obj.outer as Record<string, unknown>')
-        expect(source).toContain('const _n1 = _n0.inner as Record<string, unknown>')
-        expect(source).toContain("typeof _n1.flag === 'boolean'")
-        expect(source.split('obj.outer').length - 1).toBe(1)
-        expect(source.split('_n0.inner').length - 1).toBe(1)
+        expect(source).toContain('const _n0 = obj["outer"] as Record<string, unknown>')
+        expect(source).toContain('const _n1 = _n0["inner"] as Record<string, unknown>')
+        expect(source).toContain('typeof _n1["flag"] === \'boolean\'')
+        expect(source.split('obj["outer"]').length - 1).toBe(1)
+        expect(source.split('_n0["inner"]').length - 1).toBe(1)
         expect(source).not.toContain('as Record<string, unknown>).')
         // Innermost count first, root last: a level's count is sound only once
         // the levels below it have proven their keys present.
@@ -1317,11 +1317,11 @@ describe('generate-validator-function', () => {
       // The `=== undefined ||` branch of the expression form, as a block: the
       // local is loaded, and its chain and its count run only inside the `if`.
       expect(guardCode).toContain(
-        '  const _n0 = obj.meta as Record<string, unknown>\n' +
+        '  const _n0 = obj["meta"] as Record<string, unknown>\n' +
           '  if (_n0 !== undefined) {\n' +
           '    if (!(\n' +
           "      typeof _n0 === 'object' && _n0 !== null &&\n" +
-          "      typeof _n0.a === 'number' && (_n0.a >= 0)\n" +
+          '      typeof _n0["a"] === \'number\' && (_n0["a"] >= 0)\n' +
           '    )) return false\n' +
           '    if (Object.keys(_n0).length !== 1) return false\n' +
           '  }\n' +
@@ -1362,8 +1362,8 @@ describe('generate-validator-function', () => {
       const guardCode = generateBooleanGuard(schema, 'Rows')
 
       expect(guardCode).toContain(
-        'everyItem(obj.rows as unknown[], (_it) => { const _n0 = _it as Record<string, unknown>; ' +
-          "if (!(typeof _n0 === 'object' && _n0 !== null && typeof _n0.v === 'number')) return false; " +
+        'everyItem(obj["rows"] as unknown[], (_it) => { const _n0 = _it as Record<string, unknown>; ' +
+          "if (!(typeof _n0 === 'object' && _n0 !== null && typeof _n0[\"v\"] === 'number')) return false; " +
           'if (Object.keys(_n0).length !== 1) return false; return true })',
       )
       expect(generateBooleanGuard(schema, 'Rows', '', 'count-enumerable')).toContain(
@@ -1393,16 +1393,48 @@ describe('generate-validator-function', () => {
       }
       const code = generateValidatorFunction(schema, 'Counter')
 
-      expect(code).toContain('Number.isInteger(obj.count)')
+      expect(code).toContain('Number.isInteger(obj["count"])')
       const validate = evalValidator(code)
       expect(validate({ count: 1 })).toBe(true)
       // A non-integral number is rejected, and the guard agrees with the slow path.
       expect(validate({ count: 1.5 })).toEqual({
         valid: false,
-        // The message says `number` (the runtime test the generator emits) while
-        // `params.type` says `integer` (what the schema declared) — the interpreter
-        // and Ajv both report the declared type, which is the useful one.
-        errors: [{ message: 'must be number', path: '/count', keyword: 'type', params: { type: 'integer' } }],
+        errors: [{ message: 'must be integer', path: '/count', keyword: 'type', params: { type: 'integer' } }],
+      })
+    })
+
+    it('names `integer` in the message wherever the schema declares it', () => {
+      // `2.5` already is a number, so "must be number" read as an instruction to
+      // change nothing. Every site that reports a type mismatch names the declared
+      // type, the same way the interpreter and Ajv do.
+      const object = evalValidator(
+        generateValidatorFunction(
+          {
+            type: 'object',
+            properties: {
+              retries: { type: 'integer' },
+              bounded: { type: 'integer', minimum: 0, maximum: 10 },
+              either: { type: ['integer', 'null'] },
+            },
+          },
+          'IntegerMessage',
+        ),
+      )
+      const messages = (value: unknown): string[] => {
+        const result = object(value)
+        return result === true
+          ? []
+          : result.errors.map((e: { path: string; message: string }) => `${e.path} ${e.message}`)
+      }
+      expect(messages({ retries: 2.5 })).toEqual(['/retries must be integer'])
+      expect(messages({ bounded: 2.5 })).toEqual(['/bounded must be integer'])
+      expect(messages({ bounded: 99 })).toEqual(['/bounded must be <= 10'])
+      expect(messages({ either: 2.5 })).toEqual(['/either must be integer or null'])
+
+      const root = evalValidator(generateValidatorFunction({ type: 'integer' }, 'Count'))
+      expect(root(2.5)).toEqual({
+        valid: false,
+        errors: [{ message: 'must be integer', path: '', keyword: 'type', params: { type: 'integer' } }],
       })
     })
 
@@ -2192,7 +2224,7 @@ describe('generate-validator-function', () => {
         valid: false,
         errors: [
           { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
-          { message: 'must be number', path: '/n', keyword: 'type', params: { type: 'integer' } },
+          { message: 'must be integer', path: '/n', keyword: 'type', params: { type: 'integer' } },
         ],
       })
     })
@@ -2218,22 +2250,115 @@ describe('generate-validator-function', () => {
       })
     })
 
-    it('says nothing extra when no branch describes the value at all', () => {
-      const v = evalValidator(
-        generateValidatorFunction(
-          { anyOf: [{ type: 'string' }, { type: 'number' }] } as never,
-          'Scalar',
-          '',
-          undefined,
-          undefined,
-          undefined,
-          true,
-        ),
-      )
+    it('names the accepted kinds when no branch describes the value at all', () => {
+      const v = evalValidator(withBranchErrors({ anyOf: [{ type: 'string' }, { type: 'number' }] }, 'Scalar'))
 
       expect(v(true)).toEqual({
         valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} },
+          { message: 'must be string or number', path: '', keyword: 'type', params: { type: ['string', 'number'] } },
+        ],
+      })
+    })
+
+    // The shape from a real config schema: the long form is an object, the short
+    // form opts out with `false`. A `"true"` string or a `1` matches neither kind,
+    // and the combinator error alone named no field and no reason.
+    it('names the accepted kinds for a value written as the wrong kind', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            type: 'object',
+            properties: {
+              homebrew: {
+                anyOf: [
+                  { type: 'object', properties: { tapRepo: { type: 'string' } }, required: ['tapRepo'] },
+                  { type: 'boolean', const: false },
+                ],
+              },
+            },
+          },
+          'Publish',
+        ),
+      )
+
+      for (const homebrew of ['true', 1]) {
+        expect(v({ homebrew })).toEqual({
+          valid: false,
+          errors: [
+            { message: 'must match a schema in anyOf', path: '/homebrew', keyword: 'anyOf', params: {} },
+            {
+              message: 'must be object or boolean',
+              path: '/homebrew',
+              keyword: 'type',
+              params: { type: ['object', 'boolean'] },
+            },
+          ],
+        })
+      }
+      // A value of a kind some branch accepts still gets that branch's errors.
+      expect(v({ homebrew: {} })).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match a schema in anyOf', path: '/homebrew', keyword: 'anyOf', params: {} },
+          {
+            message: "must have required property 'tapRepo'",
+            path: '/homebrew',
+            keyword: 'required',
+            params: { missingProperty: 'tapRepo' },
+          },
+        ],
+      })
+    })
+
+    it('flattens the kinds of a nested union and of a multi-type branch', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          { anyOf: [{ type: ['string', 'null'] }, { anyOf: [{ type: 'string' }, { type: 'array' }] }] },
+          'Nested',
+        ),
+      )
+
+      const result = v(1) as { errors: unknown[] }
+      expect(result.errors.at(-1)).toEqual({
+        message: 'must be string or null or array',
+        path: '',
+        keyword: 'type',
+        params: { type: ['string', 'null', 'array'] },
+      })
+    })
+
+    // `false` has nothing to explain, so the union was not heard from in full and
+    // the list of kinds it accepts cannot be trusted. Nothing is claimed.
+    it('names no kinds when a branch could not explain itself', () => {
+      const v = evalValidator(withBranchErrors({ anyOf: [{ type: 'string' }, false] }, 'Partial'))
+
+      expect(v(1)).toEqual({
+        valid: false,
         errors: [{ message: 'must match a schema in anyOf', path: '', keyword: 'anyOf', params: {} }],
+      })
+    })
+
+    it('names a single accepted kind without a list', () => {
+      const v = evalValidator(
+        withBranchErrors(
+          {
+            oneOf: [
+              { type: 'object', required: ['a'] },
+              { type: 'object', required: ['b'] },
+            ],
+          },
+          'Either',
+        ),
+      )
+
+      expect(v('x')).toEqual({
+        valid: false,
+        errors: [
+          { message: 'must match exactly one schema in oneOf', path: '', keyword: 'oneOf', params: {} },
+          { message: 'must be object', path: '', keyword: 'type', params: { type: 'object' } },
+        ],
       })
     })
 
@@ -2549,7 +2674,7 @@ describe('generate-validator-function', () => {
         'Root',
       )
       expect(code).not.toContain('const _patterns0 =')
-      expect(code).toContain('obj._patterns0')
+      expect(code).toContain('obj["_patterns0"]')
       expect(code).toContain('${_path}/_patterns0')
     })
 
@@ -2610,7 +2735,7 @@ describe('generate-validator-function', () => {
       )
 
       expect(code).not.toContain('const _knownKeys0 =')
-      expect(code).toContain('obj._knownKeys0')
+      expect(code).toContain('obj["_knownKeys0"]')
       const validate = evalValidator(code)
       expect(validate({ _knownKeys0: 'ok' })).toBe(true)
       expect(validate({ nope: 1 })).not.toBe(true)

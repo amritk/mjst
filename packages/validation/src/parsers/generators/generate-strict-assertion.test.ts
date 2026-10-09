@@ -15,7 +15,7 @@ describe('generate-strict-assertion x-mjst instanceOf', () => {
     const lines = generateObjectStrictAssertion(schema, 'Event').join('\n')
 
     expect(lines).toContain("missing required property 'createdAt'")
-    expect(lines).toContain('!(input.createdAt instanceof Date)')
+    expect(lines).toContain('!(input["createdAt"] instanceof Date)')
     expect(lines).toContain("field 'createdAt' must be Date")
   })
 
@@ -26,7 +26,7 @@ describe('generate-strict-assertion x-mjst instanceOf', () => {
     }
     const lines = generateObjectStrictAssertion(schema, 'Event').join('\n')
 
-    expect(lines).toContain('input.createdAt !== undefined && !(input.createdAt instanceof Date)')
+    expect(lines).toContain('input["createdAt"] !== undefined && !(input["createdAt"] instanceof Date)')
   })
 
   it('asserts instanceof for a top-level Date schema', () => {
@@ -47,7 +47,7 @@ describe('generate-strict-assertion x-mjst primitive', () => {
     const lines = generateObjectStrictAssertion(schema, 'Account').join('\n')
 
     expect(lines).toContain("missing required property 'balance'")
-    expect(lines).toContain('typeof input.balance !== "bigint"')
+    expect(lines).toContain('typeof input["balance"] !== "bigint"')
     expect(lines).toContain("field 'balance' must be bigint")
   })
 
@@ -58,7 +58,7 @@ describe('generate-strict-assertion x-mjst primitive', () => {
     }
     const lines = generateObjectStrictAssertion(schema, 'Account').join('\n')
 
-    expect(lines).toContain('input.balance !== undefined && typeof input.balance !== "bigint"')
+    expect(lines).toContain('input["balance"] !== undefined && typeof input["balance"] !== "bigint"')
   })
 
   it('asserts typeof for a top-level bigint schema', () => {
@@ -264,8 +264,8 @@ describe('generate-strict-assertion tuple prefixItems', () => {
     expect(lines).toContain("field 'pair'[1] expected number")
     expect(lines).toContain("field 'pair' must NOT have more than 2 items")
     // Each position check is length-guarded — a shorter array must not throw.
-    expect(lines).toContain('input.pair.length > 0')
-    expect(lines).toContain('input.pair.length > 1')
+    expect(lines).toContain('input["pair"].length > 0')
+    expect(lines).toContain('input["pair"].length > 1')
   })
 
   it('does not emit a length cap without items:false', () => {
@@ -289,7 +289,7 @@ describe('generate-strict-assertion tuple prefixItems', () => {
     )
 
     expect(line).toContain('[Pair][0] expected string')
-    expect(line).toContain('[Pair][1] expected number')
+    expect(line).toContain('[Pair][1] expected integer')
     expect(line).toContain('[Pair] must NOT have more than 2 items')
   })
 

@@ -46,13 +46,13 @@ describe('generate-type-checks', () => {
       required: ['kind', 'r'],
     }
     const check = generateInlineObjectCheck('_figure', branch, true, '')
-    expect(check).toBe('isObject(_figure) && _figure.kind === "circle" && typeof _figure.r === "number"')
+    expect(check).toBe('isObject(_figure) && _figure["kind"] === "circle" && typeof _figure["r"] === "number"')
   })
 
   it('guards optional properties of an inline object with an undefined escape', () => {
     const branch: JSONSchema = { type: 'object', properties: { name: { type: 'string' } } }
     expect(generateInlineObjectCheck('_v', branch, true, '')).toBe(
-      'isObject(_v) && (_v.name === undefined || typeof _v.name === "string")',
+      'isObject(_v) && (_v["name"] === undefined || typeof _v["name"] === "string")',
     )
   })
 
@@ -89,7 +89,7 @@ describe('generate-type-checks', () => {
       { $ref: '#/$defs/expr' },
     ]
     expect(generateUnionCheck('input', branches, true, '')).toBe(
-      '((isObject(input) && input.kind === "lit" && typeof input.value === "number") || (validateExprShape(input)))',
+      '((isObject(input) && input["kind"] === "lit" && typeof input["value"] === "number") || (validateExprShape(input)))',
     )
   })
 

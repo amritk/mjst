@@ -304,7 +304,7 @@ describe('build-schema', () => {
     const docFile = files.find((f) => f.filename === 'doc.ts')
 
     expect(docFile?.content).toContain("import { valuesEqual } from './validation-result.js'")
-    expect(docFile?.content).toContain('!valuesEqual(obj.meta, {"a":1})')
+    expect(docFile?.content).toContain('!valuesEqual(obj["meta"], {"a":1})')
   })
 
   it('emits the structural allUnique helper in validation-result.ts', async () => {
@@ -327,9 +327,9 @@ describe('build-schema', () => {
     const docFile = files.find((f) => f.filename === 'doc.ts')
 
     expect(docFile?.content).toContain("import { allUnique, everyItem } from './validation-result.js'")
-    expect(docFile?.content).toContain('!allUnique(obj.rows as unknown[])')
+    expect(docFile?.content).toContain('!allUnique(obj["rows"] as unknown[])')
     // Scalar-item arrays dedupe with a bare `Set`, which needs no import at all.
-    expect(docFile?.content).toContain('new Set(obj.tags as unknown[]).size !== obj.tags.length')
+    expect(docFile?.content).toContain('new Set(obj["tags"] as unknown[]).size !== obj["tags"].length')
   })
 
   // The registry is what makes "we do no I/O" stop meaning "we cannot be told":

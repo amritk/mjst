@@ -3,8 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { hasOwnCheck, missingCheck, safeAccessor, safeKey } from './safe-accessor'
 
 describe('safe-accessor', () => {
-  it('uses dot notation for simple identifiers', () => {
-    expect(safeAccessor('input', 'name')).toBe('input.name')
+  // Bracket notation even for a plain identifier: generated code reads off a
+  // `Record<string, unknown>`, and `input.name` there is TS4111 for any consumer
+  // compiling with `noPropertyAccessFromIndexSignature`.
+  it('uses bracket notation for simple identifiers', () => {
+    expect(safeAccessor('input', 'name')).toBe('input["name"]')
+    expect(safeAccessor('input?', 'name')).toBe('input?.["name"]')
   })
 
   it('uses bracket notation for hyphenated keys', () => {
@@ -15,8 +19,8 @@ describe('safe-accessor', () => {
     expect(safeAccessor('input?', 'x-linkedin')).toBe('input?.["x-linkedin"]')
   })
 
-  it('uses dot notation for underscored identifiers', () => {
-    expect(safeAccessor('input', '_private')).toBe('input._private')
+  it('uses bracket notation for underscored identifiers', () => {
+    expect(safeAccessor('input', '_private')).toBe('input["_private"]')
   })
 
   it('uses bracket notation for keys starting with numbers', () => {

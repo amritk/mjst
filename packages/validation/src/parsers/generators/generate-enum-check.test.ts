@@ -53,7 +53,7 @@ describe('generate-enum-check', () => {
     expect(result).toBe(
       '((typeof value === "object" && value !== null && !Array.isArray(value)' +
         ' && Object.keys(value as object).length === 1' +
-        ' && (value as Record<string, unknown>).a === 1) || value === "x")',
+        ' && (value as Record<string, unknown>)["a"] === 1) || value === "x")',
     )
   })
 

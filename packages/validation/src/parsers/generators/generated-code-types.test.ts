@@ -255,6 +255,7 @@ const OPTIONS: ts.CompilerOptions = {
   noUnusedParameters: true,
   exactOptionalPropertyTypes: true,
   noUncheckedIndexedAccess: true,
+  noPropertyAccessFromIndexSignature: true,
   noImplicitOverride: true,
   noFallthroughCasesInSwitch: true,
   useUnknownInCatchVariables: true,

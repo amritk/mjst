@@ -50,7 +50,8 @@ Output:
   --helpers <mode>      Runtime helpers: package or embedded (default: auto-detect from package.json)
   --root-type <name>    Root type name for a single --schema run (default: schema title or filename)
   --type-suffix <s>     Suffix appended to every $ref-derived type name
-  --banner [text]       Prepend a header comment to every generated file
+  --banner [text]       Prepend a header comment to every generated file (text made of
+                        // lines is emitted as written, e.g. "// @ts-nocheck")
   --readonly            Emit deeply readonly type definitions
 
 Validation:

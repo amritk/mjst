@@ -182,6 +182,7 @@ const OPTIONS: ts.CompilerOptions = {
   strict: true,
   exactOptionalPropertyTypes: true,
   noUncheckedIndexedAccess: true,
+  noPropertyAccessFromIndexSignature: true,
   noImplicitReturns: true,
   noEmit: true,
   target: ts.ScriptTarget.ESNext,

@@ -949,7 +949,7 @@ describe('build-schema', () => {
       const files = await buildSchema(schema, 'Root', undefined, undefined)
       const lit = files.find((f) => f.filename === 'lit.ts')?.content ?? ''
       expect(lit).not.toContain('validateLitShape = (_input: unknown): boolean => false;')
-      expect(lit).toContain('input.kind === "lit"')
+      expect(lit).toContain('input["kind"] === "lit"')
     })
 
     it('throws on an unknown discriminant in strict mode', async () => {
