@@ -1,5 +1,12 @@
 # @amritk/api
 
+## 0.16.7
+
+### Patch Changes
+
+- Updated dependencies [cee59ae]
+  - @amritk/runtime-validators@0.15.2
+
 ## 0.16.6
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @amritk/asyncapi
 
+## 0.3.7
+
+### Patch Changes
+
+- Updated dependencies [cee59ae]
+  - @amritk/helpers@0.25.0
+  - @amritk/adapters@0.6.9
+
 ## 0.3.6
 
 ### Patch Changes

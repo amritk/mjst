@@ -1,5 +1,34 @@
 # @amritk/mjst
 
+## 0.27.0
+
+### Minor Changes
+
+- cee59ae: Name `integer` in type errors, and make the generated output compile in a strict project unchanged.
+
+  - **`type: integer` reports "must be integer".** A fractional value for an `integer` property was told it "must be number", which it already was. The validator, coercer and repairer now report the declared type (`/retries must be integer`, `must be integer or null`), as the runtime interpreter and Ajv already did. The strict parser does the same (`expected integer, got number`). This changes error text: anything that matched on the old "must be number" message for an `integer` schema needs updating.
+  - **The output type-checks under `noPropertyAccessFromIndexSignature`.** The generated code read properties off a `Record<string, unknown>` with a dot, which that flag rejects with `TS4111` in every generated file. Property reads now use the bracket form (`obj["name"]`), and the generated-code type tests compile with the flag on. Engines compile both forms to the same load, so this costs nothing at runtime. **Breaking for direct callers:** `safeAccessor` in `@amritk/helpers` now returns the bracket form for plain identifiers too (`input["name"]`, not `input.name`).
+  - **`--banner` passes line comments through.** Text that starts with `//` is emitted as written instead of wrapped in a JSDoc block, so `--banner "// @ts-nocheck"` works. Text that mixes comment and plain lines is still wrapped. TypeScript only honors that directive as a line comment.
+  - **Docs.** The CLI README now says up front that a project type-checking the output wants `--import-ext js`, since the `.ts` default needs `allowImportingTsExtensions`.
+
+### Patch Changes
+
+- cee59ae: Name the kinds a union accepts when no branch takes the value's kind, and warn about `null` when moving off Ajv.
+
+  - **A failing `anyOf` / `oneOf` names the accepted kinds when the value matches none of them.** With `--branch-errors` (and always in `@amritk/runtime-validators`), a value whose kind no branch accepts used to get only "must match a schema in anyOf", which names no field and no reason. It now also gets one `type` error naming what the union accepts: `'true'` against an object-or-`false` union reports `must be object or boolean`, with `params.type` set to `['object', 'boolean']`. Kinds from a multi-type branch or a nested union are flattened into the list. Nothing is claimed when a `oneOf` failed by matching more than one branch, or when a branch could not explain itself. The generated validators and the interpreter build the same error, and the parity suite checks that.
+  - **Docs.** The Ajv migration notes now warn that a caller treating a rejected document as absent will silently drop any block holding a `null` that Ajv used to coerce, and say how to keep the old behavior on purpose.
+
+- Updated dependencies [cee59ae]
+- Updated dependencies [cee59ae]
+  - @amritk/validation@0.5.0
+  - @amritk/helpers@0.25.0
+  - @amritk/adapters@0.6.9
+  - @amritk/asyncapi@0.3.7
+  - @amritk/generate-examples@0.8.11
+  - @amritk/api@0.16.7
+  - @amritk/lint@0.7.1
+  - @amritk/resolve-refs@0.9.0
+
 ## 0.26.2
 
 ### Patch Changes
