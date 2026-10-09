@@ -45,7 +45,7 @@ describe('generate-coerce-function', () => {
 
     expect(coerce({ count: 'many' })).toEqual({
       valid: false,
-      errors: [{ message: 'must be number', path: '/count', keyword: 'type', params: { type: 'integer' } }],
+      errors: [{ message: 'must be integer', path: '/count', keyword: 'type', params: { type: 'integer' } }],
     })
   })
 

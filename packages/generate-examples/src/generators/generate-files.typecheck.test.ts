@@ -266,6 +266,7 @@ const COMPILER_OPTIONS: ts.CompilerOptions = {
   strict: true,
   exactOptionalPropertyTypes: true,
   noUncheckedIndexedAccess: true,
+  noPropertyAccessFromIndexSignature: true,
   noImplicitOverride: true,
   noFallthroughCasesInSwitch: true,
   useUnknownInCatchVariables: true,

@@ -40,6 +40,7 @@ const typeErrors = (files: readonly GeneratedFile[]): string[] => {
     noUnusedParameters: true,
     exactOptionalPropertyTypes: true,
     noUncheckedIndexedAccess: true,
+    noPropertyAccessFromIndexSignature: true,
     noImplicitReturns: true,
     target: ts.ScriptTarget.ES2022,
     module: ts.ModuleKind.ESNext,

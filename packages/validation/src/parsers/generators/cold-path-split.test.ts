@@ -150,13 +150,13 @@ describe('cold-path-split', () => {
     const hot = functions(source).get('parseAssert') as string
 
     for (const key of ['number', 'string', 'boolean', 'deeplyNested']) {
-      expect(hot.split(`input.${key}`).length - 1).toBe(1)
+      expect(hot.split(`input["${key}"]`).length - 1).toBe(1)
     }
     // The nested reads are bound once each, then shared by the shape test and
     // the literal — `{ foo: n.foo }` after `typeof n.foo` would be two loads.
     for (const key of ['foo', 'num', 'bool']) {
-      expect(hot).toContain(`const _deeplyNested_${key} = (_deeplyNested as Record<string, any>).${key};`)
-      expect(hot.split(`).${key}`).length - 1).toBe(1)
+      expect(hot).toContain(`const _deeplyNested_${key} = (_deeplyNested as Record<string, any>)["${key}"];`)
+      expect(hot.split(`)["${key}"]`).length - 1).toBe(1)
     }
   })
 

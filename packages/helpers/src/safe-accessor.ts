@@ -1,7 +1,7 @@
 /**
  * Checks whether a property name is a valid JavaScript identifier that can be
- * accessed with dot notation. Property names containing hyphens, dots, or
- * other special characters (e.g., "x-linkedin") must use bracket notation.
+ * written bare as an object-literal key. Property names containing hyphens,
+ * dots, or other special characters (e.g., "x-linkedin") must be quoted.
  */
 const JS_IDENTIFIER = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/
 
@@ -25,17 +25,24 @@ const PROTOTYPE_MEMBERS = new Set(Object.getOwnPropertyNames(Object.prototype))
 
 /**
  * Generates a safe property accessor for a given key on an object variable.
- * Uses dot notation for simple identifiers and bracket notation for keys
- * that contain special characters like hyphens. Keys that collide with an
- * `Object.prototype` member get an own-property guard (see
- * {@link PROTOTYPE_MEMBERS}) so an inherited value never masquerades as input.
+ * Keys that collide with an `Object.prototype` member get an own-property guard
+ * (see {@link PROTOTYPE_MEMBERS}) so an inherited value never masquerades as
+ * input.
+ *
+ * Every other key is read with bracket notation, plain identifiers included.
+ * The generated code reads properties off a `Record<string, unknown>`, and a dot
+ * read of an index signature is `TS4111` under `noPropertyAccessFromIndexSignature`
+ * — a flag strict projects turn on, and which would otherwise fail every file
+ * dropped into one. Engines compile `o["a"]` and `o.a` to the same named load,
+ * and TypeScript narrows a string-literal index the way it narrows a dot, so the
+ * bracket form costs nothing at runtime or in the type checks it feeds.
  *
  * @param variable - The variable name (e.g., "input", "input?")
  * @param key - The property name to access
  * @returns A valid JS property access expression
  *
  * @example
- * safeAccessor("input", "name") // "input.name"
+ * safeAccessor("input", "name") // 'input["name"]'
  * safeAccessor("input?", "x-linkedin") // 'input?.["x-linkedin"]'
  * safeAccessor("input", "x-linkedin") // 'input["x-linkedin"]'
  * safeAccessor("input", "constructor")
@@ -59,10 +66,6 @@ export const safeAccessor = (variable: string, key: string): string => {
     // gives up nothing real, because the value behind it is `unknown` either
     // way, and every use site is a runtime guard that tests the value itself.
     return `((${base} != null && Object.hasOwn(${base}, ${literal}) ? ${base}[${literal}] : undefined) as any)`
-  }
-
-  if (JS_IDENTIFIER.test(key)) {
-    return `${variable}.${key}`
   }
 
   // Bracket keys are schema-controlled, so escape via JSON.stringify — a key like

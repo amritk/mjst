@@ -24,14 +24,14 @@ describe('multi-type properties', () => {
     }
 
     const parser = await parserFor(schema, true)
-    expect(parser).toContain('(typeof input.a === "string") || (input.a === null)')
+    expect(parser).toContain('(typeof input["a"] === "string") || (input["a"] === null)')
     expect(parser).toContain('expected string | null')
   })
 
   it('guards an optional multi-type property on presence', async () => {
     const schema: JSONSchema = { type: 'object', properties: { a: { type: ['number', 'null'] } } }
 
-    expect(await parserFor(schema, true)).toContain('if (input.a !== undefined && !')
+    expect(await parserFor(schema, true)).toContain('if (input["a"] !== undefined && !')
   })
 
   it('still enforces the constraints of the non-null member', async () => {
@@ -53,7 +53,7 @@ describe('multi-type properties', () => {
 
     const parser = await parserFor(schema, false)
     expect(parser).not.toContain('validateDocShape = (_input: unknown): boolean => false')
-    expect(parser).toContain('(typeof input.a === "string") || (input.a === null)')
+    expect(parser).toContain('(typeof input["a"] === "string") || (input["a"] === null)')
   })
 
   it('leaves the fast path alone when a constraint keyword rides along', async () => {
@@ -97,7 +97,7 @@ describe('nullable: true (OpenAPI 3.0)', () => {
 
     const parser = await parserFor(schema, true)
     expect(parser).toContain('name: string | null;')
-    expect(parser).toContain('(input.name === null)')
+    expect(parser).toContain('(input["name"] === null)')
   })
 
   it('still rejects a wrong type for a nullable property', async () => {

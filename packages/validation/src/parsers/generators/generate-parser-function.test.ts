@@ -21,14 +21,14 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {
         name: "",
       };
-  const _name = input.name;
-  const _age = input.age;
+  const _name = input["name"];
+  const _age = input["age"];
   if (typeof _name === "string" && (_age === undefined || typeof _age === "number")) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
   };
-  if (_age !== undefined) out.age = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
+  if (_age !== undefined) out["age"] = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
   return out as unknown as User;
 }`,
     )
@@ -46,12 +46,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseProduct = (input: unknown): Product => {
   if (!isObject(input)) return {} as Product;
-  const _id = input.id;
+  const _id = input["id"];
   if ((_id === undefined || typeof _id === "number")) return { ...input } as Product;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  if (_id !== undefined) out["id"] = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
   return out as unknown as Product;
 }`,
     )
@@ -114,16 +114,16 @@ describe('generate-parser-function', () => {
         id: 0,
         name: "",
       };
-  const _id = input.id;
-  const _name = input.name;
-  const _email = input.email;
+  const _id = input["id"];
+  const _name = input["name"];
+  const _email = input["email"];
   if (typeof _id === "number" && typeof _name === "string" && (_email === undefined || typeof _email === "string")) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
   };
-  if (_email !== undefined) out.email = typeof _email === "string" ? _email : String(_email);
+  if (_email !== undefined) out["email"] = typeof _email === "string" ? _email : String(_email);
   return out as unknown as User;
 }`,
     )
@@ -146,14 +146,14 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {
         id: 0,
       };
-  const _id = input.id;
-  const _description = input.description;
+  const _id = input["id"];
+  const _description = input["description"];
   if (typeof _id === "number" && (_description === undefined || typeof _description === "string")) return { ...input } as Item;
   const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
   };
-  if (_description !== undefined) out.description = typeof _description === "string" ? _description : String(_description);
+  if (_description !== undefined) out["description"] = typeof _description === "string" ? _description : String(_description);
   return out as unknown as Item;
 }`,
     )
@@ -173,11 +173,11 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseMixed = (input: unknown): Mixed => {
   if (!isObject(input)) return {} as Mixed;
-  const _validProp = input.validProp;
+  const _validProp = input["validProp"];
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_validProp !== undefined) out.validProp = typeof _validProp === "string" ? _validProp : String(_validProp);
+  if (_validProp !== undefined) out["validProp"] = typeof _validProp === "string" ? _validProp : String(_validProp);
   return out as unknown as Mixed;
 }`,
     )
@@ -196,11 +196,11 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _contact = input.contact;
+  const _contact = input["contact"];
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_contact !== undefined) out.contact = _contact ?? undefined;
+  if (_contact !== undefined) out["contact"] = _contact ?? undefined;
   return out as unknown as User;
 }`,
     )
@@ -222,7 +222,7 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {
         contact: parseContact(undefined),
       };
-  const _contact = input.contact;
+  const _contact = input["contact"];
   if (validateContactShape(_contact)) return { ...input } as User;
   return {
     ...input,
@@ -245,12 +245,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _contact = input.contact;
+  const _contact = input["contact"];
   if ((_contact === undefined || validateContactShape(_contact))) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_contact !== undefined) out.contact = parseContact(_contact);
+  if (_contact !== undefined) out["contact"] = parseContact(_contact);
   return out as unknown as User;
 }`,
     )
@@ -275,7 +275,7 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {
         contacts: [],
       };
-  const _contacts = input.contacts;
+  const _contacts = input["contacts"];
   if (Array.isArray(_contacts) && _contacts.every(validateContactShape)) return { ...input } as User;
   return {
     ...input,
@@ -301,12 +301,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _contacts = input.contacts;
+  const _contacts = input["contacts"];
   if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape))) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_contacts !== undefined) out.contacts = validateArray(_contacts, parseContact);
+  if (_contacts !== undefined) out["contacts"] = validateArray(_contacts, parseContact);
   return out as unknown as User;
 }`,
     )
@@ -328,12 +328,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _contacts = input.contacts;
+  const _contacts = input["contacts"];
   if ((_contacts === undefined || Array.isArray(_contacts))) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_contacts !== undefined) out.contacts = Array.isArray(_contacts) ? _contacts : [];
+  if (_contacts !== undefined) out["contacts"] = Array.isArray(_contacts) ? _contacts : [];
   return out as unknown as User;
 }`,
     )
@@ -473,20 +473,20 @@ describe('generate-parser-function', () => {
         id: 0,
         name: "",
       };
-  const _id = input.id;
-  const _name = input.name;
-  const _tags = input.tags;
-  const _metadata = input.metadata;
-  const _isActive = input.isActive;
+  const _id = input["id"];
+  const _name = input["name"];
+  const _tags = input["tags"];
+  const _metadata = input["metadata"];
+  const _isActive = input["isActive"];
   if (typeof _id === "number" && typeof _name === "string" && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string")) && (_metadata === undefined || isObject(_metadata)) && (_isActive === undefined || typeof _isActive === "boolean")) return { ...input } as Complex;
   const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
   };
-  if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
-  if (_metadata !== undefined) out.metadata = isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {};
-  if (_isActive !== undefined) out.isActive = typeof _isActive === "boolean" ? _isActive : ((_b) => _b === "true" || _b === "yes" || _b === "y" || _b === "on" || _b === "1" || _b === 1 || _b === true ? true : _b === "false" || _b === "no" || _b === "n" || _b === "off" || _b === "0" || _b === "" || _b === 0 || _b === false ? false : false)(typeof _isActive === "string" ? _isActive.trim().toLowerCase() : _isActive);
+  if (_tags !== undefined) out["tags"] = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
+  if (_metadata !== undefined) out["metadata"] = isObject(_metadata) ? _metadata : typeof _metadata === "object" && _metadata !== null ? _metadata : {};
+  if (_isActive !== undefined) out["isActive"] = typeof _isActive === "boolean" ? _isActive : ((_b) => _b === "true" || _b === "yes" || _b === "y" || _b === "on" || _b === "1" || _b === 1 || _b === true ? true : _b === "false" || _b === "no" || _b === "n" || _b === "off" || _b === "0" || _b === "" || _b === 0 || _b === false ? false : false)(typeof _isActive === "string" ? _isActive.trim().toLowerCase() : _isActive);
   return out as unknown as Complex;
 }`,
     )
@@ -505,12 +505,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseApiSpec = (input: unknown): ApiSpec => {
   if (!isObject(input)) return {} as ApiSpec;
-  const _externalDoc = input.externalDoc;
+  const _externalDoc = input["externalDoc"];
   if ((_externalDoc === undefined || validateExternalDocumentationShape(_externalDoc))) return { ...input } as ApiSpec;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_externalDoc !== undefined) out.externalDoc = parseExternalDocumentation(_externalDoc);
+  if (_externalDoc !== undefined) out["externalDoc"] = parseExternalDocumentation(_externalDoc);
   return out as unknown as ApiSpec;
 }`,
     )
@@ -534,16 +534,16 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {
         contact: parseContact(undefined),
       };
-  const _contact = input.contact;
-  const _address = input.address;
-  const _company = input.company;
+  const _contact = input["contact"];
+  const _address = input["address"];
+  const _company = input["company"];
   if (validateContactShape(_contact) && (_address === undefined || validateAddressShape(_address)) && (_company === undefined || validateCompanyShape(_company))) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
     contact: parseContact(_contact),
   };
-  if (_address !== undefined) out.address = parseAddress(_address);
-  if (_company !== undefined) out.company = parseCompany(_company);
+  if (_address !== undefined) out["address"] = parseAddress(_address);
+  if (_company !== undefined) out["company"] = parseCompany(_company);
   return out as unknown as User;
 }`,
     )
@@ -568,16 +568,16 @@ describe('generate-parser-function', () => {
         id: 0,
         name: "",
       };
-  const _id = input.id;
-  const _contact = input.contact;
-  const _name = input.name;
+  const _id = input["id"];
+  const _contact = input["contact"];
+  const _name = input["name"];
   if (typeof _id === "number" && (_contact === undefined || validateContactShape(_contact)) && typeof _name === "string") return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
     id: typeof _id === "number" ? _id : (_id !== undefined ? (Number.isFinite(Number(_id)) ? Number(_id) : 0) : 0),
   };
-  if (_contact !== undefined) out.contact = parseContact(_contact);
-  out.name = typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : "");
+  if (_contact !== undefined) out["contact"] = parseContact(_contact);
+  out["name"] = typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : "");
   return out as unknown as User;
 }`,
     )
@@ -599,12 +599,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseTagged = (input: unknown): Tagged => {
   if (!isObject(input)) return {} as Tagged;
-  const _tags = input.tags;
+  const _tags = input["tags"];
   if ((_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Tagged;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
+  if (_tags !== undefined) out["tags"] = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
   return out as unknown as Tagged;
 }`,
     )
@@ -625,12 +625,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseItemsContainer = (input: unknown): ItemsContainer => {
   if (!isObject(input)) return {} as ItemsContainer;
-  const _items = input.items;
+  const _items = input["items"];
   if ((_items === undefined || Array.isArray(_items))) return { ...input } as ItemsContainer;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_items !== undefined) out.items = Array.isArray(_items) ? _items : [];
+  if (_items !== undefined) out["items"] = Array.isArray(_items) ? _items : [];
   return out as unknown as ItemsContainer;
 }`,
     )
@@ -650,14 +650,14 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _contact = input.contact;
-  const _age = input.age;
+  const _contact = input["contact"];
+  const _age = input["age"];
   if ((_contact === undefined || validateContactShape(_contact)) && (_age === undefined || typeof _age === "number")) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_contact !== undefined) out.contact = parseContact(_contact);
-  if (_age !== undefined) out.age = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
+  if (_contact !== undefined) out["contact"] = parseContact(_contact);
+  if (_age !== undefined) out["age"] = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
   return out as unknown as User;
 }`,
     )
@@ -716,12 +716,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseMyCustomType = (input: unknown): MyCustomType => {
   if (!isObject(input)) return {} as MyCustomType;
-  const _id = input.id;
+  const _id = input["id"];
   if ((_id === undefined || typeof _id === "number")) return { ...input } as MyCustomType;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  if (_id !== undefined) out["id"] = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
   return out as unknown as MyCustomType;
 }`,
     )
@@ -740,12 +740,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parsemyCustomType = (input: unknown): myCustomType => {
   if (!isObject(input)) return {} as myCustomType;
-  const _id = input.id;
+  const _id = input["id"];
   if ((_id === undefined || typeof _id === "number")) return { ...input } as myCustomType;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  if (_id !== undefined) out["id"] = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
   return out as unknown as myCustomType;
 }`,
     )
@@ -763,12 +763,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseImplicit = (input: unknown): Implicit => {
   if (!isObject(input)) return {} as Implicit;
-  const _name = input.name;
+  const _name = input["name"];
   if ((_name === undefined || typeof _name === "string")) return { ...input } as Implicit;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_name !== undefined) out.name = typeof _name === "string" ? _name : String(_name);
+  if (_name !== undefined) out["name"] = typeof _name === "string" ? _name : String(_name);
   return out as unknown as Implicit;
 }`,
     )
@@ -836,12 +836,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseContainer = (input: unknown): Container => {
   if (!isObject(input)) return {} as Container;
-  const _data = input.data;
+  const _data = input["data"];
   if ((_data === undefined || Array.isArray(_data))) return { ...input } as Container;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_data !== undefined) out.data = Array.isArray(_data) ? _data : [];
+  if (_data !== undefined) out["data"] = Array.isArray(_data) ? _data : [];
   return out as unknown as Container;
 }`,
     )
@@ -860,12 +860,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _nested = input.nested;
+  const _nested = input["nested"];
   if ((_nested === undefined || validateDeeplyTypeShape(_nested))) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_nested !== undefined) out.nested = parseDeeplyType(_nested);
+  if (_nested !== undefined) out["nested"] = parseDeeplyType(_nested);
   return out as unknown as User;
 }`,
     )
@@ -891,14 +891,14 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _contacts = input.contacts;
-  const _addresses = input.addresses;
+  const _contacts = input["contacts"];
+  const _addresses = input["addresses"];
   if ((_contacts === undefined || Array.isArray(_contacts) && _contacts.every(validateContactShape)) && (_addresses === undefined || Array.isArray(_addresses) && _addresses.every(validateAddressShape))) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_contacts !== undefined) out.contacts = validateArray(_contacts, parseContact);
-  if (_addresses !== undefined) out.addresses = validateArray(_addresses, parseAddress);
+  if (_contacts !== undefined) out["contacts"] = validateArray(_contacts, parseContact);
+  if (_addresses !== undefined) out["addresses"] = validateArray(_addresses, parseAddress);
   return out as unknown as User;
 }`,
     )
@@ -919,14 +919,14 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _id = input.id;
-  const _name = input.name;
+  const _id = input["id"];
+  const _name = input["name"];
   if ((_id === undefined || typeof _id === "number") && (_name === undefined || typeof _name === "string")) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
-  if (_name !== undefined) out.name = typeof _name === "string" ? _name : String(_name);
+  if (_id !== undefined) out["id"] = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  if (_name !== undefined) out["name"] = typeof _name === "string" ? _name : String(_name);
   return out as unknown as User;
 }`,
     )
@@ -945,12 +945,12 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseUser = (input: unknown): User => {
   if (!isObject(input)) return {} as User;
-  const _id = input.id;
+  const _id = input["id"];
   if ((_id === undefined || typeof _id === "number")) return { ...input } as User;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_id !== undefined) out.id = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
+  if (_id !== undefined) out["id"] = typeof _id === "number" ? _id : (Number.isFinite(Number(_id)) ? Number(_id) : 0);
   return out as unknown as User;
 }`,
     )
@@ -1011,17 +1011,17 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseComponents = (input: unknown): Components => {
   if (!isObject(input)) return {} as Components;
-  const _responses = input.responses;
-  const _parameters = input.parameters;
-  const _headers = input.headers;
-  const _pathItems = input.pathItems;
+  const _responses = input["responses"];
+  const _parameters = input["parameters"];
+  const _headers = input["headers"];
+  const _pathItems = input["pathItems"];
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_responses !== undefined) out.responses = validateRecord(_responses, parseResponse);
-  if (_parameters !== undefined) out.parameters = validateRecord(_parameters, parseParameter);
-  if (_headers !== undefined) out.headers = validateRecord(_headers, parseHeader);
-  if (_pathItems !== undefined) out.pathItems = validateRecord(_pathItems, parsePathItem);
+  if (_responses !== undefined) out["responses"] = validateRecord(_responses, parseResponse);
+  if (_parameters !== undefined) out["parameters"] = validateRecord(_parameters, parseParameter);
+  if (_headers !== undefined) out["headers"] = validateRecord(_headers, parseHeader);
+  if (_pathItems !== undefined) out["pathItems"] = validateRecord(_pathItems, parsePathItem);
   return out as unknown as Components;
 }`,
     )
@@ -1169,23 +1169,23 @@ describe('generate-parser-function', () => {
         openapi: "",
         info: parseInfo(undefined),
       };
-  const _openapi = input.openapi;
-  const _info = input.info;
-  const _servers = input.servers;
-  const _paths = input.paths;
-  const _webhooks = input.webhooks;
-  const _components = input.components;
-  const _externalDocs = input.externalDocs;
+  const _openapi = input["openapi"];
+  const _info = input["info"];
+  const _servers = input["servers"];
+  const _paths = input["paths"];
+  const _webhooks = input["webhooks"];
+  const _components = input["components"];
+  const _externalDocs = input["externalDocs"];
   const out: Record<string, unknown> = {
     ...input,
     openapi: typeof _openapi === "string" ? _openapi : (_openapi !== undefined ? String(_openapi) : ""),
     info: parseInfo(_info),
   };
-  if (_servers !== undefined) out.servers = validateArray(_servers, parseServer);
-  if (_paths !== undefined) out.paths = parsePaths(_paths);
-  if (_webhooks !== undefined) out.webhooks = validateRecord(_webhooks, parsePathItem);
-  if (_components !== undefined) out.components = parseComponents(_components);
-  if (_externalDocs !== undefined) out.externalDocs = parseExternalDocumentation(_externalDocs);
+  if (_servers !== undefined) out["servers"] = validateArray(_servers, parseServer);
+  if (_paths !== undefined) out["paths"] = parsePaths(_paths);
+  if (_webhooks !== undefined) out["webhooks"] = validateRecord(_webhooks, parsePathItem);
+  if (_components !== undefined) out["components"] = parseComponents(_components);
+  if (_externalDocs !== undefined) out["externalDocs"] = parseExternalDocumentation(_externalDocs);
   return out as unknown as Document;
 }`)
   })
@@ -1219,17 +1219,17 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parseComponents = (input: unknown): Components => {
   if (!isObject(input)) return {} as Components;
-  const _schemas = input.schemas;
-  const _responses = input.responses;
-  const _parameters = input.parameters;
-  const _pathItems = input.pathItems;
+  const _schemas = input["schemas"];
+  const _responses = input["responses"];
+  const _parameters = input["parameters"];
+  const _pathItems = input["pathItems"];
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_schemas !== undefined) out.schemas = isObject(_schemas) ? _schemas : typeof _schemas === "object" && _schemas !== null ? _schemas : {};
-  if (_responses !== undefined) out.responses = validateRecord(_responses, parseResponse);
-  if (_parameters !== undefined) out.parameters = validateRecord(_parameters, parseParameter);
-  if (_pathItems !== undefined) out.pathItems = validateRecord(_pathItems, parsePathItem);
+  if (_schemas !== undefined) out["schemas"] = isObject(_schemas) ? _schemas : typeof _schemas === "object" && _schemas !== null ? _schemas : {};
+  if (_responses !== undefined) out["responses"] = validateRecord(_responses, parseResponse);
+  if (_parameters !== undefined) out["parameters"] = validateRecord(_parameters, parseParameter);
+  if (_pathItems !== undefined) out["pathItems"] = validateRecord(_pathItems, parsePathItem);
   return out as unknown as Components;
 }`,
     )
@@ -1256,7 +1256,7 @@ describe('generate-parser-function', () => {
   }
   const result = {
     ...input,
-    ...(input.default !== undefined && { default: parseResponse(input.default) }),
+    ...(input["default"] !== undefined && { default: parseResponse(input["default"]) }),
   } as unknown as Responses;
   for (const key in input) {
     if (/^[1-5](?:[0-9]{2}|XX)$/u.test(key)) {
@@ -1284,7 +1284,7 @@ describe('generate-parser-function', () => {
 
     // Without useRefImports, falls back to regular object parser
     expect(result).toContain('isObject(input)')
-    expect(result).toContain('out.default = ')
+    expect(result).toContain('out["default"] = ')
     expect(result).not.toContain('for (const [key, value]')
   })
 
@@ -1379,7 +1379,7 @@ describe('generate-parser-function', () => {
 
     expect(result).toContain('input["x-linkedin"]')
     expect(result).toContain('out["x-linkedin"] = ')
-    expect(result).not.toContain('input.x-linkedin')
+    expect(result).not.toContain('input["x"]-linkedin')
   })
 
   it('uses bracket notation for hyphenated property keys with validation', () => {
@@ -1394,7 +1394,7 @@ describe('generate-parser-function', () => {
 
     expect(result).toContain('input["x-custom"]')
     expect(result).toContain('out["x-custom"] = ')
-    expect(result).not.toContain('input.x-custom')
+    expect(result).not.toContain('input["x"]-custom')
   })
 
   it('generates object parser from conditional if/then fragments', () => {
@@ -1566,8 +1566,8 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User')
 
     // Should cache variables because fast-path exists
-    expect(result).toContain('const _name = input.name')
-    expect(result).toContain('const _age = input.age')
+    expect(result).toContain('const _name = input["name"]')
+    expect(result).toContain('const _age = input["age"]')
     // Should have fast-path check
     expect(result).toContain('if (typeof _name === "string"')
     expect(result).toContain('return { ...input } as User')
@@ -1585,7 +1585,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Example')
 
     // The generated code should have the outer undefined check
-    expect(result).toContain('if (_summary !== undefined) out.summary = ')
+    expect(result).toContain('if (_summary !== undefined) out["summary"] = ')
     // But should NOT have redundant nested undefined checks in the coercion
     // Count occurrences - should only appear in the outer check, not in String() coercion
     const matches = result.match(/!== undefined/g) || []
@@ -1604,7 +1604,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'User', { useRefImports: true })
 
     // Should still cache because $ref properties always need caching
-    expect(result).toContain('const _contact = input.contact')
+    expect(result).toContain('const _contact = input["contact"]')
   })
 
   it('optimization: caches variables for complex schemas with multiple constraints', () => {
@@ -1623,7 +1623,7 @@ describe('generate-parser-function', () => {
     const result = generateParserFunction(schema, 'Code')
 
     // Should cache because property has multiple constraints
-    expect(result).toContain('const _code = input.code')
+    expect(result).toContain('const _code = input["code"]')
   })
 
   it('optimization: fast-path returns input directly when all properties valid', () => {
@@ -1758,11 +1758,11 @@ describe('generate-parser-function', () => {
         name: "",
         price: 0,
       };
-  const _id = input.id;
-  const _name = input.name;
-  const _price = input.price;
-  const _inStock = input.inStock;
-  const _tags = input.tags;
+  const _id = input["id"];
+  const _name = input["name"];
+  const _price = input["price"];
+  const _inStock = input["inStock"];
+  const _tags = input["tags"];
   if (typeof _id === "string" && typeof _name === "string" && typeof _price === "number" && _price >= 0 && (_inStock === undefined || typeof _inStock === "boolean") && (_tags === undefined || Array.isArray(_tags) && _tags.every((_it: unknown) => typeof _it === "string"))) return { ...input } as Product;
   const out: Record<string, unknown> = {
     ...input,
@@ -1770,8 +1770,8 @@ describe('generate-parser-function', () => {
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
     price: typeof _price === "number" && _price >= 0 ? _price : (_price !== undefined ? ((_n) => Number.isFinite(_n) && _n >= 0 ? _n : 0)(Number(_price)) : 0),
   };
-  if (_inStock !== undefined) out.inStock = typeof _inStock === "boolean" ? _inStock : ((_b) => _b === "true" || _b === "yes" || _b === "y" || _b === "on" || _b === "1" || _b === 1 || _b === true ? true : _b === "false" || _b === "no" || _b === "n" || _b === "off" || _b === "0" || _b === "" || _b === 0 || _b === false ? false : false)(typeof _inStock === "string" ? _inStock.trim().toLowerCase() : _inStock);
-  if (_tags !== undefined) out.tags = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
+  if (_inStock !== undefined) out["inStock"] = typeof _inStock === "boolean" ? _inStock : ((_b) => _b === "true" || _b === "yes" || _b === "y" || _b === "on" || _b === "1" || _b === 1 || _b === true ? true : _b === "false" || _b === "no" || _b === "n" || _b === "off" || _b === "0" || _b === "" || _b === 0 || _b === false ? false : false)(typeof _inStock === "string" ? _inStock.trim().toLowerCase() : _inStock);
+  if (_tags !== undefined) out["tags"] = (Array.isArray(_tags) ? (_tags as unknown[]).map((_it) => typeof _it === "string" ? _it : String(_it)) : []);
   return out as unknown as Product;
 }`,
     )
@@ -1793,16 +1793,16 @@ describe('generate-parser-function', () => {
     expect(result).toBe(
       `export const parsePageParams = (input: unknown): PageParams => {
   if (!isObject(input)) return {} as PageParams;
-  const _page = input.page;
-  const _perPage = input.perPage;
-  const _search = input.search;
+  const _page = input["page"];
+  const _perPage = input["perPage"];
+  const _search = input["search"];
   if ((_page === undefined || typeof _page === "number" && Number.isInteger(_page) && _page >= 1) && (_perPage === undefined || typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100) && (_search === undefined || typeof _search === "string")) return { ...input } as PageParams;
   const out: Record<string, unknown> = {
     ...input,
   };
-  if (_page !== undefined) out.page = typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : ((_n) => Number.isInteger(_n) && _n >= 1 ? _n : 1)(Number(_page));
-  if (_perPage !== undefined) out.perPage = typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : ((_n) => Number.isInteger(_n) && _n >= 1 && _n <= 100 ? _n : 1)(Number(_perPage));
-  if (_search !== undefined) out.search = typeof _search === "string" ? _search : String(_search);
+  if (_page !== undefined) out["page"] = typeof _page === "number" && Number.isInteger(_page) && _page >= 1 ? _page : ((_n) => Number.isInteger(_n) && _n >= 1 ? _n : 1)(Number(_page));
+  if (_perPage !== undefined) out["perPage"] = typeof _perPage === "number" && Number.isInteger(_perPage) && _perPage >= 1 && _perPage <= 100 ? _perPage : ((_n) => Number.isInteger(_n) && _n >= 1 && _n <= 100 ? _n : 1)(Number(_perPage));
+  if (_search !== undefined) out["search"] = typeof _search === "string" ? _search : String(_search);
   return out as unknown as PageParams;
 }`,
     )
@@ -1859,18 +1859,18 @@ describe('generate-parser-function', () => {
         latitude: 0,
         longitude: 0,
       };
-  const _latitude = input.latitude;
-  const _longitude = input.longitude;
-  const _altitude = input.altitude;
-  const _label = input.label;
+  const _latitude = input["latitude"];
+  const _longitude = input["longitude"];
+  const _altitude = input["altitude"];
+  const _label = input["label"];
   if (typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 && typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 && (_altitude === undefined || typeof _altitude === "number") && (_label === undefined || typeof _label === "string")) return { ...input } as GeoCoordinate;
   const out: Record<string, unknown> = {
     ...input,
     latitude: typeof _latitude === "number" && _latitude >= -90 && _latitude <= 90 ? _latitude : (_latitude !== undefined ? ((_n) => Number.isFinite(_n) && _n >= -90 && _n <= 90 ? _n : 0)(Number(_latitude)) : 0),
     longitude: typeof _longitude === "number" && _longitude >= -180 && _longitude <= 180 ? _longitude : (_longitude !== undefined ? ((_n) => Number.isFinite(_n) && _n >= -180 && _n <= 180 ? _n : 0)(Number(_longitude)) : 0),
   };
-  if (_altitude !== undefined) out.altitude = typeof _altitude === "number" ? _altitude : (Number.isFinite(Number(_altitude)) ? Number(_altitude) : 0);
-  if (_label !== undefined) out.label = typeof _label === "string" ? _label : String(_label);
+  if (_altitude !== undefined) out["altitude"] = typeof _altitude === "number" ? _altitude : (Number.isFinite(Number(_altitude)) ? Number(_altitude) : 0);
+  if (_label !== undefined) out["label"] = typeof _label === "string" ? _label : String(_label);
   return out as unknown as GeoCoordinate;
 }`,
     )
@@ -1893,8 +1893,8 @@ describe('generate-parser-function', () => {
   if (!isObject(input)) return {
         name: "",
       };
-  const _name = input.name;
-  const _age = input.age;
+  const _name = input["name"];
+  const _age = input["age"];
   for (const _k in input) {
     if ((_k !== "name" && _k !== "age")) {
       console.warn(\`[User] Unknown property "\${_k}"\`);
@@ -1905,7 +1905,7 @@ describe('generate-parser-function', () => {
     ...input,
     name: typeof _name === "string" ? _name : (_name !== undefined ? String(_name) : ""),
   };
-  if (_age !== undefined) out.age = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
+  if (_age !== undefined) out["age"] = typeof _age === "number" ? _age : (Number.isFinite(Number(_age)) ? Number(_age) : 0);
   return out as unknown as User;
 }`,
       )
@@ -1973,7 +1973,7 @@ describe('generate-parser-function', () => {
       }
       const result = generateParserFunction(schema, 'User', { strict: true })
       expect(result).toContain(
-        'if (typeof input.name !== "string") throw new Error("[User] field \'name\' expected string, got " + (typeof input.name))',
+        'if (typeof input["name"] !== "string") throw new Error("[User] field \'name\' expected string, got " + (typeof input["name"]))',
       )
     })
 
@@ -1984,7 +1984,7 @@ describe('generate-parser-function', () => {
       }
       const result = generateParserFunction(schema, 'User', { strict: true })
       expect(result).toContain(
-        'if (input.age !== undefined && (typeof input.age !== "number")) throw new Error("[User] field \'age\' expected number, got " + (typeof input.age))',
+        'if (input["age"] !== undefined && (typeof input["age"] !== "number")) throw new Error("[User] field \'age\' expected number, got " + (typeof input["age"]))',
       )
     })
 
@@ -2237,7 +2237,7 @@ describe('generate-parser-function', () => {
     it('exported shape validator proves every element via the private item predicate', () => {
       const validator = generateShapeValidator(stepsSchema, 'Plan', false)
 
-      expect(validator).toContain('_everyPlan_StepsItem(input.steps)')
+      expect(validator).toContain('_everyPlan_StepsItem(input["steps"])')
     })
 
     it('coerces an invalid nested enum value inside array items in lax mode', () => {
@@ -2342,7 +2342,7 @@ describe('generate-parser-function', () => {
       const result = generateParserFunction(schema, 'Plan', { useRefImports: true })
 
       expect(result).toContain('who: parsePerson(_who),')
-      expect(result).toContain('validatePersonShape(input.who)')
+      expect(result).toContain('validatePersonShape(input["who"])')
     })
 
     it('parses a root-level array of inline objects in both modes', () => {
@@ -2392,7 +2392,7 @@ describe('generate-parser-function', () => {
       expect(parser).not.toContain('_every')
       expect(parser).not.toContain('Item')
       expect(validator).not.toContain('_every')
-      expect(validator).toContain('Array.isArray(input.list)')
+      expect(validator).toContain('Array.isArray(input["list"])')
       expect(validator).not.toContain('=> false')
 
       const validate = evalGenerated<(input: unknown) => boolean>(validator, 'validatePlanShape')
@@ -2676,7 +2676,7 @@ describe('generate-parser-function', () => {
       const source = generateParserFunction(schema, 'Doc', { strict: true })
       expect(source).toContain(
         'if (typeof _id === "number" && (typeof _nested === "object" && _nested !== null && !Array.isArray(_nested) && ' +
-          'typeof (_nested as Record<string, any>).foo === "string" && typeof (_nested as Record<string, any>).num === "number" && (_nested as Record<string, any>).num >= 3 && ' +
+          'typeof (_nested as Record<string, any>)["foo"] === "string" && typeof (_nested as Record<string, any>)["num"] === "number" && (_nested as Record<string, any>)["num"] >= 3 && ' +
           'Object.getPrototypeOf(_nested) === Object.prototype && Object.keys(_nested).length === 2) && ' +
           'Object.getPrototypeOf(input) === Object.prototype && Object.keys(input).length === 2) return {',
       )
@@ -2743,7 +2743,7 @@ describe('generate-parser-function', () => {
         { strict: true },
       )
       expect(deep).not.toContain(call)
-      expect(deep).toContain('validateDoc_Nested_InnerShape((_nested as Record<string, any>).inner)')
+      expect(deep).toContain('validateDoc_Nested_InnerShape((_nested as Record<string, any>)["inner"])')
       const parse = evalGenerated<(input: unknown) => unknown>(deep, 'parseDoc')
       expect(parse({ nested: { inner: { x: 1 } } })).toEqual({ nested: { inner: { x: 1 } } })
       expect(() => parse({ nested: { inner: { x: 1, y: 2 } } })).toThrow('unknown property "y"')
@@ -2814,8 +2814,8 @@ describe('generate-parser-function', () => {
       // Each nested field is read once, into a local the condition and the
       // literal share; the guard has already proven `_nested` is an object, so
       // the inlined condition carries no shape terms of its own.
-      expect(source).toContain('const _nested_foo = (_nested as Record<string, any>).foo;')
-      expect(source).toContain('const _nested_num = (_nested as Record<string, any>).num;')
+      expect(source).toContain('const _nested_foo = (_nested as Record<string, any>)["foo"];')
+      expect(source).toContain('const _nested_num = (_nested as Record<string, any>)["num"];')
       expect(source).toContain('? { foo: _nested_foo, num: _nested_num }')
       // The call survives for whatever the inlined condition rejects.
       expect(source).toContain(': parseDoc_Nested(_nested),')
@@ -3341,7 +3341,7 @@ describe('generate-parser-function', () => {
           items: false,
         }
         expect(strict(root)(['hi', 2])).toEqual(['hi', 2])
-        expect(() => strict(root)(['hi', 2.5])).toThrow(/\[1\] expected number/)
+        expect(() => strict(root)(['hi', 2.5])).toThrow(/\[1\] expected integer/)
         expect(() => strict(root)(['hi', 2, 3])).toThrow(/must NOT have more than 2 items/)
       })
 
@@ -3360,7 +3360,7 @@ describe('generate-parser-function', () => {
         }
         const p = strict(rootSchema as unknown as JSONSchema, rootSchema)
         expect(p({ entry: [7, 'a'] })).toEqual({ entry: [7, 'a'] })
-        expect(() => p({ entry: ['notint', 'a'] })).toThrow(/'entry'\[0\] expected number/)
+        expect(() => p({ entry: ['notint', 'a'] })).toThrow(/'entry'\[0\] expected integer/)
         expect(() => p({ entry: [7, 'zzz'] })).toThrow(/'entry'\[1\] must be one of/)
       })
     })

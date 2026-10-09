@@ -1846,9 +1846,12 @@ const PROTOTYPE_MEMBERS: ReadonlySet<string> = new Set(Object.getOwnPropertyName
  * because `out["__proto__"] = v` would set the prototype rather than an own
  * property, and `out.constructor = v` does not type-check against the
  * `Function` the record inherits.
+ *
+ * Always the bracket form, even for a plain identifier: the result variable is
+ * a `Record<string, unknown>`, and `out.b` on an index signature is `TS4111`
+ * under `noPropertyAccessFromIndexSignature`.
  */
-const resultMember = (key: string): string =>
-  /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key) ? `${RESULT_VARIABLE}.${key}` : `${RESULT_VARIABLE}[${JSON.stringify(key)}]`
+const resultMember = (key: string): string => `${RESULT_VARIABLE}[${JSON.stringify(key)}]`
 
 /** One line of an object literal for `entry`, at the literal's indentation. */
 const renderLiteralEntry = (entry: ResultEntry, indent: string): string => {

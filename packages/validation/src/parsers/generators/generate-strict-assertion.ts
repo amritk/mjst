@@ -297,12 +297,6 @@ const wrongTypeCondition = (accessor: string, type: string): string | null => {
 }
 
 /**
- * Maps a JSON Schema type to the label used in error messages.
- * `integer` collapses to `number` since both are validated via `typeof === "number"`.
- */
-const typeLabel = (type: string): string => (type === 'integer' ? 'number' : type)
-
-/**
  * Emits `throw new Error(<message>[ + <suffixExpr>])`. The static message may
  * contain schema-controlled text (property names, patterns, enum values), so
  * it goes through the shared {@link quoteJsString} escape-or-quote decision.
@@ -474,7 +468,7 @@ const generateItemCheck = (
 
   const scalarCheck = plainScalarItemCheck(items, '_it')
   if (scalarCheck !== null && isSchemaObject(items) && hasType(items)) {
-    return { check: scalarCheck, message: `items expected ${typeLabel(items.type as string)}` }
+    return { check: scalarCheck, message: `items expected ${items.type as string}` }
   }
 
   // A `$ref` item is validated by the parser the caller delegates to — but only
@@ -986,7 +980,7 @@ const generatePrefixItemsAssertion = (
       const wrong = wrongTypeCondition(el, pt)
       if (wrong) {
         lines.push(
-          `  if (${present} && (${wrong})) ${throwError(`${field}[${i}] expected ${typeLabel(pt)}, got `, `typeof ${el}`)};`,
+          `  if (${present} && (${wrong})) ${throwError(`${field}[${i}] expected ${pt}, got `, `typeof ${el}`)};`,
         )
       }
     }
@@ -1208,7 +1202,7 @@ const generatePropertyAssertion = (
   if (multiType !== undefined) {
     const types = propSchema.type as string[]
     if (multiType !== null) {
-      const expected = throwError(`${field} expected ${types.map(typeLabel).join(' | ')}, got `, `typeof ${acc}`)
+      const expected = throwError(`${field} expected ${types.join(' | ')}, got `, `typeof ${acc}`)
       lines.push(
         isRequired ? `  if (!${multiType}) ${expected};` : `  if (${acc} !== undefined && !${multiType}) ${expected};`,
       )
@@ -1230,7 +1224,7 @@ const generatePropertyAssertion = (
     const t = propSchema.type as string
     const wrongType = wrongTypeCondition(acc, t)
     if (wrongType) {
-      const expected = throwError(`${field} expected ${typeLabel(t)}, got `, `typeof ${acc}`)
+      const expected = throwError(`${field} expected ${t}, got `, `typeof ${acc}`)
       if (isRequired) {
         lines.push(`  if (${wrongType}) ${expected};`)
       } else {
@@ -1423,9 +1417,7 @@ export const generateScalarStrictAssertion = (
   if (rootMultiType !== undefined) {
     const types = schema.type as string[]
     if (rootMultiType !== null) {
-      lines.push(
-        `  if (!${rootMultiType}) ${throwError(`${label} expected ${types.map(typeLabel).join(' | ')}, got `, got)};`,
-      )
+      lines.push(`  if (!${rootMultiType}) ${throwError(`${label} expected ${types.join(' | ')}, got `, got)};`)
     }
     const nonNull = types.filter((type) => type !== 'null')
     if (nonNull.length === 1) {
@@ -1440,7 +1432,7 @@ export const generateScalarStrictAssertion = (
     const t = schema.type as string
     const wrongType = wrongTypeCondition('input', t)
     if (wrongType) {
-      lines.push(`  if (${wrongType}) ${throwError(`${label} expected ${typeLabel(t)}, got `, got)};`)
+      lines.push(`  if (${wrongType}) ${throwError(`${label} expected ${t}, got `, got)};`)
     }
 
     // Root-level arrays enforce scalar/enum item types too — the same gap the
