@@ -1817,8 +1817,9 @@ const generateUnevaluatedChecks = (
  *
  * `explain` holds one hoisted function name per branch that has anything to say,
  * and `total` is how many branches the combinator has. `selectBranchErrors` only
- * names the accepted kinds when it heard from every one of them, so a branch
- * with no explainer keeps it from claiming to know what the union accepts.
+ * names the accepted kinds when it heard from every one of them. A branch with
+ * no explainer is known here, so the count is passed only when every branch has
+ * one. Without it the helper never claims to know what the union accepts.
  * Every emitted line starts with a keyword or with the report's own
  * `(errors ??= [])`, which only ever follows the opening brace, so none of them
  * can fuse with the line before it.
@@ -1841,7 +1842,7 @@ const branchErrorsReport = (
         `    const _bp = ${path}`,
         `    const _br: ValidationError[][] = []`,
         `    for (const _b of [${explain.map((name) => `${name}(${raw}, _bp)`).join(', ')}]) if (_b.length !== 0) _br.push(_b)`,
-        `    for (const _e of selectBranchErrors(_br, _bp, ${total})) ${ctx.sink}.push(_e)`,
+        `    for (const _e of selectBranchErrors(_br, _bp${explain.length === total ? `, ${total}` : ''})) ${ctx.sink}.push(_e)`,
       ]),
   `  }`,
 ]
