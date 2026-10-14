@@ -48,6 +48,12 @@ export const SUITES: readonly Suite[] = [
   { name: 'codegen', pkgDir: 'validation' },
   { name: 'yaml', pkgDir: 'yaml' },
   { name: 'runtime', pkgDir: 'runtime-validators' },
+  // Whole documents through the generated validators: many small ones, and one
+  // large one, where per-call overhead and recursion show and field-level
+  // micro-cases do not.
+  { name: 'documents', pkgDir: 'validation' },
+  // A lint run phase by phase over a large JSON document.
+  { name: 'lint', pkgDir: 'lint' },
 ]
 
 /** One workspace package, reduced to what the dependant walk needs. */

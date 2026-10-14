@@ -32,6 +32,11 @@ import { readWorkspace, SUITES, selectSuites } from './bench-scope.ts'
  *     and plain data
  *   - runtime — runtime-validators throughput (ops/s, valid + invalid input)
  *     per RUNTIME_BENCH_CASE, through the guard and error-collecting entries
+ *   - documents — whole OpenAPI 3.0 documents through generated validators
+ *     (passes/s) per DOCUMENT_BENCH_CASE: many small ones, and one large one
+ *   - lint — @amritk/lint phase by phase over a large JSON document (runs/s)
+ *     per LINT_BENCH_CASE: parse, rule pass, lint from text and from data,
+ *     and the OpenAPI preset
  *
  * Only the suites the change can actually move are run: `--changed <file>`
  * takes a newline-separated list of the PR's changed paths and narrows the
@@ -432,6 +437,46 @@ const run = async (): Promise<void> => {
         parityOk: pairParityOk(baseResult, headResult),
       })
     }
+  }
+
+  const documentCases = suites.has('documents')
+    ? ((await import(pathToFileURL(join(head, 'packages/validation/bench/documents/cases.ts')).href)) as {
+        DOCUMENT_BENCH_CASES: readonly { name: string }[]
+      })
+    : { DOCUMENT_BENCH_CASES: [] }
+
+  if (suites.has('documents')) console.error('documents (passes/s through generated validators)…')
+  for (const benchCase of documentCases.DOCUMENT_BENCH_CASES) {
+    const { base: baseResult, head: headResult } = runPair('validation/bench/documents', benchCase.name)
+    progress({
+      suite: 'documents',
+      caseName: benchCase.name,
+      metric: 'passes/s',
+      higherIsBetter: true,
+      base: statOf(baseResult, 'valid'),
+      head: statOf(headResult, 'valid'),
+      parityOk: pairParityOk(baseResult, headResult),
+    })
+  }
+
+  const lintCases = suites.has('lint')
+    ? ((await import(pathToFileURL(join(head, 'packages/lint/bench/cases.ts')).href)) as {
+        LINT_BENCH_CASES: readonly { name: string }[]
+      })
+    : { LINT_BENCH_CASES: [] }
+
+  if (suites.has('lint')) console.error('lint (runs/s per phase)…')
+  for (const benchCase of lintCases.LINT_BENCH_CASES) {
+    const { base: baseResult, head: headResult } = runPair('lint/bench', benchCase.name)
+    progress({
+      suite: 'lint',
+      caseName: benchCase.name,
+      metric: 'runs/s',
+      higherIsBetter: true,
+      base: statOf(baseResult, 'valid'),
+      head: statOf(headResult, 'valid'),
+      parityOk: pairParityOk(baseResult, headResult),
+    })
   }
 
   const lines: string[] = []
