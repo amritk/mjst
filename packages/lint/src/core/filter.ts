@@ -27,10 +27,23 @@ export type CompiledFilter = { readonly test: FilterFn; readonly usesPath: boole
 // did: the node simply does not match. That mirrors JavaScript, where those are
 // TypeErrors, and keeps a filter like `@.a.b === 1` usable on nodes that have no
 // `a` — which is exactly how rulesets are written.
-const filterRuntimeError = (message: string): Error => new Error(message)
+//
+// The failure is a flag, not an exception. On real rulesets it is the common
+// case rather than the exceptional one — `@.type[0] === 'object'` fails on
+// every node without a `type`, and every string node besides — and throwing
+// (an `Error` with its stack trace, then the unwind) made those failures the
+// bulk of a rule pass over a large spec. A failed read raises the flag and
+// yields `undefined`; the logical operators stop at a raised flag, and
+// {@link toFilterFn} reads a raised flag as "no match" whatever the expression
+// went on to compute. Evaluation is synchronous and filters cannot call
+// filters, so one module-level flag is never shared by two evaluations.
+let failed = false
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
+/** Marks the running evaluation as failed. Returns `undefined` so call sites can `return fail()`. */
+const fail = (): undefined => {
+  failed = true
+  return undefined
+}
 
 /**
  * Reads a member of `object`. Only own *enumerable* properties are visible: a
@@ -45,20 +58,26 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
  * answer `false`, so the prototype walk is ruled out by the same check.
  */
 const readMember = (object: unknown, name: string | number): unknown => {
-  if (object === null || object === undefined) {
-    throw filterRuntimeError(`Cannot read "${name}" of ${object === null ? 'null' : 'undefined'}`)
+  if (object === null || object === undefined) return fail()
+  if (typeof object === 'object') {
+    if (Array.isArray(object)) {
+      if (name === 'length') return object.length
+      const index = typeof name === 'number' ? name : Number(name)
+      return Number.isInteger(index) ? object[index] : undefined
+    }
+    // Most reads in a filter miss (`@.deprecated` on a node without one), and a
+    // miss needs no ownership check: whether or not the name is an own
+    // enumerable member, the answer is `undefined`. No inherited member of a
+    // plain object reads as `undefined`, so a hit still gets the check.
+    const member = (object as Record<string | number, unknown>)[name]
+    if (member === undefined) return undefined
+    return Object.prototype.propertyIsEnumerable.call(object, name) ? member : undefined
   }
   if (typeof object === 'string') {
     if (name === 'length') return object.length
     const index = typeof name === 'number' ? name : Number(name)
     return Number.isInteger(index) ? object[index] : undefined
   }
-  if (Array.isArray(object)) {
-    if (name === 'length') return object.length
-    const index = typeof name === 'number' ? name : Number(name)
-    return Number.isInteger(index) ? object[index] : undefined
-  }
-  if (isPlainObject(object)) return Object.prototype.propertyIsEnumerable.call(object, name) ? object[name] : undefined
   // Numbers and booleans have no own properties worth exposing.
   return undefined
 }
@@ -69,13 +88,13 @@ const toStringArgument = (value: unknown): string => {
   if (typeof value === 'number' || typeof value === 'boolean' || value === null || value === undefined) {
     return String(value)
   }
-  throw filterRuntimeError('Expected a string-like argument')
+  return fail() as never
 }
 
 const toRegExpArgument = (value: unknown): RegExp => {
   if (value instanceof RegExp) return value
   if (typeof value === 'string') return new RegExp(value)
-  throw filterRuntimeError('Expected a regular expression argument')
+  return fail() as never
 }
 
 /**
@@ -94,40 +113,40 @@ const callMethod = (receiver: unknown, name: string, args: unknown[]): unknown =
           : receiver.lastIndexOf(toStringArgument(first))
       }
       if (Array.isArray(receiver)) return name === 'indexOf' ? receiver.indexOf(first) : receiver.lastIndexOf(first)
-      throw filterRuntimeError(`"${name}" is not a function`)
+      return fail()
     }
     case 'includes': {
       if (typeof receiver === 'string') return receiver.includes(toStringArgument(first))
       if (Array.isArray(receiver)) return receiver.includes(first)
-      throw filterRuntimeError('"includes" is not a function')
+      return fail()
     }
     case 'startsWith':
-      if (typeof receiver !== 'string') throw filterRuntimeError('"startsWith" is not a function')
+      if (typeof receiver !== 'string') return fail()
       return receiver.startsWith(toStringArgument(first))
     case 'endsWith':
-      if (typeof receiver !== 'string') throw filterRuntimeError('"endsWith" is not a function')
+      if (typeof receiver !== 'string') return fail()
       return receiver.endsWith(toStringArgument(first))
     case 'match':
-      if (typeof receiver !== 'string') throw filterRuntimeError('"match" is not a function')
+      if (typeof receiver !== 'string') return fail()
       return receiver.match(toRegExpArgument(first))
     case 'test': {
-      if (!(receiver instanceof RegExp)) throw filterRuntimeError('"test" is not a function')
+      if (!(receiver instanceof RegExp)) return fail()
       // A `g`/`y` regex keeps `lastIndex` between calls, which would make the same
       // filter answer differently on consecutive nodes. Reset it first.
       receiver.lastIndex = 0
       return receiver.test(toStringArgument(first))
     }
     case 'toLowerCase':
-      if (typeof receiver !== 'string') throw filterRuntimeError('"toLowerCase" is not a function')
+      if (typeof receiver !== 'string') return fail()
       return receiver.toLowerCase()
     case 'toUpperCase':
-      if (typeof receiver !== 'string') throw filterRuntimeError('"toUpperCase" is not a function')
+      if (typeof receiver !== 'string') return fail()
       return receiver.toUpperCase()
     case 'trim':
-      if (typeof receiver !== 'string') throw filterRuntimeError('"trim" is not a function')
+      if (typeof receiver !== 'string') return fail()
       return receiver.trim()
     default:
-      throw filterRuntimeError(`"${name}" is not a function`)
+      return fail()
   }
 }
 
@@ -187,6 +206,59 @@ type Thunk = (
   root: unknown,
 ) => unknown
 
+/** A run of member reads with fixed names (`@.a.b`, `@.type[0]`, `@['$ref']`) off one base. */
+type MemberChain = { base: FilterNode; names: (string | number)[] }
+
+/**
+ * Unrolls `node` into a {@link MemberChain} when every read in it has a fixed
+ * name — a `.name`, or a bracket holding a string or number literal, which is
+ * all a computed read with a constant key can be. `undefined` for anything
+ * else.
+ */
+const memberChain = (node: FilterNode): MemberChain | undefined => {
+  const names: (string | number)[] = []
+  let current = node
+  while (true) {
+    if (current.kind === 'member') names.push(current.name)
+    else if (
+      current.kind === 'computed' &&
+      current.index.kind === 'literal' &&
+      (typeof current.index.value === 'string' || typeof current.index.value === 'number')
+    ) {
+      names.push(current.index.value)
+    } else break
+    current = current.object
+  }
+  if (names.length === 0) return undefined
+  names.reverse()
+  return { base: current, names }
+}
+
+/** Compiles a member chain into one closure that reads each name in turn. */
+const compileMemberChain = ({ base, names }: MemberChain): Thunk => {
+  const count = names.length
+  const read = (object: unknown): unknown => {
+    let current = object
+    for (let i = 0; i < count; i++) {
+      current = readMember(current, names[i] as string | number)
+      if (failed) return undefined
+    }
+    return current
+  }
+  // Reading off the candidate itself is most of what a filter does; skip the
+  // call that would only hand it back.
+  if (base.kind === 'context' && base.ref === 'value') {
+    if (count === 1) {
+      const name = names[0] as string | number
+      return (value) => readMember(value, name)
+    }
+    return (value) => read(value)
+  }
+  const object = compileNode(base)
+  return (value, property, parent, parentProperty, path, root) =>
+    read(object(value, property, parent, parentProperty, path, root))
+}
+
 /**
  * Turns one parsed node into a closure that computes it.
  *
@@ -225,19 +297,18 @@ const compileNode = (node: FilterNode): Thunk => {
           return (_value, _property, _parent, _parentProperty, _path, root) => root
       }
     }
-    case 'member': {
-      const object = compileNode(node.object)
-      const name = node.name
-      return (value, property, parent, parentProperty, path, root) =>
-        readMember(object(value, property, parent, parentProperty, path, root), name)
-    }
+    case 'member':
     case 'computed': {
-      const object = compileNode(node.object)
-      const index = compileNode(node.index)
+      const chain = memberChain(node)
+      if (chain !== undefined) return compileMemberChain(chain)
+      // Only a computed member with a non-literal key gets here.
+      const computed = node as Extract<FilterNode, { kind: 'computed' }>
+      const object = compileNode(computed.object)
+      const index = compileNode(computed.index)
       return (value, property, parent, parentProperty, path, root) => {
         const key = index(value, property, parent, parentProperty, path, root)
         if (typeof key !== 'string' && typeof key !== 'number') {
-          throw filterRuntimeError('A computed member must be a string or a number')
+          return fail()
         }
         return readMember(object(value, property, parent, parentProperty, path, root), key)
       }
@@ -252,7 +323,10 @@ const compileNode = (node: FilterNode): Thunk => {
         for (let i = 0; i < arity; i++) {
           values[i] = (args[i] as Thunk)(value, property, parent, parentProperty, path, root)
         }
-        return callMethod(object(value, property, parent, parentProperty, path, root), name, values)
+        const receiver = object(value, property, parent, parentProperty, path, root)
+        // Nothing after a failed read can change the verdict; skip the call.
+        if (failed) return undefined
+        return callMethod(receiver, name, values)
       }
     }
     case 'unary': {
@@ -271,23 +345,53 @@ const compileNode = (node: FilterNode): Thunk => {
         -Number(operand(value, property, parent, parentProperty, path, root))
     }
     case 'logical': {
-      const left = compileNode(node.left)
-      const right = compileNode(node.right)
+      // `a && b && c` parses as `(a && b) && c`; run the whole chain as one loop
+      // instead of a closure per operator.
+      const operator = node.operator
+      const operands: Thunk[] = []
+      const collect = (operand: FilterNode): void => {
+        if (operand.kind === 'logical' && operand.operator === operator) {
+          collect(operand.left)
+          collect(operand.right)
+        } else operands.push(compileNode(operand))
+      }
+      collect(node)
+      const count = operands.length
       // `&&`/`||` yield the operand value, not a boolean, because rulesets chain
       // them (`@ && @.type === 'array'`) and rely on the JavaScript semantics.
-      if (node.operator === '&&') {
+      if (operator === '&&') {
         return (value, property, parent, parentProperty, path, root) => {
-          const outcome = left(value, property, parent, parentProperty, path, root)
-          return outcome ? right(value, property, parent, parentProperty, path, root) : outcome
+          let outcome: unknown
+          for (let i = 0; i < count; i++) {
+            outcome = (operands[i] as Thunk)(value, property, parent, parentProperty, path, root)
+            if (failed) return undefined
+            if (!outcome) return outcome
+          }
+          return outcome
         }
       }
       return (value, property, parent, parentProperty, path, root) => {
-        const outcome = left(value, property, parent, parentProperty, path, root)
-        return outcome ? outcome : right(value, property, parent, parentProperty, path, root)
+        let outcome: unknown
+        for (let i = 0; i < count; i++) {
+          outcome = (operands[i] as Thunk)(value, property, parent, parentProperty, path, root)
+          if (failed) return undefined
+          if (outcome) return outcome
+        }
+        return outcome
       }
     }
     case 'comparison': {
       const left = compileNode(node.left)
+      // Comparing against a literal (`@.type === 'object'`) is the usual shape;
+      // read the constant directly rather than calling a thunk for it.
+      if (node.right.kind === 'literal' && (node.operator === '===' || node.operator === '!==')) {
+        const constant = node.right.value
+        return node.operator === '==='
+          ? (value, property, parent, parentProperty, path, root) =>
+              left(value, property, parent, parentProperty, path, root) === constant
+          : (value, property, parent, parentProperty, path, root) =>
+              left(value, property, parent, parentProperty, path, root) !== constant
+      }
       const right = compileNode(node.right)
       switch (node.operator) {
         case '===':
@@ -327,13 +431,19 @@ const compileNode = (node: FilterNode): Thunk => {
 const toFilterFn = (parsed: ParsedFilter): FilterFn => {
   const test = compileNode(parsed.node)
   return (value, property, parent, root, path, parentProperty) => {
+    failed = false
     try {
-      return Boolean(test(value, property, parent, parentProperty, path, root))
-    } catch {
+      const outcome = test(value, property, parent, parentProperty, path, root)
       // A filter that cannot be evaluated against *this* node (a member of null,
       // a method on the wrong type) does not match it — the same outcome the
       // expression would have had in JavaScript, where those are TypeErrors.
+      return failed ? false : Boolean(outcome)
+    } catch {
+      // What still throws is the host itself: an invalid pattern handed to
+      // `.match`, say. It is the same "cannot evaluate here" outcome.
       return false
+    } finally {
+      failed = false
     }
   }
 }
