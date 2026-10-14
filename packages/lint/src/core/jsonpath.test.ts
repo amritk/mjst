@@ -148,4 +148,41 @@ describe('jsonpath queryMany', () => {
     expect(query(root, '$..visible').map((m) => m.value)).toEqual([1])
     expect(queryMany(root, [compileQuery('$..visible')])[0]?.map((m) => m.value)).toEqual([1])
   })
+
+  it('keeps a schema-aware descent out of example and default data', () => {
+    const schemas = {
+      Pet: {
+        type: 'object',
+        properties: {
+          // Property names that happen to be data keywords are still schemas.
+          default: { type: 'object' },
+          enum: { type: 'object' },
+        },
+        examples: [{ nested: { type: 'object' } }],
+        default: { type: 'object' },
+      },
+    }
+    const expression = "$.schemas..[?(@ && @.type === 'object')]"
+    const document = { schemas }
+    const paths = (options?: { schemaAware: boolean }) =>
+      query(document, expression, options).map((match) => match.path.join('/'))
+
+    // A filter step yields a node's matching children when it visits the node,
+    // so `Pet/default` comes out before anything under `properties`.
+    expect(paths()).toEqual([
+      'schemas/Pet',
+      'schemas/Pet/default',
+      'schemas/Pet/properties/default',
+      'schemas/Pet/properties/enum',
+      'schemas/Pet/examples/0/nested',
+    ])
+    expect(paths({ schemaAware: true })).toEqual([
+      'schemas/Pet',
+      'schemas/Pet/properties/default',
+      'schemas/Pet/properties/enum',
+    ])
+    expect(queryMany(document, [compileQuery(expression)], [{ schemaAware: true }])[0]).toEqual(
+      query(document, expression, { schemaAware: true }),
+    )
+  })
 })

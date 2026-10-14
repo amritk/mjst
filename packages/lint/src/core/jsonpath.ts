@@ -543,38 +543,97 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
 }
 
 /**
+ * The keywords whose values a schema-aware descent stays out of: they hold
+ * instance data — an example payload, a default, an enumerated value — that
+ * can look like a schema without being one.
+ */
+const DATA_KEYWORDS = new Set(['example', 'examples', 'default', 'const', 'enum'])
+
+/**
+ * The keywords whose values map names to schemas (or to other named
+ * definitions). Inside one, `default` or `enum` is a name someone chose, not a
+ * keyword, so a schema-aware descent goes into it as usual. This covers JSON
+ * Schema's own maps and the named-component maps of OpenAPI and AsyncAPI.
+ */
+const NAME_MAP_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'schemas',
+  'responses',
+  'parameters',
+  'headers',
+  'requestBodies',
+  'securitySchemes',
+  'links',
+  'callbacks',
+  'pathItems',
+  'messages',
+  'channels',
+  'operations',
+])
+
+/** Whether `node` is a map of names: the value of a name-map keyword that is itself not a name. */
+const isNameMap = (node: Node | undefined): boolean => {
+  // Walk up to the root first: whether a node is a name map depends on whether its parent is.
+  const chain: Node[] = []
+  for (let n = node; n !== undefined && n.parent !== undefined; n = n.parent) chain.push(n)
+  let nameMap = false
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const key = (chain[i] as Node).key
+    nameMap = !nameMap && typeof key === 'string' && NAME_MAP_KEYWORDS.has(key)
+  }
+  return nameMap
+}
+
+/** Whether `node` is the value of a data keyword, which a schema-aware descent does not visit or yield. */
+const isDataChild = (node: Node): boolean =>
+  typeof node.key === 'string' && DATA_KEYWORDS.has(node.key) && isObject(node.parent?.value) && !isNameMap(node.parent)
+
+/**
  * Visits `node` and every descendant (preorder), invoking `visit` on each.
+ * Schema-aware, it does not go into the values of data keywords.
  *
  * The traversal keeps its own stack instead of recursing: document depth is
  * attacker-controlled, and a recursive walker turns a deeply nested file into a
  * `RangeError` that takes the whole process down. Children are pushed in reverse
  * so they pop in document order — match order is part of the observable output.
  */
-const walkDescendants = (node: Node, visit: (n: Node) => void): void => {
+const walkDescendants = (node: Node, visit: (n: Node) => void, schemaAware: boolean): void => {
   const stack: Node[] = [node]
+  const nameMaps: boolean[] = [schemaAware && isNameMap(node)]
   while (stack.length > 0) {
     const current = stack.pop() as Node
+    const nameMap = nameMaps.pop() as boolean
     visit(current)
     const value = current.value
     if (Array.isArray(value)) {
-      for (let idx = value.length - 1; idx >= 0; idx--) stack.push({ value: value[idx], parent: current, key: idx })
+      for (let idx = value.length - 1; idx >= 0; idx--) {
+        stack.push({ value: value[idx], parent: current, key: idx })
+        nameMaps.push(false)
+      }
     } else if (isObject(value)) {
       const keys = Object.keys(value)
       for (let k = keys.length - 1; k >= 0; k--) {
         const key = keys[k] as string
+        if (schemaAware && !nameMap && DATA_KEYWORDS.has(key)) continue
         stack.push({ value: value[key], parent: current, key })
+        nameMaps.push(schemaAware && !nameMap && NAME_MAP_KEYWORDS.has(key))
       }
     }
   }
 }
 
 /** Applies a list of steps to an existing set of nodes. */
-const applySteps = (root: unknown, initial: Node[], steps: Step[]): Node[] => {
+const applySteps = (root: unknown, initial: Node[], steps: Step[], schemaAware = false): Node[] => {
   let current = initial
   for (const step of steps) {
-    const next: Node[] = []
+    let next: Node[] = []
     if (step.recursive) {
-      for (const node of current) walkDescendants(node, (n) => applySelector(n, step.selector, root, next))
+      for (const node of current) walkDescendants(node, (n) => applySelector(n, step.selector, root, next), schemaAware)
+      if (schemaAware) next = next.filter((n) => !isDataChild(n))
     } else {
       for (const node of current) applySelector(node, step.selector, root, next)
     }
@@ -583,8 +642,8 @@ const applySteps = (root: unknown, initial: Node[], steps: Step[]): Node[] => {
   return current
 }
 
-const runSteps = (root: unknown, steps: Step[]): Node[] =>
-  applySteps(root, [{ value: root, parent: undefined, key: undefined }], steps)
+const runSteps = (root: unknown, steps: Step[], schemaAware = false): Node[] =>
+  applySteps(root, [{ value: root, parent: undefined, key: undefined }], steps, schemaAware)
 
 const toMatches = (nodes: Node[]): IQueryMatch[] => {
   const out: IQueryMatch[] = new Array(nodes.length)
@@ -595,12 +654,25 @@ const toMatches = (nodes: Node[]): IQueryMatch[] => {
   return out
 }
 
+/** How a path's `..` descents read the document. */
+export type QueryOptions = {
+  /**
+   * Treat the document as JSON Schema (or an OpenAPI/AsyncAPI document) and
+   * keep `..` out of instance data: the values of `example`, `examples`,
+   * `default`, `const` and `enum` are neither visited nor matched, except
+   * where those words are names in a map such as `properties`. A rule that
+   * looks at schemas then does not trip over an example payload that happens
+   * to read `"type": "object"`, and does not pay to walk it.
+   */
+  schemaAware?: boolean
+}
+
 /** Evaluates a pre-compiled path against `data`. */
-export const queryCompiled = (data: unknown, compiled: CompiledPath): IQueryMatch[] => {
+export const queryCompiled = (data: unknown, compiled: CompiledPath, options: QueryOptions = {}): IQueryMatch[] => {
   // A malformed path matches nothing rather than falling back to the root.
   if (compiled.error !== undefined) return []
   if (data === null || data === undefined) return []
-  return toMatches(runSteps(data, compiled.steps))
+  return toMatches(runSteps(data, compiled.steps, options.schemaAware === true))
 }
 
 /**
@@ -614,7 +686,11 @@ export const queryCompiled = (data: unknown, compiled: CompiledPath): IQueryMatc
  *
  * Returns one match array per input path, index-aligned with `compiled`.
  */
-export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[][] => {
+export const queryMany = (
+  data: unknown,
+  compiled: CompiledPath[],
+  options: readonly (QueryOptions | undefined)[] = [],
+): IQueryMatch[][] => {
   const out: IQueryMatch[][] = new Array(compiled.length)
   if (data === null || data === undefined) {
     for (let i = 0; i < compiled.length; i++) out[i] = []
@@ -631,9 +707,10 @@ export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[
       out[i] = []
       continue
     }
-    const descent = c.hasDescent ? toDescent(c.steps) : undefined
+    const schemaAware = options[i]?.schemaAware === true
+    const descent = c.hasDescent ? toDescent(c.steps, schemaAware) : undefined
     if (descent === undefined) {
-      out[i] = queryCompiled(data, c)
+      out[i] = queryCompiled(data, c, { schemaAware })
       continue
     }
     shared.push(i)
@@ -644,9 +721,9 @@ export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[
     const seeds: Node[][] = descents.map(() => [])
     walkShared(data, descents, seeds)
     for (let d = 0; d < descents.length; d++) {
-      const rest = (descents[d] as Descent).rest
+      const { rest, schemaAware } = descents[d] as Descent
       const seeded = seeds[d] as Node[]
-      out[shared[d] as number] = toMatches(rest.length === 0 ? seeded : applySteps(data, seeded, rest))
+      out[shared[d] as number] = toMatches(rest.length === 0 ? seeded : applySteps(data, seeded, rest, schemaAware))
     }
   }
 
@@ -671,6 +748,8 @@ type Descent = {
   readonly first: Selector
   /** Everything after the first `..` step, applied to its matches afterwards. */
   readonly rest: Step[]
+  /** Whether the path's descents stay out of instance data (see {@link QueryOptions}). */
+  readonly schemaAware: boolean
 }
 
 /**
@@ -682,11 +761,11 @@ type Descent = {
  * the order it lists names, and may list one twice), a slice, `^` and `~` keep
  * the per-path evaluation.
  */
-const toDescent = (steps: Step[]): Descent | undefined => {
+const toDescent = (steps: Step[], schemaAware: boolean): Descent | undefined => {
   const prefix: Selector[] = []
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i] as Step
-    if (step.recursive) return { prefix, first: step.selector, rest: steps.slice(i + 1) }
+    if (step.recursive) return { prefix, first: step.selector, rest: steps.slice(i + 1), schemaAware }
     const kind = step.selector.kind
     if (kind !== 'child' && kind !== 'index' && kind !== 'wildcard' && kind !== 'filter') return undefined
     prefix.push(step.selector)
@@ -748,6 +827,10 @@ type Scope = {
   settled: Scope | undefined
   /** Child scopes already built, by which pending prefixes advanced. */
   readonly next: Map<string, Scope>
+  /** Whether a live descent is schema-aware, so data keywords need looking out for. */
+  readonly schemaAware: boolean
+  /** This scope without its schema-aware descents — what the value of a data keyword gets. */
+  outsideData: Scope | undefined
 }
 
 const createScope = (
@@ -760,7 +843,9 @@ const createScope = (
   const wildcards: number[] = []
   const filters: number[] = []
   const others: number[] = []
+  let schemaAware = false
   for (const d of active) {
+    if ((descents[d] as Descent).schemaAware) schemaAware = true
     const selector = (descents[d] as Descent).first
     if (selector.kind === 'child') {
       const existing = byName.get(selector.name)
@@ -771,7 +856,31 @@ const createScope = (
     else if (selector.kind === 'filter') filters.push(d)
     else others.push(d)
   }
-  return { active, pending, byName, numericChild, wildcards, filters, others, settled: undefined, next: new Map() }
+  return {
+    active,
+    pending,
+    byName,
+    numericChild,
+    wildcards,
+    filters,
+    others,
+    settled: undefined,
+    next: new Map(),
+    schemaAware,
+    outsideData: undefined,
+  }
+}
+
+/** The scope for the value of a data keyword: schema-aware descents stop at its edge. */
+const outsideDataScope = (descents: readonly Descent[], scope: Scope): Scope => {
+  if (scope.outsideData === undefined) {
+    scope.outsideData = createScope(
+      descents,
+      scope.active.filter((d) => !(descents[d] as Descent).schemaAware),
+      scope.pending,
+    )
+  }
+  return scope.outsideData
 }
 
 /** The scope a child gets when no pending prefix advances on it. */
@@ -855,21 +964,29 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
   // attacker-controlled, so recursion is not an option.
   const nodes: Node[] = [{ value: data, parent: undefined, key: undefined }]
   const scopes: Scope[] = [createScope(descents, rootActive, rootPending)]
+  // Whether each stacked node is a map of names (see `NAME_MAP_KEYWORDS`):
+  // tracked only when some descent is schema-aware, which is the only reader.
+  const tracksNameMaps = descents.some((descent) => descent.schemaAware)
+  const nameMaps: boolean[] = [false]
   while (nodes.length > 0) {
     const current = nodes.pop() as Node
-    const scope = scopes.pop() as Scope
+    const outer = scopes.pop() as Scope
+    const nameMap = tracksNameMaps ? (nameMaps.pop() as boolean) : false
     const value = current.value
     const base = nodes.length
     if (typeof value === 'object' && value !== null) {
       const isArray = Array.isArray(value)
       const keys = isArray ? undefined : Object.keys(value)
       const length = isArray ? value.length : (keys as string[]).length
-      const { byName, wildcards, filters } = scope
-      const hasFilters = filters.length > 0
-      const hasWildcards = wildcards.length > 0
       for (let i = 0; i < length; i++) {
         const key: string | number = isArray ? i : ((keys as string[])[i] as string)
         const child = (value as Record<string | number, unknown>)[key]
+        // A schema-aware descent neither matches nor enters the value of a data keyword.
+        const scope =
+          outer.schemaAware && !isArray && !nameMap && DATA_KEYWORDS.has(key as string)
+            ? outsideDataScope(descents, outer)
+            : outer
+        const { byName, wildcards, filters } = scope
         // Allocated on first need, and shared by every seed list and the stack.
         let node: Node | undefined
         if (!isArray) {
@@ -879,11 +996,11 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
             for (const d of interested) (seeds[d] as Node[]).push(node)
           }
         }
-        if (hasWildcards) {
+        if (wildcards.length > 0) {
           if (node === undefined) node = { value: child, parent: current, key }
           for (const d of wildcards) (seeds[d] as Node[]).push(node)
         }
-        if (hasFilters) {
+        if (filters.length > 0) {
           for (const d of filters) {
             const selector = (descents[d] as Descent).first as Extract<Selector, { kind: 'filter' }>
             const path = selector.usesPath ? childPathString(current, key) : ''
@@ -900,10 +1017,11 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
         if (visit) {
           nodes.push(node === undefined ? { value: child, parent: current, key } : node)
           scopes.push(inner)
+          if (tracksNameMaps) nameMaps.push(!isArray && !nameMap && NAME_MAP_KEYWORDS.has(key as string))
         }
       }
       if (isArray) {
-        for (const d of scope.numericChild) {
+        for (const d of outer.numericChild) {
           applySelector(current, (descents[d] as Descent).first, data, seeds[d] as Node[])
         }
       }
@@ -916,11 +1034,26 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
         const heldScope = scopes[i] as Scope
         scopes[i] = scopes[j] as Scope
         scopes[j] = heldScope
+        if (tracksNameMaps) {
+          const heldNameMap = nameMaps[i] as boolean
+          nameMaps[i] = nameMaps[j] as boolean
+          nameMaps[j] = heldNameMap
+        }
       }
     }
-    for (const d of scope.others) applySelector(current, (descents[d] as Descent).first, data, seeds[d] as Node[])
+    for (const d of outer.others) {
+      const descent = descents[d] as Descent
+      if (!descent.schemaAware) {
+        applySelector(current, descent.first, data, seeds[d] as Node[])
+        continue
+      }
+      const found: Node[] = []
+      applySelector(current, descent.first, data, found)
+      for (const node of found) if (!isDataChild(node)) (seeds[d] as Node[]).push(node)
+    }
   }
 }
 
 /** Runs a JSONPath expression and returns each match with its concrete path. */
-export const query = (data: unknown, expression: string): IQueryMatch[] => queryCompiled(data, compileQuery(expression))
+export const query = (data: unknown, expression: string, options: QueryOptions = {}): IQueryMatch[] =>
+  queryCompiled(data, compileQuery(expression), options)

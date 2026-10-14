@@ -72,6 +72,9 @@ const validateRule = (name: string, entry: RuleEntry, path: JsonPath, problems: 
   } else {
     validateThen(entry['then'], [...path, 'then'], problems)
   }
+  if (entry['descent'] !== undefined && entry['descent'] !== 'all' && entry['descent'] !== 'schema') {
+    problems.push({ message: `Rule "${name}" \`descent\` must be "all" or "schema"`, path: [...path, 'descent'] })
+  }
   if (entry['severity'] !== undefined && !isValidSeverity(entry['severity'])) {
     problems.push({ message: `Rule "${name}" has invalid severity`, path: [...path, 'severity'] })
   }

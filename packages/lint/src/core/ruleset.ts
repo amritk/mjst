@@ -139,6 +139,7 @@ const normalizeRule = (
     formats: formats ? new Set(formats) : undefined,
     recommended,
     resolved: def.resolved ?? true,
+    ...(def.descent === 'schema' ? { descent: 'schema' as const } : {}),
     documentationUrl,
   }
 }

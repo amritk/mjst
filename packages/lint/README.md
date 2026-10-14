@@ -62,6 +62,16 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
 
 `severity` is a `DiagnosticSeverity` — `0` error, `1` warning, `2` info, `3` hint — and `range` is a zero-based `{ line, character }` span you can render a squiggle from.
 
+### Lint data you already parsed
+
+A caller that has the document parsed already — a loader that read and normalized it — passes the data instead of the text, and the parse is skipped:
+
+```ts
+const findings = await lintDocument({ data: spec, text: source }, { ruleset, source: 'openapi.json' })
+```
+
+`text` is optional and only read to put `line:column` ranges on findings, lazily: JSON text is scanned for just the paths that carry findings, YAML text is parsed on the first lookup. A path the caller's normalization added resolves to its closest ancestor in the text, and without `text` every range is the zero range. Plugins that rewrite the document (auto-fix) need `text`. `createDocumentFromData(data, { text })` builds the same document for the lower-level `createLinter(ruleset).run()`.
+
 ### Validate against a JSON Schema
 
 The built-in `schema` function runs an arbitrary JSON Schema (Draft 2020-12) over the matched node, via [`@amritk/runtime-validators`](../runtime-validators):
@@ -193,7 +203,7 @@ A ruleset is a plain object (authored as YAML, JSON, or a JS module):
 
 | Field | Description |
 | --- | --- |
-| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`, `resolved` (default `true`; `false` runs the rule against the document as written, before `$ref` dereferencing), and `documentationUrl`. |
+| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`, `resolved` (default `true`; `false` runs the rule against the document as written, before `$ref` dereferencing), `descent` (default `all`; `schema` keeps `..` out of `example`, `examples`, `default`, `const` and `enum` values, so a rule about schemas does not match an example payload), and `documentationUrl`. |
 | `then` | `{ function, field?, functionOptions? }` — `field` narrows the match to a child (`@key` targets the property name). |
 | `extends` | A ruleset (or list) to inherit rules from: a file path or npm package. `[target, 'recommended' \| 'all' \| 'off']` controls what it contributes. |
 | `functions` / `functionsDir` | Custom functions to load by name (default dir `functions/`). |
@@ -224,7 +234,7 @@ Anything outside that grammar is a ruleset error (`createRuleset` throws and nam
 
 | Export | What it does |
 | --- | --- |
-| `lintDocument(input, options?)` | Parse `input` and lint it against `options.ruleset` — a definition, or a `Ruleset` you already built; returns `IDiagnostic[]`. |
+| `lintDocument(input, options?)` | Parse `input` and lint it against `options.ruleset` — a definition, or a `Ruleset` you already built; returns `IDiagnostic[]`. `input` is the text, or `{ data, text? }` for a document already parsed. |
 | `lintDocumentWithResult(input, options?)` | Like `lintDocument`, but returns `{ diagnostics, output?, pluginData }` (including any plugin's rewritten `output`). |
 | `fixDocument(input, options?)` | Lint and apply `options.fixers` to a fixpoint; returns `{ output, fixed, applied, remaining, converged, passes }`. |
 | `createRuleset(definition?, basePath?, options?)` | Normalize a ruleset definition into a runnable `Ruleset`, layering the built-in functions and resolving `extends`. Memoized per `(definition object, basePath, restrictTo)` — treat a definition you have passed in as frozen. |

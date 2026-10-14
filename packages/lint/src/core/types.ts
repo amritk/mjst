@@ -80,6 +80,16 @@ export type IRuleDefinition = {
   recommended?: boolean
   /** When false, the rule runs against the unresolved document. Default true. */
   resolved?: boolean
+  /**
+   * How `..` in `given` reads the document. `'all'` (the default) visits every
+   * node. `'schema'` treats it as JSON Schema — or an OpenAPI/AsyncAPI document
+   * — and stays out of instance data: the values of `example`, `examples`,
+   * `default`, `const` and `enum` are neither visited nor matched, except
+   * where those words are names in a map such as `properties`. Use it for
+   * rules about schemas, so an example payload that reads `"type": "object"`
+   * is not mistaken for one.
+   */
+  descent?: 'all' | 'schema'
   documentationUrl?: string
 }
 
@@ -143,6 +153,8 @@ export type ResolvedRule = {
   formats?: Set<string> | undefined
   recommended: boolean
   resolved: boolean
+  /** See {@link IRuleDefinition.descent}; absent means `'all'`. */
+  descent?: 'all' | 'schema' | undefined
   documentationUrl?: string | undefined
 }
 
