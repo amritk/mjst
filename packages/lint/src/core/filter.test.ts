@@ -145,4 +145,57 @@ describe('filter', () => {
   it('memoizes compilation by source', () => {
     expect(compileFilter('@.type')).toBe(compileFilter('@.type'))
   })
+
+  it('marks a filter object-only exactly when no scalar or array can match it', () => {
+    // The shared walk skips an object-only filter on every non-object child,
+    // so a wrong "true" here would silently drop matches.
+    const cases: [string, boolean][] = [
+      ['@.type', true],
+      ["@ && @.type === 'object'", true],
+      ["@.type === 'object' || @.type[0] === 'object'", true],
+      ["@['$ref'] === undefined", false],
+      ['@ && @.enum && @.enum.length === 1', true],
+      ["@.x.indexOf('a') === 0", true],
+      // `-1` is a negation, not a literal, so the analysis leaves it alone.
+      ["@.x.indexOf('a') === -1", false],
+      ['@.length === 3', false],
+      ['@[0]', false],
+      ["@['0']", false],
+      ["@['']", false],
+      ['@.type !== undefined', false],
+      ['!@.type', false],
+      ['@.a || @.length', false],
+      ['@ === 1', false],
+      ['@.match(/x/)', false],
+      ["@property === 'type'", false],
+      ['@parent.type', false],
+      ['@.a == null', false],
+    ]
+    const candidates: unknown[] = [
+      '',
+      'abc',
+      'object',
+      0,
+      1,
+      true,
+      false,
+      null,
+      [],
+      ['object'],
+      [1, 2, 3],
+      [{ type: 'object' }],
+    ]
+    for (const [expression, expected] of cases) {
+      const compiled = compileFilter(expression)
+      if ('error' in compiled) throw new Error(compiled.error)
+      expect(compiled.objectsOnly, expression).toBe(expected)
+      if (!compiled.objectsOnly) continue
+      for (const candidate of candidates) {
+        expect(
+          compiled.test(candidate, 'k', { k: candidate }, {}, '', undefined),
+          `${expression} on ${JSON.stringify(candidate)}`,
+        ).toBe(false)
+      }
+    }
+  })
 })

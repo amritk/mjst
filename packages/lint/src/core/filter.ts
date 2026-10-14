@@ -20,7 +20,18 @@ export type FilterFn = (
 ) => boolean
 
 /** A filter that either compiled, or the reason it did not. */
-export type CompiledFilter = { readonly test: FilterFn; readonly usesPath: boolean } | { readonly error: string }
+export type CompiledFilter =
+  | {
+      readonly test: FilterFn
+      readonly usesPath: boolean
+      /**
+       * True when the filter can only match a plain object, worked out from its
+       * shape (see {@link matchesOnlyObjects}). A walk may then skip calling it
+       * on scalars and arrays, which on a typical document are most nodes.
+       */
+      readonly objectsOnly: boolean
+    }
+  | { readonly error: string }
 
 // A filter that reaches for something the interpreter cannot do (a member of
 // `null`, `.match` on a number) fails the same way the old `new Function` body
@@ -448,6 +459,76 @@ const toFilterFn = (parsed: ParsedFilter): FilterFn => {
   }
 }
 
+/**
+ * Whether reading `name` off a value that is not a plain object always yields
+ * `undefined` (or fails). {@link readMember} answers a string or an array only
+ * for `length` and integer indices — `Number(name)` is what it asks, so `''`
+ * and `' 1'` count as indices too — and everything else has no members.
+ */
+const objectOnlyName = (name: string | number): boolean =>
+  typeof name === 'string' && name !== 'length' && !Number.isInteger(Number(name))
+
+/**
+ * Whether `node` is a read off the candidate whose first step is an
+ * {@link objectOnlyName}: `@.type`, `@.type[0]`, `@['$ref'].length`. Such a
+ * read is `undefined` or a failure unless the candidate is a plain object.
+ */
+const readsOffObject = (node: FilterNode): boolean => {
+  let current = node
+  while (true) {
+    if (current.kind === 'call') {
+      current = current.object
+      continue
+    }
+    const inner = current.kind === 'member' || current.kind === 'computed' ? current.object : undefined
+    if (inner === undefined) return false
+    if (inner.kind === 'context' && inner.ref === 'value') {
+      if (current.kind === 'member') return objectOnlyName(current.name)
+      const index = (current as Extract<FilterNode, { kind: 'computed' }>).index
+      return index.kind === 'literal' && (typeof index.value === 'string' || typeof index.value === 'number')
+        ? objectOnlyName(index.value)
+        : false
+    }
+    current = inner
+  }
+}
+
+/**
+ * Whether `node` can only come out truthy when the candidate is a plain
+ * object. Conservative: `false` means "not shown", never "can match a scalar".
+ *
+ *   - a read off the candidate by an object-only name, or a method call on one,
+ *     is `undefined` (or a failed evaluation, which is no match) otherwise;
+ *   - `X === c` and `X == c` with `c` neither `null` nor `undefined` need `X`
+ *     defined, so they inherit `X`'s answer;
+ *   - `a && b` needs both, so either one showing it is enough; `a || b` needs
+ *     one of them, so both have to show it.
+ *
+ * `!`, `!==`, relational operators and anything else are not analysed.
+ */
+const matchesOnlyObjects = (node: FilterNode): boolean => {
+  switch (node.kind) {
+    case 'member':
+    case 'computed':
+    case 'call':
+      return readsOffObject(node)
+    case 'comparison': {
+      if (node.operator !== '===' && node.operator !== '==') return false
+      const definedLiteral = (side: FilterNode): boolean =>
+        side.kind === 'literal' ? side.value !== undefined && side.value !== null : side.kind === 'regex'
+      if (definedLiteral(node.right)) return matchesOnlyObjects(node.left)
+      if (definedLiteral(node.left)) return matchesOnlyObjects(node.right)
+      return false
+    }
+    case 'logical':
+      return node.operator === '&&'
+        ? matchesOnlyObjects(node.left) || matchesOnlyObjects(node.right)
+        : matchesOnlyObjects(node.left) && matchesOnlyObjects(node.right)
+    default:
+      return false
+  }
+}
+
 // Rulesets reuse the same handful of filter bodies across many rules, so parsing
 // is memoized. The cache is bounded: a service that accepts a ruleset per request
 // must not accumulate one entry per distinct filter string forever.
@@ -466,7 +547,9 @@ export const compileFilter = (source: string): CompiledFilter => {
   if (cached) return cached
   const parsed = parseFilterExpression(source)
   const compiled: CompiledFilter =
-    'error' in parsed ? { error: parsed.error } : { test: toFilterFn(parsed), usesPath: parsed.usesPath }
+    'error' in parsed
+      ? { error: parsed.error }
+      : { test: toFilterFn(parsed), usesPath: parsed.usesPath, objectsOnly: matchesOnlyObjects(parsed.node) }
   filterCache.set(source, compiled)
   return compiled
 }

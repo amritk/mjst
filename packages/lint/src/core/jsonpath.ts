@@ -43,7 +43,7 @@ type Selector =
   | { kind: 'union'; names: (string | number)[] }
   | { kind: 'slice'; start?: number; end?: number; step?: number }
   | { kind: 'scriptIndex'; offset: number }
-  | { kind: 'filter'; test: FilterFn; source: string; usesPath: boolean }
+  | { kind: 'filter'; test: FilterFn; source: string; usesPath: boolean; objectsOnly: boolean }
   | { kind: 'parent' }
   | { kind: 'keys' }
   // A segment that could not be parsed. The owning path carries the recorded
@@ -248,7 +248,13 @@ const bracketSelector = (content: string, onError: (message: string) => void): S
       onError(filter.error)
       return { kind: 'none' }
     }
-    return { kind: 'filter', test: filter.test, source: expr, usesPath: filter.usesPath }
+    return {
+      kind: 'filter',
+      test: filter.test,
+      source: expr,
+      usesPath: filter.usesPath,
+      objectsOnly: filter.objectsOnly,
+    }
   }
   if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
     // Script subscript `[(expr)]`. We support the common `(@.length - N)` form
@@ -1001,8 +1007,11 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
           for (const d of wildcards) (seeds[d] as Node[]).push(node)
         }
         if (filters.length > 0) {
+          const childIsObject = isObject(child)
           for (const d of filters) {
             const selector = (descents[d] as Descent).first as Extract<Selector, { kind: 'filter' }>
+            // A filter that can only match an object is not asked about a scalar.
+            if (selector.objectsOnly && !childIsObject) continue
             const path = selector.usesPath ? childPathString(current, key) : ''
             if (selector.test(child, key, value, data, path, current.key)) {
               if (node === undefined) node = { value: child, parent: current, key }
