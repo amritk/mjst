@@ -51,11 +51,16 @@ const DOCUMENTS = { ...loadDialectMetaschema(), ...loadSuiteRemotes() }
  * per group rather than per case — a suite group is one schema and many
  * instances — which is a third of the codegen work for the same coverage.
  */
-const compile = async (schema: unknown): Promise<((input: unknown) => unknown) | string> => {
+const compile = async (
+  schema: unknown,
+): Promise<{ validator: (input: unknown) => unknown; guard: (input: unknown) => unknown } | string> => {
   try {
     const files = await buildValidatorSchema(schema as JSONSchema, 'Root', '', DOCUMENTS)
     const validator = linkGenerated<(input: unknown) => unknown>(files, 'index', 'validateRoot')
-    return typeof validator === 'function' ? validator : 'generated no validateRoot export'
+    const guard = linkGenerated<(input: unknown) => unknown>(files, 'index', 'isRoot')
+    if (typeof validator !== 'function') return 'generated no validateRoot export'
+    if (typeof guard !== 'function') return 'generated no isRoot export'
+    return { validator, guard }
   } catch (error) {
     return `generation refused: ${(error as Error).message}`
   }
@@ -75,6 +80,8 @@ const check = (validator: (input: unknown) => unknown, testCase: SuiteCase): str
 
 const CASES = loadSuiteCases()
 const RESULTS = new Map<string, string | null>()
+/** Cases where `isRoot` and `validateRoot` reached different verdicts — a guard bug whatever the spec says. */
+const GUARD_DISAGREEMENTS: string[] = []
 const GROUPS = new Map<string, SuiteCase[]>()
 for (const testCase of CASES) {
   const group = `${testCase.file}/${testCase.group}`
@@ -84,7 +91,15 @@ await Promise.all(
   [...GROUPS.values()].map(async (group) => {
     const compiled = await compile(group[0]?.schema)
     for (const testCase of group) {
-      RESULTS.set(testCase.key, typeof compiled === 'string' ? compiled : check(compiled, testCase))
+      RESULTS.set(testCase.key, typeof compiled === 'string' ? compiled : check(compiled.validator, testCase))
+      if (typeof compiled === 'string') continue
+      try {
+        if (compiled.guard(testCase.data) !== (compiled.validator(testCase.data) === true)) {
+          GUARD_DISAGREEMENTS.push(testCase.key)
+        }
+      } catch (error) {
+        GUARD_DISAGREEMENTS.push(`${testCase.key}: ${(error as Error).message}`)
+      }
     }
   }),
 )
@@ -98,6 +113,13 @@ describe('JSON Schema Test Suite conformance', () => {
   it('handles every case that is not a known, documented gap', () => {
     const { unexpected } = compareToExpected(RESULTS, EXPECTED_FAILURES)
     expect(unexpected).toEqual([])
+  })
+
+  it('answers every case with the same verdict from isRoot as from validateRoot', () => {
+    // The guard is emitted separately from the validator — as a yes/no body,
+    // not a call into it — so the suite is a second corpus pinning the two to
+    // one answer, on the cases the validator gets wrong as much as the rest.
+    expect(GUARD_DISAGREEMENTS).toEqual([])
   })
 
   it('has no stale entries in the expected-failure list', () => {

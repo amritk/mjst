@@ -182,9 +182,11 @@ both leave the caller's document alone (`bun run bench:validators:coerce`, or
 
 <sub>Each cell is how many times faster `coerceX` is than Ajv on the same input,
 each engine timed in its own process (Bun 1.3.11, Node 22.22, Linux x64). A
-valid document is the common case and the widest gap: where `isX` is a
-standalone guard, `coerceX` answers it with that guard and hands the input
-straight back, without walking it. On valid input Ajv rewrites nothing, so it can
+valid document is the common case and the widest gap: `coerceX` answers it with
+`isX` and hands the input straight back, without walking it. `isX` builds
+nothing — no error, no path — and stops at the first failure, answering a
+`$ref` with the target's own `isX`; it calls `validateX` only for a schema that
+folds to a constant. On valid input Ajv rewrites nothing, so it can
 also be timed without the clone; `coerceX` is still ahead there on these
 schemas, by 1.2–3.3×, but not on every one: on a large, union-heavy document
 that the caller lets Ajv coerce in place, Ajv can come out modestly ahead. The

@@ -23,7 +23,8 @@ describe('generate-validator-function', () => {
     expect(code).toContain('export const validateInfo')
     expect(code).toContain('!("name" in obj)')
     expect(code).toContain("must have required property 'name'")
-    expect(code).toContain('typeof obj["name"] !== \'string\'')
+    expect(code).toContain('const _v0_0 = obj["name"]')
+    expect(code).toContain("typeof _v0_0 !== 'string'")
     expect(code).toContain('must be string')
   })
 
@@ -34,8 +35,9 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Stats')
 
-    expect(code).toContain('obj["count"] !== undefined')
-    expect(code).toContain('typeof obj["count"] !== \'number\'')
+    expect(code).toContain('const _v0_0 = obj["count"]')
+    expect(code).toContain('_v0_0 !== undefined')
+    expect(code).toContain("typeof _v0_0 !== 'number'")
     expect(code).toContain('must be number')
   })
 
@@ -47,7 +49,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Config')
 
-    expect(code).toContain('typeof obj["enabled"] !== \'boolean\'')
+    expect(code).toContain("typeof _v0_0 !== 'boolean'")
     expect(code).toContain('must be boolean')
   })
 
@@ -198,8 +200,8 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Record')
 
-    expect(code).toContain('obj["kind"] !== "user"')
-    expect(code).toContain('obj["version"] !== 2')
+    expect(code).toContain('_v0_0 !== "user"')
+    expect(code).toContain('_v0_1 !== 2')
     expect(code).toContain('must be \\"user\\"')
   })
 
@@ -210,7 +212,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Record')
 
-    expect(code).toContain('!valuesEqual(obj["meta"], {"a":1})')
+    expect(code).toContain('!valuesEqual(_v0_0, {"a":1})')
   })
 
   it('dedupes scalar-item uniqueItems with a bare Set', () => {
@@ -220,7 +222,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('new Set(obj["tags"] as unknown[]).size !== obj["tags"].length')
+    expect(code).toContain('new Set(_v0_0 as unknown[]).size !== _v0_0.length')
     // A `JSON.stringify` projection would cost a string per element and print
     // both `NaN` and `null` as `"null"`, so `[NaN, null]` came back a duplicate
     // pair. `Set` membership is SameValueZero, which is JSON Schema's equality
@@ -242,7 +244,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('!allUnique(obj["rows"] as unknown[])')
+    expect(code).toContain('!allUnique(_v0_0 as unknown[])')
     // The key-order-sensitive stringify projection must NOT drive the dedupe here.
     expect(code).not.toContain('map((_u) => JSON.stringify(_u))')
   })
@@ -254,7 +256,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Doc')
 
-    expect(code).toContain('!allUnique(obj["anything"] as unknown[])')
+    expect(code).toContain('!allUnique(_v0_0 as unknown[])')
   })
 
   it('generates a top-level const validator', () => {
@@ -314,9 +316,9 @@ describe('generate-validator-function', () => {
 
     // A strict bound flips the pass condition from `>=`/`<=` to `>`/`<`, so the
     // boundary itself is rejected. The check is the negated pass condition.
-    expect(code).toContain('!(obj["n"] > 0)')
+    expect(code).toContain('!(_v0_0 > 0)')
     expect(code).toContain('must be > 0')
-    expect(code).toContain('!(obj["n"] < 10)')
+    expect(code).toContain('!(_v0_0 < 10)')
     expect(code).toContain('must be < 10')
   })
 
@@ -430,7 +432,7 @@ describe('generate-validator-function', () => {
     const code = generateValidatorFunction(schema, 'Event')
 
     expect(code).toContain('!("createdAt" in obj)')
-    expect(code).toContain('!(obj["createdAt"] instanceof Date)')
+    expect(code).toContain('!(_v0_0 instanceof Date)')
     expect(code).toContain('must be Date')
   })
 
@@ -441,7 +443,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Event')
 
-    expect(code).toContain('obj["createdAt"] !== undefined && !(obj["createdAt"] instanceof Date)')
+    expect(code).toContain('_v0_0 !== undefined && !(_v0_0 instanceof Date)')
   })
 
   it('generates an instanceof check for a top-level x-mjst Date schema', () => {
@@ -459,7 +461,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Account')
 
-    expect(code).toContain('typeof obj["balance"] !== "bigint"')
+    expect(code).toContain('typeof _v0_0 !== "bigint"')
     expect(code).toContain('must be bigint')
   })
 
@@ -470,7 +472,7 @@ describe('generate-validator-function', () => {
     }
     const code = generateValidatorFunction(schema, 'Account')
 
-    expect(code).toContain('obj["balance"] !== undefined && typeof obj["balance"] !== "bigint"')
+    expect(code).toContain('_v0_0 !== undefined && typeof _v0_0 !== "bigint"')
   })
 
   it('generates a typeof check for a top-level x-mjst bigint schema', () => {
@@ -1660,15 +1662,25 @@ describe('generate-validator-function', () => {
       expect(guard({ items: 'not-an-array' })).toBe(false)
     })
 
-    it('falls back to the validator for schemas it cannot express flat', () => {
-      // A $ref defers to the imported validator, which the flat form cannot mirror.
+    it('answers a $ref the flat form cannot mirror with the target guard, not the validator', () => {
+      // Calling `validateParent` would build every error on the way to `false`;
+      // the yes/no body asks the child's own guard and stops at the first failure.
       const schema = {
         type: 'object' as const,
         properties: { child: { $ref: '#/$defs/child' } },
         required: ['child'],
       }
       const code = generateBooleanGuard(schema, 'Parent')
-      expect(code).toBe('export const isParent = (input: unknown): input is Parent => validateParent(input) === true')
+      expect(code.startsWith('export const isParent = (input: unknown): input is Parent => {')).toBe(true)
+      expect(code).toContain('if (!isChild(')
+      expect(code).not.toContain('validateParent')
+    })
+
+    it('falls back to the validator for a schema whose answer never reads the value', () => {
+      // A constant body would leave the `input is X` parameter unread (TS6133).
+      expect(generateBooleanGuard({ not: false }, 'Anything')).toBe(
+        'export const isAnything = (input: unknown): input is Anything => validateAnything(input) === true',
+      )
     })
 
     it('keeps `isX` in verdict lockstep with `validateX` for nullable schemas', () => {
@@ -1689,9 +1701,9 @@ describe('generate-validator-function', () => {
       // Narrowing there would be a silent lie at every call site, so the guard
       // keeps the check and gives up the predicate.
       const implicit = { properties: { a: { type: 'string' as const } }, required: ['a'] }
-      expect(generateBooleanGuard(implicit, 'Root')).toBe(
-        'export const isRoot = (input: unknown): boolean => validateRoot(input) === true',
-      )
+      expect(
+        generateBooleanGuard(implicit, 'Root').startsWith('export const isRoot = (input: unknown): boolean => {'),
+      ).toBe(true)
       const { validate, guard } = evalBoth(implicit, 'Root')
       for (const value of [42, 'x', null, [], { a: 'ok' }, { a: 1 }, {}]) {
         expect(guard(value), `disagreement on ${JSON.stringify(value)}`).toBe(validate(value) === true)
