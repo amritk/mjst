@@ -335,6 +335,19 @@ runtime-specific and may come back.
 
 Each `lint` figure is the mean wall time of one whole pass — **every rule, not a subset** — dominated by real work: JSONPath matching, the rule functions, and the dereference pass. A fresh document is parsed on every iteration on both sides, matching how the tools are actually called. The finding counts differ because the two rulesets are not byte-identical (different rule implementations and `$ref` resolution), so this is a **throughput** comparison rather than a correctness parity check — but on petstore both land on the same two findings.
 
+**Large documents.** `bun run bench:large <document.json>` times each phase of a lint run on its own, against any large OpenAPI document (or a synthetic one built from the fixtures when none is given), and fingerprints the findings so two runs can be checked for identical output. On a 26 MB public OpenAPI 3.0 document (3,700 operations, 7,100 component schemas; Bun 1.4.2, 4 vCPUs), medians:
+
+| phase | before | after |
+| --- | ---: | ---: |
+| `createDocument` (source-mapped parse) | 1,342 ms | 129 ms |
+| three `$.components.schemas..[?(...)]` rules on parsed data | 608 ms | ~36–60 ms |
+| the same checks as a hand-written walk | 24 ms | 24 ms |
+| `lint(text)`, three rules | 1,570 ms | ~290 ms |
+| `lint({ data, text })`, three rules | — | ~145 ms |
+| recommended OpenAPI preset, `$ref`s resolved | 5.5 s | 2.8 s |
+
+The findings — paths, ranges, messages — are byte-identical before and after.
+
 **Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms** on Bun and **~0.06 ms** on Node, versus **~0.26 ms** and **~0.24 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
 
 ---
