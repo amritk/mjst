@@ -309,8 +309,11 @@ describe('repairX', () => {
   it('does not repair a key that several patterns claim', async () => {
     // The validator applies every pattern a key matches, and the error does not
     // say which one it broke, so repairing toward either could break the other.
+    // `propertyNames: true` says nothing, but it is a keyword the single-pass walk
+    // leaves to the loop, which is the engine this answer belongs to.
     const { repair } = await build({
       type: 'object',
+      propertyNames: true,
       patternProperties: { '^a': { type: 'string' }, b$: { type: 'string', minLength: 3, default: 'bbb' } },
     })
 
@@ -323,6 +326,31 @@ describe('repairX', () => {
     const one = repair({ zb: 'x' })
     expect(one.valid).toBe(true)
     expect(one.value).toEqual({ zb: 'bbb' })
+  })
+
+  it('walks a key several patterns claim under each of them, and checks the result', async () => {
+    // The walk knows which pattern failed, so it repairs toward that one, and
+    // the check it runs after any change confirms the other still holds.
+    const { repair, validate } = await build({
+      type: 'object',
+      patternProperties: { '^a': { type: 'string' }, b$: { type: 'string', minLength: 3, default: 'bbb' } },
+    })
+
+    const both = repair({ ab: 'x' })
+    expect(both.valid).toBe(true)
+    expect(both.value).toEqual({ ab: 'bbb' })
+    expect(validate(both.value)).toBe(true)
+
+    // A repair one pattern makes that the other rejects is reported, not kept quiet.
+    const { repair: clash } = await build({
+      type: 'object',
+      patternProperties: {
+        '^a': { type: 'string', maxLength: 2 },
+        b$: { type: 'string', minLength: 3, default: 'bbb' },
+      },
+    })
+    const clashed = clash({ ab: 'x' })
+    expect(clashed.valid).toBe(false)
   })
 
   it('keeps an index position on the array side of a typeless schema', async () => {

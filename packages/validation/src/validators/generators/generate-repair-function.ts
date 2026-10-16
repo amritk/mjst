@@ -1,12 +1,14 @@
 import { regexFlagsFor } from '@amritk/helpers/escape-regex-pattern'
 import { getDefaultValue } from '@amritk/helpers/get-default-value'
-import { readKey } from '@amritk/helpers/read-key'
+import { declaresKey, readKey } from '@amritk/helpers/read-key'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { NO_FORMATS } from './enforced-keywords'
+import { emitRepairWalk, repairWalkNameFor } from './generate-repair-walk'
 import { createSubschemaMatcher } from './generate-validator-function'
+import { namedTest, type RepairContext, schemaMap, subschema } from './repair-context'
 
 /**
  * The name of the position-lookup half generated for a `$ref`'s target. A repair
@@ -15,290 +17,429 @@ import { createSubschemaMatcher } from './generate-validator-function'
 export const repairLookupNameFor = (ref: string, typeSuffix: string): string => `repair${refToName(ref, typeSuffix)}At`
 
 /**
- * The walker emitted for one schema node, as source text, or `null` when nothing
- * at or under that node can be repaired.
+ * The lookup emitted for one schema node, as the name of its function, or `null`
+ * when nothing at or under that node can be repaired.
  *
  * `null` is load-bearing rather than an optimisation, the same way it is in the
  * coercion pass: a subtree that offers nothing to repair toward is emitted as
- * nothing at all, so a schema with one defaulted field does not grow a walk over
- * everything else.
+ * nothing at all, so a schema with one defaulted field does not grow a lookup
+ * over everything else.
  */
-type Walker = string | null
+type Lookup = string | null
 
-type RepairContext = {
-  readonly typeSuffix: string
-  /** Walker declarations, in the order they must appear. */
-  readonly helpers: string[]
-  /** Supplies the next unique suffix for a walker. */
-  next: () => number
-  /** The validator's own yes/no test for a subschema, for `propertyNames`. */
-  readonly matcher: ReturnType<typeof createSubschemaMatcher>
+/**
+ * Whether a node describes an object it can build: it says `type: object`, or
+ * it says nothing about its type and only describes properties. Such a node is
+ * repaired by building the object and filling what it requires, rather than by
+ * a literal that leaves every nested requirement to a later pass.
+ */
+const isObjectish = (node: Record<string, unknown>): boolean => {
+  const type = readKey(node, 'type')
+  if (type === 'object') return true
+  return type === undefined && (declaresKey(node, 'properties') || declaresKey(node, 'required'))
+}
+
+/** True when the schema itself names the value it wants. */
+const namesItsValue = (node: Record<string, unknown>): boolean =>
+  declaresKey(node, 'default') || declaresKey(node, 'const') || declaresKey(node, 'enum')
+
+/** The `required` keys a node lists, own strings only. */
+const requiredKeys = (node: Record<string, unknown>): string[] => {
+  const required = readKey(node, 'required')
+  return Array.isArray(required) ? required.filter((key): key is string => typeof key === 'string') : []
 }
 
 /**
- * A named test of a key against `propertyNames`, `true` when every key passes,
- * or `false` when none does.
- *
- * It is the validator's own test, so the walker and `validateX` agree on which
- * keys are wrong. A body only the buffered form can express gets a function of
- * its own here, as the coercer does it.
+ * The lookup a `false` schema answers with: the position is removed. One per
+ * file, since every `false` asks the same question.
  */
-const keyTest = (nameSchema: JSONSchema, ctx: RepairContext): boolean | string => {
-  const named = ctx.matcher.named(nameSchema)
-  if (named !== null) return named
-  const body = ctx.matcher.test(nameSchema)
-  if (typeof body !== 'string') return body
-  const name = `_repairKey${ctx.next()}`
-  const parameter = /\binput\b/.test(body) ? 'input' : '_input'
-  const path = /\b_path\b/.test(body) ? [`  const _path = ''`] : []
-  ctx.helpers.push([`const ${name} = (${parameter}: unknown): boolean => {`, ...path, body, `}`].join('\n'))
-  return name
+const dropLookup = (ctx: RepairContext): string => {
+  if (ctx.drop !== null) return ctx.drop
+  ctx.drop = '_repairDrop'
+  ctx.helpers.push(`const _repairDrop: RepairLookup = (segments, i) => (i === segments.length ? REPAIR_DROP : null)`)
+  return ctx.drop
 }
 
 /**
- * The literal a position repairs to, or `null` when the schema offers nothing.
- *
- * `getDefaultValue` is the parser's own table — the single source of truth for
- * "what is a valid instance of this schema" — which is why it was hoisted into
- * `@amritk/helpers` rather than reimplemented here. A repairing validator and a
- * coercing parser landing on *different* repaired values would be far worse than
- * either one's choice of value, and sharing the table is what makes that
- * impossible rather than merely unlikely.
+ * A node's `if` and the lookups of the branches it can take, or `null` when it
+ * has no `if` or neither branch offers anything. The test is settled first, so
+ * a branch an `if: true` or `if: false` never takes is never emitted — it would
+ * be a function nothing calls.
  */
-const fallbackLiteral = (schema: JSONSchema): string | null => {
-  const literal = getDefaultValue(schema)
-  return literal === 'undefined' ? null : literal
-}
-
-/** A schema map keyword, read as own properties only. */
-const schemaMap = (schema: Record<string, unknown>, key: string): Record<string, JSONSchema> | undefined => {
-  const value = readKey(schema, key)
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? (value as Record<string, JSONSchema>)
-    : undefined
+const conditionalBranches = (
+  node: Record<string, unknown>,
+  ctx: RepairContext,
+): { test: boolean | string; thenLookup: Lookup; elseLookup: Lookup } | null => {
+  const ifSchema = subschema(node, 'if')
+  if (ifSchema === undefined) return null
+  const thenSchema = subschema(node, 'then')
+  const elseSchema = subschema(node, 'else')
+  if (thenSchema === undefined && elseSchema === undefined) return null
+  const test = namedTest(ifSchema, ctx)
+  const thenLookup = test !== false && thenSchema !== undefined ? emitLookup(thenSchema, ctx) : null
+  const elseLookup = test !== true && elseSchema !== undefined ? emitLookup(elseSchema, ctx) : null
+  return thenLookup === null && elseLookup === null ? null : { test, thenLookup, elseLookup }
 }
 
 /**
- * Emits the walker for one node: a function from the remaining pointer segments
- * to the thunk that repairs that position.
+ * The conditional half of a node: what its `if`/`then`/`else` and its `allOf`
+ * entries answer, as an expression over `segments`, `i` and `value`, or `null`
+ * when they offer nothing.
  *
- * Zero segments means the position *is* this node, so the answer is this node's
- * own fallback. Otherwise the first segment picks a child and the rest are
- * handed down. Children are reached through their own emitted walkers rather
- * than inlined, which is what keeps a recursive schema from expanding forever —
- * a `$ref` is a call, resolved when it is taken rather than when it is written.
+ * The `if` is evaluated against the instance the lookup was handed, so a
+ * position under a union is repaired toward the branch the document takes —
+ * the same branch `validateX` judged it under.
  */
-const emitWalker = (schema: JSONSchema, ctx: RepairContext): Walker => {
-  if (!isSchemaObject(schema)) return null
-  const node = schema as Record<string, unknown>
+const conditionalAnswer = (node: Record<string, unknown>, ctx: RepairContext): string | null => {
+  const parts: string[] = []
+  const call = (lookup: Lookup): string => (lookup === null ? 'null' : `${lookup}(segments, i, value)`)
 
-  const ref = readKey(node, '$ref')
-  if (typeof ref === 'string') return repairLookupNameFor(ref, ctx.typeSuffix)
-
-  const own = fallbackLiteral(schema)
-
-  const properties = schemaMap(node, 'properties') ?? {}
-  const children = Object.entries(properties)
-    .map(([key, child]) => [key, emitWalker(child, ctx)] as const)
-    .filter((entry): entry is readonly [string, string] => entry[1] !== null)
-
-  // Map positions: a key the schema did not name is reached through the
-  // `patternProperties` entry whose regex it matches, and only when none does,
-  // through a schema-form `additionalProperties`. That is the same division the
-  // validator and the coercer draw, so a repair lands on the subschema that
-  // produced the error. Every pattern is kept, walker or not, because a key one
-  // claims is not `additionalProperties`'s to answer even when it has nothing to
-  // repair toward.
-  const patternProperties = schemaMap(node, 'patternProperties') ?? {}
-  const patterns = Object.entries(patternProperties).map(([source, child]) => ({
-    source,
-    walker: emitWalker(child, ctx),
-  }))
-  const additional = readKey(node, 'additionalProperties')
-  const additionalWalker =
-    typeof additional === 'object' && additional !== null ? emitWalker(additional as JSONSchema, ctx) : null
-  const mapped = additionalWalker !== null || patterns.some((pattern) => pattern.walker !== null)
-
-  const prefixItems = readKey(node, 'prefixItems')
-  const tuple = Array.isArray(prefixItems) ? (prefixItems as JSONSchema[]) : []
-  const tupleWalkers = tuple.map((item) => emitWalker(item, ctx))
-
-  const items = readKey(node, 'items')
-  const itemsWalker =
-    typeof items === 'object' && items !== null && !Array.isArray(items) ? emitWalker(items as JSONSchema, ctx) : null
-
-  const hasChildren =
-    children.length > 0 || mapped || itemsWalker !== null || tupleWalkers.some((walker) => walker !== null)
-  if (own === null && !hasChildren) return null
-
-  const id = ctx.next()
-  const name = `_repairAt${id}`
-  const lines: string[] = [
-    `const ${name}: RepairLookup = (segments) => {`,
-    `  if (segments.length === 0) return ${own === null ? 'null' : `() => (${own})`}`,
-  ]
-
-  if (hasChildren) {
-    // Once a map can answer, every declared key has to be claimed here, the ones
-    // with nothing to repair included: a declared property is never an
-    // `additionalProperties` position, and letting it fall through would repair
-    // it toward the wrong subschema.
-    const declared = mapped ? Object.keys(properties) : children.map(([key]) => key)
-    const indexed = tupleWalkers.some((walker) => walker !== null) || itemsWalker !== null
-    // A schema with no `type` can carry array and object keywords at once, and an
-    // index segment says nothing about which of the two the value was. Once a map
-    // can answer, an index stays with the array keywords whenever there are any,
-    // which is what it did before the map existed.
-    const arrayKeywords = tuple.length > 0 || (typeof items === 'object' && items !== null && !Array.isArray(items))
-    const indexBlock = indexed || (mapped && arrayKeywords)
-
-    // A key that fails `propertyNames` is reported at its own position, the same
-    // pointer a wrong value there is reported at. Replacing the value cannot fix
-    // the key, so that position is not answered at all: otherwise a valid value
-    // was overwritten and the key's error listed as repaired. Deeper positions
-    // are about the value and stay repairable.
-    const nameSchema = readKey(node, 'propertyNames')
-    const keyCheck = nameSchema === undefined ? true : keyTest(nameSchema as JSONSchema, ctx)
-
-    // A bare `additionalProperties` map answers every key the same way, so the
-    // key itself is never read.
-    const readsHead =
-      declared.length > 0 || indexBlock || (mapped && patterns.length > 0) || typeof keyCheck === 'string'
-    lines.push(`  const [${readsHead ? 'head' : ''}, ...rest] = segments as [string, ...string[]]`)
-    if (keyCheck === false) lines.push(`  if (rest.length === 0) return null`)
-    if (typeof keyCheck === 'string') lines.push(`  if (rest.length === 0 && !${keyCheck}(head)) return null`)
-
-    if (declared.length > 0) {
-      const walkers = new Map(children)
-      lines.push(`  switch (head) {`)
-      for (const key of declared) {
-        const walker = walkers.get(key)
-        lines.push(`    case ${JSON.stringify(key)}: return ${walker === undefined ? 'null' : `${walker}(rest)`}`)
-      }
-      lines.push(`  }`)
-    }
-
-    // Array positions arrive as decimal index segments. The tuple positions the
-    // schema named are answered by their own walkers; everything past them is
-    // `items`, which is one schema for every remaining index.
-    if (indexBlock) {
-      lines.push(`  const index = Number(head)`)
-      lines.push(`  if (Number.isInteger(index) && index >= 0) {`)
-      tupleWalkers.forEach((walker, position) => {
-        if (walker === null) return
-        lines.push(`    if (index === ${position}) return ${walker}(rest)`)
-      })
-      if (itemsWalker !== null) {
-        lines.push(`    if (index >= ${tuple.length}) return ${itemsWalker}(rest)`)
-      }
-      if (mapped && arrayKeywords) lines.push(`    return null`)
-      lines.push(`  }`)
-    }
-
-    if (mapped && patterns.length > 0) {
-      // Compiled once at module load, and by `new RegExp` for the same reason the
-      // validator does it: the source is schema text, and a literal would let it
-      // close a comment or start a new one.
-      const regexNames = patterns.map((pattern, index) => {
-        const regexName = `_repairPattern${id}_${index}`
-        ctx.helpers.push(
-          `const ${regexName} = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(regexFlagsFor(pattern.source))})`,
-        )
-        return regexName
-      })
-      const answer = (walker: string | null): string => (walker === null ? 'null' : `${walker}(rest)`)
-      const only = patterns[0]
-      if (patterns.length === 1 && only !== undefined) {
-        lines.push(`  if (${regexNames[0]}.test(head)) return ${answer(only.walker)}`)
-      } else {
-        // The validator applies *every* pattern a key matches, so a key two
-        // patterns claim has to satisfy both, and the error says nothing about
-        // which one it broke. Repairing toward either could fail the other, so
-        // such a key is not answered; one pattern alone is unambiguous.
-        lines.push(`  const claims = [${regexNames.join(', ')}].filter((pattern) => pattern.test(head))`)
-        lines.push(`  if (claims.length > 1) return null`)
-        patterns.forEach((pattern, index) => {
-          lines.push(`  if (claims[0] === ${regexNames[index]}) return ${answer(pattern.walker)}`)
-        })
-      }
+  const branches = conditionalBranches(node, ctx)
+  if (branches !== null) {
+    const { test, thenLookup, elseLookup } = branches
+    if (test === true) {
+      if (thenLookup !== null) parts.push(call(thenLookup))
+    } else if (test === false) {
+      if (elseLookup !== null) parts.push(call(elseLookup))
+    } else {
+      parts.push(`(${test}(value) ? ${call(thenLookup)} : ${call(elseLookup)})`)
     }
   }
 
-  // Every key no pattern claimed belongs to `additionalProperties`, so when there
-  // is one it is the last word rather than `null`.
-  lines.push(additionalWalker === null ? `  return null` : `  return ${additionalWalker}(rest)`, `}`)
+  const allOf = readKey(node, 'allOf')
+  if (Array.isArray(allOf)) {
+    for (const entry of allOf as JSONSchema[]) {
+      const lookup = emitLookup(entry, ctx)
+      if (lookup !== null) parts.push(call(lookup))
+    }
+  }
+
+  return parts.length === 0 ? null : parts.join(' ?? ')
+}
+
+/**
+ * Emits the function that builds a missing or wrong-typed object in one step:
+ * the schema's own value (or `{}`), every required key filled through the
+ * node's lookup, and then whatever the conditional branches the built object
+ * takes require on top. Each child is built one level deeper, and past
+ * `MAX_FILL_DEPTH` nothing more is filled, which is what bounds a definition
+ * that requires itself.
+ */
+const emitFill = (node: Record<string, unknown>, self: string, id: number, ctx: RepairContext): string => {
+  const literal = namesItsValue(node) ? getDefaultValue(node as JSONSchema) : '{}'
+  const base = literal.startsWith('{') ? literal : '{}'
+  const steps: string[] = requiredKeys(node).map((key) => `fillKey(o, ${JSON.stringify(key)}, ${self}, depth)`)
+
+  // The branches are asked about the object being built, so a discriminator
+  // filled above picks the branch whose requirements come next.
+  const branches = conditionalBranches(node, ctx)
+  if (branches !== null) {
+    const { test, thenLookup, elseLookup } = branches
+    const answer = (lookup: Lookup): string => (lookup === null ? 'null' : `${lookup}(NO_SEGMENTS, 0, o)`)
+    if (test === true && thenLookup !== null) steps.push(`fillInto(o, ${answer(thenLookup)}, depth)`)
+    else if (test === false && elseLookup !== null) steps.push(`fillInto(o, ${answer(elseLookup)}, depth)`)
+    else if (typeof test === 'string') {
+      steps.push(`fillInto(o, ${test}(o) ? ${answer(thenLookup)} : ${answer(elseLookup)}, depth)`)
+    }
+  }
+  const allOf = readKey(node, 'allOf')
+  if (Array.isArray(allOf)) {
+    for (const entry of allOf as JSONSchema[]) {
+      const lookup = emitLookup(entry, ctx)
+      if (lookup !== null) steps.push(`fillInto(o, ${lookup}(NO_SEGMENTS, 0, o), depth)`)
+    }
+  }
+
+  const name = `_repairFill${id}`
+  const lines =
+    steps.length === 0
+      ? [`const ${name}: RepairThunk = (_depth, into) => into ?? ${base}`]
+      : [
+          `const ${name}: RepairThunk = (depth, into) => {`,
+          // The outermost fill starts the budget every level of it shares.
+          `  if (into === undefined && depth === 0) fillBegin()`,
+          `  const o: Record<string, unknown> = into ?? ${base}`,
+          `  if (depth < MAX_FILL_DEPTH) {`,
+          ...steps.map((step) => `    ${step}`),
+          `  }`,
+          `  return o`,
+          `}`,
+        ]
   ctx.helpers.push(lines.join('\n'))
   return name
 }
 
 /**
- * Generates the repairing half of a validator file: the position lookup, and the
- * `repairX` that drives validate-repair-revalidate over it.
+ * What a node answers for its own position — the expression returned when the
+ * lookup has walked every segment. `null` when the schema offers nothing.
+ */
+const ownAnswer = (node: Record<string, unknown>, self: string, id: number, ctx: RepairContext): string | null => {
+  const marker = readKey(node, 'x-repair')
+  if (marker === 'drop') return 'REPAIR_DROP'
+  if (isObjectish(node)) return emitFill(node, self, id, ctx)
+
+  // A union written as conditionals says nothing about its type itself: the
+  // branch the value takes is the schema to repair toward.
+  if (readKey(node, 'type') === undefined && !namesItsValue(node)) {
+    const conditional = conditionalAnswer(node, ctx)
+    if (conditional !== null) return conditional
+  }
+
+  const literal = getDefaultValue(node as JSONSchema)
+  if (literal === 'undefined') return null
+  const name = `_repairValue${id}`
+  ctx.helpers.push(`const ${name}: RepairThunk = () => (${literal})`)
+  return name
+}
+
+/**
+ * Emits the lookup for one node: a function from a position's pointer segments
+ * (read from `segments[i]` on) and the instance at this node to what that
+ * position repairs to.
  *
- * The loop is the whole design. Coercion runs first, so anything that was only
- * written in the wrong type is already right and never counts as a repair. What
- * is left is judged by the very same `validateX` the package already emits, and
- * *its errors* are what drive the repair: each one names a position and a
- * reason, the lookup answers with a value for that position, and the error the
- * repair came from is what gets reported. Nothing second-guesses the validator,
- * and there is no parallel set of rules about what is wrong that could disagree
- * with it.
+ * Reaching the last segment means the position *is* this node, so the answer is
+ * its own. Otherwise the segment picks a child — a declared property, an array
+ * index, a pattern, `additionalProperties` — and the rest are handed down with
+ * the child's value. Whatever the node's own keywords do not answer, its
+ * conditional branches may. Children are reached through their own emitted
+ * lookups rather than inlined, which is what keeps a recursive schema from
+ * expanding forever — a `$ref` is a call, resolved when it is taken.
+ */
+const emitLookup = (schema: JSONSchema, ctx: RepairContext): Lookup => {
+  if (schema === false) return dropLookup(ctx)
+  if (!isSchemaObject(schema)) return null
+  if (ctx.lookups.has(schema)) return ctx.lookups.get(schema) ?? null
+  const node = schema as Record<string, unknown>
+
+  const ref = readKey(node, '$ref')
+  if (typeof ref === 'string') {
+    const name = repairLookupNameFor(ref, ctx.typeSuffix)
+    ctx.lookups.set(schema, name)
+    return name
+  }
+
+  // Claimed before the children are emitted, so a node reached again while its
+  // own children are being worked out answers with the same name.
+  const id = ctx.next()
+  const name = `_repairAt${id}`
+  ctx.lookups.set(schema, name)
+
+  const own = ownAnswer(node, name, id, ctx)
+  const descent = emitDescent(node, id, ctx)
+  const conditional = conditionalAnswer(node, ctx)
+
+  if (own === null && descent === null && conditional === null) {
+    ctx.lookups.set(schema, null)
+    return null
+  }
+
+  // The branches answer first. A branch the instance takes constrains the same
+  // value its parent's property does — a path parameter's `required` is `const:
+  // true` there and a plain boolean here — and the parent's default would
+  // satisfy the parent and fail the branch. A branch that says nothing about the
+  // position answers `null` and the parent's own keywords decide.
+  const deeper =
+    descent !== null && conditional !== null
+      ? `${conditional} ?? ${descent}(segments, i, value)`
+      : descent !== null
+        ? `${descent}(segments, i, value)`
+        : (conditional ?? 'null')
+  const body = [`  if (i === segments.length) return ${own ?? 'null'}`, `  return ${deeper}`]
+  const parameter = body.some((line) => /\bvalue\b/.test(line)) ? 'value' : '_value'
+  ctx.helpers.push([`const ${name}: RepairLookup = (segments, i, ${parameter}) => {`, ...body, `}`].join('\n'))
+  return name
+}
+
+/**
+ * The half of a node's lookup that steps into a child, as the name of its
+ * function, or `null` when no child has anything to repair.
+ */
+const emitDescent = (node: Record<string, unknown>, id: number, ctx: RepairContext): string | null => {
+  const properties = schemaMap(node, 'properties') ?? {}
+  const children = Object.entries(properties)
+    .map(([key, child]) => [key, emitLookup(child, ctx)] as const)
+    .filter((entry): entry is readonly [string, string] => entry[1] !== null)
+
+  // Map positions: a key the schema did not name is reached through the
+  // `patternProperties` entry whose regex it matches, and only when none does,
+  // through `additionalProperties` — a schema, or `false`, which removes the key.
+  // That is the same division the validator draws, so a repair lands on the
+  // subschema that produced the error. Every pattern is kept, lookup or not,
+  // because a key one claims is not `additionalProperties`'s to answer.
+  const patternProperties = schemaMap(node, 'patternProperties') ?? {}
+  const patterns = Object.entries(patternProperties).map(([source, child]) => ({
+    source,
+    lookup: emitLookup(child, ctx),
+  }))
+  const additional = subschema(node, 'additionalProperties')
+  const additionalLookup = additional === undefined ? null : emitLookup(additional, ctx)
+  const mapped = additionalLookup !== null || patterns.some((pattern) => pattern.lookup !== null)
+
+  const prefixItems = readKey(node, 'prefixItems')
+  const tuple = Array.isArray(prefixItems) ? (prefixItems as JSONSchema[]) : []
+  const tupleLookups = tuple.map((item) => emitLookup(item, ctx))
+
+  const items = readKey(node, 'items')
+  const itemsSchema =
+    typeof items === 'boolean' || (typeof items === 'object' && items !== null && !Array.isArray(items))
+  const itemsLookup = itemsSchema ? emitLookup(items as JSONSchema, ctx) : null
+
+  const indexed = tupleLookups.some((lookup) => lookup !== null) || itemsLookup !== null
+  if (children.length === 0 && !mapped && !indexed) return null
+
+  const name = `_repairChild${id}`
+  const lines: string[] = [`const ${name}: RepairLookup = (segments, i, value) => {`]
+  lines.push(`  const head = segments[i] as string`)
+  lines.push(`  const next = i + 1`)
+
+  // Once a map can answer, every declared key has to be claimed here, the ones
+  // with nothing to repair included: a declared property is never an
+  // `additionalProperties` position, and letting it fall through would repair
+  // it toward the wrong subschema.
+  const declared = mapped ? Object.keys(properties) : children.map(([key]) => key)
+  // A schema with no `type` can carry array and object keywords at once, and an
+  // index segment says nothing about which of the two the value was. Once a map
+  // can answer, an index stays with the array keywords whenever there are any.
+  const arrayKeywords = tuple.length > 0 || itemsSchema
+  const indexBlock = indexed || (mapped && arrayKeywords)
+
+  // A key that fails `propertyNames` is reported at its own position, the same
+  // pointer a wrong value there is reported at. Replacing the value cannot fix
+  // the key, so that position is not answered at all; deeper positions are
+  // about the value and stay repairable.
+  const nameSchema = readKey(node, 'propertyNames')
+  const keyCheck = nameSchema === undefined ? true : namedTest(nameSchema as JSONSchema, ctx)
+  if (keyCheck === false) lines.push(`  if (next === segments.length) return null`)
+  if (typeof keyCheck === 'string') lines.push(`  if (next === segments.length && !${keyCheck}(head)) return null`)
+
+  const child = `childAt(value, head)`
+  if (declared.length > 0) {
+    const lookups = new Map(children)
+    lines.push(`  switch (head) {`)
+    for (const key of declared) {
+      const lookup = lookups.get(key)
+      lines.push(
+        `    case ${JSON.stringify(key)}: return ${lookup === undefined ? 'null' : `${lookup}(segments, next, ${child})`}`,
+      )
+    }
+    lines.push(`  }`)
+  }
+
+  // Array positions arrive as decimal index segments. The tuple positions the
+  // schema named are answered by their own lookups; everything past them is
+  // `items`, which is one schema for every remaining index.
+  if (indexBlock) {
+    lines.push(`  const index = Number(head)`)
+    lines.push(`  if (Number.isInteger(index) && index >= 0) {`)
+    tupleLookups.forEach((lookup, position) => {
+      if (lookup === null) return
+      lines.push(`    if (index === ${position}) return ${lookup}(segments, next, ${child})`)
+    })
+    if (itemsLookup !== null)
+      lines.push(`    if (index >= ${tuple.length}) return ${itemsLookup}(segments, next, ${child})`)
+    if (mapped && arrayKeywords) lines.push(`    return null`)
+    lines.push(`  }`)
+  }
+
+  if (mapped && patterns.length > 0) {
+    // Compiled once at module load, and by `new RegExp` for the same reason the
+    // validator does it: the source is schema text, and a literal would let it
+    // close a comment or start a new one.
+    const regexNames = patterns.map((pattern, index) => {
+      const regexName = `_repairPattern${id}_${index}`
+      ctx.helpers.push(
+        `const ${regexName} = new RegExp(${JSON.stringify(pattern.source)}, ${JSON.stringify(regexFlagsFor(pattern.source))})`,
+      )
+      return regexName
+    })
+    const answer = (lookup: string | null): string => (lookup === null ? 'null' : `${lookup}(segments, next, ${child})`)
+    const only = patterns[0]
+    if (patterns.length === 1 && only !== undefined) {
+      lines.push(`  if (${regexNames[0]}.test(head)) return ${answer(only.lookup)}`)
+    } else {
+      // The validator applies *every* pattern a key matches, so a key two
+      // patterns claim has to satisfy both, and the error says nothing about
+      // which one it broke. Repairing toward either could fail the other, so
+      // such a key is not answered; one pattern alone is unambiguous.
+      lines.push(`  const claims = [${regexNames.join(', ')}].filter((pattern) => pattern.test(head))`)
+      lines.push(`  if (claims.length > 1) return null`)
+      patterns.forEach((pattern, index) => {
+        lines.push(`  if (claims[0] === ${regexNames[index]}) return ${answer(pattern.lookup)}`)
+      })
+    }
+  }
+
+  // Every key no pattern claimed belongs to `additionalProperties`, so when there
+  // is one it is the last word rather than `null`.
+  lines.push(
+    additionalLookup === null ? `  return null` : `  return ${additionalLookup}(segments, next, ${child})`,
+    `}`,
+  )
+  const text = lines.join('\n')
+  // A node whose only children are by index never reads the key as a key.
+  ctx.helpers.push(
+    /\bvalue\b/.test(text.slice(text.indexOf('\n'))) ? text : text.replace('i, value) => {', 'i, _value) => {'),
+  )
+  return name
+}
+
+/**
+ * Generates the repairing half of a validator file: the position lookup, the
+ * single-pass walk when the schema is one it covers, and the `repairX` that runs
+ * one or the other.
  *
- * Re-validating after a round is what catches the cases one pass cannot see: a
- * required object that was missing entirely is repaired into existence, and only
- * then can its own children be judged. A position is repaired at most once, so
- * the loop terminates on progress rather than on the pass cap.
+ * The lookup answers what a position repairs to, and both engines ask it, so
+ * they cannot land on different values. The walk checks and repairs every
+ * position in one pass; the loop — validate, repair the reported positions,
+ * validate again — is what every other schema gets. Either way, what is
+ * reported is the error the validator would have produced, and nothing
+ * second-guesses it.
  */
 export const generateRepairFunction = (
   schema: JSONSchema,
   typeName: string,
   typeSuffix = '',
   options: {
-    /** The whole document, for a `propertyNames` test that reads a `$ref`'s target. */
+    /** The whole document, for a test that reads a `$ref`'s target. */
     readonly rootSchema?: Record<string, unknown>
-    /** The `format` names the validator enforces, so a key test agrees with it. */
+    /** The `format` names the validator enforces, so a test agrees with it. */
     readonly formats?: ReadonlySet<string>
+    /** Whether to emit the single-pass walk, decided over the whole schema graph. */
+    readonly walk?: boolean
   } = {},
 ): { code: string } => {
   const helpers: string[] = []
   let counter = 0
-  const matcher = createSubschemaMatcher(
+  const rootSchema = options.rootSchema ?? (isSchemaObject(schema) ? (schema as Record<string, unknown>) : undefined)
+  const matcher = createSubschemaMatcher(typeSuffix, rootSchema, options.formats ?? NO_FORMATS, '_repair')
+  const ctx: RepairContext = {
     typeSuffix,
-    options.rootSchema ?? (isSchemaObject(schema) ? (schema as Record<string, unknown>) : undefined),
-    options.formats ?? NO_FORMATS,
-    '_repair',
-  )
-  const ctx: RepairContext = { typeSuffix, helpers, next: () => counter++, matcher }
+    helpers,
+    next: () => counter++,
+    matcher,
+    lookups: new Map(),
+    tests: new Map(),
+    drop: null,
+  }
 
-  const walker = emitWalker(schema, ctx)
+  const lookup = emitLookup(schema, ctx)
   const lookupName = `repair${typeName}At`
+  const walkName = repairWalkNameFor(typeName)
+  const walker =
+    options.walk === true
+      ? emitRepairWalk(schema, { repair: ctx, typeName, rootSchema, lookupFor: (node) => emitLookup(node, ctx) })
+      : null
   const declarations = [...matcher.declarations(helpers.join('\n')), ...helpers]
 
   const parts = [
     ...(declarations.length > 0 ? [declarations.join('\n\n'), ''] : []),
-    `export const ${lookupName}: RepairLookup = ${walker === null ? '() => null' : walker}`,
+    `export const ${lookupName}: RepairLookup = ${lookup === null ? '() => null' : lookup}`,
     '',
-    `export const repair${typeName} = (input: unknown, _path = ''): RepairResult<${typeName}> => {`,
-    `  let value = coerce${typeName}Value(input)`,
-    `  const repairs: ValidationError[] = []`,
-    `  const done = new Set<string>()`,
-    ``,
-    `  for (let pass = 0; pass < MAX_REPAIR_PASSES; pass++) {`,
-    `    const result = validate${typeName}(value, _path)`,
-    `    if (result === true) return { valid: true, value: value as ${typeName}, repairs }`,
-    ``,
-    `    const applied = applyRepairs(value, result.errors, ${lookupName}, done)`,
-    `    // Nothing moved, so nothing on a further pass would either.`,
-    `    if (applied.repaired.length === 0) return { valid: false, value, errors: result.errors, repairs }`,
-    `    value = applied.value`,
-    `    repairs.push(...applied.repaired)`,
-    `  }`,
-    ``,
-    `  const final = validate${typeName}(value, _path)`,
-    `  return final === true`,
-    `    ? { valid: true, value: value as ${typeName}, repairs }`,
-    `    : { valid: false, value, errors: final.errors, repairs }`,
-    `}`,
+    ...(options.walk === true ? [`export const ${walkName}: RepairWalk = ${walker ?? '(value) => value'}`, ''] : []),
+    `export const repair${typeName} = (input: unknown, options?: RepairOptions | string): RepairResult<${typeName}> =>`,
+    options.walk === true
+      ? `  runRepairWalk<${typeName}>(input, options, ${walkName})`
+      : `  runRepairLoop<${typeName}>(input, options, validate${typeName}, ${lookupName}, coerce${typeName}Value)`,
   ]
 
   return { code: parts.join('\n') }

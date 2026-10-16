@@ -52,6 +52,7 @@ type CollectValidatorImportsOptions = {
     readonly checkerName: string
     readonly coercerName: string
     readonly repairerName: string
+    readonly walkerName: string
   }) => {
     readonly type: boolean
     readonly validator: boolean
@@ -82,6 +83,12 @@ type CollectValidatorImportsOptions = {
      * without {@link coercer}, though the reverse is ordinary.
      */
     readonly repairer?: boolean
+    /**
+     * The `$ref` target's single-pass repair walk. Only emitted when the whole
+     * schema graph is one the walk covers, and then called wherever a walk
+     * reaches the ref.
+     */
+    readonly walker?: boolean
   }
 }
 
@@ -97,6 +104,7 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
   const checkerName = `check${typeName}`
   const coercerName = `coerce${typeName}Value`
   const repairerName = `repair${typeName}At`
+  const walkerName = `walk${typeName}Repair`
   const {
     type,
     validator,
@@ -104,6 +112,7 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
     checker = false,
     coercer = false,
     repairer = false,
+    walker = false,
   } = reads({
     typeName,
     validatorName,
@@ -111,6 +120,7 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
     checkerName,
     coercerName,
     repairerName,
+    walkerName,
   })
   // `.js` extension so the emitted import resolves under Node ESM (not just Bun);
   // `./x.js` → sibling `x.ts` is the standard NodeNext form.
@@ -120,6 +130,7 @@ const buildImport = (ref: string, suffix: string, reads: Reads, importExt: 'js' 
     ...(checker ? [checkerName] : []),
     ...(coercer ? [coercerName] : []),
     ...(repairer ? [repairerName] : []),
+    ...(walker ? [walkerName] : []),
   ]
   if (type && values.length > 0)
     return `import { type ${typeName}, ${values.join(', ')} } from './${filename}.${importExt}'`

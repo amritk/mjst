@@ -3,6 +3,7 @@ import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 import { buildValidatorSchema } from './build-schema'
+import { OPENAPI_COERCER_SCHEMA } from './openapi-coercer-schema.test-utils'
 
 /**
  * The sibling `generated-code-syntax` suite proves the output *parses*; this one
@@ -489,8 +490,8 @@ describe('generated-code-types', () => {
   // able to emit something the consumer's build rejects: it inlines a fallback
   // *literal* per position, so a schema whose default does not type-check against
   // the property it repairs is a `TS2322` in the consumer's build and nowhere
-  // else. It also names `RepairResult`, `RepairLookup`, `applyRepairs` and
-  // `MAX_REPAIR_PASSES`, each of which has to be imported by the same
+  // else. It also names `RepairResult`, `RepairLookup`, the walk's run types and
+  // a dozen runtime helpers, each of which has to be imported by the same
   // asked-of-the-emitted-text rule the other halves use.
   it('emits type-correct repairing validator files too', { timeout: 120_000 }, async () => {
     // Map shapes, where the position lookup reads the key: a pattern, several
@@ -519,9 +520,65 @@ describe('generated-code-types', () => {
       ],
       ['typeless-tuple-and-map', { prefixItems: [{ minLength: 3 }], additionalProperties: { type: 'integer' } }],
     ]
+    // Shapes the single-pass walk takes: removals, closed objects, patterns
+    // beside a map, the validator's own test for a leaf, unsatisfiable checks,
+    // and the whole OpenAPI coercer schema with its instance `$ref`s.
+    const walks: ReadonlyArray<readonly [string, JSONSchema]> = [
+      [
+        'walk-removals',
+        {
+          type: 'object',
+          properties: {
+            gone: false,
+            dropped: { 'x-repair': 'drop', type: 'integer' },
+            list: { type: 'array', items: false },
+            closed: { type: 'object', properties: { a: { type: 'string' } }, additionalProperties: false },
+          },
+        },
+      ],
+      [
+        'walk-patterns-and-map',
+        {
+          type: 'object',
+          properties: { known: { type: 'string' } },
+          patternProperties: { '^x-': { type: 'number' }, '^y': true },
+          additionalProperties: { type: 'boolean' },
+        },
+      ],
+      [
+        'walk-leaf-assertions',
+        {
+          type: 'object',
+          properties: {
+            s: { type: 'string', minLength: 2, pattern: '^a' },
+            u: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+            n: { type: ['number', 'null'], minimum: 0 },
+            never: { not: {} },
+            impossible: { type: 'string', enum: [1, { a: 1 }], const: 2 },
+          },
+        },
+      ],
+      [
+        'walk-conditionals',
+        {
+          type: 'object',
+          required: ['kind'],
+          properties: { kind: { enum: ['a', 'b'] } },
+          allOf: [
+            {
+              if: { properties: { kind: { const: 'a' } } },
+              then: { required: ['x'], properties: { x: { type: 'integer' } } },
+            },
+            { if: true, then: { properties: { y: { type: 'string' } } } },
+            { if: false, then: { required: ['z'] }, else: { properties: { z: { const: null } } } },
+          ],
+        },
+      ],
+      ['walk-openapi', OPENAPI_COERCER_SCHEMA],
+    ]
 
     const sources = new Map<string, string>()
-    for (const [name, schema] of [...CASES, ...maps]) {
+    for (const [name, schema] of [...CASES, ...maps, ...walks]) {
       const files = await buildValidatorSchema(schema, 'Doc', '', undefined, undefined, undefined, false, false, true)
       for (const file of files) sources.set(`/repair-${name}/${file.filename}`, file.content)
     }
