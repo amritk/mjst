@@ -151,7 +151,7 @@ describe('build-schema', () => {
 
     expect(files.map((file) => file.filename)).toContain('validation-error.ts')
     expect(files.find((file) => file.filename === 'document.ts')?.content).toContain(
-      "import { type ValidationErrorObject, validateValidationErrorObject } from './validation-error.js'",
+      "import { type ValidationErrorObject, validateValidationErrorObject, isValidationErrorObject } from './validation-error.js'",
     )
   })
 
@@ -219,7 +219,7 @@ describe('build-schema', () => {
 
     expect(files.map((file) => file.filename)).toContain('parameter-or-reference.ts')
     expect(files.find((file) => file.filename === 'root.ts')?.content).toContain(
-      "import { type ParameterOrReference, validateParameterOrReference } from './parameter-or-reference.js'",
+      "import { type ParameterOrReference, validateParameterOrReference, isParameterOrReference } from './parameter-or-reference.js'",
     )
 
     // The import agreeing with the call is the point, so link the whole set and
@@ -304,7 +304,7 @@ describe('build-schema', () => {
     const docFile = files.find((f) => f.filename === 'doc.ts')
 
     expect(docFile?.content).toContain("import { valuesEqual } from './validation-result.js'")
-    expect(docFile?.content).toContain('!valuesEqual(obj["meta"], {"a":1})')
+    expect(docFile?.content).toContain('!valuesEqual(_v0_0, {"a":1})')
   })
 
   it('emits the structural allUnique helper in validation-result.ts', async () => {
@@ -327,9 +327,9 @@ describe('build-schema', () => {
     const docFile = files.find((f) => f.filename === 'doc.ts')
 
     expect(docFile?.content).toContain("import { allUnique, everyItem } from './validation-result.js'")
-    expect(docFile?.content).toContain('!allUnique(obj["rows"] as unknown[])')
+    expect(docFile?.content).toContain('!allUnique(_v0_0 as unknown[])')
     // Scalar-item arrays dedupe with a bare `Set`, which needs no import at all.
-    expect(docFile?.content).toContain('new Set(obj["tags"] as unknown[]).size !== obj["tags"].length')
+    expect(docFile?.content).toContain('new Set(_v0_1 as unknown[]).size !== _v0_1.length')
   })
 
   // The registry is what makes "we do no I/O" stop meaning "we cannot be told":

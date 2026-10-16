@@ -101,6 +101,16 @@ const PROTOTYPE_MEMBERS = new Set(Object.getOwnPropertyNames(Object.prototype))
 const protoLocalName = (key: string, depth: number): string => `_own${depth}_${key}`
 
 /**
+ * The local a named property's value is read into before its checks. A
+ * prototype-member name keeps its {@link protoLocalName}; every other key is
+ * named by its position among the object's `properties`, since the key itself
+ * need not be an identifier. The depth keeps a nested object's locals apart
+ * from its parent's.
+ */
+const propertyLocalName = (key: string, index: number, depth: number): string =>
+  PROTOTYPE_MEMBERS.has(key) ? protoLocalName(key, depth) : `_v${depth}_${index}`
+
+/**
  * The generated expression that is TRUE when `key` is present on the object held
  * in `objVar` — meaning present as an *own* property, never inherited.
  *
@@ -816,6 +826,7 @@ const generateMissingRequiredChecks = (schema: JSONSchema, ctx: NestingContext):
  */
 const generatePropertyChecks = (
   key: string,
+  index: number,
   propSchema: JSONSchema,
   isRequired: boolean,
   suffix: string,
@@ -850,17 +861,22 @@ const generatePropertyChecks = (
     ]
   }
 
-  const raw = PROTOTYPE_MEMBERS.has(key) ? protoLocalName(key, ctx.depth) : propertyRead(ctx.objVar, key)
+  const raw = propertyLocalName(key, index, ctx.depth)
   const lines = [
-    ...generatePropertyCheckLines(key, propSchema, isRequired, suffix, ctx),
+    ...generatePropertyCheckLines(key, raw, propSchema, isRequired, suffix, ctx),
     // `unevaluated*` is a sibling of everything else the property declares, and
     // several of the branches above return early, so it is appended here rather
     // than emitted inside them. The checks carry their own runtime type guard, so
     // an absent optional property is inert and needs no presence gate.
     ...generateUnevaluatedChecks(raw, `\`${ctx.pathPrefix}/${pointerSegment(key)}\``, propSchema, suffix, ctx),
   ]
-  if (lines.length === 0 || !PROTOTYPE_MEMBERS.has(key)) return lines
-  return [`  const ${protoLocalName(key, ctx.depth)} = ${propertyRead(ctx.objVar, key)}`, ...lines]
+  // The value is read into a local once, ahead of its checks: a property's
+  // presence test, type test and each constraint used to read it off the object
+  // again, which on a large document was a measurable share of validating it.
+  // Only when something reads it — a required key with no schema of its own is
+  // a presence test alone.
+  if (!readsBinding(raw, lines.join('\n'))) return lines
+  return [`  const ${raw} = ${propertyRead(ctx.objVar, key)}`, ...lines]
 }
 
 /**
@@ -1054,6 +1070,7 @@ const generateKeywordChecks = (
  */
 const generatePropertyCheckLines = (
   key: string,
+  raw: string,
   propSchema: JSONSchema,
   isRequired: boolean,
   suffix: string,
@@ -1076,7 +1093,6 @@ const generatePropertyCheckLines = (
     return []
   }
 
-  const raw = PROTOTYPE_MEMBERS.has(key) ? protoLocalName(key, ctx.depth) : propertyRead(ctx.objVar, key)
   const path = `\`${ctx.pathPrefix}/${pointerSegment(key)}\``
 
   if (isRequired) {
@@ -2104,9 +2120,9 @@ const generateInlineObjectChecks = (
 
   const innerLines: string[] = []
 
-  for (const [childKey, childSchema] of Object.entries(properties)) {
+  for (const [index, [childKey, childSchema]] of Object.entries(properties).entries()) {
     innerLines.push(
-      ...generatePropertyChecks(childKey, childSchema as JSONSchema, required.has(childKey), suffix, child),
+      ...generatePropertyChecks(childKey, index, childSchema as JSONSchema, required.has(childKey), suffix, child),
     )
   }
 
@@ -2770,8 +2786,8 @@ const generateObjectValidator = (
 
   const propertyLines: string[] = []
 
-  for (const [key, propSchema] of Object.entries(properties)) {
-    const checks = generatePropertyChecks(key, propSchema as JSONSchema, required.has(key), suffix, ctx)
+  for (const [index, [key, propSchema]] of Object.entries(properties).entries()) {
+    const checks = generatePropertyChecks(key, index, propSchema as JSONSchema, required.has(key), suffix, ctx)
     if (checks.length > 0) {
       propertyLines.push(...checks)
     }
@@ -3337,12 +3353,56 @@ export const generateBooleanGuardSource = (
   typeName: string,
   unknownKeys: UnknownKeysStrategy = DEFAULT_UNKNOWN_KEYS,
   formats: ReadonlySet<string> = NO_FORMATS,
+  refs: {
+    /** The suffix `$ref`-derived names carry, so a ref's guard is called by its real name. */
+    readonly suffix?: string
+    /** The whole document, for a ref that resolves inside it. */
+    readonly rootSchema?: Record<string, unknown>
+  } = {},
 ): { code: string; standalone: boolean } => {
   const name = guardName(typeName)
   const returns = typeDescribesEveryAcceptedValue(rewriteNullable(schema) as JSONSchema)
     ? `input is ${typeName}`
     : 'boolean'
-  const fallback = `export const ${name} = (input: unknown): ${returns} => ${validatorName(typeName)}(input) === true`
+
+  // When the flat forms below cannot mirror the schema, the guard is the yes/no
+  // body the union emitters already use to ask whether a value satisfies a
+  // branch: the validator's own checks, each reporting as a `return false`, and
+  // a `$ref` answered by the target's guard. It builds nothing — no error, no
+  // path — and stops at the first failure, where calling `validateX` built every
+  // error on the way to `false`: on a document where one union branch is a
+  // `$ref` object, that was an error object for every reference it held. Only
+  // when even that body cannot be emitted (a shape whose report no condition
+  // guards) does the guard call the validator.
+  const fallback = (): { code: string; standalone: boolean } => {
+    const matcher = createSubschemaMatcher(
+      refs.suffix ?? '',
+      refs.rootSchema ?? (isSchemaObject(schema) ? (schema as Record<string, unknown>) : undefined),
+      formats,
+      '_guard',
+    )
+    const body = matcher.guardBody(schema)
+    // A body that never reads the value answers the same for everything: a
+    // schema that folds to a constant. Its `input is X` would name a parameter
+    // nothing reads (TS6133), so it keeps the validator call, as before.
+    if (typeof body !== 'string' || !readsBinding('input', body)) {
+      return {
+        code: `export const ${name} = (input: unknown): ${returns} => ${validatorName(typeName)}(input) === true`,
+        standalone: false,
+      }
+    }
+    const declarations = matcher.declarations(body)
+    const code = [
+      ...(declarations.length > 0 ? [declarations.join('\n\n'), ''] : []),
+      `export const ${name} = (input: unknown): ${returns} => {`,
+      // Some checks build a path for a key or an index before they know whether
+      // they fail. Nothing reports it here, so it is rooted at nothing.
+      ...(readsBinding('_path', body) ? [`  const _path = ''`] : []),
+      body,
+      `}`,
+    ].join('\n')
+    return { code, standalone: true }
+  }
 
   // Fold `nullable: true` into `anyOf` so the guard's verdict matches the
   // validator's (which applies the same rewrite). Without this a nullable node's
@@ -3360,9 +3420,9 @@ export const generateBooleanGuardSource = (
     // A `$ref`, a `const`/`enum` or an `x-mjst` hint beside the object keywords
     // is something the block form refuses too, so the answer is the fallback
     // either way — say so here rather than fall through to a leaf that would.
-    if (!objectRootIsSelfContained(rewritten)) return { code: fallback, standalone: false }
+    if (!objectRootIsSelfContained(rewritten)) return fallback()
     const block = booleanObjectParts(rewritten, 'input', 'obj', ctx)
-    if (block === null) return { code: fallback, standalone: false }
+    if (block === null) return fallback()
     // A guard that is one chain is the chain itself. One that hoists a nested
     // object or tests a key set is a sequence of early exits (see
     // {@link GuardBlock}), with `return true` once every test has passed.
@@ -3382,7 +3442,7 @@ export const generateBooleanGuardSource = (
 
   // Non-object roots (scalar, enum, array) can often be expressed inline too.
   const expr = booleanLeafExpr(rewritten, 'input', ctx)
-  if (expr === null) return { code: fallback, standalone: false }
+  if (expr === null) return fallback()
   return { code: `export const ${name} = (input: unknown): ${returns} => ${expr}`, standalone: true }
 }
 
@@ -3960,6 +4020,11 @@ export const createSubschemaMatcher = (
    */
   test: (sub: JSONSchema) => boolean | string
   /**
+   * The early-return body of {@link test}, or `null` where `test` would have to
+   * fall back to its buffered expression — a guard then calls the validator.
+   */
+  guardBody: (sub: JSONSchema) => boolean | string | null
+  /**
    * The same test as a named function, hoisted with the rest and shared with
    * every other test of the same subschema in this file — or a constant, or
    * `null` for a body only the buffered form of {@link test} can express.
@@ -3989,6 +4054,21 @@ export const createSubschemaMatcher = (
       // A body that reports unconditionally cannot take the early-return form
       // (see {@link FailFast}), so it keeps the buffered expression.
       return `  return ${generateMatchesExpr('input', rewritten, suffix, ctx, true)}`
+    },
+    guardBody: (sub) => {
+      if (sub === false) return false
+      const state: FailFast = { on: false, blocked: false }
+      const checks = generateValueChecks(
+        '',
+        'input',
+        '`${_path}`',
+        rewriteNullable(sub) as JSONSchema,
+        suffix,
+        { ...ctx, sink: MATCH_BOOL_SINK, failFast: state, branchErrors: false },
+        true,
+      )
+      if (checks.length === 0) return true
+      return state.blocked ? null : `${checks.join('\n')}\n  return true`
     },
     named: (sub) => {
       if (sub === false) return false

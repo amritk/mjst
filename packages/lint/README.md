@@ -62,6 +62,16 @@ const findings = await lintDocument('version: 1\n', { ruleset, source: 'service.
 
 `severity` is a `DiagnosticSeverity` — `0` error, `1` warning, `2` info, `3` hint — and `range` is a zero-based `{ line, character }` span you can render a squiggle from.
 
+### Lint data you already parsed
+
+A caller that has the document parsed already — a loader that read and normalized it — passes the data instead of the text, and the parse is skipped:
+
+```ts
+const findings = await lintDocument({ data: spec, text: source }, { ruleset, source: 'openapi.json' })
+```
+
+`text` is optional and only read to put `line:column` ranges on findings, lazily: JSON text is scanned for just the paths that carry findings, YAML text is parsed on the first lookup. A path the caller's normalization added resolves to its closest ancestor in the text, and without `text` every range is the zero range. Since the data is not parsed, there are no parser diagnostics: `parserOptions` (`duplicateKeys`, `incompatibleValues`) and syntax errors are only reported when linting the text. Plugins that rewrite the document (auto-fix) need `text`. `createDocumentFromData(data, { text })` builds the same document for the lower-level `createLinter(ruleset).run()`.
+
 ### Validate against a JSON Schema
 
 The built-in `schema` function runs an arbitrary JSON Schema (Draft 2020-12) over the matched node, via [`@amritk/runtime-validators`](../runtime-validators):
@@ -193,7 +203,7 @@ A ruleset is a plain object (authored as YAML, JSON, or a JS module):
 
 | Field | Description |
 | --- | --- |
-| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`, `resolved` (default `true`; `false` runs the rule against the document as written, before `$ref` dereferencing), and `documentationUrl`. |
+| `rules` | Map of `name → rule`. A rule has `given` (one or more JSONPath expressions), `then` (a function to run, or a list), `severity` (`error`/`warn`/`info`/`hint`/`off`), and optional `message`, `description`, `formats`, `recommended`, `resolved` (default `true`; `false` runs the rule against the document as written, before `$ref` dereferencing), `descent` (default `all`; `schema` keeps `..` out of `example`, `examples`, `default`, `const` and `enum` values, so a rule about schemas does not match an example payload), and `documentationUrl`. |
 | `then` | `{ function, field?, functionOptions? }` — `field` narrows the match to a child (`@key` targets the property name). |
 | `extends` | A ruleset (or list) to inherit rules from: a file path or npm package. `[target, 'recommended' \| 'all' \| 'off']` controls what it contributes. |
 | `functions` / `functionsDir` | Custom functions to load by name (default dir `functions/`). |
@@ -224,7 +234,7 @@ Anything outside that grammar is a ruleset error (`createRuleset` throws and nam
 
 | Export | What it does |
 | --- | --- |
-| `lintDocument(input, options?)` | Parse `input` and lint it against `options.ruleset` — a definition, or a `Ruleset` you already built; returns `IDiagnostic[]`. |
+| `lintDocument(input, options?)` | Parse `input` and lint it against `options.ruleset` — a definition, or a `Ruleset` you already built; returns `IDiagnostic[]`. `input` is the text, or `{ data, text? }` for a document already parsed. |
 | `lintDocumentWithResult(input, options?)` | Like `lintDocument`, but returns `{ diagnostics, output?, pluginData }` (including any plugin's rewritten `output`). |
 | `fixDocument(input, options?)` | Lint and apply `options.fixers` to a fixpoint; returns `{ output, fixed, applied, remaining, converged, passes }`. |
 | `createRuleset(definition?, basePath?, options?)` | Normalize a ruleset definition into a runnable `Ruleset`, layering the built-in functions and resolving `extends`. Memoized per `(definition object, basePath, restrictTo)` — treat a definition you have passed in as frozen. |
@@ -324,6 +334,19 @@ side and reports `errored` rather than aborting the run, since that failure was
 runtime-specific and may come back.
 
 Each `lint` figure is the mean wall time of one whole pass — **every rule, not a subset** — dominated by real work: JSONPath matching, the rule functions, and the dereference pass. A fresh document is parsed on every iteration on both sides, matching how the tools are actually called. The finding counts differ because the two rulesets are not byte-identical (different rule implementations and `$ref` resolution), so this is a **throughput** comparison rather than a correctness parity check — but on petstore both land on the same two findings.
+
+**Large documents.** `bun run bench:large <document.json>` times each phase of a lint run on its own, against any large OpenAPI document (or a synthetic one built from the fixtures when none is given), and fingerprints the findings so two runs can be checked for identical output. On a 26 MB public OpenAPI 3.0 document (3,700 operations, 7,100 component schemas; Bun 1.4.2, 4 vCPUs), medians:
+
+| phase | before | after |
+| --- | ---: | ---: |
+| `createDocument` (source-mapped parse) | 1,342 ms | 129 ms |
+| three `$.components.schemas..[?(...)]` rules on parsed data | 608 ms | ~36–60 ms |
+| the same checks as a hand-written walk | 24 ms | 24 ms |
+| `lint(text)`, three rules | 1,570 ms | ~290 ms |
+| `lint({ data, text })`, three rules | — | ~145 ms |
+| recommended OpenAPI preset, `$ref`s resolved | 5.5 s | 2.8 s |
+
+The findings — paths, ranges, messages — are byte-identical before and after.
 
 **Assembling the ruleset** is timed separately, because a process pays it once and then lints many documents: `createOpenApiRuleset` (compiling every rule's JSONPath and wiring up functions and format detectors) measures **~0.07 ms** on Bun and **~0.06 ms** on Node, versus **~0.26 ms** and **~0.24 ms** for `new Spectral()` + `setRuleset(oas)`. The benchmark warms up before timing and reports the mean over a fixed time budget; micro-benchmark figures vary by machine and runtime.
 

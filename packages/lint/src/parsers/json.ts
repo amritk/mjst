@@ -1,13 +1,12 @@
 import { getNodeValue, type Node, type ParseError, parseTree, printParseErrorCode } from 'jsonc-parser'
 
 import { findExcessiveNesting, MAX_NESTING_DEPTH } from './depth'
-import { createLineMap } from './lines'
+import { createJsonLocator } from './json-locator'
+import { createLineMap, type LineMap } from './lines'
 import { DiagnosticSeverity, type IDiagnostic, type ILocation, type IParseResult, type JsonPath } from './types'
 
 /** Parses strict JSON into data plus a source map, reporting JSON-specific syntax errors. */
 export const parseJson = <T = unknown>(source: string): IParseResult<T> => {
-  const lineMap = createLineMap(source)
-
   // A document nested deeper than this would overflow the call stack inside
   // jsonc-parser before we ever saw a node, so it is reported as a diagnostic up
   // front — the same way `@amritk/yaml` reports it, and the same way every other
@@ -15,7 +14,7 @@ export const parseJson = <T = unknown>(source: string): IParseResult<T> => {
   // to kill the process linting it.
   const excessive = findExcessiveNesting(source)
   if (excessive !== -1) {
-    const position = lineMap.positionAt(excessive)
+    const position = createLineMap(source).positionAt(excessive)
     return {
       data: undefined as T,
       diagnostics: [
@@ -29,6 +28,15 @@ export const parseJson = <T = unknown>(source: string): IParseResult<T> => {
     }
   }
 
+  // Valid JSON — nearly every document — is read by the engine's own parser,
+  // several times faster than building a `jsonc-parser` tree and projecting
+  // it, and positions come from scanning the text for just the paths a
+  // caller asks about. The tree is only built for a document `JSON.parse`
+  // rejects, where its recovery and error positions are the point.
+  const fast = parseValidJson<T>(source)
+  if (fast !== undefined) return fast
+
+  const lineMap = createLineMap(source)
   const errors: ParseError[] = []
   const root = parseTree(source, errors, { allowTrailingComma: false, disallowComments: true })
 
@@ -43,8 +51,36 @@ export const parseJson = <T = unknown>(source: string): IParseResult<T> => {
     },
   }))
 
-  const getLocationForJsonPath = (path: JsonPath, closest = false): ILocation | undefined => {
-    if (!root) return undefined
+  const getLocationForJsonPath = root ? createTreeLocator(root, lineMap) : () => undefined
+
+  return { data, diagnostics, getLocationForJsonPath }
+}
+
+/**
+ * Parses `source` with `JSON.parse`, or returns `undefined` when it is not
+ * valid JSON. The data matches what the tree parser projects for the same
+ * text — the same values, the last of any duplicate key — with one
+ * difference: objects get the ordinary prototype rather than none, which is
+ * what the YAML parser has always produced, so rules already read documents
+ * through own-key checks.
+ */
+const parseValidJson = <T>(source: string): IParseResult<T> | undefined => {
+  let data: T
+  try {
+    data = JSON.parse(source) as T
+  } catch {
+    return undefined
+  }
+  return { data, diagnostics: [], getLocationForJsonPath: createJsonLocator(source) }
+}
+
+/**
+ * Resolves paths against a `jsonc-parser` tree. When `closest` is set and the
+ * path leaves the document, the deepest node it reached is returned.
+ */
+export const createTreeLocator =
+  (root: Node, lineMap: LineMap) =>
+  (path: JsonPath, closest = false): ILocation | undefined => {
     const p = path.slice()
     while (true) {
       const node = findNode(root, p)
@@ -60,9 +96,6 @@ export const parseJson = <T = unknown>(source: string): IParseResult<T> => {
       p.pop()
     }
   }
-
-  return { data, diagnostics, getLocationForJsonPath }
-}
 
 /** An array index in the only spelling a JSON array answers to. */
 const ARRAY_INDEX = /^(?:0|[1-9]\d*)$/

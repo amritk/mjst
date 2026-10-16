@@ -3,6 +3,7 @@ import {
   createBoundedCache,
   createRuleset as createCoreRuleset,
   type IDocumentOptions,
+  type LintInput,
   type LintPlugin,
   type LintResolver,
   lintWithResult,
@@ -26,6 +27,7 @@ export {
   type CompiledPath,
   compileQuery,
   createDocument,
+  createDocumentFromData,
   createLinter,
   type Document,
   detectFormats,
@@ -33,11 +35,13 @@ export {
   type ExtendResolver,
   type Format,
   globToRegExp,
+  type IDataDocumentOptions,
   type IDocumentOptions,
   type IQueryMatch,
   type IRulesetProblem,
   type IRunOptions,
   type Linter,
+  type LintInput,
   type LintOptions,
   type LintPlugin,
   type LintPluginContext,
@@ -264,6 +268,10 @@ export type ILintResult = {
  * ruleset. Returns just the findings; use {@link lintDocumentWithResult} for the
  * full result.
  *
+ * A caller that has already parsed the document passes `{ data, text? }`
+ * instead of the string, and the parse is skipped: `text` is only read to
+ * put line:column ranges on the findings (see `createDocumentFromData`).
+ *
  * @example
  * ```ts
  * const ruleset = {
@@ -276,7 +284,7 @@ export type ILintResult = {
  * // findings[].severity is numeric (0 error, 1 warn, 2 info, 3 hint).
  * ```
  */
-export const lintDocument = async (input: string, options: ILintOptions = {}): Promise<IDiagnostic[]> =>
+export const lintDocument = async (input: LintInput, options: ILintOptions = {}): Promise<IDiagnostic[]> =>
   (await lintDocumentWithResult(input, options)).diagnostics
 
 /**
@@ -284,7 +292,7 @@ export const lintDocument = async (input: string, options: ILintOptions = {}): P
  * anything the configured `plugins` produced (e.g. the auto-fix plugin's
  * rewritten `output`).
  */
-export const lintDocumentWithResult = async (input: string, options: ILintOptions = {}): Promise<ILintResult> => {
+export const lintDocumentWithResult = async (input: LintInput, options: ILintOptions = {}): Promise<ILintResult> => {
   const { ruleset, rulesetBasePath, restrictTo, ...rest } = options
   return runLint(input, toRuleset(ruleset, rulesetBasePath, restrictTo), rest)
 }
@@ -303,7 +311,7 @@ const toRuleset = (
 type RunOptions = Omit<ILintOptions, 'ruleset' | 'rulesetBasePath' | 'restrictTo'>
 
 /** Runs an already-built ruleset, so a caller that lints repeatedly builds it once. */
-const runLint = async (input: string, ruleset: Ruleset, options: RunOptions): Promise<ILintResult> => {
+const runLint = async (input: LintInput, ruleset: Ruleset, options: RunOptions): Promise<ILintResult> => {
   const { resolve, plugins, ...documentOptions } = options
   return lintWithResult(input, {
     ...documentOptions,

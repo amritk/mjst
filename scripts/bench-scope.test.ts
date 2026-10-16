@@ -52,7 +52,7 @@ describe('bench-scope', () => {
       ['packages/yaml/src/parse.ts', 'packages/api/README.md', '.changeset/soft-pans-clap.md', 'docs/guide.md'],
       readWorkspace(`${import.meta.dirname}/..`),
     )
-    expect(scope.suites).toEqual(['yaml'])
+    expect(scope.suites).toEqual(['yaml', 'lint'])
   })
 
   it('reports no coverage when only inert paths changed', () => {
@@ -73,9 +73,10 @@ describe('bench-scope', () => {
     expect(scope.suites).toEqual([])
   })
 
-  it('scopes a yaml-only change to the yaml suite', () => {
+  // @amritk/lint parses YAML with it, so the lint suite comes along.
+  it('scopes a yaml-only change to the yaml suite and its dependants', () => {
     const scope = selectSuites(['packages/yaml/src/parse-document.ts'], readWorkspace(`${import.meta.dirname}/..`))
-    expect(scope.suites).toEqual(['yaml'])
+    expect(scope.suites).toEqual(['yaml', 'lint'])
     expect(scope.reason).toBe('scoped to yaml and dependants')
   })
 
@@ -88,7 +89,7 @@ describe('bench-scope', () => {
   // drop the bench harness edges that genuinely do move numbers.
   it('scopes a helpers change to its dependants', () => {
     const scope = selectSuites(['packages/helpers/src/index.ts'], readWorkspace(`${import.meta.dirname}/..`))
-    expect(names(scope.suites)).toBe('api,codegen,parsers,runtime,validators')
+    expect(names(scope.suites)).toBe('api,codegen,documents,lint,parsers,runtime,validators')
   })
 
   // Bench harness code is shared across packages (every bench measures through
@@ -105,13 +106,13 @@ describe('bench-scope', () => {
   // directly rather than only through the request path that wraps it.
   it('scopes a runtime-validators change to its dependants', () => {
     const scope = selectSuites(['packages/runtime-validators/src/index.ts'], readWorkspace(`${import.meta.dirname}/..`))
-    expect(names(scope.suites)).toBe('api,codegen,parsers,runtime,validators')
+    expect(names(scope.suites)).toBe('api,codegen,documents,lint,parsers,runtime,validators')
   })
 
   it('explains when a benchmarked package simply does not depend on the change', () => {
-    const scope = selectSuites(['packages/resolve-refs/src/index.ts'], readWorkspace(`${import.meta.dirname}/..`))
+    const scope = selectSuites(['packages/generate-markdown/src/index.ts'], readWorkspace(`${import.meta.dirname}/..`))
     expect(scope.suites).toEqual([])
-    expect(scope.reason).toBe('no benchmarked package depends on resolve-refs')
+    expect(scope.reason).toBe('no benchmarked package depends on generate-markdown')
   })
 
   it('reads the real workspace graph', () => {

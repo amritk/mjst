@@ -1,6 +1,7 @@
 export { findExcessiveNesting, MAX_NESTING_DEPTH } from './depth'
 export { type ApplyEditOpsResult, applyEditOps, applyEditOpsWithChanges, type EditOp } from './edit-model'
 export { parseJson } from './json'
+export { createJsonLocator } from './json-locator'
 export { createLineMap, type LineMap } from './lines'
 export {
   DiagnosticSeverity,

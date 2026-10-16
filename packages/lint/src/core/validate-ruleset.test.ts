@@ -34,6 +34,16 @@ describe('validateRuleset', () => {
     expect(problems.some((p) => p.message.includes('invalid severity'))).toBe(true)
   })
 
+  it('accepts the two descent modes and flags any other', () => {
+    for (const descent of ['all', 'schema']) {
+      expect(validateRuleset({ rules: { r: { given: '$..x', descent, then: { function: 'truthy' } } } })).toEqual([])
+    }
+    const problems = validateRuleset({
+      rules: { r: { given: '$..x', descent: 'schemas', then: { function: 'truthy' } } },
+    })
+    expect(problems.map((p) => p.path)).toEqual([['rules', 'r', 'descent']])
+  })
+
   it('flags a malformed given expression', () => {
     const problems = validateRuleset({ rules: { r: { given: 'info.title', then: { function: 'truthy' } } } })
     expect(problems.some((p) => p.message.includes('invalid `given`'))).toBe(true)

@@ -43,7 +43,7 @@ type Selector =
   | { kind: 'union'; names: (string | number)[] }
   | { kind: 'slice'; start?: number; end?: number; step?: number }
   | { kind: 'scriptIndex'; offset: number }
-  | { kind: 'filter'; test: FilterFn; source: string; usesPath: boolean }
+  | { kind: 'filter'; test: FilterFn; source: string; usesPath: boolean; objectsOnly: boolean }
   | { kind: 'parent' }
   | { kind: 'keys' }
   // A segment that could not be parsed. The owning path carries the recorded
@@ -248,7 +248,13 @@ const bracketSelector = (content: string, onError: (message: string) => void): S
       onError(filter.error)
       return { kind: 'none' }
     }
-    return { kind: 'filter', test: filter.test, source: expr, usesPath: filter.usesPath }
+    return {
+      kind: 'filter',
+      test: filter.test,
+      source: expr,
+      usesPath: filter.usesPath,
+      objectsOnly: filter.objectsOnly,
+    }
   }
   if (trimmed.startsWith('(') && trimmed.endsWith(')')) {
     // Script subscript `[(expr)]`. We support the common `(@.length - N)` form
@@ -543,38 +549,112 @@ const applySelector = (node: Node, selector: Selector, root: unknown, out: Node[
 }
 
 /**
+ * The keywords whose values a schema-aware descent stays out of: they hold
+ * instance data — an example payload, a default, an enumerated value — that
+ * can look like a schema without being one.
+ */
+const DATA_KEYWORDS = new Set(['example', 'examples', 'default', 'const', 'enum'])
+
+/**
+ * The keywords whose values map names to schemas (or to other named
+ * definitions). Inside one, `default` or `enum` is a name someone chose, not a
+ * keyword, so a schema-aware descent goes into it as usual. This covers JSON
+ * Schema's own maps and the named-component maps of OpenAPI and AsyncAPI.
+ */
+const NAME_MAP_KEYWORDS = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'schemas',
+  'responses',
+  'parameters',
+  'headers',
+  'requestBodies',
+  'securitySchemes',
+  'links',
+  'callbacks',
+  'pathItems',
+  'webhooks',
+  'encoding',
+  'variables',
+  'dependencies',
+  'messages',
+  'channels',
+  'operations',
+  'servers',
+  'serverVariables',
+  'messageTraits',
+  'operationTraits',
+  'correlationIds',
+  'replies',
+  'replyAddresses',
+  'serverBindings',
+  'channelBindings',
+  'operationBindings',
+  'messageBindings',
+])
+
+/** Whether `node` is a map of names: the value of a name-map keyword that is itself not a name. */
+const isNameMap = (node: Node | undefined): boolean => {
+  // Walk up to the root first: whether a node is a name map depends on whether its parent is.
+  const chain: Node[] = []
+  for (let n = node; n !== undefined && n.parent !== undefined; n = n.parent) chain.push(n)
+  let nameMap = false
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const key = (chain[i] as Node).key
+    nameMap = !nameMap && typeof key === 'string' && NAME_MAP_KEYWORDS.has(key)
+  }
+  return nameMap
+}
+
+/** Whether `node` is the value of a data keyword, which a schema-aware descent does not visit or yield. */
+const isDataChild = (node: Node): boolean =>
+  typeof node.key === 'string' && DATA_KEYWORDS.has(node.key) && isObject(node.parent?.value) && !isNameMap(node.parent)
+
+/**
  * Visits `node` and every descendant (preorder), invoking `visit` on each.
+ * Schema-aware, it does not go into the values of data keywords.
  *
  * The traversal keeps its own stack instead of recursing: document depth is
  * attacker-controlled, and a recursive walker turns a deeply nested file into a
  * `RangeError` that takes the whole process down. Children are pushed in reverse
  * so they pop in document order — match order is part of the observable output.
  */
-const walkDescendants = (node: Node, visit: (n: Node) => void): void => {
+const walkDescendants = (node: Node, visit: (n: Node) => void, schemaAware: boolean): void => {
   const stack: Node[] = [node]
+  const nameMaps: boolean[] = [schemaAware && isNameMap(node)]
   while (stack.length > 0) {
     const current = stack.pop() as Node
+    const nameMap = nameMaps.pop() as boolean
     visit(current)
     const value = current.value
     if (Array.isArray(value)) {
-      for (let idx = value.length - 1; idx >= 0; idx--) stack.push({ value: value[idx], parent: current, key: idx })
+      for (let idx = value.length - 1; idx >= 0; idx--) {
+        stack.push({ value: value[idx], parent: current, key: idx })
+        nameMaps.push(false)
+      }
     } else if (isObject(value)) {
       const keys = Object.keys(value)
       for (let k = keys.length - 1; k >= 0; k--) {
         const key = keys[k] as string
+        if (schemaAware && !nameMap && DATA_KEYWORDS.has(key)) continue
         stack.push({ value: value[key], parent: current, key })
+        nameMaps.push(schemaAware && !nameMap && NAME_MAP_KEYWORDS.has(key))
       }
     }
   }
 }
 
 /** Applies a list of steps to an existing set of nodes. */
-const applySteps = (root: unknown, initial: Node[], steps: Step[]): Node[] => {
+const applySteps = (root: unknown, initial: Node[], steps: Step[], schemaAware = false): Node[] => {
   let current = initial
   for (const step of steps) {
-    const next: Node[] = []
+    let next: Node[] = []
     if (step.recursive) {
-      for (const node of current) walkDescendants(node, (n) => applySelector(n, step.selector, root, next))
+      for (const node of current) walkDescendants(node, (n) => applySelector(n, step.selector, root, next), schemaAware)
+      if (schemaAware) next = next.filter((n) => !isDataChild(n))
     } else {
       for (const node of current) applySelector(node, step.selector, root, next)
     }
@@ -583,8 +663,8 @@ const applySteps = (root: unknown, initial: Node[], steps: Step[]): Node[] => {
   return current
 }
 
-const runSteps = (root: unknown, steps: Step[]): Node[] =>
-  applySteps(root, [{ value: root, parent: undefined, key: undefined }], steps)
+const runSteps = (root: unknown, steps: Step[], schemaAware = false): Node[] =>
+  applySteps(root, [{ value: root, parent: undefined, key: undefined }], steps, schemaAware)
 
 const toMatches = (nodes: Node[]): IQueryMatch[] => {
   const out: IQueryMatch[] = new Array(nodes.length)
@@ -595,32 +675,52 @@ const toMatches = (nodes: Node[]): IQueryMatch[] => {
   return out
 }
 
+/** How a path's `..` descents read the document. */
+export type QueryOptions = {
+  /**
+   * Treat the document as JSON Schema (or an OpenAPI/AsyncAPI document) and
+   * keep `..` out of instance data: the values of `example`, `examples`,
+   * `default`, `const` and `enum` are neither visited nor matched, except
+   * where those words are names in a map such as `properties`. A rule that
+   * looks at schemas then does not trip over an example payload that happens
+   * to read `"type": "object"`, and does not pay to walk it.
+   */
+  schemaAware?: boolean
+}
+
 /** Evaluates a pre-compiled path against `data`. */
-export const queryCompiled = (data: unknown, compiled: CompiledPath): IQueryMatch[] => {
+export const queryCompiled = (data: unknown, compiled: CompiledPath, options: QueryOptions = {}): IQueryMatch[] => {
   // A malformed path matches nothing rather than falling back to the root.
   if (compiled.error !== undefined) return []
   if (data === null || data === undefined) return []
-  return toMatches(runSteps(data, compiled.steps))
+  return toMatches(runSteps(data, compiled.steps, options.schemaAware === true))
 }
 
 /**
- * Evaluates many pre-compiled paths against `data`, sharing a *single* recursive
- * descent of the tree across every `$..`-rooted path. The ruleset has ~16
- * descent `given`s; walking the (post-deref, ~60k-node) tree once and testing
- * each path's first selector at every node — instead of one full traversal per
- * path — is the dominant rule-run speedup on large specs. Non-recursive paths
- * are evaluated directly (cheap, no descent).
+ * Evaluates many pre-compiled paths against `data` with **one** walk of the
+ * tree for every path that contains a `..` descent, wherever that descent
+ * starts. `$..enum`, `$.paths.*..parameters` and
+ * `$.components.schemas..[?(@.deprecated)]` all ride the same traversal: a
+ * node is visited once, however many rules want to look at it, and a subtree
+ * no descent can reach is not visited at all. Paths without a descent are
+ * evaluated directly (cheap, no walk).
  *
  * Returns one match array per input path, index-aligned with `compiled`.
  */
-export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[][] => {
+export const queryMany = (
+  data: unknown,
+  compiled: CompiledPath[],
+  options: readonly (QueryOptions | undefined)[] = [],
+): IQueryMatch[][] => {
   const out: IQueryMatch[][] = new Array(compiled.length)
   if (data === null || data === undefined) {
     for (let i = 0; i < compiled.length; i++) out[i] = []
     return out
   }
 
-  const recursive: number[] = []
+  /** Index into `compiled` of every path the shared walk serves. */
+  const shared: number[] = []
+  const descents: Descent[] = []
   for (let i = 0; i < compiled.length; i++) {
     const c = compiled[i] as CompiledPath
     // Skip malformed paths entirely; they contribute no matches.
@@ -628,90 +728,356 @@ export const queryMany = (data: unknown, compiled: CompiledPath[]): IQueryMatch[
       out[i] = []
       continue
     }
-    const first = c.steps[0]
-    if (first?.recursive) recursive.push(i)
-    else out[i] = queryCompiled(data, c)
+    const schemaAware = options[i]?.schemaAware === true
+    const descent = c.hasDescent ? toDescent(c.steps, schemaAware) : undefined
+    if (descent === undefined) {
+      out[i] = queryCompiled(data, c, { schemaAware })
+      continue
+    }
+    shared.push(i)
+    descents.push(descent)
   }
 
-  if (recursive.length > 0) {
-    const firsts = recursive.map((i) => (compiled[i] as CompiledPath).steps[0] as Step)
-    const seeds: Node[][] = recursive.map(() => [])
-    seedDescents(data, firsts, seeds)
-    for (let r = 0; r < recursive.length; r++) {
-      const c = compiled[recursive[r] as number] as CompiledPath
-      out[recursive[r] as number] = toMatches(applySteps(data, seeds[r] as Node[], c.steps.slice(1)))
+  if (descents.length > 0) {
+    const seeds: Node[][] = descents.map(() => [])
+    walkShared(data, descents, seeds)
+    for (let d = 0; d < descents.length; d++) {
+      const { rest, schemaAware } = descents[d] as Descent
+      const seeded = seeds[d] as Node[]
+      out[shared[d] as number] = toMatches(rest.length === 0 ? seeded : applySteps(data, seeded, rest, schemaAware))
     }
   }
 
   return out
 }
 
+/** The `@path` string of the child at `key` under `parent`, without allocating a node for it. */
+const childPathString = (parent: Node, key: string | number): string => {
+  const path = pathOf(parent)
+  path.push(key)
+  return pathToJsonPathString(path)
+}
+
 /**
- * Walks the whole tree once and collects, for every `$..` path, the nodes its
- * first selector matches — the seeds its remaining steps then run from.
- *
- * The traversal is shared across paths (a ruleset has a dozen-odd descent
- * `given`s, and the dereferenced tree is large), and the *matching* is inverted
- * on top of that. Nearly every descent `given` opens with a plain name —
- * `$..parameters`, `$..enum`, `$..$ref` — so asking each path in turn whether
- * this node has its name meant a dozen own-property checks per node. Instead
- * we look at each own key the node already has and ask which paths wanted *it*:
- * one map lookup per key, and a node whose keys nobody named costs nothing.
- *
- * The children are being materialized for the walk anyway, so a seeded child
- * reuses that node rather than allocating a second one for the match.
- *
- * Everything else (`$..*`, `$..[?(...)]`, unions, slices) keeps the general
- * per-path call. Seed order stays document order, which is the order findings
- * come out in.
+ * A `..` path split where its first descent begins: the plain steps that lead
+ * to it, the descent's own selector, and what runs from each node it yields.
  */
-const seedDescents = (data: unknown, firsts: readonly Step[], seeds: Node[][]): void => {
-  /** Own key → the descent paths whose first selector names it. */
-  const byName = new Map<string, number[]>()
-  /** Paths whose name can also index an array, which `byName` cannot answer for. */
-  const numericChild: number[] = []
-  /** Paths whose first selector is not a plain name, applied one by one. */
-  const others: number[] = []
-  for (let r = 0; r < firsts.length; r++) {
-    const selector = (firsts[r] as Step).selector
-    if (selector.kind !== 'child') {
-      others.push(r)
-      continue
+type Descent = {
+  /** Non-recursive steps from the root to where the descent starts; each selects children of a node. */
+  readonly prefix: Selector[]
+  /** The first `..` step's selector, applied at every node at or under the end of `prefix`. */
+  readonly first: Selector
+  /** Everything after the first `..` step, applied to its matches afterwards. */
+  readonly rest: Step[]
+  /** Whether the path's descents stay out of instance data (see {@link QueryOptions}). */
+  readonly schemaAware: boolean
+}
+
+/**
+ * Splits `steps` at the first descent, or returns `undefined` when the prefix
+ * cannot be followed inside the shared walk. The walk decides membership one
+ * child at a time and in document order, so a prefix selector qualifies only
+ * when it selects children *of the current node*, in document order, each at
+ * most once: a name, an index, a wildcard or a filter. A union (it yields in
+ * the order it lists names, and may list one twice), a slice, `^` and `~` keep
+ * the per-path evaluation.
+ */
+const toDescent = (steps: Step[], schemaAware: boolean): Descent | undefined => {
+  const prefix: Selector[] = []
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i] as Step
+    if (step.recursive) return { prefix, first: step.selector, rest: steps.slice(i + 1), schemaAware }
+    const kind = step.selector.kind
+    if (kind !== 'child' && kind !== 'index' && kind !== 'wildcard' && kind !== 'filter') return undefined
+    prefix.push(step.selector)
+  }
+  return undefined
+}
+
+/**
+ * Whether a prefix selector picks the child at `key` of `parent` — the
+ * one-child-at-a-time reading of what {@link applySelector} does for a whole
+ * node, restricted to the selectors {@link toDescent} admits.
+ */
+const prefixSelects = (
+  selector: Selector,
+  parent: Node,
+  key: string | number,
+  child: unknown,
+  root: unknown,
+): boolean => {
+  const value = parent.value
+  switch (selector.kind) {
+    case 'child':
+      return typeof key === 'number' ? selector.index === key : selector.name === key
+    case 'index': {
+      if (typeof key === 'number') {
+        const idx = selector.index < 0 ? (value as unknown[]).length + selector.index : selector.index
+        return idx === key
+      }
+      return key === String(selector.index)
     }
-    const existing = byName.get(selector.name)
-    if (existing === undefined) byName.set(selector.name, [r])
-    else existing.push(r)
-    if (selector.index !== undefined) numericChild.push(r)
+    case 'wildcard':
+      return true
+    case 'filter':
+      return selector.test(child, key, value, root, selector.usesPath ? childPathString(parent, key) : '', parent.key)
+    default:
+      return false
+  }
+}
+
+/**
+ * What the shared walk does inside one subtree: which descents are live (their
+ * first selector runs at every node here), and which are still working through
+ * their prefix (`pending` pairs of descent and prefix position, matched
+ * against each child). Scopes are shared by every node they cover and only
+ * change where a prefix advances, so a plain subtree costs no allocation.
+ */
+type Scope = {
+  readonly active: readonly number[]
+  readonly pending: readonly (readonly [descent: number, step: number])[]
+  /** Live descents whose first selector is a plain name, by that name. */
+  readonly byName: Map<string, number[]>
+  /** Live name descents whose name also indexes an array, which `byName` cannot answer. */
+  readonly numericChild: readonly number[]
+  readonly wildcards: readonly number[]
+  readonly filters: readonly number[]
+  /** Live descents with any other first selector, applied node by node. */
+  readonly others: readonly number[]
+  /** This scope with its pending prefixes dropped — what a child that advances none of them gets. */
+  settled: Scope | undefined
+  /** Child scopes already built, by which pending prefixes advanced. */
+  readonly next: Map<string, Scope>
+  /** Whether a live descent is schema-aware, so data keywords need looking out for. */
+  readonly schemaAware: boolean
+  /** This scope without its schema-aware descents — what the value of a data keyword gets. */
+  outsideData: Scope | undefined
+}
+
+const createScope = (
+  descents: readonly Descent[],
+  active: readonly number[],
+  pending: readonly (readonly [number, number])[],
+): Scope => {
+  const byName = new Map<string, number[]>()
+  const numericChild: number[] = []
+  const wildcards: number[] = []
+  const filters: number[] = []
+  const others: number[] = []
+  let schemaAware = false
+  for (const d of active) {
+    if ((descents[d] as Descent).schemaAware) schemaAware = true
+    const selector = (descents[d] as Descent).first
+    if (selector.kind === 'child') {
+      const existing = byName.get(selector.name)
+      if (existing === undefined) byName.set(selector.name, [d])
+      else existing.push(d)
+      if (selector.index !== undefined) numericChild.push(d)
+    } else if (selector.kind === 'wildcard') wildcards.push(d)
+    else if (selector.kind === 'filter') filters.push(d)
+    else others.push(d)
+  }
+  return {
+    active,
+    pending,
+    byName,
+    numericChild,
+    wildcards,
+    filters,
+    others,
+    settled: undefined,
+    next: new Map(),
+    schemaAware,
+    outsideData: undefined,
+  }
+}
+
+/** The scope for the value of a data keyword: schema-aware descents stop at its edge. */
+const outsideDataScope = (descents: readonly Descent[], scope: Scope): Scope => {
+  if (scope.outsideData === undefined) {
+    scope.outsideData = createScope(
+      descents,
+      scope.active.filter((d) => !(descents[d] as Descent).schemaAware),
+      scope.pending,
+    )
+  }
+  return scope.outsideData
+}
+
+/** The scope a child gets when no pending prefix advances on it. */
+const settledScope = (descents: readonly Descent[], scope: Scope): Scope => {
+  if (scope.pending.length === 0) return scope
+  if (scope.settled === undefined) scope.settled = createScope(descents, scope.active, [])
+  return scope.settled
+}
+
+/**
+ * The scope for a child of a node in `scope`. Each pending prefix whose next
+ * selector picks this child either moves one step on or, at its end, makes its
+ * descent live from the child down (`..` is descendant-or-*self*).
+ */
+const childScope = (
+  descents: readonly Descent[],
+  scope: Scope,
+  parent: Node,
+  key: string | number,
+  child: unknown,
+  root: unknown,
+): Scope => {
+  const pending = scope.pending
+  if (pending.length === 0) return scope
+  let advanced: (readonly [number, number])[] | undefined
+  for (const entry of pending) {
+    const [d, step] = entry
+    const prefix = (descents[d] as Descent).prefix
+    if (prefixSelects(prefix[step] as Selector, parent, key, child, root)) {
+      if (advanced === undefined) advanced = []
+      advanced.push(entry)
+    }
+  }
+  if (advanced === undefined) return settledScope(descents, scope)
+  let signature = ''
+  for (const [d, step] of advanced) signature += `${d}:${step},`
+  const cached = scope.next.get(signature)
+  if (cached !== undefined) return cached
+  const active = scope.active.slice()
+  const stillPending: (readonly [number, number])[] = []
+  for (const [d, step] of advanced) {
+    if (step + 1 === (descents[d] as Descent).prefix.length) active.push(d)
+    else stillPending.push([d, step + 1])
+  }
+  const built = createScope(descents, active, stillPending)
+  scope.next.set(signature, built)
+  return built
+}
+
+/** Whether anything in `scope` can still produce a match at or under a node. */
+const isLive = (scope: Scope): boolean => scope.active.length > 0 || scope.pending.length > 0
+
+/**
+ * Walks the tree once and collects, for every descent, the nodes its first
+ * selector matches — the seeds its remaining steps then run from.
+ *
+ * The matching is inverted, and fused into the step that lists a node's
+ * children for the walk anyway. Nearly every descent `given` opens with a
+ * plain name (`$..parameters`, `$..enum`, `$..$ref`) or a filter
+ * (`..[?(@.deprecated)]`): rather than asking each descent in turn whether a
+ * node has its name, or listing a node's children once more per filter, each
+ * child is looked at once — one map lookup for the names that want its key,
+ * one call per live filter — as it is listed.
+ *
+ * A child gets a node only when it needs one: when it is a seed, or when the
+ * walk has to go into it. Scalars are leaves, so on a typical document most
+ * nodes are never allocated. A subtree no descent can reach is skipped whole.
+ *
+ * Seed order is document order, the order the per-path evaluation produces and
+ * the order findings come out in.
+ */
+const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]): void => {
+  const rootActive: number[] = []
+  const rootPending: (readonly [number, number])[] = []
+  for (let d = 0; d < descents.length; d++) {
+    if ((descents[d] as Descent).prefix.length === 0) rootActive.push(d)
+    else rootPending.push([d, 0])
   }
 
-  // The same explicit stack as {@link walkDescendants}, and for the same reason:
-  // document depth is attacker-controlled, so recursion is not an option.
-  const stack: Node[] = [{ value: data, parent: undefined, key: undefined }]
-  while (stack.length > 0) {
-    const current = stack.pop() as Node
+  // An explicit stack, as in {@link walkDescendants}: document depth is
+  // attacker-controlled, so recursion is not an option.
+  const nodes: Node[] = [{ value: data, parent: undefined, key: undefined }]
+  const scopes: Scope[] = [createScope(descents, rootActive, rootPending)]
+  // Whether each stacked node is a map of names (see `NAME_MAP_KEYWORDS`):
+  // tracked only when some descent is schema-aware, which is the only reader.
+  const tracksNameMaps = descents.some((descent) => descent.schemaAware)
+  const nameMaps: boolean[] = [false]
+  while (nodes.length > 0) {
+    const current = nodes.pop() as Node
+    const outer = scopes.pop() as Scope
+    const nameMap = tracksNameMaps ? (nameMaps.pop() as boolean) : false
     const value = current.value
-    if (Array.isArray(value)) {
-      for (let idx = value.length - 1; idx >= 0; idx--) stack.push({ value: value[idx], parent: current, key: idx })
-      for (const r of numericChild) applySelector(current, (firsts[r] as Step).selector, data, seeds[r] as Node[])
-    } else if (isObject(value)) {
-      // Children are pushed in document order (so a seeded one is collected in
-      // that order too), then reversed in place so they still pop preorder.
-      const base = stack.length
-      for (const key of Object.keys(value)) {
-        const child: Node = { value: value[key], parent: current, key }
-        stack.push(child)
-        const interested = byName.get(key)
-        if (interested !== undefined) for (const r of interested) (seeds[r] as Node[]).push(child)
+    const base = nodes.length
+    if (typeof value === 'object' && value !== null) {
+      const isArray = Array.isArray(value)
+      const keys = isArray ? undefined : Object.keys(value)
+      const length = isArray ? value.length : (keys as string[]).length
+      for (let i = 0; i < length; i++) {
+        const key: string | number = isArray ? i : ((keys as string[])[i] as string)
+        const child = (value as Record<string | number, unknown>)[key]
+        // A schema-aware descent neither matches nor enters the value of a data keyword.
+        const scope =
+          outer.schemaAware && !isArray && !nameMap && DATA_KEYWORDS.has(key as string)
+            ? outsideDataScope(descents, outer)
+            : outer
+        const { byName, wildcards, filters } = scope
+        // Allocated on first need, and shared by every seed list and the stack.
+        let node: Node | undefined
+        if (!isArray) {
+          const interested = byName.get(key as string)
+          if (interested !== undefined) {
+            node = { value: child, parent: current, key }
+            for (const d of interested) (seeds[d] as Node[]).push(node)
+          }
+        }
+        if (wildcards.length > 0) {
+          if (node === undefined) node = { value: child, parent: current, key }
+          for (const d of wildcards) (seeds[d] as Node[]).push(node)
+        }
+        if (filters.length > 0) {
+          const childIsObject = isObject(child)
+          for (const d of filters) {
+            const selector = (descents[d] as Descent).first as Extract<Selector, { kind: 'filter' }>
+            // A filter that can only match an object is not asked about a scalar.
+            if (selector.objectsOnly && !childIsObject) continue
+            const path = selector.usesPath ? childPathString(current, key) : ''
+            if (selector.test(child, key, value, data, path, current.key)) {
+              if (node === undefined) node = { value: child, parent: current, key }
+              ;(seeds[d] as Node[]).push(node)
+            }
+          }
+        }
+        const inner = childScope(descents, scope, current, key, child, data)
+        // A scalar has no children to list, so it is only worth visiting for a
+        // selector that looks at the node itself (`^`, `~`, an index…).
+        const visit = typeof child === 'object' && child !== null ? isLive(inner) : inner.others.length > 0
+        if (visit) {
+          nodes.push(node === undefined ? { value: child, parent: current, key } : node)
+          scopes.push(inner)
+          if (tracksNameMaps) nameMaps.push(!isArray && !nameMap && NAME_MAP_KEYWORDS.has(key as string))
+        }
       }
-      for (let i = base, j = stack.length - 1; i < j; i++, j--) {
-        const held = stack[i] as Node
-        stack[i] = stack[j] as Node
-        stack[j] = held
+      if (isArray) {
+        for (const d of outer.numericChild) {
+          applySelector(current, (descents[d] as Descent).first, data, seeds[d] as Node[])
+        }
+      }
+      // Children were pushed in document order; reverse them in place so they
+      // pop preorder, which is the order matches have to come out in.
+      for (let i = base, j = nodes.length - 1; i < j; i++, j--) {
+        const heldNode = nodes[i] as Node
+        nodes[i] = nodes[j] as Node
+        nodes[j] = heldNode
+        const heldScope = scopes[i] as Scope
+        scopes[i] = scopes[j] as Scope
+        scopes[j] = heldScope
+        if (tracksNameMaps) {
+          const heldNameMap = nameMaps[i] as boolean
+          nameMaps[i] = nameMaps[j] as boolean
+          nameMaps[j] = heldNameMap
+        }
       }
     }
-    for (const r of others) applySelector(current, (firsts[r] as Step).selector, data, seeds[r] as Node[])
+    for (const d of outer.others) {
+      const descent = descents[d] as Descent
+      if (!descent.schemaAware) {
+        applySelector(current, descent.first, data, seeds[d] as Node[])
+        continue
+      }
+      const found: Node[] = []
+      applySelector(current, descent.first, data, found)
+      for (const node of found) if (!isDataChild(node)) (seeds[d] as Node[]).push(node)
+    }
   }
 }
 
 /** Runs a JSONPath expression and returns each match with its concrete path. */
-export const query = (data: unknown, expression: string): IQueryMatch[] => queryCompiled(data, compileQuery(expression))
+export const query = (data: unknown, expression: string, options: QueryOptions = {}): IQueryMatch[] =>
+  queryCompiled(data, compileQuery(expression), options)

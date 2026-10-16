@@ -187,7 +187,7 @@ const runPlan = async (
 ): Promise<void> => {
   if (rules.length === 0) return
   const order: string[] = []
-  const groups = new Map<string, { compiled: CompiledPath; rules: ResolvedRule[] }>()
+  const groups = new Map<string, { compiled: CompiledPath; schemaAware: boolean; rules: ResolvedRule[] }>()
   for (const rule of rules) {
     // Surface an unknown-function reference once for the whole rule, then skip it
     // rather than throwing mid-run at the first matched node.
@@ -204,20 +204,27 @@ const runPlan = async (
       )
       continue
     }
+    const schemaAware = rule.descent === 'schema'
     for (const given of ruleset.expandGiven(rule.given, formats)) {
-      let group = groups.get(given)
+      // The same `given` read schema-aware is a different query.
+      const key = schemaAware ? `${given}\0schema` : given
+      let group = groups.get(key)
       if (!group) {
-        group = { compiled: compileQuery(given), rules: [] }
-        groups.set(given, group)
-        order.push(given)
+        group = { compiled: compileQuery(given), schemaAware, rules: [] }
+        groups.set(key, group)
+        order.push(key)
       }
       // Guard against a rule listing the same `given` twice.
       if (group.rules[group.rules.length - 1] !== rule) group.rules.push(rule)
     }
   }
 
-  const compiled = order.map((given) => (groups.get(given) as { compiled: CompiledPath }).compiled)
-  const matchesPerGiven = queryMany(data, compiled)
+  const planned = order.map((key) => groups.get(key) as { compiled: CompiledPath; schemaAware: boolean })
+  const matchesPerGiven = queryMany(
+    data,
+    planned.map((group) => group.compiled),
+    planned.map((group) => (group.schemaAware ? { schemaAware: true } : undefined)),
+  )
   for (let i = 0; i < order.length; i++) {
     const group = groups.get(order[i] as string) as { rules: ResolvedRule[] }
     const matches = matchesPerGiven[i] as { value: unknown; path: JsonPath }[]

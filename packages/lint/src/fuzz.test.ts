@@ -288,4 +288,63 @@ describe('JSONPath robustness (random expressions)', () => {
     }
     expect(failures.slice(0, 5)).toEqual([])
   })
+
+  it('keeps the shared walk in step with the per-path walk, schema-aware or not', () => {
+    // The shared walk follows a path's prefix one child at a time and skips
+    // data keywords inline; the per-path walk does neither. Any disagreement
+    // between them — a match, its path, or the order — is a bug in one.
+    const STEPS = [
+      '.a',
+      '.properties',
+      '.default',
+      '..b',
+      '..*',
+      '[*]',
+      '.*',
+      '[0]',
+      '[-1]',
+      "['a','b']",
+      '..[?(@.type)]',
+      '[?(@ && @.c)]',
+      '..[?(@property === "enum")]',
+      '..[?(@path.length > 6)]',
+      '..^',
+      '..~',
+      '..enum',
+      '..example',
+      '^',
+      '[0:2]',
+    ]
+    const SCHEMA_TREES: unknown[] = [
+      ...TREES,
+      {
+        a: { type: 'object', default: { type: 'object', b: 1 }, enum: [{ c: 1 }], properties: { default: { b: 2 } } },
+        properties: { enum: { type: 'x', example: { c: { b: 3 } } }, properties: { examples: [{ b: 4 }] } },
+        b: [{ type: 'object', const: { b: 5 } }, { examples: { default: { b: 6 } } }],
+      },
+      { default: { a: { b: 1 } }, schemas: { default: { type: 'object' }, example: [{ type: 1 }] } },
+    ]
+    const failures: string[] = []
+    for (let i = 0; i < 4000; i++) {
+      const expressions = Array.from({ length: 1 + rand(5) }, () => {
+        let expression = '$'
+        for (let step = 0, steps = 1 + rand(4); step < steps; step++) expression += pick(STEPS)
+        return expression
+      })
+      const compiled = expressions.map(compileQuery)
+      const options = expressions.map(() => ({ schemaAware: rand(2) === 0 }))
+      const tree = pick(SCHEMA_TREES)
+      const batched = queryMany(tree, compiled, options)
+      compiled.forEach((path, index) => {
+        const alone = queryCompiled(tree, path, options[index])
+        if (JSON.stringify(batched[index]) !== JSON.stringify(alone)) {
+          failures.push(
+            `${expressions[index]} (${JSON.stringify(options[index])}): batched ${JSON.stringify(batched[index])} vs ${JSON.stringify(alone)}`,
+          )
+        }
+      })
+      if (failures.length > 4) break
+    }
+    expect(failures.slice(0, 5)).toEqual([])
+  })
 })

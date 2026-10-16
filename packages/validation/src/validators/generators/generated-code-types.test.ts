@@ -665,14 +665,15 @@ describe('generated-code-types', () => {
       [
         'both',
         { type: 'object', properties: { p: { $ref: '#/$defs/a' } }, ...defs },
-        (content) => content.includes("import { type A, validateA } from './a.js'"),
+        // The guard answers the ref with the target's guard, so it imports that half too.
+        (content) => content.includes("import { type A, validateA, isA } from './a.js'"),
       ],
       // Called, never named: the type generator types an `if`-carrying node
       // `unknown` and names neither arm.
       [
         'validator-only',
         { if: { type: 'string' }, then: { $ref: '#/$defs/a' }, ...defs },
-        (content) => content.includes("import { validateA } from './a.js'"),
+        (content) => content.includes("import { validateA, isA } from './a.js'"),
       ],
       // Named, never called. With `prefixItems` present the array `items` beside
       // it is ignored and `additionalItems` describes no position the emitter

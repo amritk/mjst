@@ -134,6 +134,7 @@ export const generateValidatorFile = (
     typeName,
     unknownKeys,
     formats,
+    { suffix: typeSuffix, ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}) },
   )
   // Emitted from the same generator as `validateX`, off the same schema, so the
   // two can only disagree about how far they looked — never about the verdict.

@@ -1,5 +1,5 @@
 import { detectFormat, type ParserFormat } from '../parsers'
-import { createDocument, type Document, type IDocumentOptions } from './document'
+import { createDocument, createDocumentFromData, type Document, type IDocumentOptions } from './document'
 import { bySourceThenPosition, withoutDuplicates } from './order'
 import type { LintPlugin } from './plugin'
 import { runPlugins } from './plugin'
@@ -37,8 +37,16 @@ export type LintResolverResult = {
  */
 export type LintResolver = (
   document: Document,
+  /** `input` is the document text: `''` when the caller linted data without it. */
   context: { input: string },
 ) => LintResolverResult | Promise<LintResolverResult>
+
+/**
+ * What {@link lint} reads: the document text, or data the caller has already
+ * parsed — optionally with the text it came from, which is only read to put
+ * line:column ranges on findings. See {@link createDocumentFromData}.
+ */
+export type LintInput = string | { data: unknown; text?: string }
 
 /** Options for {@link lint} / {@link lintWithResult}. */
 export type LintOptions = IDocumentOptions & {
@@ -84,17 +92,38 @@ const toParserSeverity = (value: DiagnosticSeverity | string | undefined): Parse
  * level entry point (such as `@amritk/lint`) supplies the ruleset, and
  * optionally a resolver and format-skip predicate; {@link lint} is a thin
  * wrapper returning just the diagnostics.
+ *
+ * Handed `{ data, text? }` instead of a string, the parse is skipped: the
+ * run starts from the caller's data, and `text` (when given) is consulted
+ * only to put ranges on findings. The resolver then sees `text` (or `''`)
+ * as its `input`.
  */
-export const lintWithResult = async (input: string, options: LintOptions): Promise<LintResult> => {
+export const lintWithResult = async (input: LintInput, options: LintOptions): Promise<LintResult> => {
   const { ruleset, resolve, skip, plugins, ...documentOptions } = options
 
-  const duplicateKeys = toParserSeverity(ruleset.parserOptions?.duplicateKeys)
-  const incompatibleValues = toParserSeverity(ruleset.parserOptions?.incompatibleValues)
-  const document = createDocument(input, {
-    ...documentOptions,
-    ...(duplicateKeys !== undefined ? { duplicateKeys } : {}),
-    ...(incompatibleValues !== undefined ? { incompatibleValues } : {}),
-  })
+  let document: Document
+  let text: string
+  if (typeof input === 'string') {
+    const duplicateKeys = toParserSeverity(ruleset.parserOptions?.duplicateKeys)
+    const incompatibleValues = toParserSeverity(ruleset.parserOptions?.incompatibleValues)
+    document = createDocument(input, {
+      ...documentOptions,
+      ...(duplicateKeys !== undefined ? { duplicateKeys } : {}),
+      ...(incompatibleValues !== undefined ? { incompatibleValues } : {}),
+    })
+    text = input
+  } else {
+    // A plugin such as auto-fix rewrites the text, so it cannot work from data alone.
+    if (plugins && plugins.length > 0 && input.text === undefined) {
+      throw new Error('Plugins need the document text: pass `text` alongside `data`')
+    }
+    document = createDocumentFromData(input.data, {
+      ...(documentOptions.source !== undefined ? { source: documentOptions.source } : {}),
+      ...(documentOptions.format !== undefined ? { format: documentOptions.format } : {}),
+      ...(input.text !== undefined ? { text: input.text } : {}),
+    })
+    text = input.text ?? ''
+  }
 
   // Skip unrecognized-format documents before paying for resolution or the run.
   if (skip?.(document.data)) return { diagnostics: [], pluginData: {} }
@@ -103,7 +132,7 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
   let sources: ISourceSet | undefined
   let resolverDiagnostics: IDiagnostic[] = []
   if (resolve) {
-    const result = await resolve(document, { input })
+    const result = await resolve(document, { input: text })
     resolved = result.resolved
     sources = result.sources
     if (result.diagnostics) resolverDiagnostics = result.diagnostics
@@ -129,9 +158,9 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
 
   if (!plugins || plugins.length === 0) return { diagnostics, pluginData: {} }
 
-  const format: ParserFormat = documentOptions.format ?? detectFormat(input)
+  const format: ParserFormat = documentOptions.format ?? detectFormat(text)
   const run = runPlugins(plugins, diagnostics, {
-    input,
+    input: text,
     format,
     document,
     resolved,
@@ -146,5 +175,5 @@ export const lintWithResult = async (input: string, options: LintOptions): Promi
 }
 
 /** Lints `input` against a normalized `ruleset` and returns just the findings. */
-export const lint = async (input: string, options: LintOptions): Promise<IDiagnostic[]> =>
+export const lint = async (input: LintInput, options: LintOptions): Promise<IDiagnostic[]> =>
   (await lintWithResult(input, options)).diagnostics
