@@ -67,6 +67,12 @@ type GenerateValidatorFileOptions = {
    * validator ever sees it, and never shows up as a repair.
    */
   readonly repair?: boolean
+  /**
+   * Whether the repairing half also gets the single-pass walk, which `repairX`
+   * then runs instead of the validate-and-repair loop. Decided over the whole
+   * schema graph by the caller, since one walk calls another across files.
+   */
+  readonly repairWalk?: boolean
   /** Extension on every emitted relative specifier: `'js'` (default) or `'ts'`. */
   readonly importExt?: 'js' | 'ts'
   /**
@@ -162,6 +168,7 @@ export const generateValidatorFile = (
       ? generateRepairFunction(schema, typeName, typeSuffix, {
           ...(options?.rootSchema !== undefined ? { rootSchema: options.rootSchema } : {}),
           formats,
+          walk: options.repairWalk === true,
         }).code
       : ''
 
@@ -185,13 +192,14 @@ export const generateValidatorFile = (
     rootSchema: options?.rootSchema,
     typeSuffix,
     importExt,
-    reads: ({ typeName: name, validatorName, guardName, checkerName, coercerName, repairerName }) => ({
+    reads: ({ typeName: name, validatorName, guardName, checkerName, coercerName, repairerName, walkerName }) => ({
       type: mentions(name),
       validator: mentions(validatorName),
       guard: mentions(guardName),
       checker: mentions(checkerName),
       coercer: mentions(coercerName),
       repairer: mentions(repairerName),
+      walker: mentions(walkerName),
     }),
   })
 
@@ -210,7 +218,9 @@ export const generateValidatorFile = (
     ...(/\bValidationError\b/.test(body) ? ['ValidationError'] : []),
     ...(/\bCoercionResult\b/.test(body) ? ['CoercionResult'] : []),
     ...(/\bRepairResult\b/.test(body) ? ['RepairResult'] : []),
-    ...(/\bRepairLookup\b/.test(body) ? ['RepairLookup'] : []),
+    ...(['RepairLookup', 'RepairOptions', 'RepairThunk', 'RepairWalk', 'RepairRun'] as const).filter((name) =>
+      new RegExp(`\\b${name}\\b`).test(body),
+    ),
   ]
 
   // `.js` extension so the relative import resolves under Node ESM, not only Bun.
@@ -232,13 +242,36 @@ export const generateValidatorFile = (
       'selectBranchErrors',
       'coerceScalar',
       'coerceUnion',
-      'applyRepairs',
+      'runRepairLoop',
+      'runRepairWalk',
+      'childAt',
+      'fillKey',
+      'fillInto',
+      'walkError',
+      'walkPath',
+      'walkRepair',
+      'walkVerified',
+      'walkSet',
+      'walkSetItem',
+      'walkCompact',
+      'walkMissing',
+      'walkScope',
+      'walkUnscope',
+      'fillBegin',
+      'walkExtra',
+      'walkProto',
+      'walkHalt',
+      'walkMemo',
+      'walkRef',
+      'isPlainObject',
     ] as const
-  ).filter((name) => body.includes(`${name}(`))
-  // `MAX_REPAIR_PASSES` is a bound the repair loop reads as a bare identifier
-  // rather than calls, so the "is it invoked" test that finds every other helper
-  // does not see it.
-  if (body.includes('MAX_REPAIR_PASSES')) runtimeHelpers.push('MAX_REPAIR_PASSES')
+  ).filter((name) => body.includes(`${name}(`) || body.includes(`${name}<`))
+  // The repairing half reads a few runtime constants as bare identifiers rather
+  // than calling them, so the "is it invoked" test that finds every other helper
+  // does not see them.
+  for (const name of ['REPAIR_DROP', 'NO_SEGMENTS', 'MAX_FILL_DEPTH'] as const) {
+    if (new RegExp(`\\b${name}\\b`).test(body)) runtimeHelpers.push(name)
+  }
   if (runtimeHelpers.length > 0) {
     result += `import { ${runtimeHelpers.join(', ')} } from './validation-result.${importExt}'\n`
   }

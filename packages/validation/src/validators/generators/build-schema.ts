@@ -1,10 +1,12 @@
 import { generateIndexBarrel } from '@amritk/helpers/generate-index-barrel'
 import { DEFAULT_UNKNOWN_KEYS, type UnknownKeysStrategy } from '@amritk/helpers/unknown-keys-strategy'
-import { walkRefGraph } from '@amritk/helpers/walk-ref-graph'
+import { type RefNode, walkRefGraph } from '@amritk/helpers/walk-ref-graph'
 import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 
 import { emitFormatModule, FORMAT_FRAGMENTS, formatCheckName } from './emit-format-checks'
 import { generateValidatorFile } from './generate-files'
+import { REPAIR_RUNTIME_CONTENT } from './repair-runtime'
+import { asksForRefs, repairWalkBlocker } from './repair-walkable'
 
 /**
  * Represents a generated TypeScript file with its filename and content.
@@ -19,7 +21,8 @@ export type GeneratedFile = {
  * types plus the helpers emitted code calls as free identifiers. Exported so tests
  * can evaluate the very source that ships instead of reimplementing it.
  */
-export const VALIDATION_RESULT_CONTENT = `/**
+export const VALIDATION_RESULT_CONTENT =
+  `/**
  * A single validation error: what went wrong, where, and which keyword said so.
  *
  * The shape matches \`@amritk/runtime-validators\`, so an error from a generated
@@ -452,221 +455,7 @@ const acceptedKinds = (
   ]
 }
 
-/**
- * The result of a generated repairing validator.
- *
- * \`repairs\` is not a second, parallel account of what went wrong — it *is* the
- * errors \`validateX\` produced, the ones a repair was found for. So a caller that
- * logs a repair logs the same path, keyword and params it would have been
- * rejected with, and the two can never drift apart, because there is only one of
- * them.
- *
- * A document that needed no repair comes back \`valid: true\` with an empty
- * \`repairs\`, which is exactly what \`coerceX\` would have returned. One that was
- * fully repaired is \`valid: true\` with a non-empty \`repairs\` — the caller
- * decides whether that is acceptable by looking, rather than by being told. One
- * that could not be fully repaired is \`valid: false\` and carries both: the
- * repairs that were applied, and the \`errors\` still outstanding against the
- * value handed back.
- */
-export type RepairResult<T> =
-  | { valid: true; value: T; repairs: ValidationError[] }
-  | { valid: false; value: unknown; errors: ValidationError[]; repairs: ValidationError[] }
-
-/**
- * Looks up the repaired value for one position, given that position's JSON
- * Pointer split into segments. Returns a thunk rather than a value so each
- * repair gets its own object — a shared literal would alias every site that
- * repaired to it — and \`null\` where the schema offers nothing to repair toward.
- */
-export type RepairLookup = (segments: readonly string[]) => (() => unknown) | null
-
-/**
- * How many validate-and-repair rounds \`repairX\` will run. Repairing a child can
- * expose a parent that only became checkable once the child was there, so one
- * round is not always enough; but each round is bounded further by the rule that
- * a position is repaired at most once, so this is a backstop rather than the
- * thing doing the terminating.
- */
-export const MAX_REPAIR_PASSES = 8
-
-/**
- * Splits a JSON Pointer into its segments, undoing the escaping
- * {@link escapePointer} applied. The root pointer (\`''\`) is zero segments.
- */
-export const pointerSegments = (path: string): string[] =>
-  path === ''
-    ? []
-    : path
-        .slice(1)
-        .split('/')
-        .map((segment) =>
-          segment.indexOf('~') === -1 ? segment : segment.replace(/~1/g, '/').replace(/~0/g, '~'),
-        )
-
-/**
- * Returns \`root\` with the position at \`segments\` replaced by \`value\`, copying
- * only the containers along the way.
- *
- * Copying rather than writing is not politeness, it is the same promise
- * \`coerceX\` makes: the caller's input is never modified, so a repaired document
- * can be compared against what was actually sent. Everything the path did not
- * touch is shared, so repairing one field of a large document does not clone it.
- *
- * Returns \`root\` unchanged when the path does not lead anywhere — a segment into
- * a missing or non-container parent. That is not a failure to handle here: the
- * parent has an error of its own, and repairing *it* is what makes this position
- * reachable on a later pass.
- */
-export const repairAt = (root: unknown, segments: readonly string[], value: unknown): unknown => {
-  if (segments.length === 0) return value
-  const [head, ...rest] = segments as [string, ...string[]]
-
-  if (Array.isArray(root)) {
-    const index = Number(head)
-    // \`index === root.length\` is an append, which is what padding a short array
-    // to its \`minItems\` is made of. Anything past that would leave a hole, and a
-    // hole is not a repair.
-    if (!Number.isInteger(index) || index < 0 || index > root.length) return root
-    const next = repairAt(root[index], rest, value)
-    if (next === root[index]) return root
-    const copy = [...root]
-    copy[index] = next
-    return copy
-  }
-
-  if (typeof root !== 'object' || root === null) return root
-  const obj = root as Record<string, unknown>
-  // A missing key is reachable only when this is the last segment: that is the
-  // \`required\` repair, which is putting the key there. Deeper than that and the
-  // parent is the thing that needs repairing first.
-  if (!Object.hasOwn(obj, head) && rest.length > 0) return root
-  const next = repairAt(obj[head], rest, value)
-  if (next === obj[head] && Object.hasOwn(obj, head)) return root
-  return { ...obj, [head]: next }
-}
-
-/**
- * The position one error is asking to have repaired, or \`null\` when the error is
- * not about a position a value can be put at.
- *
- * One keyword does not point at the value that is wrong: a \`required\` error is
- * reported against the *object* that is missing the key, and names the key in
- * \`params.missingProperty\`, so the position to fill is one segment deeper.
- * \`minItems\` is the other exception and is handled separately, because it is
- * satisfied by adding several values rather than by replacing one.
- */
-const repairTarget = (error: ValidationError): readonly string[] | null => {
-  const segments = pointerSegments(error.path)
-  if (error.keyword === 'required') {
-    const missing = error.params['missingProperty']
-    return typeof missing === 'string' ? [...segments, missing] : null
-  }
-  return segments
-}
-
-/** The value at a pointer, or \`undefined\` when the path does not lead anywhere. */
-const valueAt = (root: unknown, segments: readonly string[]): unknown =>
-  segments.reduce<unknown>(
-    (node, segment) =>
-      Array.isArray(node)
-        ? node[Number(segment)]
-        : typeof node === 'object' && node !== null
-          ? (node as Record<string, unknown>)[segment]
-          : undefined,
-    root,
-  )
-
-/**
- * Grows a short array to the length \`minItems\` asks for, or \`null\` when it
- * cannot.
- *
- * Padding is its own operation rather than a position repair because one
- * \`minItems\` error is satisfied by *several* values, not one. Doing it a single
- * element per round would work, but it would spend a round per element and a
- * \`minItems: 50\` would run out of them; filling the shortfall at once keeps the
- * number of rounds a question about the shape of the document rather than about
- * the size of its arrays.
- *
- * Every added element is a separate call to the thunk, so no two share an object.
- */
-const padToMinItems = (
-  root: unknown,
-  error: ValidationError,
-  lookup: RepairLookup,
-  done: Set<string>,
-): unknown => {
-  const segments = pointerSegments(error.path)
-  const array = valueAt(root, segments)
-  const limit = error.params['limit']
-  if (!Array.isArray(array) || typeof limit !== 'number' || array.length >= limit) return null
-
-  // Keyed apart from a position repair at the same path: replacing the whole
-  // array and padding it are different repairs, and having done one is no reason
-  // to refuse the other.
-  const key = \`\${segments.join('/')}#minItems\`
-  if (done.has(key)) return null
-
-  const element = lookup([...segments, String(array.length)])
-  if (element === null) return null
-
-  const padded = [...array]
-  while (padded.length < limit) padded.push(element())
-  const updated = repairAt(root, segments, padded)
-  if (updated === root) return null
-  done.add(key)
-  return updated
-}
-
-/**
- * Applies one round of repairs: every error the schema offers a value for is
- * repaired, and the rest are handed back untouched.
- *
- * \`done\` carries the positions already repaired on an earlier round. A position
- * that failed again after being repaired is not repaired a second time — the
- * value the schema offered did not satisfy the schema, which is a fact about the
- * schema, and trying again would only produce the same value. Refusing keeps the
- * loop finite without relying on the pass cap, and turns the position into an
- * honest error instead of a silent spin.
- */
-export const applyRepairs = (
-  value: unknown,
-  errors: readonly ValidationError[],
-  lookup: RepairLookup,
-  done: Set<string>,
-): { value: unknown; repaired: ValidationError[] } => {
-  const repaired: ValidationError[] = []
-  let next = value
-
-  for (const error of errors) {
-    if (error.keyword === 'minItems') {
-      const padded = padToMinItems(next, error, lookup, done)
-      if (padded === null) continue
-      next = padded
-      repaired.push(error)
-      continue
-    }
-
-    const target = repairTarget(error)
-    if (target === null) continue
-    const key = target.join('/')
-    if (done.has(key)) continue
-    const to = lookup(target)
-    if (to === null) continue
-
-    const updated = repairAt(next, target, to())
-    // An unreachable position leaves the document exactly as it was. Not counting
-    // it as repaired is what lets the parent's own error be the thing that
-    // reports, rather than this silently claiming a fix that did not land.
-    if (updated === next) continue
-    done.add(key)
-    next = updated
-    repaired.push(error)
-  }
-
-  return { value: next, repaired }
-}
-`
+` + REPAIR_RUNTIME_CONTENT
 
 /**
  * The type names {@link VALIDATION_RESULT_CONTENT} exports, which every generated
@@ -674,6 +463,12 @@ export const applyRepairs = (
  * under one name, so generation refuses rather than emit a file that cannot load.
  */
 const RESERVED_TYPE_NAMES = new Set(['ValidationResult', 'ValidationError'])
+
+/** The type names a coercing file can import as well. */
+const COERCE_TYPE_NAMES = ['CoercionResult']
+
+/** The type names a repairing file can import as well. */
+const REPAIR_TYPE_NAMES = ['RepairResult', 'RepairLookup', 'RepairOptions', 'RepairThunk', 'RepairWalk', 'RepairRun']
 
 /** A name TypeScript will accept after `export type`. */
 const TYPE_NAME = /^[\p{ID_Start}_$][\p{ID_Continue}$]*$/u
@@ -723,6 +518,32 @@ const RESERVED_WORDS = new Set([
   'with',
   'yield',
 ])
+
+/**
+ * Whether the repairing half of every file gets the single-pass walk.
+ *
+ * It does when every definition is built from keywords the walk repairs exactly
+ * as the validate-and-repair loop would. Otherwise `repairX` keeps the loop —
+ * unless the schema asked for instance `$ref` following, which only the walk
+ * does: dropping an explicit opt-in silently would hand back documents whose
+ * references were never checked, so that refuses to generate instead.
+ */
+const decideRepairWalk = (nodes: readonly RefNode[]): boolean => {
+  for (const node of nodes) {
+    const blocker = repairWalkBlocker(node.schema, node.isRoot)
+    if (blocker === null) continue
+    const refs = nodes.find((candidate) => asksForRefs(candidate.schema))
+    if (refs !== undefined) {
+      const owner = node.isRoot ? 'the root schema' : `"${node.ref}"`
+      throw new Error(
+        `"x-repair": "ref" needs the single-pass repair walk, which ${owner} cannot use: ${blocker} is a keyword ` +
+          'the walk does not repair. Remove it, or drop the "x-repair": "ref" opt-in.',
+      )
+    }
+    return false
+  }
+  return true
+}
 
 /**
  * Builds all TypeScript validator files from a JSON Schema by traversing all
@@ -789,8 +610,23 @@ export const buildValidatorSchema = async (
       ? new Set(Object.keys(FORMAT_FRAGMENTS))
       : new Set((formats ?? []).filter((name) => Object.hasOwn(FORMAT_FRAGMENTS, name)))
   const files: GeneratedFile[] = []
+  const reserved = new Set([
+    ...RESERVED_TYPE_NAMES,
+    ...(coerce || repair ? COERCE_TYPE_NAMES : []),
+    ...(repair ? REPAIR_TYPE_NAMES : []),
+  ])
 
+  // The graph is collected before anything is emitted, because whether the
+  // repairing half gets its single-pass walk is a question about every
+  // definition at once: one walk calls the next across files, so a single
+  // definition the walk cannot cover keeps the loop for all of them.
+  const nodes: RefNode[] = []
   walkRefGraph(rootSchema, rootTypeName, { typeSuffix, ...(schemas !== undefined ? { schemas } : {}) }, (node) => {
+    nodes.push(node)
+  })
+  const repairWalk = repair && decideRepairWalk(nodes)
+
+  for (const node of nodes) {
     // `validation-result` and `index` are reserved output filenames. Skipping a
     // definition that wants one of them looked safe and was not: nothing stopped
     // the *importers* from being generated, so a `$defs.index` produced a
@@ -836,7 +672,7 @@ export const buildValidatorSchema = async (
     // file that does not compile. The type name is what the emitted code says, so
     // it is what to ask about — and a `typeSuffix` that moves it clear (a
     // `ValidationErrorObject`) is no collision at all.
-    if (RESERVED_TYPE_NAMES.has(node.typeName)) {
+    if (reserved.has(node.typeName)) {
       const owner = node.isRoot ? `the root type name "${node.typeName}"` : `"${node.ref}"`
       throw new Error(
         `${owner} generates the type "${node.typeName}", which every generated file already imports from ` +
@@ -854,11 +690,12 @@ export const buildValidatorSchema = async (
       coerce,
       branchErrors,
       repair,
+      repairWalk,
       importExt,
       ...(node.ref !== undefined ? { selfRef: node.ref } : {}),
     })
     files.push({ filename: `${node.filename}.ts`, content })
-  })
+  }
 
   // Emit the runtime contract for validators. ValidationResult is mjst-defined
   // (not derived from the input schema), so its content is fixed.

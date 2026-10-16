@@ -56,4 +56,16 @@ bun run --filter='@amritk/validation' types:check
   data, so a `replaceAll` over a finished function rewrites *them* too —
   `schema-text-is-data.test.ts` pins it. Emit the final spelling first time.
 
+- **The repairing half has two engines over one lookup.** `repairXAt`
+  (`generate-repair-function.ts`) answers what a position repairs to. The
+  single-pass walk (`generate-repair-walk.ts`) is emitted only when
+  `repair-walkable.ts` clears *every* definition in the graph — one walk calls
+  the next across files — and otherwise `repairX` runs the validate-and-repair
+  loop. A keyword lands in the walk only if the walk repairs it exactly as the
+  loop would; anything repaired elsewhere than the position that reports it
+  (`minItems` pads, `propertyNames` names a key) goes on the blocking list.
+  the "walk against validateX" suite in `repair-walk.test.ts` pins that every error
+  `validateX` reports, the walk reports too. The runtime both engines share is
+  `repair-runtime.ts`: a plain template, so it holds no backticks and no `${`.
+
 Add a changeset for every change (`bunx changeset`).

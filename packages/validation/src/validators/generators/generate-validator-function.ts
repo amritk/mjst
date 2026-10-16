@@ -952,7 +952,11 @@ const generateKeywordChecks = (
           ? [`  if (!${ctx.refGuard(target)}(${raw})) return false`]
           : [
               `  const _r = ${validatorName(target)}(${raw}, ${path})`,
-              `  if (_r !== true) ${ctx.sink}.push(..._r.errors)`,
+              // A loop rather than a spread: spreading passes every error as an
+              // argument, and a document with tens of thousands of errors under
+              // one reference overflows the engine's argument limit with a
+              // RangeError instead of returning them.
+              `  if (_r !== true) for (const _e of _r.errors) ${ctx.sink}.push(_e)`,
             ]
     // The delegation result gets a block of its own, so two of them can sit in
     // the same statement list: `{ $ref, allOf: [{ $ref }] }` is a real shape, and
@@ -1285,7 +1289,7 @@ const generateConstraintChecks = (
       // `return` out of the `for` being a `return` out of the validator.
       const failFast = ctx.sink === FAIL_FAST_SINK
       const target = refToName(itemSchema.$ref, suffix)
-      const onFailure = failFast ? 'return _ir' : `${ctx.sink}.push(..._ir.errors)`
+      const onFailure = failFast ? 'return _ir' : `for (const _e of _ir.errors) ${ctx.sink}.push(_e)`
       lines.push(`  if (Array.isArray(${raw})) {`)
       lines.push(`    for (let ${iv} = ${firstTailIndex}; ${iv} < ${raw}.length; ${iv}++) {`)
       // A yes/no test asks the target's guard, which builds nothing on the way to
@@ -4030,6 +4034,14 @@ export const createSubschemaMatcher = (
    * `null` for a body only the buffered form of {@link test} can express.
    */
   named: (sub: JSONSchema) => boolean | string | null
+  /**
+   * The name of a hoisted function that says why a value fails `sub` — every
+   * error `validateX` would report for it, rooted at the path it is handed — or
+   * `null` when `sub` has no checks to explain anything with. The repair walk
+   * calls it once a position has already failed, so it costs nothing on valid
+   * input.
+   */
+  explain: (sub: JSONSchema) => string | null
   declarations: (text: string) => string[]
 } => {
   const ctx: NestingContext = { ...createRootContext(rootSchema, formats), hoistNamespace, refGuard }
@@ -4075,6 +4087,7 @@ export const createSubschemaMatcher = (
       const name = namedMatcher(rewriteNullable(sub) as JSONSchema, suffix, ctx)
       return name === 'true' ? true : name
     },
+    explain: (sub) => namedBranchErrors(rewriteNullable(sub) as JSONSchema, suffix, ctx),
     declarations: (text) => keptHoisted(ctx.hoisted, text),
   }
 }

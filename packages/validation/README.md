@@ -103,6 +103,51 @@ not enough: a document nothing could repair comes back with none either, and
 `valid: false`. To reject a bad config, use `coerceX`. To hand back a fixed one,
 use `repairX`.
 
+**Repairing large documents.** `repairX(input, options?)` takes an options
+object (a bare string is still read as the base path):
+
+| option | default | what it does |
+| --- | --- | --- |
+| `path` | `''` | JSON Pointer every reported path is rooted at |
+| `inPlace` | `false` | assign and delete on the input instead of copying the containers a repair touches |
+| `coerce` | `true` | move a scalar written in the wrong type (`"5"` under `integer`) before repairing; off, it is repaired to the schema's value and reported |
+| `refs` | `true` | follow instance `$ref`s at positions whose Reference schema opts in (below) |
+| `skipRefs` | `[]` | pointer prefixes (`'#/components/'`) whose targets the root schema already walks; still resolved, not walked again |
+| `onRef` | — | `(value, path, typeId) => boolean \| void`, called for every opted-in `$ref`; `false` leaves it alone |
+| `maxDepth` | `512` | depth past which a position is reported (`maxDepth`) instead of walked |
+| `maxWork` | `10_000_000` | containers visited before the walk stops (`maxWork`) |
+| `memo` | `false` | walk each object once per schema — for in-memory graphs with shared or cyclic subtrees |
+| `finite` | `false` | reject `NaN` and the infinities where a number is declared |
+| `plainObjects` | `false` | accept only plain objects, and remove an own `__proto__` key |
+
+When every definition in the schema is built from `type`, `enum`, `const`,
+`properties`, `required`, `additionalProperties`, `patternProperties`, `items`,
+`$ref`, `if`/`then`/`else` and `allOf` — plus annotations, and scalar
+assertions such as `minLength`, `pattern`, `minimum`, `anyOf`, `oneOf` or `not`,
+which are asked of the validator's own test of the position — `repairX` is a
+single pass: each position is checked and repaired where it stands, an `if` is
+evaluated against the value actually there, a missing required object is built
+with its required children (to a bounded depth on a recursive definition), and
+errors go straight into one array with their paths built only when something is
+reported. A valid document comes back as itself with nothing copied. On a 24 MB
+bundled OpenAPI document that is well under a hundred milliseconds (`bun
+--conditions development scripts/bench-repair-walk.ts`). Any other keyword keeps
+the validate-and-repair loop, which honours `path`, `inPlace` and `coerce` and
+throws on the walk-only options (`skipRefs`, `onRef`, `maxDepth`, `maxWork`,
+`memo`, `finite`, `plainObjects`) rather than quietly dropping a guard.
+
+Two schema annotations steer it. `"x-repair": "drop"` — and a `false` schema —
+removes a failing position instead of writing a default: an unknown key under
+`additionalProperties: false`, an array element under `items: false`, a
+drop-marked property. `"x-repair": "ref"` on a Reference schema turns on
+instance `$ref` following: at a position written
+`{ if: { type: object, required: [$ref] }, then: Reference, else: T }`, the
+`$ref` is resolved as a JSON Pointer against the root document (own properties
+only), and its target is checked and repaired as that position's type, with
+errors at the target's own path. Each target is walked once per type, chains
+and cycles included; one that does not resolve is reported as `unresolvedRef`
+and never created.
+
 **`parseX` agrees with `coerceX`.** Wherever `coerceX` accepts a document, the
 coercing `parseX` returns the very same value — through a union, an `allOf`, an
 `if`, a `$ref`, recursion included — and it only repairs what `coerceX` would

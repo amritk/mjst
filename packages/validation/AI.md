@@ -107,4 +107,15 @@ any of them without one of those two flags.
    barrel — a leading `_` marks a name for sibling files only). Strict and
    `stripUnknown` parsers are unchanged.
 
+11. **`repairX(input, options?)` takes options, and is one pass when it can be.**
+   `inPlace`, `coerce: false` and `path` work for every schema; `refs`,
+   `skipRefs`, `onRef`, `maxDepth`, `maxWork`, `memo`, `finite` and
+   `plainObjects` only for a schema the single-pass walk covers (the
+   `if`/`then`/`else` + `allOf` + `properties` family; see the README) — on any
+   other schema `repairX` throws if they are set. Do not
+   promise a user instance `$ref` following without `"x-repair": "ref"` on their
+   Reference schema — generation refuses that opt-in on a schema the walk cannot
+   serve rather than ignoring it. `"x-repair": "drop"` and `false` schemas remove
+   a failing position rather than defaulting it.
+
 Only the `.` entry. Install: `bun add @amritk/validation`.
