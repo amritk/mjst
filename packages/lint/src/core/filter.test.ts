@@ -170,6 +170,10 @@ describe('filter', () => {
       ["@property === 'type'", false],
       ['@parent.type', false],
       ['@.a == null', false],
+      ['@.x == 0', true],
+      ["'' == @.x", true],
+      ['@.x == /a/', true],
+      ['@.x.length === 0', true],
       // A nested comparison is a defined boolean on every candidate, so
       // comparing it to a literal says nothing about the candidate's type.
       ["(@.type === 'object') === false", false],

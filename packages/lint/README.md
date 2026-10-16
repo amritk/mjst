@@ -70,7 +70,7 @@ A caller that has the document parsed already — a loader that read and normali
 const findings = await lintDocument({ data: spec, text: source }, { ruleset, source: 'openapi.json' })
 ```
 
-`text` is optional and only read to put `line:column` ranges on findings, lazily: JSON text is scanned for just the paths that carry findings, YAML text is parsed on the first lookup. A path the caller's normalization added resolves to its closest ancestor in the text, and without `text` every range is the zero range. Nothing is parsed, so there are no parser diagnostics: `parserOptions` (`duplicateKeys`, `incompatibleValues`) and syntax errors are only reported when linting the text. Plugins that rewrite the document (auto-fix) need `text`. `createDocumentFromData(data, { text })` builds the same document for the lower-level `createLinter(ruleset).run()`.
+`text` is optional and only read to put `line:column` ranges on findings, lazily: JSON text is scanned for just the paths that carry findings, YAML text is parsed on the first lookup. A path the caller's normalization added resolves to its closest ancestor in the text, and without `text` every range is the zero range. Since the data is not parsed, there are no parser diagnostics: `parserOptions` (`duplicateKeys`, `incompatibleValues`) and syntax errors are only reported when linting the text. Plugins that rewrite the document (auto-fix) need `text`. `createDocumentFromData(data, { text })` builds the same document for the lower-level `createLinter(ruleset).run()`.
 
 ### Validate against a JSON Schema
 
