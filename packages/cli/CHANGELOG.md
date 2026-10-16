@@ -1,5 +1,16 @@
 # @amritk/mjst
 
+## 0.27.1
+
+### Patch Changes
+
+- Updated dependencies [148a651]
+- Updated dependencies [147bf5d]
+- Updated dependencies [148a651]
+  - @amritk/lint@0.8.0
+  - @amritk/validation@0.6.0
+  - @amritk/adapters@0.6.9
+
 ## 0.27.0
 
 ### Minor Changes
