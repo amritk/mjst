@@ -223,5 +223,8 @@ describe('jsonpath queryMany', () => {
     expect(query(document, '$..type', { schemaAware: true }).map((match) => match.path.join('/'))).toEqual([
       `${map}/default/type`,
     ])
+    expect(queryMany(document, [compileQuery('$..type')], [{ schemaAware: true }])[0]).toEqual(
+      query(document, '$..type', { schemaAware: true }),
+    )
   })
 })
