@@ -201,4 +201,27 @@ describe('jsonpath queryMany', () => {
       query(document, expression, { schemaAware: true }),
     )
   })
+
+  it.each([
+    'webhooks',
+    'encoding',
+    'variables',
+    'dependencies',
+    'servers',
+    'serverVariables',
+    'messageTraits',
+    'operationTraits',
+    'correlationIds',
+    'replies',
+    'replyAddresses',
+    'serverBindings',
+    'channelBindings',
+    'operationBindings',
+    'messageBindings',
+  ])('treats the keys of %s as names in a schema-aware descent', (map) => {
+    const document = { [map]: { default: { type: 'object' } } }
+    expect(query(document, '$..type', { schemaAware: true }).map((match) => match.path.join('/'))).toEqual([
+      `${map}/default/type`,
+    ])
+  })
 })
