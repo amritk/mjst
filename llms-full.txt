@@ -451,7 +451,8 @@ createAsyncApiRuleset({
 - `lintDocument(input, options?)` → findings only. `options.ruleset` is either a
   definition to build or an already-built `Ruleset`. `input` is the text, or
   `{ data, text? }` when the caller has already parsed it: the parse is skipped
-  and `text` is read only for finding ranges (zero ranges without it).
+  (so no parser diagnostics) and `text` is read only for finding ranges (zero
+  ranges without it).
 - A rule's `descent: 'schema'` keeps `..` out of `example`, `examples`,
   `default`, `const` and `enum` values. Use it for rules about schemas.
 - `lintDocumentWithResult(input, options?)` → `{ diagnostics, output?, pluginData }`.

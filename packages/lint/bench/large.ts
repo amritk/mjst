@@ -19,7 +19,7 @@ import { resolveRefs } from '@amritk/resolve-refs'
  *     source string and from pre-parsed data.
  *   - **preset** — the recommended OpenAPI ruleset end to end, `$ref`s resolved.
  *
- *   bun --conditions development packages/lint/bench/large.ts <document.json> [--dump <file>] [--only <phases>]
+ *   bun --conditions development packages/lint/bench/large.ts <document.json> [--dump <file>] [--only <phases>] [--budget <ms>]
  *
  * Any large public OpenAPI document works; without an argument the bench
  * builds a synthetic one (see `synthesize`) so it runs offline and in CI.

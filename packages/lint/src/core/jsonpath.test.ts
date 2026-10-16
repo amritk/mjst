@@ -185,4 +185,20 @@ describe('jsonpath queryMany', () => {
       query(document, expression, { schemaAware: true }),
     )
   })
+
+  it('goes into named components called default under the AsyncAPI and OpenAPI maps', () => {
+    const payload = { type: 'object' }
+    const document = {
+      components: { messageTraits: { default: { payload } } },
+      webhooks: { default: { post: { requestBody: { content: { 'application/json': { schema: payload } } } } } },
+    }
+    const expression = "$..[?(@ && @.type === 'object')]"
+    expect(query(document, expression, { schemaAware: true }).map((match) => match.path.join('/'))).toEqual([
+      'components/messageTraits/default/payload',
+      'webhooks/default/post/requestBody/content/application/json/schema',
+    ])
+    expect(queryMany(document, [compileQuery(expression)], [{ schemaAware: true }])[0]).toEqual(
+      query(document, expression, { schemaAware: true }),
+    )
+  })
 })

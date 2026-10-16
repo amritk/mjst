@@ -2,7 +2,7 @@
  * The cases `scripts/bench-compare.ts` times for `@amritk/lint`, one per phase
  * of a lint run, so a regression in any one of them shows on its own row
  * rather than diluted into an end-to-end number. Every case runs over the same
- * document: the vendored OpenAI spec, re-serialized as JSON (~4 MB), which is
+ * document: the vendored OpenAI spec, re-serialized as JSON (~3 MB), which is
  * the largest real-world document in the repo and exercises the JSON path the
  * large-document work targets.
  *

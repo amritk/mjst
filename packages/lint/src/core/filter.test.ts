@@ -170,6 +170,12 @@ describe('filter', () => {
       ["@property === 'type'", false],
       ['@parent.type', false],
       ['@.a == null', false],
+      // A nested comparison is a defined boolean on every candidate, so
+      // comparing it to a literal says nothing about the candidate's type.
+      ["(@.type === 'object') === false", false],
+      ["(@.type === 'object') == 0", false],
+      ["false === (@.type === 'object')", false],
+      ['(@.a && @.b) === false', false],
     ]
     const candidates: unknown[] = [
       '',

@@ -500,7 +500,9 @@ const readsOffObject = (node: FilterNode): boolean => {
  *   - a read off the candidate by an object-only name, or a method call on one,
  *     is `undefined` (or a failed evaluation, which is no match) otherwise;
  *   - `X === c` and `X == c` with `c` neither `null` nor `undefined` need `X`
- *     defined, so they inherit `X`'s answer;
+ *     defined, so they count when `X` is such a read. Only a read: a nested
+ *     comparison or logical expression is defined on every candidate, so
+ *     `(@.type === 'object') === false` matches scalars;
  *   - `a && b` needs both, so either one showing it is enough; `a || b` needs
  *     one of them, so both have to show it.
  *
@@ -516,8 +518,8 @@ const matchesOnlyObjects = (node: FilterNode): boolean => {
       if (node.operator !== '===' && node.operator !== '==') return false
       const definedLiteral = (side: FilterNode): boolean =>
         side.kind === 'literal' ? side.value !== undefined && side.value !== null : side.kind === 'regex'
-      if (definedLiteral(node.right)) return matchesOnlyObjects(node.left)
-      if (definedLiteral(node.left)) return matchesOnlyObjects(node.right)
+      if (definedLiteral(node.right)) return readsOffObject(node.left)
+      if (definedLiteral(node.left)) return readsOffObject(node.right)
       return false
     }
     case 'logical':
