@@ -1,4 +1,4 @@
-import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { regexTest } from '@amritk/helpers/escape-regex-pattern'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { refToName } from '@amritk/helpers/ref-to-name'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
@@ -409,7 +409,7 @@ export const generatePropertyTypeCheck = (
   switch (schema.type) {
     case 'string': {
       checks.push(`typeof ${varName} === "string"`)
-      if (hasPattern(schema)) checks.push(`${regexLiteral(schema.pattern)}.test(${varName})`)
+      if (hasPattern(schema)) checks.push(regexTest(schema.pattern, varName))
       // Code points, not UTF-16 units (see string-length-check). A bare
       // `.length` is not *true-sound* for an astral string: it called `"💩"`
       // two characters long, so the guard waved a value past `minLength: 2`

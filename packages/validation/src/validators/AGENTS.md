@@ -56,6 +56,17 @@ bun run --filter='@amritk/validation' types:check
   data, so a `replaceAll` over a finished function rewrites *them* too —
   `schema-text-is-data.test.ts` pins it. Emit the final spelling first time.
 
+- An object with eight or more optional properties reads them with one
+  `for…in` + `switch` over the instance's keys (`planKeyDispatch`), not a
+  named read per declared property, which is what a document of varied shapes
+  pays for most. Only the *read* moves: every check still runs in declared
+  order from a local, so errors and their order are unchanged, and
+  `key-dispatch.test.ts` pins both against the interpreter. Prototype-member
+  names keep their own-property read.
+- Patterns reach generated code through `regexTest` (`@amritk/helpers`), which
+  turns a literal pattern (`^x-`, `^\$ref$`) into a string comparison. Emit
+  sites take it rather than writing `${regexLiteral(p)}.test(…)`, and the
+  subject must already be known to be a string.
 - **The repairing half has two engines over one lookup.** `repairXAt`
   (`generate-repair-function.ts`) answers what a position repairs to. The
   single-pass walk (`generate-repair-walk.ts`) is emitted only when

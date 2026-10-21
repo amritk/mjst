@@ -2648,10 +2648,12 @@ describe('generate-validator-function', () => {
   })
 
   describe('hoisted declarations', () => {
+    // `^x-[a-z]` rather than the usual `^x-`: a literal prefix is a `startsWith`
+    // and needs no table, and the table is what these cases are about.
     const strictWithPatterns = {
       type: 'object' as const,
       additionalProperties: false,
-      patternProperties: { '^x-': { type: 'string' as const } },
+      patternProperties: { '^x-[a-z]': { type: 'string' as const } },
       properties: { b: { type: 'string' as const } },
     }
 
@@ -2659,8 +2661,20 @@ describe('generate-validator-function', () => {
       // The half that must survive: when the sweep is emitted, its table has to
       // come with it, or the file references a name nothing declares.
       const code = generateValidatorFunction(strictWithPatterns, 'Root')
-      expect(code).toContain('const _patterns0 = [new RegExp("^x-", "u")]')
-      expect(code).toContain('_patterns0.some(')
+      expect(code).toContain('const _patterns0 = [new RegExp("^x-[a-z]", "u")]')
+      expect(code).toContain('_patterns0[0].test(_key0)')
+    })
+
+    it('tests a literal pattern as a string, with no table to hoist', () => {
+      const code = generateValidatorFunction(
+        { ...strictWithPatterns, patternProperties: { '^x-': { type: 'string' as const } } },
+        'Root',
+      )
+      expect(code).not.toContain('_patterns0')
+      expect(code).toContain('_key0.startsWith("x-")')
+      const validate = evalValidator(code)
+      expect(validate({ b: 'ok', 'x-a': 'v' })).toBe(true)
+      expect(validate({ b: 'ok', y: 'v' })).not.toBe(true)
     })
 
     it('drops a table whose only reader was a folded branch', () => {
@@ -2757,7 +2771,7 @@ describe('generate-validator-function', () => {
     // first attempt answered it by searching the emitted text for the name. That
     // text is not all code: a `pattern` becomes a regex *literal*, and its source
     // is the schema author's. An apostrophe in an ordinary name pattern opened a
-    // string that swallowed the `_patterns0.some(` following it, the declaration
+    // string that swallowed the `_patterns0[0].test(` following it, the declaration
     // was pruned as dead, and the validator threw `_patterns0 is not defined` on
     // the first object with an extra key. Every case here asserts the declaration
     // SURVIVES and the validator runs — the direction a blanket "prune it" also
@@ -2772,12 +2786,12 @@ describe('generate-validator-function', () => {
       const schema = {
         type: 'object' as const,
         additionalProperties: false,
-        patternProperties: { '^x-': { type: 'string' as const } },
+        patternProperties: { '^x-[a-z]': { type: 'string' as const } },
         properties: { name: { type: 'string' as const, pattern } },
       }
       const code = generateValidatorFunction(schema, 'Root')
 
-      expect(code).toContain('_patterns0.some(')
+      expect(code).toContain('_patterns0[0].test(')
       expect(code).toContain('const _patterns0 =')
 
       // The declaration being present is not enough — it has to be present *and*

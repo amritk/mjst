@@ -1,4 +1,4 @@
-import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { regexTest } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr } from '@amritk/helpers/multiple-of-check'
 import { boundFailExpr } from '@amritk/helpers/numeric-bound-check'
@@ -324,9 +324,9 @@ const generateConstraintChecks = (
 
   if (t === 'string') {
     if (hasPattern(propSchema)) {
-      const patternLiteral = regexLiteral(propSchema.pattern)
+      const patternTest = regexTest(propSchema.pattern, acc)
       lines.push(
-        `  if (typeof ${acc} === "string" && !${patternLiteral}.test(${acc})) ${throwError(`${field} must match pattern ${propSchema.pattern}`)};`,
+        `  if (typeof ${acc} === "string" && !${patternTest}) ${throwError(`${field} must match pattern ${propSchema.pattern}`)};`,
       )
     }
     // Lengths count code points, not UTF-16 units: `"💩".length` is 2, so a raw
@@ -824,14 +824,14 @@ export const generateKeyedValueChecks = (
   const lines: string[] = []
   for (const [pattern, match] of patternEntries) {
     lines.push(
-      `    if (${regexLiteral(pattern)}.test(_k) && !(${match})) ${throwError(`${label} invalid value for property `, '_k')};`,
+      `    if (${regexTest(pattern, '_k')} && !(${match})) ${throwError(`${label} invalid value for property `, '_k')};`,
     )
   }
   if (additionalMatch !== null && additionalMatch !== 'true') {
     const declared = hasProperties(schema) ? Object.keys(schema.properties as Record<string, unknown>) : []
     const guards: string[] = []
     if (declared.length > 0) guards.push(`!${JSON.stringify(declared)}.includes(_k)`)
-    for (const pattern of allPatterns) guards.push(`!${regexLiteral(pattern)}.test(_k)`)
+    for (const pattern of allPatterns) guards.push(`!${regexTest(pattern, '_k')}`)
     const prefix = guards.length > 0 ? `${guards.join(' && ')} && ` : ''
     lines.push(`    if (${prefix}!(${additionalMatch})) ${throwError(`${label} invalid value for property `, '_k')};`)
   }

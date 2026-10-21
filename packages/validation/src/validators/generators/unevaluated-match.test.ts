@@ -51,7 +51,10 @@ describe('unevaluated-match', () => {
       'Object.keys((value as Record<string, unknown>)).every((_uk0) => ["a","b"].includes(_uk0))',
     )
     expect(properties({ patternProperties: { '^x-': true }, unevaluatedProperties: false })?.expr).toContain(
-      '/^x-/u.test(_uk0)',
+      '_uk0.startsWith("x-")',
+    )
+    expect(properties({ patternProperties: { '^x-\\d': true }, unevaluatedProperties: false })?.expr).toContain(
+      '/^x-\\d/u.test(_uk0)',
     )
     expect(items({ prefixItems: [true, true], unevaluatedItems: false })?.expr).toContain('_un0 < 2')
   })

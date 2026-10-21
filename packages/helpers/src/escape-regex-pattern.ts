@@ -168,3 +168,85 @@ export const regexFlagsFor = (pattern: string): string => compileMode(pattern) ?
  * @throws if `pattern` is not a valid regular expression.
  */
 export const regexLiteral = (pattern: string): string => `/${escapeRegexPattern(pattern)}/${regexFlagsFor(pattern)}`
+
+/** The characters a `\` makes literal, in either regex mode, without making them a class or a control. */
+const ESCAPABLE_PUNCTUATION = new Set(['^', '$', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '/', '-'])
+
+/** The characters that mean something unescaped, so a pattern holding one is not a plain literal. */
+const METACHARACTERS = new Set(['^', '$', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|'])
+
+/**
+ * The string a `pattern` matches verbatim, and where it is anchored, when the
+ * pattern is nothing but literal characters — `^x-`, `^\$ref$`, `^\/`. `null` for
+ * anything that needs a regex engine.
+ *
+ * Kept deliberately narrow: an escape counts only when it is one of the
+ * punctuation characters every mode reads as itself (`\d`, `\n` or `A`
+ * bail), and any surrogate bails, so the code-point matching the `u` flag does
+ * can never differ from the code-unit comparison that replaces it. Without the
+ * `m` flag, which no generated regex carries, `^` and `$` anchor to the ends of
+ * the whole string and nothing else, so `startsWith`, `endsWith` and `===` are
+ * exactly the same test.
+ */
+export const literalPattern = (
+  pattern: string,
+): { readonly text: string; readonly start: boolean; readonly end: boolean } | null => {
+  const start = pattern.startsWith('^')
+  let body = start ? pattern.slice(1) : pattern
+  // A trailing `$` is an anchor only when it is not itself escaped, which takes
+  // an even run of backslashes in front of it.
+  let end = false
+  if (body.endsWith('$')) {
+    let slashes = 0
+    for (let i = body.length - 2; i >= 0 && body[i] === '\\'; i--) slashes++
+    if (slashes % 2 === 0) {
+      end = true
+      body = body.slice(0, -1)
+    }
+  }
+  let text = ''
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i] as string
+    const code = char.charCodeAt(0)
+    if (code >= 0xd800 && code <= 0xdfff) return null
+    if (char === '\\') {
+      const next = body[i + 1]
+      if (next === undefined || !ESCAPABLE_PUNCTUATION.has(next)) return null
+      text += next
+      i++
+      continue
+    }
+    if (METACHARACTERS.has(char)) return null
+    text += char
+  }
+  // The empty pattern matches everything. It is rare enough that it is left to
+  // the regex path rather than given a `true` that drops the subject from the code.
+  if (text === '' && !(start && end)) return null
+  return { text, start, end }
+}
+
+/**
+ * A boolean expression testing the string `subject` against `pattern`: a plain
+ * string comparison when the pattern is only literal characters, a regex
+ * literal's `.test` otherwise.
+ *
+ * Generated code tests the same few patterns on every key of every object —
+ * `^x-` for OpenAPI extensions, `^\/` for paths — and a regex costs several
+ * times what `startsWith` does for the same answer, more again inside the loop,
+ * where the literal is re-created on each pass. `subject` must be an expression
+ * that is already known to be a string, which every key and every `typeof`
+ * -guarded value is.
+ *
+ * @example
+ * regexTest('^x-', 'key') // → 'key.startsWith("x-")'
+ * regexTest('^\\d+$', 'key') // → '/^\\d+$/u.test(key)'
+ */
+export const regexTest = (pattern: string, subject: string): string => {
+  const literal = literalPattern(pattern)
+  if (literal === null) return `${regexLiteral(pattern)}.test(${subject})`
+  const text = JSON.stringify(literal.text)
+  if (literal.start && literal.end) return `(${subject} === ${text})`
+  if (literal.start) return `${subject}.startsWith(${text})`
+  if (literal.end) return `${subject}.endsWith(${text})`
+  return `${subject}.includes(${text})`
+}
