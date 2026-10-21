@@ -1,4 +1,4 @@
-import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { regexTest } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { boundPassExpr } from '@amritk/helpers/numeric-bound-check'
@@ -147,7 +147,7 @@ const generateInferredChecks = (accessor: string, schema: JSONSchema, type: Infe
     case 'string':
       checks.push(`typeof ${accessor} === "string"`)
       if (hasPattern(schema)) {
-        checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
+        checks.push(regexTest(schema.pattern, accessor))
       }
       // Code points, not UTF-16 units (see string-length-check): a bare
       // `.length` made this branch check disagree with the matcher and the
@@ -261,7 +261,7 @@ export const generateSchemaChecks = (accessor: string, schema: JSONSchema): stri
     case 'string': {
       checks.push(`typeof ${accessor} === "string"`)
       if (hasPattern(schema)) {
-        checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
+        checks.push(regexTest(schema.pattern, accessor))
       }
       // Code points, not UTF-16 units, exactly as the inferred-type path above
       // does: an explicit `type: 'string'` is the same string, and a bare

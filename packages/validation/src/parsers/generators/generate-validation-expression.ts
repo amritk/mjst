@@ -1,4 +1,4 @@
-import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { regexTest } from '@amritk/helpers/escape-regex-pattern'
 import { getDefaultValue } from '@amritk/helpers/get-default-value'
 import { getMjstInstanceOf, getMjstPrimitive } from '@amritk/helpers/mjst-extension'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
@@ -259,7 +259,7 @@ const getTypeArray = (schema: JSONSchema): string[] | null => {
  */
 const stringBoundChecks = (valueExpr: string, schema: JSONSchema): string[] => {
   const checks: string[] = []
-  if (hasPattern(schema)) checks.push(`${regexLiteral(schema.pattern)}.test(${valueExpr})`)
+  if (hasPattern(schema)) checks.push(regexTest(schema.pattern, valueExpr))
   if (hasMinLength(schema)) checks.push(minLengthPassExpr(valueExpr, schema.minLength))
   if (hasMaxLength(schema)) checks.push(maxLengthPassExpr(valueExpr, schema.maxLength))
   return checks
@@ -595,7 +595,7 @@ export const generateValidationExpression = (
       case 'string': {
         checks.push(`typeof ${accessor} === "string"`)
         if (hasPattern(schema)) {
-          checks.push(`${regexLiteral(schema.pattern)}.test(${accessor})`)
+          checks.push(regexTest(schema.pattern, accessor))
         }
         // Code points, not UTF-16 units — see string-length-check. A bare
         // `.length` disagreed with the strict assertions and the matcher, which

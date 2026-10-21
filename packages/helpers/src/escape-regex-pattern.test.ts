@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { escapeRegexPattern, regexFlagsFor, regexLiteral } from './escape-regex-pattern'
+import { escapeRegexPattern, literalPattern, regexFlagsFor, regexLiteral, regexTest } from './escape-regex-pattern'
 
 describe('escape-regex-pattern', () => {
   it('escapes bare forward slashes so the regex literal does not close early', () => {
@@ -64,7 +64,7 @@ describe('escape-regex-pattern', () => {
     // `\-` outside a character class is an identity escape `u` mode forbids, so a
     // pattern using one has to compile without the flag rather than fail to compile.
     expect(regexFlagsFor('\\-')).toBe('')
-    expect(() => new RegExp('\\-', 'u')).toThrow()
+    expect(() => /-/u).toThrow()
   })
 
   it('builds a complete literal whose flags follow the pattern', () => {
@@ -77,7 +77,7 @@ describe('escape-regex-pattern', () => {
   it('reads a Unicode property escape as a property, which is what the flag is for', () => {
     // Without `u`, `\p{Letter}` is the literal `p{Letter}` and matches nothing
     // sensible — the JSON Schema Test Suite case this closes.
-    expect(new RegExp('\\p{Letter}').test('a')).toBe(false)
+    expect(/p{Letter}/.test('a')).toBe(false)
     const literal = regexLiteral('\\p{Letter}')
     const [, source, flags] = /^\/(.*)\/(\w*)$/.exec(literal) as RegExpExecArray
     expect(new RegExp(source as string, flags).test('a')).toBe(true)
@@ -121,5 +121,64 @@ describe('escape-regex-pattern', () => {
   it('still rejects a pattern that is a regex in neither mode', () => {
     expect(() => escapeRegexPattern('([')).toThrow(/Invalid regex pattern/)
     expect(regexFlagsFor('([')).toBe('')
+  })
+
+  describe('regexTest', () => {
+    it('turns a literal pattern into the string test it is', () => {
+      expect(regexTest('^x-', 'key')).toBe('key.startsWith("x-")')
+      expect(regexTest('^\\$ref$', 'key')).toBe('(key === "$ref")')
+      expect(regexTest('\\.json$', 'key')).toBe('key.endsWith(".json")')
+      expect(regexTest('a\\/b', 'key')).toBe('key.includes("a/b")')
+      expect(regexTest('^$', 'key')).toBe('(key === "")')
+    })
+
+    it('keeps the regex for anything a regex engine has to answer', () => {
+      expect(regexTest('^\\d+$', 'key')).toBe('/^\\d+$/u.test(key)')
+      expect(regexTest('^a|b', 'key')).toBe('/^a|b/u.test(key)')
+      expect(regexTest('^a.b', 'key')).toBe('/^a.b/u.test(key)')
+      // The empty pattern matches everything, and stays a regex rather than a `true`.
+      expect(regexTest('', 'key')).toBe('/(?:)/u.test(key)')
+    })
+
+    it('reads an escaped trailing dollar as a literal, not an anchor', () => {
+      expect(literalPattern('^a\\$')).toEqual({ text: 'a$', start: true, end: false })
+      expect(literalPattern('^a\\\\$')).toEqual({ text: 'a\\', start: true, end: true })
+    })
+
+    it('leaves surrogates and class escapes to the regex', () => {
+      expect(literalPattern('^😀')).toBeNull()
+      expect(literalPattern('^\\n')).toBeNull()
+      expect(literalPattern('^\\u0041')).toBeNull()
+    })
+
+    it('answers exactly as the regex does', () => {
+      // Every literal pattern built from these pieces, against subjects built
+      // from the same pieces: the string test must agree with the regex it
+      // stands in for on all of them, anchors and escapes included.
+      const pieces = ['a', 'x-', '/', '\\/', '\\$', '\\.', '\\-', '\\\\', '~', 'é', ' ']
+      const subjects = ['', 'a', 'x-a', 'ax-', '/a', 'a/', '$', '.', '-', '\\', '~', 'é', ' a', 'x-/', 'a.$']
+      let compared = 0
+      for (const left of pieces) {
+        for (const right of ['', ...pieces]) {
+          for (const anchors of [
+            ['', ''],
+            ['^', ''],
+            ['', '$'],
+            ['^', '$'],
+          ] as const) {
+            const pattern = `${anchors[0]}${left}${right}${anchors[1]}`
+            if (literalPattern(pattern) === null) continue
+            const regex = new RegExp(pattern, regexFlagsFor(pattern))
+            const test = new Function('s', `return ${regexTest(pattern, 's')}`) as (s: string) => boolean
+            const corpus = [...subjects, pattern.replace(/\\(.)/g, '$1').replace(/^\^|\$$/g, '')]
+            for (const subject of corpus) {
+              expect(test(subject), `${pattern} on ${JSON.stringify(subject)}`).toBe(regex.test(subject))
+              compared++
+            }
+          }
+        }
+      }
+      expect(compared).toBeGreaterThan(1000)
+    })
   })
 })

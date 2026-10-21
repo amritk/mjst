@@ -1,4 +1,4 @@
-import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { regexTest } from '@amritk/helpers/escape-regex-pattern'
 import { multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { hasOwnCheck, missingCheck, safeAccessor } from '@amritk/helpers/safe-accessor'
@@ -155,7 +155,7 @@ const patternEntriesOf = (schema: JSONSchema): [string, JSONSchema][] | null => 
  */
 const stringConstraints = (acc: string, schema: JSONSchema): string[] => {
   const c: string[] = []
-  if (hasPattern(schema)) c.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
+  if (hasPattern(schema)) c.push(regexTest(schema.pattern, acc))
   // Lengths are code-point counts, not UTF-16 units (see string-length-check):
   // `"💩".length` is 2, so a raw `.length` accepted it against `minLength: 2` —
   // a value Ajv rejects — and rejected `"💩💩"` against `maxLength: 2`.
@@ -355,7 +355,7 @@ const keyWalkTerms = (
       const match = subschemaMatchExpr(valueVar, sub, nest(ctx))
       if (match === null) return null
       if (match === 'true') continue
-      terms.push({ expr: `(!${regexLiteral(pattern)}.test(${keyVar}) || ${match})`, usesValue: true })
+      terms.push({ expr: `(!${regexTest(pattern, keyVar)} || ${match})`, usesValue: true })
     }
   }
 
@@ -366,7 +366,7 @@ const keyWalkTerms = (
     // schema allows, policing fewer would accept ones it forbids.
     const guards: string[] = []
     if (declared.length > 0) guards.push(`!${JSON.stringify(declared)}.includes(${keyVar})`)
-    if (patterns) for (const [pattern] of patterns) guards.push(`!${regexLiteral(pattern)}.test(${keyVar})`)
+    if (patterns) for (const [pattern] of patterns) guards.push(`!${regexTest(pattern, keyVar)}`)
     const unclaimed = guards.length > 0 ? guards.join(' && ') : null
 
     if (additional === false) {

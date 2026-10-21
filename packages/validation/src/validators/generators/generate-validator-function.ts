@@ -1,4 +1,4 @@
-import { regexFlagsFor, regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { literalPattern, regexFlagsFor, regexTest } from '@amritk/helpers/escape-regex-pattern'
 import { getMjstInstanceOf, getMjstPrimitive, MJST_EXTENSION_KEY } from '@amritk/helpers/mjst-extension'
 import { multipleOfFailExpr, multipleOfPassExpr } from '@amritk/helpers/multiple-of-check'
 import { boundFailExpr, boundOperator, boundPassExpr } from '@amritk/helpers/numeric-bound-check'
@@ -772,15 +772,25 @@ const generateStrictKeyChecks = (schema: JSONSchema, ctx: NestingContext): strin
   let patternGuard = ''
   if (patterns.length > 0) {
     const patternsName = `${hoistPrefix(ctx)}_patterns${ctx.hoisted.length}`
-    // Hoisted as `new RegExp` rather than literals because the sources are only
-    // known as strings here; the flags still come from `regexFlagsFor`, so these
-    // read `pattern` the same way every emitted literal does.
-    const compiled = patterns.map((p) => `new RegExp(${JSON.stringify(p)}, ${JSON.stringify(regexFlagsFor(p))})`)
-    patternGuard = ` && !${patternsName}.some((re) => re.test(_key${d}))`
-    ctx.hoisted.push({
-      declaration: `const ${patternsName} = [${compiled.join(', ')}]`,
-      reference: patternGuard,
+    // A literal pattern (`^x-`) is a string comparison and needs no regex at all.
+    // The rest are hoisted as `new RegExp` rather than literals because the
+    // sources are only known as strings here; the flags still come from
+    // `regexFlagsFor`, so these read `pattern` the same way every emitted literal
+    // does. The tests are an unrolled `||` rather than `.some(…)`, which paid
+    // for a closure call per pattern on every key of every object.
+    const compiled: string[] = []
+    const terms = patterns.map((p) => {
+      if (literalPattern(p) !== null) return regexTest(p, `_key${d}`)
+      compiled.push(`new RegExp(${JSON.stringify(p)}, ${JSON.stringify(regexFlagsFor(p))})`)
+      return `${patternsName}[${compiled.length - 1}].test(_key${d})`
     })
+    patternGuard = ` && !(${terms.join(' || ')})`
+    if (compiled.length > 0) {
+      ctx.hoisted.push({
+        declaration: `const ${patternsName} = [${compiled.join(', ')}]`,
+        reference: patternGuard,
+      })
+    }
   }
 
   return [
@@ -831,6 +841,7 @@ const generatePropertyChecks = (
   isRequired: boolean,
   suffix: string,
   ctx: NestingContext,
+  dispatched?: string,
 ): string[] => {
   // A `false` property schema says the key may not appear at all, and it used to
   // emit nothing — so `{ properties: { b: false } }` accepted `{ "b": 1 }`. The
@@ -875,8 +886,154 @@ const generatePropertyChecks = (
   // again, which on a large document was a measurable share of validating it.
   // Only when something reads it — a required key with no schema of its own is
   // a presence test alone.
+  // Under a key dispatch the walk in front of the object's checks has already
+  // read it, into `dispatched` (see {@link renderKeyDispatch}).
   if (!readsBinding(raw, lines.join('\n'))) return lines
-  return [`  const ${raw} = ${propertyRead(ctx.objVar, key)}`, ...lines]
+  return [`  const ${raw} = ${dispatched ?? propertyRead(ctx.objVar, key)}`, ...lines]
+}
+
+/**
+ * How many optional properties an object schema has to declare before its
+ * properties are read by walking the instance's keys instead of naming each one.
+ *
+ * Reading a property an object does not have is cheap while every object at
+ * that site has the same shape, and expensive once they do not: the engine
+ * gives up on its per-site cache and looks each name up the slow way, absent
+ * ones included. An OpenAPI Schema Object declares 35 properties and a typical
+ * one carries three, in whatever combination its author wrote, so checking one
+ * cost 35 such lookups. Walking the keys it has instead took `isX` over a
+ * 1.5 MB OpenAPI 3.0 document from about 10 ms to under 6 ms on Node.
+ *
+ * Optional properties are what make shapes vary. A schema whose properties are
+ * all required describes objects that mostly look alike, and there the named
+ * reads stay inline-cached and beat a key walk, so those keep them. Below about
+ * eight declared properties the walk does not pay for itself either way.
+ */
+const KEY_DISPATCH_MIN_OPTIONAL = 8
+
+/**
+ * The plan for reading an object's declared properties off the keys it carries:
+ * the local each dispatched key is read into, and the flag that records whether
+ * any key fell outside them.
+ */
+type KeyDispatch = {
+  readonly locals: ReadonlyMap<string, string>
+  /** Set when the walk met a key it does not dispatch, so the unknown-key sweep has work to do. */
+  readonly extra: string
+  readonly keyVar: string
+}
+
+/**
+ * Plans a key dispatch for an object's `properties`, or `null` when the object
+ * keeps its named reads (see {@link KEY_DISPATCH_MIN_OPTIONAL}).
+ *
+ * A prototype-member name stays out of it: its read is an own-property guard
+ * that must also see a non-enumerable own key, which a key walk never visits.
+ * Under `additionalProperties: false` it falls to the walk's `default` like any
+ * undeclared key, so the unknown-key sweep still runs and still knows it.
+ */
+const planKeyDispatch = (
+  properties: Record<string, JSONSchema>,
+  required: ReadonlySet<string>,
+  depth: number,
+): KeyDispatch | null => {
+  const locals = new Map<string, string>()
+  let optional = 0
+  for (const [index, [key, propSchema]] of Object.entries(properties).entries()) {
+    if (PROTOTYPE_MEMBERS.has(key) || propSchema === false) continue
+    locals.set(key, `_dv${depth}_${index}`)
+    if (!required.has(key)) optional++
+  }
+  if (optional < KEY_DISPATCH_MIN_OPTIONAL) return null
+  return { locals, extra: `_dx${depth}`, keyVar: `_dk${depth}` }
+}
+
+/**
+ * The key walk a {@link KeyDispatch} plans, to go in front of the property
+ * checks in `body`: one `for…in` whose `switch` reads each declared key the
+ * instance carries into its local, and nothing for the ones it lacks.
+ *
+ * The checks themselves are unchanged and still run in declared order, each
+ * reading its value from the local rather than off the object, so every error
+ * and the order they come in is exactly what the named reads produced. A key is
+ * read when the walk meets it, which is when it is an enumerable property of the
+ * object or its prototype chain: what a JSON document is made of, and all a
+ * `JSON.stringify` of the value would carry.
+ *
+ * `sweep` is whether an unknown-key sweep follows, gated on `extra`; the
+ * `default` arm is only emitted for it.
+ */
+const renderKeyDispatch = (plan: KeyDispatch, objVar: string, body: string, sweep: boolean): string[] => {
+  const read = [...plan.locals].filter(([, local]) => readsBinding(local, body))
+  if (read.length === 0 && !sweep) return []
+  // A declared key nothing checks (`default: {}`) is still declared, so under a
+  // sweep it needs a `case` of its own or the `default` arm would count it as
+  // unknown and send every object carrying it through the sweep for nothing.
+  const unread = sweep ? [...plan.locals].filter(([, local]) => !readsBinding(local, body)) : []
+  const declarations = [...read.map(([, local]) => `${local}: unknown`), ...(sweep ? [`${plan.extra} = false`] : [])]
+  return [
+    `  let ${declarations.join(', ')}`,
+    `  for (const ${plan.keyVar} in ${objVar}) {`,
+    `    switch (${plan.keyVar}) {`,
+    ...read.flatMap(([key, local]) => [
+      `      case ${JSON.stringify(key)}:`,
+      `        ${local} = ${objVar}[${plan.keyVar}]`,
+      `        break`,
+    ]),
+    ...(unread.length > 0 ? [...unread.map(([key]) => `      case ${JSON.stringify(key)}:`), `        break`] : []),
+    ...(sweep ? [`      default:`, `        ${plan.extra} = true`] : []),
+    `    }`,
+    `  }`,
+  ]
+}
+
+/**
+ * The checks for a whole `properties` block, read through a key dispatch when
+ * the schema calls for one (see {@link planKeyDispatch}), together with the
+ * plan so the caller can gate its unknown-key sweep on it.
+ */
+const generatePropertiesBlock = (
+  properties: Record<string, JSONSchema>,
+  required: ReadonlySet<string>,
+  suffix: string,
+  ctx: NestingContext,
+): { lines: string[]; dispatch: KeyDispatch | null } => {
+  const dispatch = planKeyDispatch(properties, required, ctx.depth)
+  const lines: string[] = []
+  for (const [index, [key, propSchema]] of Object.entries(properties).entries()) {
+    lines.push(
+      ...generatePropertyChecks(key, index, propSchema, required.has(key), suffix, ctx, dispatch?.locals.get(key)),
+    )
+  }
+  return { lines, dispatch }
+}
+
+/**
+ * The unknown-key sweep, run only when the key dispatch in front of it met a key
+ * it does not read. A valid closed object has none, so it skips the second walk
+ * over its keys and the known-key test on each of them.
+ */
+const gatedStrictKeyChecks = (sweep: string[], dispatch: KeyDispatch | null): string[] =>
+  dispatch === null || sweep.length === 0
+    ? sweep
+    : [`  if (${dispatch.extra}) {`, ...sweep.map((line) => `  ${line}`), `  }`]
+
+/**
+ * The lines for an object's own keywords in the order every emitter wants them,
+ * with the key dispatch, when there is one, in front.
+ */
+const assembleObjectLines = (
+  dispatch: KeyDispatch | null,
+  objVar: string,
+  propertyLines: string[],
+  sweep: string[],
+  rest: string[],
+  afterSweep: string[],
+): string[] => {
+  const gated = gatedStrictKeyChecks(sweep, dispatch)
+  const lines = [...propertyLines, ...rest, ...gated, ...afterSweep]
+  if (dispatch === null) return lines
+  return [...renderKeyDispatch(dispatch, objVar, lines.join('\n'), gated !== sweep), ...lines]
 }
 
 /**
@@ -1160,9 +1317,8 @@ const generateConstraintChecks = (
   // String constraints
   if (hasPattern(propSchema) || hasMinLength(propSchema) || hasMaxLength(propSchema)) {
     if (hasPattern(propSchema)) {
-      const re = regexLiteral(propSchema.pattern)
       const msg = JSON.stringify(`must match pattern ${propSchema.pattern}`)
-      lines.push(`  if (typeof ${raw} === 'string' && !${re}.test(${raw})) {`)
+      lines.push(`  if (typeof ${raw} === 'string' && !${regexTest(propSchema.pattern, raw)}) {`)
       lines.push(`    ${pushError(ctx.sink, msg, path, 'pattern', JSON.stringify({ pattern: propSchema.pattern }))}`)
       lines.push(`  }`)
     }
@@ -2045,7 +2201,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
   for (const [pattern, sub] of Object.entries(patternsRecord)) {
     const valueChecks = valueChecksFor(sub)
     if (valueChecks.length === 0) continue
-    body.push(`    if (${regexLiteral(pattern)}.test(${kv})) {`)
+    body.push(`    if (${regexTest(pattern, kv)}) {`)
     body.push(...valueChecks.map((line) => `    ${line}`))
     body.push(`    }`)
   }
@@ -2073,7 +2229,7 @@ const generatePatternAndAdditionalChecks = (schema: JSONSchema, suffix: string, 
         body.push(`    if (${knownTest}) continue`)
       }
       for (const pattern of patterns) {
-        body.push(`    if (${regexLiteral(pattern)}.test(${kv})) continue`)
+        body.push(`    if (${regexTest(pattern, kv)}) continue`)
       }
       // One level of indent, not two: the checks come in carrying their own, and
       // the `continue` guards above are the loop body's real depth.
@@ -2122,24 +2278,28 @@ const generateInlineObjectChecks = (
   const required = new Set(hasRequired(propSchema) ? propSchema.required : [])
   const properties = hasProperties(propSchema) ? propSchema.properties : {}
 
-  const innerLines: string[] = []
+  const { lines: declaredLines, dispatch } = generatePropertiesBlock(
+    properties as Record<string, JSONSchema>,
+    required,
+    suffix,
+    child,
+  )
+  const rest = [
+    ...generateMissingRequiredChecks(propSchema, child),
+    ...generatePatternAndAdditionalChecks(propSchema, suffix, child),
+  ]
+  const sweep = generateStrictKeyChecks(propSchema, child)
 
-  for (const [index, [childKey, childSchema]] of Object.entries(properties).entries()) {
-    innerLines.push(
-      ...generatePropertyChecks(childKey, index, childSchema as JSONSchema, required.has(childKey), suffix, child),
-    )
-  }
-
-  innerLines.push(...generateMissingRequiredChecks(propSchema, child))
-  innerLines.push(...generatePatternAndAdditionalChecks(propSchema, suffix, child))
-  innerLines.push(...generateStrictKeyChecks(propSchema, child))
-  innerLines.push(...generateDependentRequiredChecks(propSchema, child))
-  innerLines.push(...generateDependentSchemasChecks(propSchema, suffix, child))
-  innerLines.push(...generateDependenciesChecks(propSchema, suffix, child))
-  innerLines.push(...generateMinMaxPropertiesChecks(propSchema, child))
+  const afterSweep: string[] = []
+  afterSweep.push(...generateDependentRequiredChecks(propSchema, child))
+  afterSweep.push(...generateDependentSchemasChecks(propSchema, suffix, child))
+  afterSweep.push(...generateDependenciesChecks(propSchema, suffix, child))
+  afterSweep.push(...generateMinMaxPropertiesChecks(propSchema, child))
   if (hasPropertyNames(propSchema)) {
-    innerLines.push(...generatePropertyNameChecks(propSchema.propertyNames, suffix, child))
+    afterSweep.push(...generatePropertyNameChecks(propSchema.propertyNames, suffix, child))
   }
+
+  const innerLines = assembleObjectLines(dispatch, child.objVar, declaredLines, sweep, rest, afterSweep)
 
   if (innerLines.length === 0) return []
 
@@ -2788,24 +2948,25 @@ const generateObjectValidator = (
   const properties = hasProperties(schema) ? schema.properties : {}
   const ctx = createRootContext(rootSchema, formats, branchErrors, failFast)
 
-  const propertyLines: string[] = []
+  const { lines: declaredLines, dispatch } = generatePropertiesBlock(
+    properties as Record<string, JSONSchema>,
+    required,
+    suffix,
+    ctx,
+  )
 
-  for (const [index, [key, propSchema]] of Object.entries(properties).entries()) {
-    const checks = generatePropertyChecks(key, index, propSchema as JSONSchema, required.has(key), suffix, ctx)
-    if (checks.length > 0) {
-      propertyLines.push(...checks)
-    }
-  }
-
-  // Required keys with no `properties` entry still need a presence check.
-  propertyLines.push(...generateMissingRequiredChecks(schema, ctx))
-
-  // patternProperties values and a schema-form additionalProperties are
-  // validated here (the `false` form is handled by generateStrictKeyChecks).
-  propertyLines.push(...generatePatternAndAdditionalChecks(schema, suffix, ctx))
+  const rest = [
+    // Required keys with no `properties` entry still need a presence check.
+    ...generateMissingRequiredChecks(schema, ctx),
+    // patternProperties values and a schema-form additionalProperties are
+    // validated here (the `false` form is handled by generateStrictKeyChecks).
+    ...generatePatternAndAdditionalChecks(schema, suffix, ctx),
+  ]
 
   // additionalProperties: false rejects every key not declared in properties
-  propertyLines.push(...generateStrictKeyChecks(schema, ctx))
+  const sweep = generateStrictKeyChecks(schema, ctx)
+
+  const propertyLines: string[] = []
 
   // dependentRequired — when a trigger property is present, its dependencies must be too.
   propertyLines.push(...generateDependentRequiredChecks(schema, ctx))
@@ -2852,7 +3013,8 @@ const generateObjectValidator = (
   // is already a create-on-first-use push (see {@link ROOT_ERROR_SINK}), so
   // nothing is allocated until the first actual error and the common valid case
   // stays alloc-free even when the schema is too rich for the boolean guard.
-  const body = propertyLines.length > 0 ? '\n' + propertyLines.join('\n') + '\n' : ''
+  const objectLines = assembleObjectLines(dispatch, ctx.objVar, declaredLines, sweep, rest, propertyLines)
+  const body = objectLines.length > 0 ? '\n' + objectLines.join('\n') + '\n' : ''
 
   // A pure boolean guard for the happy path: when every property is present and
   // well-typed (and, for strict objects, there are no extras) it returns true
@@ -3065,7 +3227,7 @@ const booleanLeafExpr = (schema: JSONSchema, acc: string, ctx: GuardContext): st
       const parts = [`typeof ${acc} === 'string'`]
       const formatPass = guardFormatPass(schema, acc, ctx)
       if (formatPass !== null) parts.push(formatPass)
-      if (hasPattern(schema)) parts.push(`${regexLiteral(schema.pattern)}.test(${acc})`)
+      if (hasPattern(schema)) parts.push(regexTest(schema.pattern, acc))
       // The exact negations of the validator's length conditions, from the same
       // `string-length-check` emitter, so the guard counts code points too.
       if (hasMinLength(schema)) parts.push(minLengthPassExpr(acc, schema.minLength))

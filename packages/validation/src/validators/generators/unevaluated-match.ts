@@ -1,4 +1,4 @@
-import { regexLiteral } from '@amritk/helpers/escape-regex-pattern'
+import { regexTest } from '@amritk/helpers/escape-regex-pattern'
 import { declaresKey, readKey } from '@amritk/helpers/read-key'
 import { resolveRef } from '@amritk/helpers/resolve-ref'
 import { isSchemaObject } from '@amritk/helpers/schema-guards'
@@ -147,7 +147,7 @@ const ownPropertyCoverage = (
   const patterns = readKey(schema, 'patternProperties')
   if (typeof patterns === 'object' && patterns !== null && !Array.isArray(patterns)) {
     for (const pattern of Object.keys(patterns as Record<string, unknown>)) {
-      terms.push(`${regexLiteral(pattern)}.test(${keyVar})`)
+      terms.push(regexTest(pattern, keyVar))
     }
   }
   return { all: false, terms }

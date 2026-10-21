@@ -1064,7 +1064,7 @@ describe('generate-parser-function', () => {
     ...input,
   } as unknown as Paths;
   for (const key in input) {
-    if (/^\\//u.test(key)) {
+    if (key.startsWith("/")) {
       const value = input[key];
       (result as Record<string, unknown>)[key] = parsePathItem(value);
     }
@@ -1131,7 +1131,7 @@ describe('generate-parser-function', () => {
     ...input,
   } as unknown as SimplePaths;
   for (const key in input) {
-    if (/^\\//u.test(key)) {
+    if (key.startsWith("/")) {
       const value = input[key];
       (result as Record<string, unknown>)[key] = parsePathItem(value);
     }
