@@ -64,7 +64,7 @@ describe('escape-regex-pattern', () => {
     // `\-` outside a character class is an identity escape `u` mode forbids, so a
     // pattern using one has to compile without the flag rather than fail to compile.
     expect(regexFlagsFor('\\-')).toBe('')
-    expect(() => /-/u).toThrow()
+    expect(() => new RegExp('\\-', 'u')).toThrow()
   })
 
   it('builds a complete literal whose flags follow the pattern', () => {
@@ -77,7 +77,7 @@ describe('escape-regex-pattern', () => {
   it('reads a Unicode property escape as a property, which is what the flag is for', () => {
     // Without `u`, `\p{Letter}` is the literal `p{Letter}` and matches nothing
     // sensible — the JSON Schema Test Suite case this closes.
-    expect(/p{Letter}/.test('a')).toBe(false)
+    expect(new RegExp('\\p{Letter}').test('a')).toBe(false)
     const literal = regexLiteral('\\p{Letter}')
     const [, source, flags] = /^\/(.*)\/(\w*)$/.exec(literal) as RegExpExecArray
     expect(new RegExp(source as string, flags).test('a')).toBe(true)
