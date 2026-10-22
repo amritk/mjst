@@ -1,5 +1,16 @@
 # @amritk/mjst
 
+## 0.27.2
+
+### Patch Changes
+
+- Updated dependencies [a46c816]
+  - @amritk/validation@0.6.1
+  - @amritk/helpers@0.26.0
+  - @amritk/adapters@0.6.10
+  - @amritk/asyncapi@0.3.8
+  - @amritk/generate-examples@0.8.12
+
 ## 0.27.1
 
 ### Patch Changes
