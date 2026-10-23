@@ -727,6 +727,28 @@ export const queryMany = (
   options: readonly (QueryOptions | undefined)[] = [],
 ): IQueryMatch[][] => queryManyNodes(data, compiled, options).map(toMatches)
 
+/** How the shared walk of {@link queryManyNodes} treats the tree it is given. */
+export type SharedWalkOptions = {
+  /**
+   * Enter each object at most once per walk state, rather than once per path
+   * that reaches it. A `$ref`-resolved tree shares one object wherever a
+   * reference pointed at it, so a tree walk visits it once per route — on a
+   * document whose schemas reference each other in layers that is millions of
+   * visits over a few thousand objects. The matches a revisit would yield sit at
+   * the same relative paths below the object, so the runner, which translates
+   * every resolved path back to the authored node, would only drop them as
+   * duplicates.
+   *
+   * Only for a tree whose sharing comes from `$ref` resolution: a revisit is
+   * skipped only when the object is entered under the same key, in the same
+   * walk state, so everything below it — and its own key — reads the same as
+   * on the first visit; what differs is the route above it, which a query can
+   * only see through `@path` or by climbing past it with `^`.
+   * {@link revisitSafe} turns the option off for a walk serving such a query.
+   */
+  skipRevisits?: boolean
+}
+
 /**
  * {@link queryMany}, but each match stays a {@link MatchNode} with no path built.
  * Internal to the package: the runner reads a path with {@link matchPath} only
@@ -736,6 +758,7 @@ export const queryManyNodes = (
   data: unknown,
   compiled: CompiledPath[],
   options: readonly (QueryOptions | undefined)[] = [],
+  walk: SharedWalkOptions = {},
 ): MatchNode[][] => {
   const out: MatchNode[][] = new Array(compiled.length)
   if (data === null || data === undefined) {
@@ -765,7 +788,7 @@ export const queryManyNodes = (
 
   if (descents.length > 0) {
     const seeds: Node[][] = descents.map(() => [])
-    walkShared(data, descents, seeds)
+    walkShared(data, descents, seeds, walk.skipRevisits === true && descents.every(revisitSafe))
     for (let d = 0; d < descents.length; d++) {
       const { rest, schemaAware } = descents[d] as Descent
       const seeded = seeds[d] as Node[]
@@ -817,6 +840,30 @@ const toDescent = (steps: Step[], schemaAware: boolean): Descent | undefined => 
     prefix.push(step.selector)
   }
   return undefined
+}
+
+/**
+ * Whether a descent's matches below an object are the same whichever route
+ * reached it, so the shared walk may skip a revisit (see
+ * {@link SharedWalkOptions.skipRevisits}). Seeds are children of nodes at or
+ * under the revisited object, so the remaining steps may climb back up to the
+ * object itself but not past it; and no filter may read `@path`, the one thing
+ * that spells out the route.
+ */
+const revisitSafe = (descent: Descent): boolean => {
+  const readsPath = (selector: Selector): boolean => selector.kind === 'filter' && selector.usesPath
+  if (descent.prefix.some(readsPath) || readsPath(descent.first) || descent.first.kind === 'parent') return false
+  // Depth below the revisited object; a seed is at least one level down.
+  let depth = 1
+  for (const step of descent.rest) {
+    if (readsPath(step.selector)) return false
+    if (step.selector.kind === 'parent') {
+      if (step.recursive || --depth < 0) return false
+    } else {
+      depth++
+    }
+  }
+  return true
 }
 
 /**
@@ -998,7 +1045,7 @@ const isLive = (scope: Scope): boolean => scope.active.length > 0 || scope.pendi
  * Seed order is document order, the order the per-path evaluation produces and
  * the order findings come out in.
  */
-const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]): void => {
+const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][], skipRevisits: boolean): void => {
   const rootActive: number[] = []
   const rootPending: (readonly [number, number])[] = []
   for (let d = 0; d < descents.length; d++) {
@@ -1014,6 +1061,25 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
   // tracked only when some descent is schema-aware, which is the only reader.
   const tracksNameMaps = descents.some((descent) => descent.schemaAware)
   const nameMaps: boolean[] = [false]
+  // Objects already entered, by walk state: the scope (interned, so one object
+  // per state), the key the object was entered under, and whether it was a name
+  // map — a bit each, since that flag also decides what its children match.
+  const entered = skipRevisits ? new WeakMap<object, Map<Scope, Map<string | number, number>>>() : undefined
+  /** Records an entry into `child`, returning false when an identical one was already made. */
+  const firstEntry = (child: object, scope: Scope, key: string | number, nameMap: boolean): boolean => {
+    const byScope = (entered as WeakMap<object, Map<Scope, Map<string | number, number>>>).get(child)
+    let byKey = byScope?.get(scope)
+    const bit = nameMap ? 2 : 1
+    const seen = byKey?.get(key) ?? 0
+    if (seen & bit) return false
+    if (byKey === undefined) {
+      byKey = new Map()
+      if (byScope === undefined) entered?.set(child, new Map([[scope, byKey]]))
+      else byScope.set(scope, byKey)
+    }
+    byKey.set(key, seen | bit)
+    return true
+  }
   while (nodes.length > 0) {
     const current = nodes.pop() as Node
     const outer = scopes.pop() as Scope
@@ -1062,11 +1128,15 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
         const inner = childScope(descents, scope, current, key, child, data)
         // A scalar has no children to list, so it is only worth visiting for a
         // selector that looks at the node itself (`^`, `~`, an index…).
-        const visit = typeof child === 'object' && child !== null ? isLive(inner) : inner.others.length > 0
-        if (visit) {
+        const childIsNode = typeof child === 'object' && child !== null
+        const visit = childIsNode ? isLive(inner) : inner.others.length > 0
+        const childNameMap = tracksNameMaps && !isArray && !nameMap && NAME_MAP_KEYWORDS.has(key as string)
+        // The child itself was matched above, against this route's key and parent;
+        // only what lies below it is the same on every entry, and that is skipped.
+        if (visit && (!skipRevisits || !childIsNode || firstEntry(child, inner, key, childNameMap))) {
           nodes.push(node === undefined ? { value: child, parent: current, key } : node)
           scopes.push(inner)
-          if (tracksNameMaps) nameMaps.push(!isArray && !nameMap && NAME_MAP_KEYWORDS.has(key as string))
+          if (tracksNameMaps) nameMaps.push(childNameMap)
         }
       }
       if (isArray) {

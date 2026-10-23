@@ -128,4 +128,44 @@ describe('lint pipeline', () => {
     ])
     expect(schemaOnly.diagnostics.map((d) => d.path.join('/'))).toEqual(['components/schemas/Event/properties/payload'])
   })
+
+  it('reports a shared node once and fast when references layer on each other', async () => {
+    // Each schema references the next twice, so the resolved tree has 2^30 routes to the
+    // last one. Every route translates back to the same authored node, so walking each
+    // would only produce duplicates — and would not finish.
+    const schemas: Record<string, unknown> = { L30: { description: 'eval(1)' } }
+    for (let i = 0; i < 30; i++) {
+      const next = { $ref: `#/components/schemas/L${i + 1}` }
+      schemas[`L${i}`] = { properties: { left: next, right: next } }
+    }
+    const source = JSON.stringify({ openapi: '3.1.0', components: { schemas } })
+    // Inlines each reference as one shared object, the way `@amritk/resolve-refs` does.
+    const resolve = (document: { data: unknown }) => {
+      const inlined = new Map<string, unknown>()
+      const visit = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(visit)
+        if (typeof value !== 'object' || value === null) return value
+        const ref = (value as { $ref?: unknown }).$ref
+        if (typeof ref === 'string') {
+          const name = ref.slice('#/components/schemas/'.length)
+          if (!inlined.has(name)) inlined.set(name, visit(schemas[name]))
+          return inlined.get(name)
+        }
+        return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, visit(child)]))
+      }
+      return { resolved: visit(document.data) }
+    }
+    const ruleset = build({
+      rules: {
+        'no-eval': {
+          given: '$..description',
+          resolved: true,
+          severity: 'error',
+          then: { function: 'pattern', functionOptions: { notMatch: 'eval\\(' } },
+        },
+      },
+    })
+    const { diagnostics } = await lintWithResult(source, { ruleset, resolve })
+    expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['components/schemas/L30/description'])
+  })
 })

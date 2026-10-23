@@ -231,6 +231,12 @@ const missingFunction = (ruleset: Ruleset, rule: ResolvedRule): string | undefin
  * A rule that references an unknown named function is reported once (not per
  * node) and skipped; a rule function that throws (or rejects) becomes an
  * error-severity diagnostic on that node so one bad rule cannot abort the run.
+ *
+ * `resolved` says `data` is the `$ref`-resolved tree, where one object stands
+ * wherever a reference pointed at it. Its walk then enters each object once per
+ * walk state instead of once per route (see `SharedWalkOptions`): {@link locate}
+ * translates every route back to the same authored node, so a revisit could only
+ * add findings that `withoutDuplicates` drops.
  */
 const runPlan = async (
   ruleset: Ruleset,
@@ -240,6 +246,7 @@ const runPlan = async (
   formats: Set<string>,
   out: IDiagnostic[],
   sources: ISourceSet | undefined,
+  resolved: boolean,
 ): Promise<void> => {
   if (rules.length === 0) return
   const order: string[] = []
@@ -280,6 +287,7 @@ const runPlan = async (
     data,
     planned.map((group) => group.compiled),
     planned.map((group) => (group.schemaAware ? { schemaAware: true } : undefined)),
+    { skipRevisits: resolved },
   )
   for (let i = 0; i < order.length; i++) {
     const group = groups.get(order[i] as string) as { rules: ResolvedRule[] }
@@ -457,9 +465,18 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
     // Raw rules run against the root's unresolved tree, so positions always come
     // straight from the root document; only resolved rules can land on inlined
     // external nodes and need the source set.
-    await runPlan(ruleset, rawRules, document.data, document, documentFormats, diagnostics, undefined)
+    await runPlan(ruleset, rawRules, document.data, document, documentFormats, diagnostics, undefined, false)
     if (resolvedRules.length > 0) {
-      await runPlan(ruleset, resolvedRules, options.resolved, document, documentFormats, diagnostics, options.sources)
+      await runPlan(
+        ruleset,
+        resolvedRules,
+        options.resolved,
+        document,
+        documentFormats,
+        diagnostics,
+        options.sources,
+        true,
+      )
     }
 
     return applyScopedOverrides(ruleset, document.source, diagnostics).sort(bySourceThenPosition)

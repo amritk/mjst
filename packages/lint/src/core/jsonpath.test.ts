@@ -147,6 +147,46 @@ describe('jsonpath queryMany', () => {
     expect(paths).toStrictEqual(queryMany(doc, compiled, options).map((matches) => matches.map((m) => m.path)))
   })
 
+  it('enters a shared object once per key when skipping revisits', () => {
+    // What `$ref` resolution produces: one object wherever a reference pointed at it.
+    const shared = { description: 'x', nested: { description: 'y' } }
+    const tree = { a: { s: shared }, b: { s: shared }, c: { t: shared } }
+    const compiled = [compileQuery('$..description')]
+    const paths = (skipRevisits: boolean) =>
+      queryManyNodes(tree, compiled, [], { skipRevisits })[0]?.map((node) => matchPath(node).join('.'))
+    expect(paths(false)).toStrictEqual([
+      'a.s.description',
+      'a.s.nested.description',
+      'b.s.description',
+      'b.s.nested.description',
+      'c.t.description',
+      'c.t.nested.description',
+    ])
+    // `b.s` repeats `a.s` exactly. `c.t` enters under another key, which its own children's
+    // matches could read, so it is walked again — but `nested` enters under the key it had the
+    // first time, so nothing below it is.
+    expect(paths(true)).toStrictEqual(['a.s.description', 'a.s.nested.description', 'c.t.description'])
+  })
+
+  it('keeps every route for a query that can see it', () => {
+    const shared = { leaf: { description: 'x' } }
+    const tree = { a: { s: shared }, b: { s: shared } }
+    // `@path` spells out the route, and `^^` climbs from the seed past the shared object.
+    for (const expression of ['$..[?(@path && @.description)]', '$..description^^']) {
+      const [nodes] = queryManyNodes(tree, [compileQuery(expression)], [], { skipRevisits: true })
+      expect(nodes?.map((node) => matchPath(node)[0])).toStrictEqual(['a', 'b'])
+    }
+  })
+
+  it('walks layered shared objects in linear time when skipping revisits', () => {
+    // Each layer reaches the next by two keys, so a tree walk has 2^30 routes to the leaf.
+    let layer: Record<string, unknown> = { description: 'leaf' }
+    for (let i = 0; i < 30; i++) layer = { left: layer, right: layer }
+    const [nodes] = queryManyNodes({ root: layer }, [compileQuery('$..description')], [], { skipRevisits: true })
+    // The leaf is reached under both keys, so it matches once for each — not once per route.
+    expect(nodes?.map((node) => matchPath(node).length)).toStrictEqual([32, 32])
+  })
+
   it('returns empty arrays for a null root, one per path', () => {
     const out = queryMany(null, [compileQuery('$.a'), compileQuery('$..b')])
     expect(out).toEqual([[], []])
