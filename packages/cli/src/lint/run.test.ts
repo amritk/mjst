@@ -144,6 +144,42 @@ describe('cli', () => {
     expect(stderr).toContain('No files matched:')
   })
 
+  // A single plain path skips fast-glob entirely, so these pin that the shortcut
+  // answers exactly what fast-glob did: the path as written, and nothing for
+  // anything that is not a file.
+  it('reports a single plain path exactly as it was written', async () => {
+    const dir = tmp('lint-plain-')
+    writeFileSync(join(dir, '.lint.yaml'), RULESET)
+    writeFileSync(join(dir, 'doc.yaml'), 'version: 1\n')
+    const file = `${dir}/./doc.yaml`
+    const { stdout, code } = await run([file])
+
+    expect(code).toBe(1)
+    expect(stdout).toContain(`${file}:1:1`)
+  })
+
+  it('matches no files for a single plain path naming a directory', async () => {
+    const dir = tmp('lint-dir-')
+    const { code, stderr } = await run([dir], { stdin: '' })
+
+    expect(code).toBe(2)
+    expect(stderr).toContain(`No files matched: ${dir}`)
+  })
+
+  // `doc[1].yaml` is a glob to fast-glob — it matches `doc1.yaml` as well as
+  // the file by that literal name — so the shortcut must hand it over rather
+  // than lint the literal file alone.
+  it('expands a single path with glob syntax through fast-glob even when it names a file', async () => {
+    const dir = tmp('lint-class-')
+    writeFileSync(join(dir, '.lint.yaml'), RULESET)
+    writeFileSync(join(dir, 'doc[1].yaml'), 'version: 1\n')
+    writeFileSync(join(dir, 'doc1.yaml'), 'version: 1\n')
+    const { stdout } = await run([join(dir, 'doc[1].yaml')])
+
+    expect(stdout).toContain(`${join(dir, 'doc1.yaml')}:1:1`)
+    expect(stdout).toContain(`${join(dir, 'doc[1].yaml')}:1:1`)
+  })
+
   it('still lints stdin when no document arguments were given at all', async () => {
     const dir = tmp('lint-stdin2-')
     writeFileSync(join(dir, '.lint.yaml'), RULESET)

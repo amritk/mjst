@@ -1,12 +1,10 @@
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import { type LintResolver, lintDocument, type Ruleset, validateRuleset } from '@amritk/lint'
 import { DiagnosticSeverity, type IDiagnostic, type RulesetDefinition } from '@amritk/lint/types'
-import fg from 'fast-glob'
 import yargs from 'yargs'
 
 import { buildLoadedRuleset, buildPresetRuleset, PRESET_RULESET_NAMES } from './preset-ruleset'
-import { createLintResolver } from './resolver'
 import { discoverRuleset, loadRuleset } from './ruleset-loader'
 
 const SEVERITY_BY_NAME: Record<string, DiagnosticSeverity> = {
@@ -53,6 +51,31 @@ const formatReport = (findings: IDiagnostic[]): string => {
   const warnings = findings.filter((d) => d.severity === DiagnosticSeverity.Warning).length
   lines.push('', `✖ ${findings.length} problem(s) (${errors} error(s), ${warnings} warning(s))`)
   return `${lines.join('\n')}\n`
+}
+
+// What fast-glob reads as glob syntax, or rewrites (`//`, a backslash escape).
+// A path free of all of it is matched as itself, exactly as written.
+const GLOB_SYNTAX = /[*?[\]{}()!+@|\\]|\/\//
+
+/**
+ * Expands the document arguments into the files to lint. Importing fast-glob
+ * costs about as much as linting a small document, so the common single-file
+ * run (`mjst lint openapi.yaml`) skips it: a path with no glob syntax that names
+ * a file is exactly what fast-glob would return for it. Everything else —
+ * globs, directories, missing files, several arguments — goes to fast-glob.
+ */
+const expandDocuments = async (documents: string[]): Promise<string[]> => {
+  if (documents.length === 0) return []
+  const [only] = documents
+  if (documents.length === 1 && only && !GLOB_SYNTAX.test(only)) {
+    const isFile = await stat(only).then(
+      (stats) => stats.isFile(),
+      () => false,
+    )
+    if (isFile) return [only]
+  }
+  const { default: fg } = await import('fast-glob')
+  return fg(documents, { dot: true, onlyFiles: true })
 }
 
 /** The outcome of a {@link run}: exit code plus the text it would print. */
@@ -200,8 +223,10 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
 
   // A non-empty --allowed-hosts is an explicit opt-in to remote fetching.
   const allowRemote = parsed.resolveRemote || (parsed.allowedHosts?.length ?? 0) > 0
+  // Imported only when it will be used: `@amritk/resolve-refs` is a noticeable
+  // part of startup, and a `--no-resolve` run never touches it.
   const resolver: LintResolver | undefined = parsed.resolve
-    ? createLintResolver({
+    ? (await import('./resolver')).createLintResolver({
         remote: allowRemote,
         ...(parsed.allowedHosts ? { allowedHosts: parsed.allowedHosts } : {}),
         allowPrivateHosts: parsed.allowPrivateHosts,
@@ -245,7 +270,7 @@ export const run = async (argv: string[], options: { stdin?: string } = {}): Pro
   }
 
   const documents = parsed.documents ?? []
-  const targets = await fg(documents, { dot: true, onlyFiles: true })
+  const targets = await expandDocuments(documents)
   const allResults: IDiagnostic[] = []
 
   // Arguments that matched nothing must not fall through to stdin. In CI there is
