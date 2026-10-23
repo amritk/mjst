@@ -133,34 +133,19 @@ const isTree = validateGuard({
 
 Pick the right tool for the shape of your workload. There are two regimes, and they have opposite winners.
 
-**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once. Numbers from `bun run bench` and `bun run bench:node` on one machine (Linux x64, a 4-vCPU cloud box, Bun 1.3.11 and Node 22.22.2); your hardware will differ, run it yourself:
-
-| schema | `validate` (cold) | Ajv (compile + run) | speedup |
-|:---|---:|---:|---:|
-| **Bun 1.3.11 / JavaScriptCore** | | | |
-| small | ~0.017 ms | ~8.6 ms | **~448×** |
-| wide (40 props) | ~0.15 ms | ~12 ms | **~126×** |
-| deep (`$ref` + arrays) | ~0.15 ms | ~12 ms | **~64×** |
-| assert (7 scalars + nested) | ~0.010 ms | ~9.1 ms | **~593×** |
-| **Node 22.22.2 / V8** | | | |
-| small | ~0.012 ms | ~5.3 ms | **~459×** |
-| wide (40 props) | ~0.12 ms | ~8.1 ms | **~65×** |
-| deep (`$ref` + arrays) | ~0.12 ms | ~7.5 ms | **~62×** |
-| assert (7 scalars + nested) | ~0.022 ms | ~5.9 ms | **~266×** |
-
-The win is smaller on V8 for a reason worth knowing: Ajv's compile costs about
-half as much there, while this interpreter's cold walk is only a little faster.
-Same shape of answer, different size.
+**Cold one-shot — schema to first result.** This is the path this package is built for: you have a schema and a value or two, in a fresh process, and you want an answer. There is no compile step up front, and only the nodes your data reaches are ever specialized, so the cost stays close to one walk of the data. Ajv must compile the *whole* schema (build and JIT a function) before it can validate even once, so from a cold start this package returns its first answer orders of magnitude sooner, on Bun and on Node alike. The win is smaller on V8, because Ajv's compile is cheaper there while this interpreter's cold walk is only a little faster — same shape of answer, different size.
 
 **Steady state — one schema, many values.** Here Ajv's JIT'd function generally
-wins: on Bun it runs `validate` about **2.3–6.7×** faster per call, on Node
-**2.4–7.1×** — with one case going the other way on V8, the 40-property `wide`
-schema, where this interpreter is about **1.2×** *faster* than Ajv's compiled
-function. If you validate the same schema against a high-throughput stream,
+wins, running `validate` several times faster per call on both runtimes — with
+the odd case going the other way on V8, such as the 40-property `wide` bench
+schema. If you validate the same schema against a high-throughput stream,
 compile it once with Ajv (or use this repo's build-time
 [`@amritk/validation`](../validation)) — nothing that stops short of emitting a
 function will match generated straight-line code, and this package does not
 pretend otherwise.
+
+Both regimes are measured by `bun run bench` (Bun) and `bun run bench:node`
+(Node); the figures depend on the engine and the machine, so run them yourself.
 
 `validate` and `validateGuard` now cost within a few percent of each other,
 because `validate` *is* the guard until something fails — see the hot/cold split
@@ -173,7 +158,7 @@ ahead of time**.
 
 What keeps the interpreter lean:
 
-- **A hot/cold split.** Collecting errors is not free even when there are none: the error-mode step carries the path string it would need to report a failure and cannot short-circuit, because a later failure is another error to name. So `validate` and `assert` run the boolean guard first and only fall through to the error-collecting half once something has actually failed — the same split [`@amritk/validation`](../validation) emits. Valid input is 1.75–2.4× faster than collecting outright; invalid input pays a second walk, which is the right way round for a validator that says "yes" far more often than "no". The error-collecting half is built on first use, so a validator never handed anything invalid never builds one.
+- **A hot/cold split.** Collecting errors is not free even when there are none: the error-mode step carries the path string it would need to report a failure and cannot short-circuit, because a later failure is another error to name. So `validate` and `assert` run the boolean guard first and only fall through to the error-collecting half once something has actually failed — the same split [`@amritk/validation`](../validation) emits. Valid input runs markedly faster than collecting outright; invalid input pays a second walk, which is the right way round for a validator that says "yes" far more often than "no". The error-collecting half is built on first use, so a validator never handed anything invalid never builds one.
 - **No compile step up front.** `validate` / `validateGuard` return immediately — there is nothing to build, JIT, or warm up. A node is specialized the first time a validation reaches it, so a one-shot check never pays for the `$defs` it does not touch. A `pattern` is the exception: every one in the document is compiled and screened when the validator is built, so `pattern: "("` is named there rather than thrown out of a validation months later.
 - **Every per-node question answered once.** Which keywords a node carries, its property key list, its `required` set, its compiled `pattern`s, which type-specific checks can possibly apply — all of it is settled when the node is specialized and closed over by its step, instead of being rediscovered on every value.
 - **Lazy, reused caches.** The one thing a node cannot settle is where a `$ref` points when the document declares `$id`s, because that depends on the base URI in scope at call time. Those targets are memoized the first time they are followed and reused on later calls.
@@ -419,7 +404,7 @@ verdict — the same fail-loud contract as an unresolvable `$ref` or an unknown
 reached a verdict — a value with more errors than the cap is invalid however many
 more there are — and the cap only says how many are worth carrying back. Every
 error already recorded is a real failure, so the walk stops once the list is
-full, which is why the 200,000-element case above now takes 2 ms instead of 43.
+full, which is why the 200,000-element case above now finishes in a fraction of the time.
 Pass `Infinity` to collect every error however many there are.
 
 ```ts
