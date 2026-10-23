@@ -11,6 +11,7 @@ import { severityFromName } from './severity'
 import {
   DiagnosticSeverity,
   type IDiagnostic,
+  type IFunctionContext,
   type IFunctionResult,
   type ISourceDocument,
   type ISourceSet,
@@ -45,6 +46,23 @@ const targetPath = (target: Target): JsonPath => {
   match.path ??= matchPath(match.node)
   target.path = target.suffix === undefined ? match.path : [...match.path, ...target.suffix]
   return target.path
+}
+
+const TARGET = Symbol('target')
+
+/** The context handed to a rule function, carrying the target its `path` getter reads. */
+type RunContext = IFunctionContext & { [TARGET]: Target }
+
+/**
+ * Every rule function's context inherits `path` from here, so the path is only
+ * built when a function reads it. The getter lives on a shared prototype rather
+ * than in each context's object literal: V8 builds a literal with its own getter
+ * on a slow path, and on Node that cost more than the paths it saved.
+ */
+const contextPrototype = {
+  get path(): JsonPath {
+    return targetPath((this as RunContext)[TARGET])
+  },
 }
 
 const isIndexable = (value: unknown): value is Record<string, unknown> | unknown[] =>
@@ -342,16 +360,13 @@ const runThen = async (
       // The declared signature is synchronous, but a function reference may in
       // fact return a Promise (a Spectral-style async function), so treat the raw
       // result as unknown and await it when it is thenable.
-      const raw: unknown = fn(target.value, then.functionOptions ?? {}, {
-        document,
-        // A getter, so the path is only built for a function that reads it.
-        get path() {
-          return targetPath(target)
-        },
-        value: target.value,
-        rule,
-        functionOptions: then.functionOptions,
-      })
+      const context: RunContext = Object.create(contextPrototype)
+      context.document = document
+      context.value = target.value
+      context.rule = rule
+      context.functionOptions = then.functionOptions
+      context[TARGET] = target
+      const raw: unknown = fn(target.value, then.functionOptions ?? {}, context)
       results = (isThenable(raw) ? await raw : raw) as IFunctionResult[] | undefined
     } catch (error) {
       // Isolate the failure: convert it into an error diagnostic on this node so

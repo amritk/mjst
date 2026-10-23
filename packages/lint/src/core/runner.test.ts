@@ -79,6 +79,26 @@ describe('runner', () => {
     ])
   })
 
+  it('reads context.path through destructuring and after an await', async () => {
+    // `path` is a getter on the context's prototype, so check the two ways a
+    // function most often reads it away from the plain `context.path` form.
+    const seen: JsonPath[] = []
+    const later = (async (_input: unknown, _options: unknown, context: { path: JsonPath }) => {
+      const { path } = context
+      await Promise.resolve()
+      seen.push(path, context.path)
+      return undefined
+    }) as unknown as RulesetFunction
+    await run(
+      { rules: { later: { given: '$.paths.*.get', severity: 'error', then: { function: 'later' } } } },
+      { later },
+    )
+    expect(seen).toEqual([
+      ['paths', '/users', 'get'],
+      ['paths', '/users', 'get'],
+    ])
+  })
+
   it('extends the match path with a field on a finding', async () => {
     const diagnostics = await run({
       rules: { summary: { given: '$.paths.*.*', severity: 'error', then: { field: 'summary', function: 'truthy' } } },
