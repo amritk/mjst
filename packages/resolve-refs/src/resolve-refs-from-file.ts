@@ -18,6 +18,7 @@ import { refPathIndex } from './ref-path-index'
 import {
   ANNOTATION_ONLY_SIBLINGS,
   type Reference,
+  type RefKeyword,
   type ResolvedTarget,
   readReference,
   resolveFragment,
@@ -705,6 +706,37 @@ const rebaseKeptRefs = (node: unknown, from: string, root: string, role: NodeRol
 const pathToRef = (path: JsonPath): string =>
   path.length === 0 ? '#' : `#/${path.map((segment) => escapeSegment(String(segment))).join('/')}`
 
+/** The members a document keeps its named definitions under, from its root. */
+const DEFINITION_CONTAINERS: readonly (readonly string[])[] = [['$defs'], ['definitions'], ['components', 'schemas']]
+
+/**
+ * How many leading segments of `pointer` name the definition the target sits
+ * *inside* (`$defs/Order` for `/$defs/Order/properties/lines/items`), or 0 when it
+ * is a definition itself or sits in none.
+ *
+ * Bundling hoists that enclosing definition and points into it, rather than
+ * lifting the inner node out on its own: the output then has the shape the same
+ * schemas would have written in one file, and a generator names the node from its
+ * path (`OrderLinesItems`) the way it would there, instead of from a bare `items`.
+ */
+const enclosingDefinitionLength = (pointer: JsonPath): number => {
+  for (const container of DEFINITION_CONTAINERS) {
+    const length = container.length + 1
+    if (pointer.length > length && container.every((key, index) => pointer[index] === key)) return length
+  }
+  return 0
+}
+
+/** The value at `path` in `root`, through own members only. */
+const valueAt = (root: unknown, path: JsonPath): unknown => {
+  let value = root
+  for (const segment of path) {
+    if (value === null || typeof value !== 'object' || !Object.hasOwn(value, segment)) return undefined
+    value = (value as Record<string | number, unknown>)[segment]
+  }
+  return value
+}
+
 /** Derives a readable `$defs` key for a hoisted cycle target. */
 const hoistName = (targetLocation: string, fragment: string, taken: Set<string>): string => {
   const fragmentTail = fragment.split('/').filter(Boolean).pop()
@@ -979,6 +1011,9 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   // it has been emitted; these sites are how it gets rewritten instead of
   // stranding a ref that points at nothing.
   const hoistRefSites = new Map<Record<string, unknown>, string>()
+  // The part of a bundled ref past its hoist's name, for a ref that points inside
+  // a hoisted definition (see `enclosingDefinitionLength`); the rename keeps it.
+  const hoistRefSuffixes = new Map<Record<string, unknown>, string>()
 
   /**
    * Single-pass resolver that inlines internal and external (`$ref` to other
@@ -1026,6 +1061,130 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
             ? rebaseKeptRef(value, baseLocation, rootLocation)
             : value,
       )
+    }
+    return kept
+  }
+
+  /**
+   * Finds what a classified reference points at: the in-scope target when the
+   * ref resolved against an `$id` in its own document, otherwise the fragment
+   * looked up in the target document. `$anchor`/`$dynamicAnchor`/
+   * `$recursiveAnchor` resolve within the target document — scoped by its own
+   * `$id`s where possible, falling back to the document-global search. Returns
+   * the base URI the target's own refs resolve against.
+   */
+  const lookupTarget = (
+    scoped: ScopedTarget | undefined,
+    keyword: RefKeyword,
+    targetLocation: string,
+    fragment: string,
+  ): { found: ResolvedTarget | undefined; base: string } => {
+    if (scoped !== undefined) return { found: scoped, base: scoped.base }
+    const targetRegistry = registryFor(targetLocation)
+    const targetRoot = docCache.get(targetLocation) ?? {}
+    if (keyword === '$recursiveRef') {
+      return { found: resolveFragment(targetRoot, keyword, fragment), base: targetRegistry.rootBase }
+    }
+    const scopedFragment = resolveRefInScope(targetRegistry, keyword, `#${fragment}`, targetRegistry.rootBase)
+    if (scopedFragment !== 'external' && scopedFragment !== undefined) {
+      return { found: scopedFragment, base: scopedFragment.base }
+    }
+    return { found: resolveFragment(targetRoot, keyword, fragment), base: targetRegistry.rootBase }
+  }
+
+  /**
+   * The `bundle` option's answer for a `$ref`: a node that keeps its reference,
+   * pointing into the output instead of copying the target in. A target in the
+   * root document stays where it is — the root is walked whole, so nothing needs
+   * moving — and the ref is kept as written, or re-expressed against the root
+   * when written in another document. A target in another document is resolved
+   * once and hoisted into the root's `$defs` when resolution completes; every ref
+   * naming it shares that one definition, which is the point.
+   *
+   * Returns `undefined` when the ref has to be inlined after all: inside an
+   * embedded resource, or into a document that declares an `$id`, a `#/...`
+   * pointer means something relative to that resource, and moving the node
+   * under the root's `$defs` would change what it names.
+   */
+  const bundleReference = (
+    obj: Record<string, unknown>,
+    value: string,
+    scoped: ScopedTarget | undefined,
+    targetLocation: string,
+    fragment: string,
+    cacheKey: string,
+    baseLocation: string,
+    nodeBase: string,
+    depth: number,
+    role: NodeRole,
+  ): Record<string, unknown> | undefined => {
+    if (nodeBase !== registryFor(baseLocation).rootBase) return undefined
+    const intoRoot = scoped !== undefined ? baseLocation === rootLocation : targetLocation === rootLocation
+    if (!intoRoot && registryFor(targetLocation).bases.size > 0) return undefined
+    if (refCache.get(cacheKey) === MISSING) return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
+
+    const { found, base: targetBase } = lookupTarget(scoped, '$ref', targetLocation, fragment)
+    // Same keep-and-report rules as inlining (see the long note there).
+    const targetLoaded = docCache.has(targetLocation) && !unloadable.has(targetLocation)
+    if (found === undefined || !targetLoaded) {
+      if (targetLoaded) {
+        errors.push({
+          message: `Cannot resolve $ref "${value}"`,
+          path: baseLocation === rootLocation ? refPathAt('$ref', value) : [],
+        })
+      }
+      refCache.set(cacheKey, MISSING)
+      return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
+    }
+    const pointer = found.pointer ?? []
+
+    let target: string
+    let hoistKey: string | undefined
+    let suffix = ''
+    if (intoRoot) {
+      target = baseLocation === rootLocation ? value : pathToRef(pointer)
+    } else {
+      // Keyed by where the target is — its document and pointer — not by how the
+      // ref spells it: `./common.json#/$defs/T` written in the root and
+      // `#/$defs/T` written inside common.json are one definition, and keyed by
+      // spelling they were hoisted twice, the second named after the file.
+      const split = enclosingDefinitionLength(pointer)
+      const hoisted = split > 0 ? pointer.slice(0, split) : pointer
+      suffix = split > 0 ? pathToRef(pointer.slice(split)).slice(1) : ''
+      hoistKey = `$ref ${targetLocation}${pathToRef(hoisted)}`
+      let name = hoists.get(hoistKey)
+      if (name === undefined) {
+        name = hoistName(targetLocation, pathToRef(hoisted).slice(1), hoistTaken)
+        hoists.set(hoistKey, name)
+      }
+      target = `#/$defs/${name}${suffix}`
+      // `CYCLE` while the target is being resolved further up this walk: its
+      // hoist is registered above, so a ref back into it only has to name it.
+      if (!refCache.has(hoistKey)) {
+        refCache.set(hoistKey, CYCLE)
+        // Bundling copies a node's members over unchanged (only `$ref` values are
+        // rewritten), so the suffix still leads to the target inside the copy.
+        const value = split > 0 ? valueAt(docCache.get(targetLocation), hoisted) : found.value
+        const resolved = resolveAt(value, targetLocation, targetBase, depth + 1, roleAtPath(hoisted))
+        refCache.set(hoistKey, { value: resolved, pointer: hoisted, base: targetBase })
+        if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
+          origins.set(resolved, { location: targetLocation, pointer: hoisted })
+        }
+      }
+    }
+
+    const kept: Record<string, unknown> = {}
+    for (const key of Object.keys(obj)) {
+      assignKey(
+        kept,
+        key,
+        key === '$ref' ? target : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
+      )
+    }
+    // Registered so the final rename (see the hoist attach below) reaches it.
+    if (hoistKey !== undefined) {
+      hoistRefSites.set(kept, hoistKey)
+      if (suffix !== '') hoistRefSuffixes.set(kept, suffix)
     }
     return kept
   }
@@ -1115,6 +1274,21 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         scoped !== undefined
           ? `${keyword} ${baseLocation} ${nodeBase} ${value}`
           : `${keyword} ${targetLocation}#${fragment}`
+      if (options.bundle === true && keyword === '$ref') {
+        const bundled = bundleReference(
+          obj,
+          value,
+          scoped,
+          targetLocation,
+          fragment,
+          cacheKey,
+          baseLocation,
+          nodeBase,
+          depth,
+          role,
+        )
+        if (bundled !== undefined) return bundled
+      }
       let resolved: unknown
       let pointer: JsonPath
       let targetBase = nodeBase
@@ -1159,31 +1333,9 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         targetBase = cached.base
       } else {
         refCache.set(cacheKey, CYCLE)
-        let found: ResolvedTarget | undefined
-        if (scoped !== undefined) {
-          found = scoped
-          targetBase = scoped.base
-        } else {
-          // `$anchor`/`$dynamicAnchor`/`$recursiveAnchor` resolve within the
-          // target document — scoped by its own `$id`s where possible, falling
-          // back to the document-global search. A fragment that resolves to
-          // nothing inlines as `undefined` (kept as-is for parity).
-          const targetRegistry = registryFor(targetLocation)
-          const targetRoot = docCache.get(targetLocation) ?? {}
-          if (keyword === '$recursiveRef') {
-            found = resolveFragment(targetRoot, keyword, fragment)
-            targetBase = targetRegistry.rootBase
-          } else {
-            const scopedFragment = resolveRefInScope(targetRegistry, keyword, `#${fragment}`, targetRegistry.rootBase)
-            if (scopedFragment !== 'external' && scopedFragment !== undefined) {
-              found = scopedFragment
-              targetBase = scopedFragment.base
-            } else {
-              found = resolveFragment(targetRoot, keyword, fragment)
-              targetBase = targetRegistry.rootBase
-            }
-          }
-        }
+        const lookup = lookupTarget(scoped, keyword, targetLocation, fragment)
+        const found = lookup.found
+        targetBase = lookup.base
         // A fragment that resolves to nothing *within a document that loaded* —
         // a typo'd pointer, an anchor that was renamed. This inlined literal
         // `undefined`, so the key vanished on serialization and a required
@@ -1354,7 +1506,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       }
       for (const [node, cacheKey] of hoistRefSites) {
         const name = finalNames.get(cacheKey)
-        if (name !== undefined) assignKey(node, '$ref', `#/$defs/${name}`)
+        if (name !== undefined) assignKey(node, '$ref', `#/$defs/${name}${hoistRefSuffixes.get(node) ?? ''}`)
       }
       for (const [cacheKey] of hoists) {
         const cached = refCache.get(cacheKey)

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { resolveRefs } from './resolve-refs'
 import { clearRemoteCache, resolveRefsFromFile } from './resolve-refs-from-file'
 
 describe('resolve-refs-from-file', () => {
@@ -1317,5 +1318,227 @@ describe('resolve-refs-from-file', () => {
     const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'))
 
     expect(resolved).toEqual({ a: { x: { $dynamicRef: '#meta' } } })
+  })
+
+  it('bundles a cross-file target into $defs and keeps root refs as written', async () => {
+    writeFileSync(join(dir, 'common.json'), JSON.stringify({ $defs: { Money: { type: 'integer' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { order: { $ref: '#/$defs/Order' }, total: { $ref: './common.json#/$defs/Money' } },
+        $defs: { Order: { properties: { price: { $ref: './common.json#/$defs/Money' } } } },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      properties: { order: { $ref: '#/$defs/Order' }, total: { $ref: '#/$defs/Money' } },
+      $defs: { Order: { properties: { price: { $ref: '#/$defs/Money' } } }, Money: { type: 'integer' } },
+    })
+  })
+
+  it('hoists one definition however a ref spells its target', async () => {
+    // From the root it is `./common.json#/$defs/T`; inside common.json it is `#/$defs/T`.
+    writeFileSync(
+      join(dir, 'common.json'),
+      JSON.stringify({ $defs: { T: { type: 'string' }, Error: { properties: { at: { $ref: '#/$defs/T' } } } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { at: { $ref: './common.json#/$defs/T' }, error: { $ref: './common.json#/$defs/Error' } },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect((resolved as { $defs: object }).$defs).toEqual({
+      T: { type: 'string' },
+      Error: { properties: { at: { $ref: '#/$defs/T' } } },
+    })
+  })
+
+  it('bundles layered references across files in linear size', async () => {
+    // Each layer references the next twice: inlined, the output holds 2^30 copies of the last.
+    const defs: Record<string, unknown> = { L30: { type: 'string' } }
+    for (let i = 0; i < 30; i++) {
+      const next = { $ref: `#/$defs/L${i + 1}` }
+      defs[`L${i}`] = { properties: { left: next, right: next } }
+    }
+    writeFileSync(join(dir, 'defs.json'), JSON.stringify({ $defs: defs }))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ $ref: './defs.json#/$defs/L0' }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect(resolved).toMatchObject({ $ref: '#/$defs/L0' })
+    expect(Object.keys((resolved as { $defs: object }).$defs)).toHaveLength(31)
+    expect(JSON.stringify(resolved).length).toBeLessThan(5000)
+  })
+
+  it('hoists the definition a deep pointer sits in and points into it', async () => {
+    // Lifted out alone, the node would be hoisted as `items`, and a generator would name it
+    // that; inside its definition it keeps the path a single-file schema would give it.
+    writeFileSync(
+      join(dir, 'defs.json'),
+      JSON.stringify({ $defs: { Order: { properties: { lines: { type: 'array', items: { type: 'string' } } } } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { line: { $ref: './defs.json#/$defs/Order/properties/lines/items' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(resolved).toEqual({
+      properties: { line: { $ref: '#/$defs/Order/properties/lines/items' } },
+      $defs: { Order: { properties: { lines: { type: 'array', items: { type: 'string' } } } } },
+    })
+  })
+
+  it('bundles a cross-file cycle into refs between hoisted definitions', async () => {
+    writeFileSync(join(dir, 'a.json'), JSON.stringify({ properties: { b: { $ref: './b.json' } } }))
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ properties: { a: { $ref: './a.json' } } }))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ $ref: './a.json' }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      $ref: '#/$defs/a',
+      $defs: { a: { properties: { b: { $ref: '#/$defs/b' } } }, b: { properties: { a: { $ref: '#/$defs/a' } } } },
+    })
+  })
+
+  it('points a ref back into the root at the root pointer', async () => {
+    writeFileSync(
+      join(dir, 'item.json'),
+      JSON.stringify({ properties: { owner: { $ref: './root.json#/$defs/User' } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { item: { $ref: './item.json' } }, $defs: { User: { type: 'object' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect((resolved as { $defs: Record<string, unknown> }).$defs['item']).toEqual({
+      properties: { owner: { $ref: '#/$defs/User' } },
+    })
+  })
+
+  it('renames a hoist that collides with a root definition, and every ref to it', async () => {
+    writeFileSync(join(dir, 'other.json'), JSON.stringify({ $defs: { User: { type: 'string' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { theirs: { $ref: './other.json#/$defs/User' } },
+        $defs: { User: { type: 'object' } },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(resolved).toEqual({
+      properties: { theirs: { $ref: '#/$defs/User-2' } },
+      $defs: { User: { type: 'object' }, 'User-2': { type: 'string' } },
+    })
+  })
+
+  it('keeps an unresolvable ref when bundling and reports it as inlining does', async () => {
+    writeFileSync(join(dir, 'common.json'), JSON.stringify({ $defs: {} }))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { x: { $ref: './common.json#/$defs/Nope' } } }))
+
+    const inlined = await resolveRefsFromFile(join(dir, 'root.json'))
+    const bundled = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(bundled.errors).toEqual(inlined.errors)
+    expect(bundled.resolved).toEqual({ properties: { x: { $ref: './common.json#/$defs/Nope' } } })
+  })
+
+  it('inlines a target in a document that declares an $id, even when bundling', async () => {
+    // Under the root's `$defs`, the `#/$defs/Inner` written inside it would resolve against its own `$id`.
+    writeFileSync(
+      join(dir, 'scoped.json'),
+      JSON.stringify({
+        $id: 'https://example.com/scoped',
+        $ref: '#/$defs/Inner',
+        $defs: { Inner: { type: 'boolean' } },
+      }),
+    )
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { flag: { $ref: './scoped.json' } } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(JSON.stringify(resolved)).not.toContain('"$ref":"#/$defs/')
+  })
+
+  it('bundles to what inlining produces once its refs are inlined in memory', async () => {
+    // Siblings are where a bundled ref and an inlined one could part ways: an
+    // annotation overrides the target, a constraint is combined with it in `allOf`.
+    writeFileSync(
+      join(dir, 'common.json'),
+      JSON.stringify({
+        $defs: {
+          Money: { type: 'object', properties: { amount: { type: 'integer' }, at: { $ref: '#/$defs/Time' } } },
+          Time: { type: 'string', format: 'date-time', description: 'when' },
+        },
+      }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        type: 'object',
+        properties: {
+          total: { $ref: './common.json#/$defs/Money' },
+          paidAt: { $ref: './common.json#/$defs/Time', description: 'paid' },
+          note: { $ref: './common.json#/$defs/Time', maxLength: 30 },
+          lines: { type: 'array', items: { $ref: './common.json#/$defs/Money' } },
+        },
+      }),
+    )
+
+    const inlined = await resolveRefsFromFile(join(dir, 'root.json'))
+    const bundled = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+    const { $defs, ...reinlined } = resolveRefs(bundled.resolved).resolved as Record<string, unknown>
+
+    expect(Object.keys($defs as object)).toEqual(['Money', 'Time'])
+    expect(reinlined).toEqual(inlined.resolved)
+  })
+
+  it('reads an edited document again on the next bundle', async () => {
+    writeFileSync(join(dir, 'common.json'), JSON.stringify({ $defs: { Id: { type: 'string' } } }))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { id: { $ref: './common.json#/$defs/Id' } } }))
+    const first = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    writeFileSync(join(dir, 'common.json'), JSON.stringify({ $defs: { Id: { type: 'integer' } } }))
+    const second = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect((first.resolved as { $defs: object }).$defs).toEqual({ Id: { type: 'string' } })
+    expect((second.resolved as { $defs: object }).$defs).toEqual({ Id: { type: 'integer' } })
+  })
+
+  it('shares nothing between two bundles of one cached remote document', async () => {
+    // The remote document stays in the session cache; editing one result must not
+    // reach the cached copy, or the next bundle would hoist the edit.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () => new Response(JSON.stringify({ $defs: { Id: { type: 'string', enum: ['a'] } } }), { status: 200 }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { id: { $ref: 'https://api.example.com/c.json#/$defs/Id' } } }),
+    )
+    const options = { allowedHosts: ['api.example.com'], bundle: true }
+
+    const first = await resolveRefsFromFile(join(dir, 'root.json'), options)
+    const hoisted = (first.resolved as { $defs: Record<string, { type: string; enum: string[] }> }).$defs['Id']
+    if (hoisted === undefined) throw new Error('expected a hoisted Id')
+    hoisted.type = 'integer'
+    hoisted.enum.push('b')
+    const second = await resolveRefsFromFile(join(dir, 'root.json'), options)
+
+    expect((second.resolved as { $defs: object }).$defs).toEqual({ Id: { type: 'string', enum: ['a'] } })
   })
 })

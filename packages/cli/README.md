@@ -176,8 +176,10 @@ tree-shake identically (verified against esbuild and rollup).
 
 A schema can split its definitions across files. When a schema references another
 document — `{ "$ref": "./address.json" }` or `{ "$ref": "./common.json#/$defs/id" }` —
-mjst dereferences those cross-file targets before generating, inlining them into a
-single schema so the generated parsers cover the whole shape:
+mjst bundles those cross-file targets before generating: each one is pulled into the
+schema's `$defs` once and its refs point there, so the generator sees a single schema
+and still emits one named type per shared definition — the same output as if the
+definitions had been written in one file:
 
 ```bash
 npx mjst --schema ./order.json --out-dir ./generated

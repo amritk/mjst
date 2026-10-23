@@ -158,6 +158,22 @@ export type ResolveOptions = {
    */
   trackOrigins?: boolean
   /**
+   * Bundle instead of inlining: pull every other document a `$ref` reaches into
+   * the root's `$defs` and point the ref there, so the output is one
+   * self-contained document whose `$ref`s are all internal. A ref into the root
+   * document is kept as written, and each target is hoisted once however many
+   * refs name it. A code generator wants this: a shared schema stays one named
+   * definition rather than an inline copy at every use, which on schemas that
+   * reference each other in layers is exponential in the output's size.
+   *
+   * A target in a document that declares an `$id`, or a ref inside an embedded
+   * resource of the root, is still inlined: moved under the root's `$defs`, a
+   * `#/...` pointer would resolve against a different resource than the one it
+   * was written in. `$dynamicRef` and `$recursiveRef` are resolved as without
+   * this option. Defaults to `false`.
+   */
+  bundle?: boolean
+  /**
    * Extra HTTP headers sent with remote `$ref` requests (e.g. an `Authorization`
    * token for a private schema registry) — a static record, or a function
    * returning headers per URL so different hosts can carry different

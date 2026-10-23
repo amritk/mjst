@@ -33,6 +33,13 @@ const write = (dir: string, name: string, content: unknown): string => {
   return file
 }
 
+/** What a bundled `$ref` names: the hoisted `$defs` entry it points at. */
+const target = (schema: unknown, node: unknown): unknown => {
+  const ref = (node as { $ref?: string }).$ref
+  if (ref === undefined || !ref.startsWith('#/$defs/')) return undefined
+  return (schema as { $defs: Record<string, unknown> }).$defs[ref.slice('#/$defs/'.length)]
+}
+
 describe('loadSchema', () => {
   it('parses a plain JSON schema as-is', async () => {
     const dir = tmp()
@@ -56,7 +63,7 @@ describe('loadSchema', () => {
     expect(schema.properties.contact).toEqual({ $ref: '#/$defs/contact' })
   })
 
-  it('inlines a cross-file $ref into a single document', async () => {
+  it('bundles a cross-file $ref into a single document', async () => {
     const dir = tmp()
     write(dir, 'user.json', { type: 'object', properties: { name: { type: 'string' } } })
     const main = write(dir, 'order.json', {
@@ -64,11 +71,32 @@ describe('loadSchema', () => {
       properties: { user: { $ref: './user.json' } },
     })
 
-    const schema = (await loadSchema({}, main)) as {
-      properties: { user: { type: string; properties: { name: { type: string } } } }
-    }
-    // The referenced document is inlined in place of the `$ref`.
-    expect(schema.properties.user).toEqual({ type: 'object', properties: { name: { type: 'string' } } })
+    const schema = (await loadSchema({}, main)) as { properties: { user: unknown } }
+    // The referenced document is hoisted into `$defs` once and the `$ref` points there.
+    expect(schema.properties.user).toEqual({ $ref: '#/$defs/user' })
+    expect(target(schema, schema.properties.user)).toEqual({
+      type: 'object',
+      properties: { name: { type: 'string' } },
+    })
+  })
+
+  it('keeps a schema shared through another file as one named type', async () => {
+    // Inlining turned every use of a shared schema into its own copy as soon as
+    // any `$ref` crossed a file, which the generator then emitted once per use.
+    const dir = tmp()
+    write(dir, 'common.json', { $defs: { Money: { type: 'integer' } } })
+    const main = write(dir, 'order.json', {
+      type: 'object',
+      properties: { total: { $ref: '#/$defs/Line' }, tax: { $ref: './common.json#/$defs/Money' } },
+      $defs: { Line: { properties: { price: { $ref: './common.json#/$defs/Money' } } } },
+    })
+
+    const schema = (await loadSchema({}, main)) as Record<string, unknown>
+    expect(schema).toEqual({
+      type: 'object',
+      properties: { total: { $ref: '#/$defs/Line' }, tax: { $ref: '#/$defs/Money' } },
+      $defs: { Line: { properties: { price: { $ref: '#/$defs/Money' } } }, Money: { type: 'integer' } },
+    })
   })
 
   it('resolves a pointer into another file', async () => {
@@ -80,7 +108,7 @@ describe('loadSchema', () => {
     })
 
     const schema = (await loadSchema({}, main)) as { properties: { id: unknown } }
-    expect(schema.properties.id).toEqual({ type: 'string', pattern: '^[0-9]+$' })
+    expect(target(schema, schema.properties.id)).toEqual({ type: 'string', pattern: '^[0-9]+$' })
   })
 
   it('surfaces a missing cross-file target as a CLI error', async () => {
@@ -123,7 +151,7 @@ describe('loadSchema', () => {
     const { root, main } = splitSpec()
 
     const schema = (await loadSchema({ allowedRoots: [root] }, main)) as { properties: { user: unknown } }
-    expect(schema.properties.user).toEqual({ type: 'object' })
+    expect(target(schema, schema.properties.user)).toEqual({ type: 'object' })
   })
 
   // `allowedRoots` replaces the resolver's default outright, so the CLI keeps the
@@ -143,8 +171,8 @@ describe('loadSchema', () => {
     const schema = (await loadSchema({ allowedRoots: [join(root, 'common')] }, main)) as {
       properties: { user: unknown; id: unknown }
     }
-    expect(schema.properties.user).toEqual({ type: 'object' })
-    expect(schema.properties.id).toEqual({ type: 'string' })
+    expect(target(schema, schema.properties.user)).toEqual({ type: 'object' })
+    expect(target(schema, schema.properties.id)).toEqual({ type: 'string' })
   })
 
   // The flag widens confinement; it must not dissolve it. A `$ref` that climbs
