@@ -1142,7 +1142,13 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     let hoistKey: string | undefined
     let suffix = ''
     if (intoRoot) {
-      target = baseLocation === rootLocation ? value : pathToRef(pointer)
+      // A fragment written in the root (`#/$defs/X`, `#anchor`) is kept as written.
+      // Anything else names a root node by URI — an embedded resource's `$id`
+      // (`child.json`, `https://example.com/node#leaf`) — which reads as a ref to
+      // another document; it becomes the node's pointer, so the output's refs are
+      // all `#...`. The ref sits at the root's base (checked above), so the
+      // pointer reads from the document root the way its URI resolved.
+      target = baseLocation === rootLocation && value.startsWith('#') ? value : pathToRef(pointer)
     } else {
       // Keyed by where the target is — its document and pointer — not by how the
       // ref spells it: `./common.json#/$defs/T` written in the root and

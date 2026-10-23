@@ -1398,6 +1398,27 @@ describe('resolve-refs-from-file', () => {
     })
   })
 
+  it('rewrites a ref to an embedded resource by its URI into a pointer', async () => {
+    // `child.json` names the embedded resource under `$defs/child`, not a file —
+    // but left as written, it reads as a ref to another document.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        $id: 'https://example.com/root.json',
+        properties: { child: { $ref: 'child.json' }, local: { $ref: '#/$defs/child' } },
+        $defs: { child: { $id: 'child.json', type: 'integer' } },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect((resolved as { properties: object }).properties).toEqual({
+      child: { $ref: '#/$defs/child' },
+      local: { $ref: '#/$defs/child' },
+    })
+  })
+
   it('bundles a cross-file cycle into refs between hoisted definitions', async () => {
     writeFileSync(join(dir, 'a.json'), JSON.stringify({ properties: { b: { $ref: './b.json' } } }))
     writeFileSync(join(dir, 'b.json'), JSON.stringify({ properties: { a: { $ref: './a.json' } } }))
