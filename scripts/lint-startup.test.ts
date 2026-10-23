@@ -1,10 +1,14 @@
+import { execFile } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { CLI_BIN, runNode } from './e2e-helpers'
+import { CLI_BIN } from './e2e-helpers'
+
+const execFileAsync = promisify(execFile)
 
 /**
  * Pins what a small `mjst lint` run loads. Module loading is most of what such a
@@ -62,7 +66,6 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  delete process.env.LOAD_TRACE
   await rm(dir, { recursive: true, force: true })
 })
 
@@ -70,12 +73,12 @@ afterAll(async () => {
 const lintTraced = async (args: string[], trace: string): Promise<{ stdout: string; loaded: string }> => {
   const traceFile = join(dir, `${trace}.trace`)
   await writeFile(traceFile, '')
-  process.env.LOAD_TRACE = traceFile
-  // A finding exits 1, which `runNode` reports as a failure; the stdout we want
-  // to check rides along on the error.
-  const stdout = await runNode(['--import', register, CLI_BIN, 'lint', ...args]).then(
+  // A finding exits 1, which rejects; its stdout rides along on the error.
+  const stdout = await execFileAsync('node', ['--import', register, CLI_BIN, 'lint', ...args], {
+    env: { ...process.env, LOAD_TRACE: traceFile },
+  }).then(
     (result) => result.stdout,
-    (error: Error) => error.message,
+    (error: { stdout?: string }) => error.stdout ?? '',
   )
   return { stdout, loaded: await readFile(traceFile, 'utf-8') }
 }

@@ -10,6 +10,8 @@ const SCHEMA_FREE_FUNCTIONS: ReadonlySet<RulesetFunction> = new Set(
   Object.values(builtinFunctions).filter((fn) => fn !== schema),
 )
 
+let loaded = false
+
 /**
  * Loads the `schema` function's validator before a run when one of the rules
  * that will run for `source` might need it, so a ruleset of plain style checks
@@ -17,6 +19,8 @@ const SCHEMA_FREE_FUNCTIONS: ReadonlySet<RulesetFunction> = new Set(
  * report.
  */
 export const preloadSchemaValidator = async (ruleset: Ruleset, source: string | undefined): Promise<void> => {
+  // Once loaded there is nothing left to decide, so later documents skip the scan.
+  if (loaded) return
   for (const rule of ruleset.rulesForSource(source)) {
     if (!rule.enabled) continue
     for (const then of rule.then) {
@@ -25,7 +29,11 @@ export const preloadSchemaValidator = async (ruleset: Ruleset, source: string | 
       const named = then?.function
       const fn =
         typeof named === 'function' ? named : typeof named === 'string' ? ruleset.getFunction(named) : undefined
-      if (fn !== undefined && !SCHEMA_FREE_FUNCTIONS.has(fn)) return loadSchemaValidator()
+      if (fn !== undefined && !SCHEMA_FREE_FUNCTIONS.has(fn)) {
+        await loadSchemaValidator()
+        loaded = true
+        return
+      }
     }
   }
 }
