@@ -6,17 +6,16 @@ import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { CLI_BIN } from './e2e-helpers'
+import { CLI_BIN, ROOT } from './e2e-helpers'
 
 const execFileAsync = promisify(execFile)
 
 /**
  * Pins what a small `mjst lint` run loads. Module loading is most of what such a
- * run costs, so `fast-glob`, `@amritk/resolve-refs` and
- * `@amritk/runtime-validators` are only imported once the run needs them — and a
- * stray static import anywhere on the path would quietly undo that. These run the
- * built CLI under plain `node` with a resolve hook that records every module it
- * loads.
+ * run costs, so `fast-glob` and `@amritk/resolve-refs` are only imported once the
+ * run needs them — and a stray static import anywhere on the path would quietly
+ * undo that. These run the built CLI under plain `node` with a resolve hook that
+ * records every module it loads.
  *
  * Requires a prior `bun run build`; run via `bun run test:dist`.
  */
@@ -84,7 +83,7 @@ const lintTraced = async (args: string[], trace: string): Promise<{ stdout: stri
 }
 
 describe('lint-startup', () => {
-  it('loads neither fast-glob, resolve-refs nor runtime-validators for a plain style check', async () => {
+  it('loads neither fast-glob nor resolve-refs for a single file under --no-resolve', async () => {
     const { stdout, loaded } = await lintTraced(
       [join(dir, 'spec.json'), '-r', join(dir, 'ruleset.json'), '--no-resolve'],
       'plain',
@@ -94,7 +93,6 @@ describe('lint-startup', () => {
     expect(loaded).toContain('/lint/dist/index.js')
     expect(loaded).not.toContain('fast-glob')
     expect(loaded).not.toContain('resolve-refs')
-    expect(loaded).not.toContain('runtime-validators')
   })
 
   it('loads what the run needs once it needs it', async () => {
@@ -103,6 +101,29 @@ describe('lint-startup', () => {
     expect(stdout).toContain('info-contact')
     expect(loaded).toContain('fast-glob')
     expect(loaded).toContain('resolve-refs')
-    expect(loaded).toContain('runtime-validators')
+  })
+
+  // `@amritk/runtime-validators` stays a static import of the library: `schema`
+  // and `createLinter().run()` are public and reach it without any async step to
+  // load it in, and `require()` of an ES module — the only synchronous way left —
+  // is missing on Node 20.0–20.18 and 22.0–22.11, which `engines` still allows.
+  // Turning `require(esm)` off stands in for those runtimes.
+  it('validates through createLinter and a direct schema call without require(esm)', async () => {
+    const lint = pathToFileURL(join(ROOT, 'packages/lint/dist/index.js')).href
+    const script = `
+      const { createDocument, createLinter, createRuleset, schema } = await import(${JSON.stringify(lint)})
+      const ruleset = createRuleset(${SCHEMA_RULESET})
+      const findings = await createLinter(ruleset).run(createDocument('{"info":{}}'))
+      const direct = schema(1, { schema: { type: 'string' } }, { path: [] })
+      console.log(JSON.stringify({ codes: findings.map((f) => f.code), direct: direct.map((r) => r.message) }))
+    `
+    const { stdout } = await execFileAsync('node', [
+      '--no-experimental-require-module',
+      '--input-type=module',
+      '-e',
+      script,
+    ])
+
+    expect(JSON.parse(stdout)).toEqual({ codes: ['info-contact'], direct: ['value must be string'] })
   })
 })
