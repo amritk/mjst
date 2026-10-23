@@ -434,6 +434,14 @@ type Node = {
   key: string | number | undefined
 }
 
+/**
+ * A match as the engine holds it: the matched value plus a parent link, with no
+ * path built yet. Internal to the package — the runner uses it so that only the
+ * matches that become findings (or whose rule function reads `path`) pay for a
+ * path. Read the path with {@link matchPath}.
+ */
+export type MatchNode = Node
+
 /** Materializes the concrete (un-normalized) path from root to `node`. */
 const pathOf = (node: Node): (string | number)[] => {
   let depth = 0
@@ -666,11 +674,14 @@ const applySteps = (root: unknown, initial: Node[], steps: Step[], schemaAware =
 const runSteps = (root: unknown, steps: Step[], schemaAware = false): Node[] =>
   applySteps(root, [{ value: root, parent: undefined, key: undefined }], steps, schemaAware)
 
+/** The normalized path from the root to a {@link MatchNode}, the same `path` an {@link IQueryMatch} carries. */
+export const matchPath = (node: MatchNode): JsonPath => normalizePath(pathOf(node))
+
 const toMatches = (nodes: Node[]): IQueryMatch[] => {
   const out: IQueryMatch[] = new Array(nodes.length)
   for (let i = 0; i < nodes.length; i++) {
     const node = nodes[i] as Node
-    out[i] = { value: node.value, path: normalizePath(pathOf(node)) }
+    out[i] = { value: node.value, path: matchPath(node) }
   }
   return out
 }
@@ -688,13 +699,16 @@ export type QueryOptions = {
   schemaAware?: boolean
 }
 
-/** Evaluates a pre-compiled path against `data`. */
-export const queryCompiled = (data: unknown, compiled: CompiledPath, options: QueryOptions = {}): IQueryMatch[] => {
+const queryCompiledNodes = (data: unknown, compiled: CompiledPath, options: QueryOptions): Node[] => {
   // A malformed path matches nothing rather than falling back to the root.
   if (compiled.error !== undefined) return []
   if (data === null || data === undefined) return []
-  return toMatches(runSteps(data, compiled.steps, options.schemaAware === true))
+  return runSteps(data, compiled.steps, options.schemaAware === true)
 }
+
+/** Evaluates a pre-compiled path against `data`. */
+export const queryCompiled = (data: unknown, compiled: CompiledPath, options: QueryOptions = {}): IQueryMatch[] =>
+  toMatches(queryCompiledNodes(data, compiled, options))
 
 /**
  * Evaluates many pre-compiled paths against `data` with **one** walk of the
@@ -711,8 +725,19 @@ export const queryMany = (
   data: unknown,
   compiled: CompiledPath[],
   options: readonly (QueryOptions | undefined)[] = [],
-): IQueryMatch[][] => {
-  const out: IQueryMatch[][] = new Array(compiled.length)
+): IQueryMatch[][] => queryManyNodes(data, compiled, options).map(toMatches)
+
+/**
+ * {@link queryMany}, but each match stays a {@link MatchNode} with no path built.
+ * Internal to the package: the runner reads a path with {@link matchPath} only
+ * for the matches that need one.
+ */
+export const queryManyNodes = (
+  data: unknown,
+  compiled: CompiledPath[],
+  options: readonly (QueryOptions | undefined)[] = [],
+): MatchNode[][] => {
+  const out: MatchNode[][] = new Array(compiled.length)
   if (data === null || data === undefined) {
     for (let i = 0; i < compiled.length; i++) out[i] = []
     return out
@@ -731,7 +756,7 @@ export const queryMany = (
     const schemaAware = options[i]?.schemaAware === true
     const descent = c.hasDescent ? toDescent(c.steps, schemaAware) : undefined
     if (descent === undefined) {
-      out[i] = queryCompiled(data, c, { schemaAware })
+      out[i] = queryCompiledNodes(data, c, { schemaAware })
       continue
     }
     shared.push(i)
@@ -744,7 +769,7 @@ export const queryMany = (
     for (let d = 0; d < descents.length; d++) {
       const { rest, schemaAware } = descents[d] as Descent
       const seeded = seeds[d] as Node[]
-      out[shared[d] as number] = toMatches(rest.length === 0 ? seeded : applySteps(data, seeded, rest, schemaAware))
+      out[shared[d] as number] = rest.length === 0 ? seeded : applySteps(data, seeded, rest, schemaAware)
     }
   }
 

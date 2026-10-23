@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { compileQuery, query, queryMany } from './jsonpath'
+import { compileQuery, matchPath, query, queryMany, queryManyNodes } from './jsonpath'
 
 const doc = {
   openapi: '3.1.0',
@@ -109,6 +109,42 @@ describe('jsonpath queryMany', () => {
     expect(titles?.map((m) => m.value)).toEqual(['API'])
     expect(descriptions?.map((m) => m.value).sort()).toEqual(['created', 'ok'])
     expect(tag?.[0]?.value).toEqual({ type: 'array' })
+  })
+
+  it('returns plain matches with the path already built', () => {
+    // `queryMany` is public and sits on top of the lazy `queryManyNodes`; its
+    // matches must still be plain `{ value, path }` data with a normalized path.
+    const [responses] = queryMany(doc, [compileQuery('$..responses.*')])
+    expect(responses).toStrictEqual([
+      { value: { description: 'ok' }, path: ['paths', '/users', 'get', 'responses', 200] },
+      { value: { description: 'created' }, path: ['paths', '/users', 'post', 'responses', 201] },
+    ])
+    // `toStrictEqual` passes for a getter too; the path has to be a plain data property.
+    expect(Object.getOwnPropertyDescriptor(responses?.[0], 'path')?.value).toEqual(responses?.[0]?.path)
+  })
+
+  it('builds the same normalized paths from queryManyNodes on demand', () => {
+    const compiled = [
+      compileQuery('$.info.title'),
+      compileQuery('$..description'),
+      compileQuery('$.paths.*..responses[*]'),
+      compileQuery('info.title'),
+    ]
+    const options = [undefined, { schemaAware: true }, undefined, undefined]
+    const paths = queryManyNodes(doc, compiled, options).map((nodes) => nodes.map(matchPath))
+    expect(paths).toStrictEqual([
+      [['info', 'title']],
+      [
+        ['paths', '/users', 'get', 'responses', 200, 'description'],
+        ['paths', '/users', 'post', 'responses', 201, 'description'],
+      ],
+      [
+        ['paths', '/users', 'get', 'responses', 200],
+        ['paths', '/users', 'post', 'responses', 201],
+      ],
+      [],
+    ])
+    expect(paths).toStrictEqual(queryMany(doc, compiled, options).map((matches) => matches.map((m) => m.path)))
   })
 
   it('returns empty arrays for a null root, one per path', () => {
