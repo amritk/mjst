@@ -166,6 +166,20 @@ describe('cli', () => {
     expect(stderr).toContain(`No files matched: ${dir}`)
   })
 
+  // `doc[1].yaml` is a glob to fast-glob — it matches `doc1.yaml` as well as
+  // the file by that literal name — so the shortcut must hand it over rather
+  // than lint the literal file alone.
+  it('expands a single path with glob syntax through fast-glob even when it names a file', async () => {
+    const dir = tmp('lint-class-')
+    writeFileSync(join(dir, '.lint.yaml'), RULESET)
+    writeFileSync(join(dir, 'doc[1].yaml'), 'version: 1\n')
+    writeFileSync(join(dir, 'doc1.yaml'), 'version: 1\n')
+    const { stdout } = await run([join(dir, 'doc[1].yaml')])
+
+    expect(stdout).toContain(`${join(dir, 'doc1.yaml')}:1:1`)
+    expect(stdout).toContain(`${join(dir, 'doc[1].yaml')}:1:1`)
+  })
+
   it('still lints stdin when no document arguments were given at all', async () => {
     const dir = tmp('lint-stdin2-')
     writeFileSync(join(dir, '.lint.yaml'), RULESET)
