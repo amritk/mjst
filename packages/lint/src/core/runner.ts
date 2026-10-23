@@ -2,7 +2,7 @@ import type { IRange, JsonPath } from '../parsers'
 import type { Document } from './document'
 import { detectFormats } from './formats'
 import { matchesGlob } from './glob'
-import { type CompiledPath, compileQuery, query, queryMany } from './jsonpath'
+import { type CompiledPath, compileQuery, type MatchNode, matchPath, query, queryManyNodes } from './jsonpath'
 import { bySourceThenPosition } from './order'
 import { ownKey } from './own-key'
 import { pointerToPath, resolveSourcePath } from './pointers'
@@ -20,9 +20,23 @@ import {
 
 const ZERO_RANGE: IRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }
 
+/**
+ * A node a `then` runs against. Its path is read through `path()` and built on
+ * the first call: most targets never become findings, and building a path for
+ * every match was the single largest cost of a run on a large spec.
+ */
 type Target = {
   value: unknown
-  path: JsonPath
+  path: () => JsonPath
+}
+
+/** Wraps `build` so it runs at most once, on the first call. */
+const once = (build: () => JsonPath): (() => JsonPath) => {
+  let path: JsonPath | undefined
+  return () => {
+    path ??= build()
+    return path
+  }
 }
 
 const isIndexable = (value: unknown): value is Record<string, unknown> | unknown[] =>
@@ -38,7 +52,7 @@ const isThenable = (value: unknown): value is Promise<unknown> =>
  * field against a primitive lints the matched value itself; a `$`-prefixed field
  * runs as a sub-query.
  */
-const resolveTargets = (value: unknown, path: JsonPath, field: string | undefined): Target[] => {
+const resolveTargets = (value: unknown, path: () => JsonPath, field: string | undefined): Target[] => {
   if (field === undefined) return [{ value, path }]
   // A field only narrows into a container; against a primitive (or null) the
   // matched value itself is the target.
@@ -48,11 +62,11 @@ const resolveTargets = (value: unknown, path: JsonPath, field: string | undefine
     // back to numbers for the path so lookups stay consistent.
     return Object.keys(value).map((key) => ({
       value: key,
-      path: [...path, Array.isArray(value) ? Number(key) : key],
+      path: once(() => [...path(), Array.isArray(value) ? Number(key) : key]),
     }))
   }
   if (field.startsWith('$')) {
-    return query(value, field).map((match) => ({ value: match.value, path: [...path, ...match.path] }))
+    return query(value, field).map((match) => ({ value: match.value, path: once(() => [...path(), ...match.path]) }))
   }
   // A plain property name, or a numeric index into an array. `Object.hasOwn`, not
   // a bare index: `field` is ruleset input, so `field: 'constructor'` otherwise
@@ -60,7 +74,7 @@ const resolveTargets = (value: unknown, path: JsonPath, field: string | undefine
   // and `truthy` both passed on a key the document does not have.
   const key = Array.isArray(value) && /^\d+$/.test(field) ? Number(field) : field
   const own = Object.hasOwn(value, key) ? (value as Record<string | number, unknown>)[key] : undefined
-  return [{ value: own, path: [...path, key] }]
+  return [{ value: own, path: once(() => [...path(), key]) }]
 }
 
 const stringify = (value: unknown): string => {
@@ -220,18 +234,20 @@ const runPlan = async (
   }
 
   const planned = order.map((key) => groups.get(key) as { compiled: CompiledPath; schemaAware: boolean })
-  const matchesPerGiven = queryMany(
+  const matchesPerGiven = queryManyNodes(
     data,
     planned.map((group) => group.compiled),
     planned.map((group) => (group.schemaAware ? { schemaAware: true } : undefined)),
   )
   for (let i = 0; i < order.length; i++) {
     const group = groups.get(order[i] as string) as { rules: ResolvedRule[] }
-    const matches = matchesPerGiven[i] as { value: unknown; path: JsonPath }[]
+    const matches = matchesPerGiven[i] as MatchNode[]
     for (const match of matches) {
+      // Shared by every rule on this match, so a path is built once at most.
+      const path = once(() => matchPath(match))
       for (const rule of group.rules) {
         for (const then of rule.then) {
-          await runThen(ruleset, rule, then, match.value, match.path, document, out, sources)
+          await runThen(ruleset, rule, then, match.value, path, document, out, sources)
         }
       }
     }
@@ -298,7 +314,7 @@ const runThen = async (
   rule: ResolvedRule,
   then: IThen,
   value: unknown,
-  path: JsonPath,
+  path: () => JsonPath,
   document: Document,
   out: IDiagnostic[],
   sources: ISourceSet | undefined,
@@ -318,7 +334,10 @@ const runThen = async (
       // result as unknown and await it when it is thenable.
       const raw: unknown = fn(target.value, then.functionOptions ?? {}, {
         document,
-        path: target.path,
+        // A getter, so the path is only built for a function that reads it.
+        get path() {
+          return target.path()
+        },
         value: target.value,
         rule,
         functionOptions: then.functionOptions,
@@ -327,7 +346,7 @@ const runThen = async (
     } catch (error) {
       // Isolate the failure: convert it into an error diagnostic on this node so
       // the rest of the run (and already-collected findings) survive.
-      const { sourcePath, range, source } = locate(rule, target.path, document, sources)
+      const { sourcePath, range, source } = locate(rule, target.path(), document, sources)
       const reason = error instanceof Error ? error.message : String(error)
       out.push(errorDiagnostic(rule, sourcePath, `Rule "${rule.name}" threw: ${reason}`, range, source))
       continue
@@ -346,7 +365,7 @@ const toDiagnostic = (
   document: Document,
   sources: ISourceSet | undefined,
 ): IDiagnostic => {
-  const path = result.path ?? target.path
+  const path = result.path ?? target.path()
   const property = path.length > 0 ? path[path.length - 1] : undefined
   const message = rule.message
     ? applyTemplate(rule.message, {
