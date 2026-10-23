@@ -99,6 +99,28 @@ describe('runner', () => {
     ])
   })
 
+  it('lets a function assign, spread and list context.path like a plain property', async () => {
+    const seen: unknown[] = []
+    const rewrite: RulesetFunction = (_input, _options, context) => {
+      seen.push(Object.keys(context), { ...context }.path)
+      context.path = ['rewritten']
+      seen.push(context.path, { ...context }.path)
+      return [{ message: 'found' }]
+    }
+    const diagnostics = await run(
+      { rules: { rewrite: { given: '$.paths.*.get', severity: 'error', then: { function: 'rewrite' } } } },
+      { rewrite },
+    )
+    expect(seen).toEqual([
+      ['document', 'path', 'value', 'rule', 'functionOptions'],
+      ['paths', '/users', 'get'],
+      ['rewritten'],
+      ['rewritten'],
+    ])
+    // The finding still lands on the matched node, as it did when the write went to a plain property.
+    expect(diagnostics.map((d) => d.path)).toEqual([['paths', '/users', 'get']])
+  })
+
   it('extends the match path with a field on a finding', async () => {
     const diagnostics = await run({
       rules: { summary: { given: '$.paths.*.*', severity: 'error', then: { field: 'summary', function: 'truthy' } } },
@@ -120,5 +142,38 @@ describe('runner', () => {
     expect(diagnostics.map((d) => [d.message, d.path])).toEqual([
       ['Rule "boom" threw: boom', ['paths', '/users', 'get']],
     ])
+  })
+
+  it('reports @key targets on each key', async () => {
+    const diagnostics = await run({
+      rules: {
+        keys: { given: '$.paths./users', severity: 'error', then: { field: '@key', function: 'falsy' } },
+        tags: { given: '$', severity: 'error', then: { field: 'openapi', function: 'falsy' } },
+      },
+    })
+    expect(diagnostics.map((d) => [d.code, d.path])).toEqual([
+      ['tags', ['openapi']],
+      ['keys', ['paths', '/users', 'get']],
+      ['keys', ['paths', '/users', 'post']],
+    ])
+  })
+
+  it('appends a $-field sub-query path to the match path', async () => {
+    const diagnostics = await run({
+      rules: {
+        codes: { given: '$.paths./users', severity: 'error', then: { field: '$..description', function: 'falsy' } },
+      },
+    })
+    expect(diagnostics.map((d) => d.path)).toEqual([
+      ['paths', '/users', 'get', 'responses', 200, 'description'],
+      ['paths', '/users', 'post', 'responses', 201, 'description'],
+    ])
+  })
+
+  it('lints the matched value itself when a field meets a primitive', async () => {
+    const diagnostics = await run({
+      rules: { version: { given: '$.openapi', severity: 'error', then: { field: 'major', function: 'falsy' } } },
+    })
+    expect(diagnostics.map((d) => d.path)).toEqual([['openapi']])
   })
 })

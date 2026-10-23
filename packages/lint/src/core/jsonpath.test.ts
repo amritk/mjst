@@ -123,7 +123,7 @@ describe('jsonpath queryMany', () => {
     expect(Object.getOwnPropertyDescriptor(responses?.[0], 'path')?.value).toEqual(responses?.[0]?.path)
   })
 
-  it('matches queryManyNodes once each node path is built', () => {
+  it('builds the same normalized paths from queryManyNodes on demand', () => {
     const compiled = [
       compileQuery('$.info.title'),
       compileQuery('$..description'),
@@ -131,10 +131,20 @@ describe('jsonpath queryMany', () => {
       compileQuery('info.title'),
     ]
     const options = [undefined, { schemaAware: true }, undefined, undefined]
-    const lazy = queryManyNodes(doc, compiled, options).map((nodes) =>
-      nodes.map((node) => ({ value: node.value, path: matchPath(node) })),
-    )
-    expect(lazy).toStrictEqual(queryMany(doc, compiled, options))
+    const paths = queryManyNodes(doc, compiled, options).map((nodes) => nodes.map(matchPath))
+    expect(paths).toStrictEqual([
+      [['info', 'title']],
+      [
+        ['paths', '/users', 'get', 'responses', 200, 'description'],
+        ['paths', '/users', 'post', 'responses', 201, 'description'],
+      ],
+      [
+        ['paths', '/users', 'get', 'responses', 200],
+        ['paths', '/users', 'post', 'responses', 201],
+      ],
+      [],
+    ])
+    expect(paths).toStrictEqual(queryMany(doc, compiled, options).map((matches) => matches.map((m) => m.path)))
   })
 
   it('returns empty arrays for a null root, one per path', () => {
