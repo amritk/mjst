@@ -48,6 +48,12 @@ const targetPath = (target: Target): JsonPath => {
   return target.path
 }
 
+/**
+ * Where a context keeps its target for the `path` getter. It is an own,
+ * enumerable symbol key: `Object.keys`, `JSON.stringify` and `for...in` skip it,
+ * while `Reflect.ownKeys` lists it and a spread copies it. Hiding it with
+ * `Object.defineProperty` would put each context on V8's slow path again.
+ */
 const TARGET = Symbol('target')
 
 /** The context handed to a rule function, carrying the target its `path` getter reads. */

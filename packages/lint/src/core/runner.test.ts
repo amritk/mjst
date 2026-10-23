@@ -139,6 +139,22 @@ describe('runner', () => {
     expect(diagnostics.map((d) => d.path)).toEqual([['paths', '/users', 'get']])
   })
 
+  it('keeps an assigned path on the context that assigned it', async () => {
+    // The setter lives on the shared prototype, so a write must land on the one
+    // context, not the prototype every later context inherits from.
+    const seen: JsonPath[] = []
+    const rewriteFirst: RulesetFunction = (_input, _options, context) => {
+      if (seen.length === 0) context.path = ['rewritten']
+      seen.push(context.path)
+      return undefined
+    }
+    await run(
+      { rules: { first: { given: '$.paths.*.*', severity: 'error', then: { function: 'rewriteFirst' } } } },
+      { rewriteFirst },
+    )
+    expect(seen).toEqual([['rewritten'], ['paths', '/users', 'post']])
+  })
+
   it('extends the match path with a field on a finding', async () => {
     const diagnostics = await run({
       rules: { summary: { given: '$.paths.*.*', severity: 'error', then: { field: 'summary', function: 'truthy' } } },
