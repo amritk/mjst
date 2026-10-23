@@ -48,6 +48,31 @@ const targetPath = (target: Target): JsonPath => {
   return target.path
 }
 
+const TARGET = Symbol('target')
+
+/** The context handed to a rule function, carrying the target its `path` getter reads. */
+type RunContext = IFunctionContext & { [TARGET]: Target }
+
+/**
+ * Every rule function's context inherits `path` from here, so the path is only
+ * built when a function reads it. The getter lives on a shared prototype rather
+ * than on each context: V8 builds an object with its own accessor on a slow
+ * path, and on Node that cost more than the paths it saved.
+ */
+const contextPrototype = {
+  get path(): JsonPath {
+    return targetPath((this as RunContext)[TARGET])
+  },
+  /**
+   * Assigning `context.path` gives that context an own data property, as the
+   * plain property it replaces did. It only changes what the function reads
+   * back, never where the finding lands.
+   */
+  set path(path: JsonPath) {
+    Object.defineProperty(this, 'path', { value: path, writable: true, enumerable: true, configurable: true })
+  },
+}
+
 const isIndexable = (value: unknown): value is Record<string, unknown> | unknown[] =>
   typeof value === 'object' && value !== null
 
@@ -343,25 +368,12 @@ const runThen = async (
       // The declared signature is synchronous, but a function reference may in
       // fact return a Promise (a Spectral-style async function), so treat the raw
       // result as unknown and await it when it is thenable.
-      // `path` is an own, enumerable accessor so the path is only built for a
-      // function that reads it, while a function that assigns it, spreads the
-      // context or lists its keys sees what the plain property used to give it.
-      // A write only changes what the function reads back, never the finding.
-      let assigned = false
-      let assignedPath: JsonPath | undefined
-      const context: IFunctionContext = {
-        document,
-        get path(): JsonPath {
-          return assigned ? (assignedPath as JsonPath) : targetPath(target)
-        },
-        set path(path: JsonPath) {
-          assigned = true
-          assignedPath = path
-        },
-        value: target.value,
-        rule,
-        functionOptions: then.functionOptions,
-      }
+      const context: RunContext = Object.create(contextPrototype)
+      context.document = document
+      context.value = target.value
+      context.rule = rule
+      context.functionOptions = then.functionOptions
+      context[TARGET] = target
       const raw: unknown = fn(target.value, then.functionOptions ?? {}, context)
       results = (isThenable(raw) ? await raw : raw) as IFunctionResult[] | undefined
     } catch (error) {

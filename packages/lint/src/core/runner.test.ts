@@ -79,14 +79,15 @@ describe('runner', () => {
     ])
   })
 
-  it('reads context.path through destructuring and after an await', async () => {
-    // `path` is a getter on the context's prototype, so check the two ways a
-    // function most often reads it away from the plain `context.path` form.
+  it('reads context.path directly, destructured, after an await and in a copy that sets it', async () => {
+    // `path` is a getter inherited from the context's prototype, so pin the ways
+    // a function commonly reads it besides the plain `context.path` form.
     const seen: JsonPath[] = []
     const later = (async (_input: unknown, _options: unknown, context: { path: JsonPath }) => {
       const { path } = context
+      const copy = { ...context, path: [...context.path, 'copy'] }
       await Promise.resolve()
-      seen.push(path, context.path)
+      seen.push(path, context.path, copy.path)
       return undefined
     }) as unknown as RulesetFunction
     await run(
@@ -96,15 +97,32 @@ describe('runner', () => {
     expect(seen).toEqual([
       ['paths', '/users', 'get'],
       ['paths', '/users', 'get'],
+      ['paths', '/users', 'get', 'copy'],
     ])
   })
 
-  it('lets a function assign, spread and list context.path like a plain property', async () => {
+  it('leaves path out of a bare copy of the context and out of its keys', async () => {
+    // The documented cost of the inherited getter: a copy that does not set
+    // `path` has none, and `path` is not an own key.
+    const seen: unknown[] = []
+    const inspect: RulesetFunction = (_input, _options, context) => {
+      seen.push(Object.keys(context), { ...context }.path, 'path' in context)
+      return undefined
+    }
+    await run(
+      { rules: { inspect: { given: '$.paths.*.get', severity: 'error', then: { function: 'inspect' } } } },
+      { inspect },
+    )
+    expect(seen).toEqual([['document', 'value', 'rule', 'functionOptions'], undefined, true])
+  })
+
+  it('gives a context that assigns path its own writable property', async () => {
     const seen: unknown[] = []
     const rewrite: RulesetFunction = (_input, _options, context) => {
-      seen.push(Object.keys(context), { ...context }.path)
       context.path = ['rewritten']
-      seen.push(context.path, { ...context }.path)
+      seen.push(context.path, Object.getOwnPropertyDescriptor(context, 'path'), { ...context }.path)
+      context.path = ['again']
+      seen.push(context.path)
       return [{ message: 'found' }]
     }
     const diagnostics = await run(
@@ -112,12 +130,12 @@ describe('runner', () => {
       { rewrite },
     )
     expect(seen).toEqual([
-      ['document', 'path', 'value', 'rule', 'functionOptions'],
-      ['paths', '/users', 'get'],
       ['rewritten'],
+      { value: ['rewritten'], writable: true, enumerable: true, configurable: true },
       ['rewritten'],
+      ['again'],
     ])
-    // The finding still lands on the matched node, as it did when the write went to a plain property.
+    // The write only changes what the function reads back; the finding stays on the matched node.
     expect(diagnostics.map((d) => d.path)).toEqual([['paths', '/users', 'get']])
   })
 
