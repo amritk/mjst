@@ -7,6 +7,7 @@ import { bySourceThenPosition } from './order'
 import { ownKey } from './own-key'
 import { pointerToPath, resolveSourcePath } from './pointers'
 import type { Ruleset } from './ruleset'
+import { createRunScope, RUN_SCOPE, type RunScope } from './run-scope'
 import { severityFromName } from './severity'
 import {
   DiagnosticSeverity,
@@ -57,7 +58,7 @@ const targetPath = (target: Target): JsonPath => {
 const TARGET = Symbol('target')
 
 /** The context handed to a rule function, carrying the target its `path` getter reads. */
-type RunContext = IFunctionContext & { [TARGET]: Target }
+type RunContext = IFunctionContext & { [TARGET]: Target; [RUN_SCOPE]: RunScope }
 
 /**
  * Every rule function's context inherits `path` from here, so the path is only
@@ -237,6 +238,8 @@ const missingFunction = (ruleset: Ruleset, rule: ResolvedRule): string | undefin
  * walk state instead of once per route (see `SharedWalkOptions`): {@link locate}
  * translates every route back to the same authored node, so a revisit could only
  * add findings that `withoutDuplicates` drops.
+ *
+ * `scope` is the run's {@link RunScope}, handed to every function context.
  */
 const runPlan = async (
   ruleset: Ruleset,
@@ -247,6 +250,7 @@ const runPlan = async (
   out: IDiagnostic[],
   sources: ISourceSet | undefined,
   resolved: boolean,
+  scope: RunScope,
 ): Promise<void> => {
   if (rules.length === 0) return
   const order: string[] = []
@@ -297,7 +301,7 @@ const runPlan = async (
       const match: Match = { node, path: undefined }
       for (const rule of group.rules) {
         for (const then of rule.then) {
-          await runThen(ruleset, rule, then, node.value, match, document, out, sources)
+          await runThen(ruleset, rule, then, node.value, match, document, out, sources, scope)
         }
       }
     }
@@ -368,6 +372,7 @@ const runThen = async (
   document: Document,
   out: IDiagnostic[],
   sources: ISourceSet | undefined,
+  scope: RunScope,
 ): Promise<void> => {
   // A malformed rule (e.g. a `then` with no `function`, which `validateRuleset`
   // warns about) is skipped rather than crashing the whole run.
@@ -388,6 +393,7 @@ const runThen = async (
       context.rule = rule
       context.functionOptions = then.functionOptions
       context[TARGET] = target
+      context[RUN_SCOPE] = scope
       const raw: unknown = fn(target.value, then.functionOptions ?? {}, context)
       results = (isThenable(raw) ? await raw : raw) as IFunctionResult[] | undefined
     } catch (error) {
@@ -448,6 +454,8 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
   run: async (document, options = {}) => {
     const documentFormats = detectFormats(document.data, ruleset.formats)
     const diagnostics: IDiagnostic[] = []
+    // Fresh for every run, so nothing a function memoized outlives the data it read.
+    const scope = createRunScope()
 
     // Rules split by which document they run against (resolved vs raw). Each
     // dataset is linted with a single deduped query plan so that identical
@@ -465,7 +473,7 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
     // Raw rules run against the root's unresolved tree, so positions always come
     // straight from the root document; only resolved rules can land on inlined
     // external nodes and need the source set.
-    await runPlan(ruleset, rawRules, document.data, document, documentFormats, diagnostics, undefined, false)
+    await runPlan(ruleset, rawRules, document.data, document, documentFormats, diagnostics, undefined, false, scope)
     if (resolvedRules.length > 0) {
       await runPlan(
         ruleset,
@@ -476,6 +484,7 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
         diagnostics,
         options.sources,
         true,
+        scope,
       )
     }
 

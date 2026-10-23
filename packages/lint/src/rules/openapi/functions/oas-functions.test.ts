@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { lint } from '../../../core'
+import { createDocumentFromData, createLinter, lint } from '../../../core'
 import { createOpenApiRuleset, oas } from '../index'
 
 // Per-rule coverage for the OpenAPI-specific functions. Each function is driven
@@ -400,6 +400,35 @@ describe('oas-functions', () => {
       components: { schemas: { A: { type: 'object', properties: { example: { type: 'string' } } } } },
     }
     expect(await has(doc, 'oas3-valid-schema-example')).toBe(false)
+  })
+
+  it('validates examples again after the data is edited in place between runs', async () => {
+    // Both example rules memoize by node identity. Callers keep the data they lint and
+    // edit it, so the memo has to end with the run — the edited node must be checked again.
+    const schema: Record<string, unknown> = { type: 'integer', example: 1 }
+    const media: Record<string, unknown> = { schema: { type: 'string' }, example: 'ok' }
+    const data = {
+      ...base3(),
+      paths: { '/a': { get: { responses: { '200': { description: 'ok', content: { 'application/json': media } } } } } },
+      components: { schemas: { A: schema } },
+    }
+    const codes = async (run: () => Promise<{ code: string | number }[]>) =>
+      new Set((await run()).map((finding) => finding.code))
+    const document = createDocumentFromData(data)
+    const runs = [
+      () => lint({ data }, { ruleset: allRules }),
+      () => createLinter(allRules).run(document, { resolved: data }),
+    ]
+    for (const run of runs) {
+      schema['example'] = 1
+      media['example'] = 'ok'
+      expect(await codes(run)).not.toContain('oas3-valid-schema-example')
+      schema['example'] = 'one'
+      media['example'] = 5
+      const edited = await codes(run)
+      expect(edited).toContain('oas3-valid-schema-example')
+      expect(edited).toContain('oas3-valid-media-example')
+    }
   })
 
   // oasMediaExample --------------------------------------------------------
