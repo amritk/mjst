@@ -211,35 +211,22 @@ document has to clone it first. `coerceX` returns a new value that shares
 everything it did not touch, or the input itself when nothing needed coercing.
 
 **It is faster where the input has to survive.** Against Ajv cloning first, so
-both leave the caller's document alone (`bun run bench:validators:coerce`, or
-`bench:validators:coerce:node`):
-
-| schema | runtime | valid input | needs coercing | cannot be coerced |
-|:--|:--|--:|--:|--:|
-| small (4 fields) | Bun | 5.4× | 1.7× | 1.5× |
-| small (4 fields) | Node | 9.9× | 2.1× | 2.2× |
-| order (nested + array) | Bun | 11× | 1.6× | 1.9× |
-| order (nested + array) | Node | 8.4× | 1.8× | 2.2× |
-| assert-loose | Bun | 19× | 1.4× | 3.0× |
-| assert-loose | Node | 36× | 1.6× | 3.1× |
-| config (unions via `$ref`) | Bun | 7.2× | 1.7× | 3.7× |
-| config (unions via `$ref`) | Node | 5.2× | 1.5× | 4.6× |
-
-<sub>Each cell is how many times faster `coerceX` is than Ajv on the same input,
-each engine timed in its own process (Bun 1.3.11, Node 22.22, Linux x64). A
-valid document is the common case and the widest gap: `coerceX` answers it with
-`isX` and hands the input straight back, without walking it. `isX` builds
-nothing — no error, no path — and stops at the first failure, answering a
-`$ref` with the target's own `isX`; it calls `validateX` only for a schema that
-folds to a constant. On valid input Ajv rewrites nothing, so it can
-also be timed without the clone; `coerceX` is still ahead there on these
-schemas, by 1.2–3.3×, but not on every one: on a large, union-heavy document
-that the caller lets Ajv coerce in place, Ajv can come out modestly ahead. The
-gap above is the clone, so it is real exactly where the caller cannot let Ajv
-mutate its input.
-The config case is the shape `--coerce` exists for: every coercible scalar sits
-inside a union reached through `$ref`, and every union branch is tested by a
-named function rather than a closure built per call.</sub>
+both leave the caller's document alone, `coerceX` comes out ahead on every
+schema in the bench, on both Bun and Node, whether the input is valid, needs
+coercing, or cannot be coerced (`bun run bench:validators:coerce`, or
+`bench:validators:coerce:node`). A valid document is the common case and the
+widest gap: `coerceX` answers it with `isX` and hands the input straight back,
+without walking it. `isX` builds nothing — no error, no path — and stops at the
+first failure, answering a `$ref` with the target's own `isX`; it calls
+`validateX` only for a schema that folds to a constant. On valid input Ajv
+rewrites nothing, so it can also be timed without the clone; `coerceX` is still
+ahead there on the bench schemas, but not on every one: on a large, union-heavy
+document that the caller lets Ajv coerce in place, Ajv can come out modestly
+ahead. Much of the gap is the clone, so it is real exactly where the caller
+cannot let Ajv mutate its input. The bench's `config` case is the shape
+`--coerce` exists for: every coercible scalar sits inside a union reached
+through `$ref`, and every union branch is tested by a named function rather
+than a closure built per call.
 
 The errors differ in one way worth knowing if you key diagnostics on
 `path + keyword + params`: an `additionalProperties` error points **at the
@@ -315,18 +302,15 @@ made. `bun run bench` measures it anyway, and the deltas wander either side of
 zero between runs, which is what process-level variance looks like when there is
 no underlying difference.
 
-What does change is the cold side, and only in the direction you would hope:
+What does change is what a build that reaches every mode emits:
 
 | | before (both engines directly) | after |
 |:---|:---|:---|
-| codegen for the whole matrix | 2.9 ms | 2.7 ms |
-| emitted bytes | 46.0 KiB | 45.8 KiB |
 | files | 7 | 6 |
 | declarations of `Order` | **2** | **1** |
-| per-mode codegen | — | equal or slightly lower |
 | per-mode bytes | — | identical |
 
-The one that matters is the last row of the middle block. Reaching every mode
+The one that matters is the declarations row. Reaching every mode
 used to mean running both generators yourself and shipping two trees for one
 schema, including two declarations of the same type — structurally
 interchangeable, but two things to keep in step. Now there is one.

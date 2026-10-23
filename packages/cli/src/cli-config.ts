@@ -114,9 +114,9 @@ export type CliConfig = {
    *
    * A document that is already valid is answered by `isX` alone where that is a
    * standalone guard, and handed back as the very same object. Where the caller
-   * cannot let Ajv mutate its input, so Ajv has to clone it first, `coerceX` runs
-   * 5–36× faster on valid input and 1.4–2.1× faster on input that needs coercing
-   * (`bench:validators:coerce`). Where the caller owns the document and lets Ajv
+   * cannot let Ajv mutate its input, so Ajv has to clone it first, `coerceX` is
+   * faster, by the widest margin on valid input (`bench:validators:coerce`).
+   * Where the caller owns the document and lets Ajv
    * coerce it in place, there is no clone to save, and on a large document Ajv
    * can come out modestly ahead.
    *

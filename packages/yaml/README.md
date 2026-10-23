@@ -21,8 +21,8 @@
 
 It is **zero-dependency** and tuned to be **small and fast**. Against the two parsers people reach for on the web:
 
-- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **~29–36× faster**, and the bundle is **~3.2× smaller**.
-- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **~1.8–2.3× faster**, the bundle is **~1.3× smaller**, and we *also* hand you the positioned tree it cannot produce.
+- **vs [`yaml`](https://www.npmjs.com/package/yaml) (eemeli)** — the only other parser here that also tracks source positions — building the source-mapped tree is **over an order of magnitude faster**, and the bundle is a fraction of the size.
+- **vs [`js-yaml`](https://www.npmjs.com/package/js-yaml)** — which has **no concept of source positions** — parsing straight to data is **faster**, the bundle is **smaller**, and we *also* hand you the positioned tree it cannot produce.
 
 It passes **397 of the 402 cases** in the official YAML test suite, with every
 remaining case [written down and explained](#conformance-measured) rather than
@@ -168,47 +168,27 @@ apply your own rule.
 
 ## Performance
 
-Run it yourself with `bun run bench` (Bun) or `bun run bench:node` (Node, against
-the built package). Numbers below are a median of three runs of each on one
-Linux x64 machine (a 4-vCPU cloud box, the same one every table in this repo
-comes from), Bun 1.4.0 and Node 26.8.1 — treat the ratios as the durable part
-and the absolute throughput as a property of that box, which drifts between
-sittings.
+Run the bench yourself with `bun run bench` (Bun) or `bun run bench:node` (Node,
+against the built package). It measures three things, against
+[`yaml`](https://www.npmjs.com/package/yaml) (eemeli) and
+[`js-yaml`](https://www.npmjs.com/package/js-yaml), over small, medium and large
+fixtures:
 
-**Parse to a source-mapped tree** — the job this package exists for. `js-yaml` cannot produce positions, so it is not a candidate here.
-
-| fixture | Bun: @amritk/yaml | Bun: yaml (eemeli) | Bun speedup | Node: @amritk/yaml | Node: yaml | Node speedup |
-| --- | --- | --- | --- | --- | --- | --- |
-| small (155 B) | 386k ops/s | 13.4k ops/s | **28.8×** | 418k ops/s | 12.1k ops/s | **34.6×** |
-| medium (2 KB) | 40.0k ops/s | 1.10k ops/s | **36.4×** | 35.9k ops/s | 1.10k ops/s | **32.6×** |
-| large (100 KB) | 759 ops/s | 23.0 ops/s | **33.0×** | 667 ops/s | 21.3 ops/s | **31.3×** |
-
-**Parse to plain data** — all three can do this.
-
-| fixture | runtime | @amritk/yaml | yaml | js-yaml | vs yaml | vs js-yaml |
-| --- | --- | --- | --- | --- | --- | --- |
-| small | Bun | 265k | 15.0k | 151k | 17.7× | 1.75× |
-| small | Node | 303k | 11.1k | 136k | 27.3× | 2.23× |
-| medium | Bun | 25.4k | 1.20k | 12.3k | 21.2× | 2.07× |
-| medium | Node | 26.5k | 1.00k | 11.5k | 26.5× | 2.30× |
-| large | Bun | 447 | 23.4 | 251 | 19.1× | 1.78× |
-| large | Node | 456 | 20.3 | 255 | 22.5× | 1.79× |
-
-**Bundle size** (minified + gzipped) — what each parser adds to an application
-that imports it. This one table has no runtime split: it measures what the
-bundler emits, which is the same bytes whoever runs them. The bench bundles a small consumer of each library rather than
-the library's own entry point, so the numbers reflect code that is actually
-reachable. Ours imports what a diagnostics consumer uses (`parse`,
-`parseDocument`, `nodeAtPath`, `lineCounter`) — not every export, so `keyText`,
-`parseAllDocuments`, and the node guards are not counted; `yaml` gets `parse`
-and `parseDocument`, and `js-yaml` only `load`, because it has no positioned-tree
-equivalent to import.
-
-| | size | |
-| --- | --- | --- |
-| **@amritk/yaml** | **11.1 KB** | — |
-| yaml | 35.4 KB | 3.2× larger |
-| js-yaml | 14.5 KB | 1.3× larger |
+- **Parse to a source-mapped tree** — the job this package exists for. `js-yaml`
+  cannot produce positions, so it is not a candidate here; against `yaml` this
+  package is over an order of magnitude faster on every fixture, on both
+  runtimes.
+- **Parse to plain data** — all three can do this. This package leads both on
+  every fixture: by an order of magnitude over `yaml`, and by a smaller but
+  consistent margin over `js-yaml`.
+- **Bundle size** (minified + gzipped) — what each parser adds to an application
+  that imports it, which is the same bytes whoever runs them. The bench bundles
+  a small consumer of each library rather than the library's own entry point, so
+  the numbers reflect code that is actually reachable. Ours imports what a
+  diagnostics consumer uses (`parse`, `parseDocument`, `nodeAtPath`,
+  `lineCounter`); `yaml` gets `parse` and `parseDocument`, and `js-yaml` only
+  `load`, because it has no positioned-tree equivalent to import. This package
+  comes out smallest, and several times smaller than `yaml`.
 
 Correctness is pinned three ways: a differential test suite (`src/differential.test.ts`) parses a battery of documents — including full OpenAPI specs — and asserts byte-identical data output against `yaml`; `src/json-superset.test.ts` holds a generated JSON corpus to `JSON.parse` exactly; and `src/conformance.test.ts` measures the parser against the official YAML test suite (see [Conformance, measured](#conformance-measured)). Where `js-yaml` diverges (its `!!timestamp` type turns ISO strings into `Date`s, which is wrong for a JSON superset), we instead agree with `yaml`.
 
