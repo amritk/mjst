@@ -1,3 +1,4 @@
+import { preloadSchemaValidator } from '../functions/preload-schema-validator'
 import { detectFormat, type ParserFormat } from '../parsers'
 import { createDocument, createDocumentFromData, type Document, type IDocumentOptions } from './document'
 import { bySourceThenPosition, withoutDuplicates } from './order'
@@ -138,6 +139,9 @@ export const lintWithResult = async (input: LintInput, options: LintOptions): Pr
     if (result.diagnostics) resolverDiagnostics = result.diagnostics
   }
 
+  // The `schema` function runs synchronously, so its validator has to be loaded
+  // before the rules run rather than when it is first called.
+  await preloadSchemaValidator(ruleset, document.source)
   const ruleResults = await createLinter(ruleset).run(document, { resolved, ...(sources ? { sources } : {}) })
 
   const parserResults = document.diagnostics.map((diagnostic): IDiagnostic => {

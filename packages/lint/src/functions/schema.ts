@@ -1,8 +1,33 @@
-import { validate as buildValidator } from '@amritk/runtime-validators'
+import { createRequire } from 'node:module'
+import type { validate } from '@amritk/runtime-validators'
 
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../core/types'
 
 type RuntimeValidator = (input: unknown) => true | { valid: false; errors: { message: string; path: string }[] }
+
+// `@amritk/runtime-validators` is a fair share of what `@amritk/lint` costs to
+// import, and most rulesets never run a schema. So it is not imported up front:
+// a lint run calls `loadSchemaValidator` before its rules execute when one of
+// them might need it (see `preloadSchemaValidator`), which keeps `schema` itself
+// synchronous.
+let buildValidator: typeof validate | undefined
+
+/** Loads `@amritk/runtime-validators` once, ahead of a run whose rules may call {@link schema}. */
+export const loadSchemaValidator = async (): Promise<void> => {
+  buildValidator ??= (await import('@amritk/runtime-validators')).validate
+}
+
+/**
+ * The validator builder, loaded synchronously when nothing preloaded it — a
+ * direct `schema()` call, or a `createLinter` run that skipped `lint`. That
+ * leans on `require()` of an ES module, which Bun and Node 20.19+ / 22.12+
+ * support.
+ */
+const getBuildValidator = (): typeof validate => {
+  buildValidator ??= (createRequire(import.meta.url)('@amritk/runtime-validators') as { validate: typeof validate })
+    .validate
+  return buildValidator
+}
 
 // The rule's `options.schema` is a stable object, so cache the prepared
 // validator by identity. `@amritk/runtime-validators` interprets the schema at
@@ -14,7 +39,7 @@ const getValidator = (schema: object): RuntimeValidator => {
   if (!validator) {
     // The `schema` built-in historically enforced string formats (ajv
     // `validateFormats: true`); keep that by opting into all formats here.
-    validator = buildValidator(schema, { formats: 'all' }) as RuntimeValidator
+    validator = getBuildValidator()(schema, { formats: 'all' }) as RuntimeValidator
     validators.set(schema, validator)
   }
   return validator

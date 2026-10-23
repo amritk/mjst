@@ -144,6 +144,28 @@ describe('cli', () => {
     expect(stderr).toContain('No files matched:')
   })
 
+  // A single plain path skips fast-glob entirely, so these pin that the shortcut
+  // answers exactly what fast-glob did: the path as written, and nothing for
+  // anything that is not a file.
+  it('reports a single plain path exactly as it was written', async () => {
+    const dir = tmp('lint-plain-')
+    writeFileSync(join(dir, '.lint.yaml'), RULESET)
+    writeFileSync(join(dir, 'doc.yaml'), 'version: 1\n')
+    const file = `${dir}/./doc.yaml`
+    const { stdout, code } = await run([file])
+
+    expect(code).toBe(1)
+    expect(stdout).toContain(`${file}:1:1`)
+  })
+
+  it('matches no files for a single plain path naming a directory', async () => {
+    const dir = tmp('lint-dir-')
+    const { code, stderr } = await run([dir], { stdin: '' })
+
+    expect(code).toBe(2)
+    expect(stderr).toContain(`No files matched: ${dir}`)
+  })
+
   it('still lints stdin when no document arguments were given at all', async () => {
     const dir = tmp('lint-stdin2-')
     writeFileSync(join(dir, '.lint.yaml'), RULESET)
