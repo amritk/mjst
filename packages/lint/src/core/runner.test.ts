@@ -73,7 +73,6 @@ describe('runner', () => {
       { record },
     )
     // The all-digit status codes come back as numbers, as `query` has always reported them.
-    expect(seen).toEqual(jsonpath.query(createDocument(SPEC).data, '$..responses.*').map((match) => match.path))
     expect(seen).toEqual([
       ['paths', '/users', 'get', 'responses', 200],
       ['paths', '/users', 'post', 'responses', 201],

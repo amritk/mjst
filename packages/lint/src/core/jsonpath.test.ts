@@ -119,6 +119,7 @@ describe('jsonpath queryMany', () => {
       { value: { description: 'ok' }, path: ['paths', '/users', 'get', 'responses', 200] },
       { value: { description: 'created' }, path: ['paths', '/users', 'post', 'responses', 201] },
     ])
+    // `toStrictEqual` passes for a getter too; the path has to be a plain data property.
     expect(Object.getOwnPropertyDescriptor(responses?.[0], 'path')?.value).toEqual(responses?.[0]?.path)
   })
 

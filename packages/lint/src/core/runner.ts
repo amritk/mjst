@@ -20,23 +20,31 @@ import {
 
 const ZERO_RANGE: IRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }
 
+/** A JSONPath match and, once something has read it, its path. Shared by every rule on the match. */
+type Match = {
+  node: MatchNode
+  path: JsonPath | undefined
+}
+
 /**
- * A node a `then` runs against. Its path is read through `path()` and built on
- * the first call: most targets never become findings, and building a path for
- * every match was the single largest cost of a run on a large spec.
+ * A node a `then` runs against. Its path is built by {@link targetPath} on first
+ * read: most targets never become findings, and building a path for every match
+ * was the single largest cost of a run on a large spec.
  */
 type Target = {
   value: unknown
-  path: () => JsonPath
+  match: Match
+  /** Segments a `field` adds after the match's path; `undefined` when the target is the match itself. */
+  suffix: JsonPath | undefined
+  path: JsonPath | undefined
 }
 
-/** Wraps `build` so it runs at most once, on the first call. */
-const once = (build: () => JsonPath): (() => JsonPath) => {
-  let path: JsonPath | undefined
-  return () => {
-    path ??= build()
-    return path
-  }
+const targetPath = (target: Target): JsonPath => {
+  if (target.path !== undefined) return target.path
+  const match = target.match
+  match.path ??= matchPath(match.node)
+  target.path = target.suffix === undefined ? match.path : [...match.path, ...target.suffix]
+  return target.path
 }
 
 const isIndexable = (value: unknown): value is Record<string, unknown> | unknown[] =>
@@ -52,21 +60,23 @@ const isThenable = (value: unknown): value is Promise<unknown> =>
  * field against a primitive lints the matched value itself; a `$`-prefixed field
  * runs as a sub-query.
  */
-const resolveTargets = (value: unknown, path: () => JsonPath, field: string | undefined): Target[] => {
-  if (field === undefined) return [{ value, path }]
+const resolveTargets = (value: unknown, match: Match, field: string | undefined): Target[] => {
+  if (field === undefined) return [{ value, match, suffix: undefined, path: undefined }]
   // A field only narrows into a container; against a primitive (or null) the
   // matched value itself is the target.
-  if (!isIndexable(value)) return [{ value, path }]
+  if (!isIndexable(value)) return [{ value, match, suffix: undefined, path: undefined }]
   if (field === '@key') {
     // Object.keys over an array yields its indices (as strings); normalize those
     // back to numbers for the path so lookups stay consistent.
     return Object.keys(value).map((key) => ({
       value: key,
-      path: once(() => [...path(), Array.isArray(value) ? Number(key) : key]),
+      match,
+      suffix: [Array.isArray(value) ? Number(key) : key],
+      path: undefined,
     }))
   }
   if (field.startsWith('$')) {
-    return query(value, field).map((match) => ({ value: match.value, path: once(() => [...path(), ...match.path]) }))
+    return query(value, field).map((sub) => ({ value: sub.value, match, suffix: sub.path, path: undefined }))
   }
   // A plain property name, or a numeric index into an array. `Object.hasOwn`, not
   // a bare index: `field` is ruleset input, so `field: 'constructor'` otherwise
@@ -74,7 +84,7 @@ const resolveTargets = (value: unknown, path: () => JsonPath, field: string | un
   // and `truthy` both passed on a key the document does not have.
   const key = Array.isArray(value) && /^\d+$/.test(field) ? Number(field) : field
   const own = Object.hasOwn(value, key) ? (value as Record<string | number, unknown>)[key] : undefined
-  return [{ value: own, path: once(() => [...path(), key]) }]
+  return [{ value: own, match, suffix: [key], path: undefined }]
 }
 
 const stringify = (value: unknown): string => {
@@ -184,7 +194,7 @@ const missingFunction = (ruleset: Ruleset, rule: ResolvedRule): string | undefin
  * Builds a deduped query plan for `rules` against `data`: each distinct
  * (expanded) `given` is compiled and evaluated once, then its matches fan out to
  * every rule that shares it. Recursive descents are evaluated with a single
- * shared tree walk inside `queryMany`.
+ * shared tree walk inside `queryManyNodes`.
  *
  * A rule that references an unknown named function is reported once (not per
  * node) and skipped; a rule function that throws (or rejects) becomes an
@@ -241,13 +251,13 @@ const runPlan = async (
   )
   for (let i = 0; i < order.length; i++) {
     const group = groups.get(order[i] as string) as { rules: ResolvedRule[] }
-    const matches = matchesPerGiven[i] as MatchNode[]
-    for (const match of matches) {
-      // Shared by every rule on this match, so a path is built once at most.
-      const path = once(() => matchPath(match))
+    const nodes = matchesPerGiven[i] as MatchNode[]
+    for (const node of nodes) {
+      // Shared by every rule on this node, so its path is built once at most.
+      const match: Match = { node, path: undefined }
       for (const rule of group.rules) {
         for (const then of rule.then) {
-          await runThen(ruleset, rule, then, match.value, path, document, out, sources)
+          await runThen(ruleset, rule, then, node.value, match, document, out, sources)
         }
       }
     }
@@ -314,7 +324,7 @@ const runThen = async (
   rule: ResolvedRule,
   then: IThen,
   value: unknown,
-  path: () => JsonPath,
+  match: Match,
   document: Document,
   out: IDiagnostic[],
   sources: ISourceSet | undefined,
@@ -326,7 +336,7 @@ const runThen = async (
   // Unknown named functions are handled once per rule in `runPlan`; nothing to do.
   if (!fn) return
 
-  for (const target of resolveTargets(value, path, then.field)) {
+  for (const target of resolveTargets(value, match, then.field)) {
     let results: IFunctionResult[] | undefined
     try {
       // The declared signature is synchronous, but a function reference may in
@@ -336,7 +346,7 @@ const runThen = async (
         document,
         // A getter, so the path is only built for a function that reads it.
         get path() {
-          return target.path()
+          return targetPath(target)
         },
         value: target.value,
         rule,
@@ -346,7 +356,7 @@ const runThen = async (
     } catch (error) {
       // Isolate the failure: convert it into an error diagnostic on this node so
       // the rest of the run (and already-collected findings) survive.
-      const { sourcePath, range, source } = locate(rule, target.path(), document, sources)
+      const { sourcePath, range, source } = locate(rule, targetPath(target), document, sources)
       const reason = error instanceof Error ? error.message : String(error)
       out.push(errorDiagnostic(rule, sourcePath, `Rule "${rule.name}" threw: ${reason}`, range, source))
       continue
@@ -365,7 +375,7 @@ const toDiagnostic = (
   document: Document,
   sources: ISourceSet | undefined,
 ): IDiagnostic => {
-  const path = result.path ?? target.path()
+  const path = result.path ?? targetPath(target)
   const property = path.length > 0 ? path[path.length - 1] : undefined
   const message = rule.message
     ? applyTemplate(rule.message, {

@@ -737,7 +737,7 @@ export const queryManyNodes = (
   compiled: CompiledPath[],
   options: readonly (QueryOptions | undefined)[] = [],
 ): MatchNode[][] => {
-  const out: Node[][] = new Array(compiled.length)
+  const out: MatchNode[][] = new Array(compiled.length)
   if (data === null || data === undefined) {
     for (let i = 0; i < compiled.length; i++) out[i] = []
     return out
