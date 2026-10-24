@@ -727,7 +727,12 @@ const enclosingDefinitionLength = (pointer: JsonPath): number => {
   return 0
 }
 
-/** The value at `path` in `root`, through own members only. */
+/**
+ * The value at `path` in `root`, through own members only — `undefined` rather
+ * than a throw for a member that is not there, since a resolve reports and never
+ * throws. Bundling only asks for a prefix of a pointer it just resolved, so that
+ * is a guard, not a case it expects.
+ */
 const valueAt = (root: unknown, path: JsonPath): unknown => {
   let value = root
   for (const segment of path) {
@@ -1118,8 +1123,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     if (root === null || typeof root !== 'object' || Array.isArray(root)) return undefined
     const id = (root as Record<string, unknown>)['$id']
     if (typeof id !== 'string' || !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(id)) return undefined
-    const base = registryFor(location).rootBase
-    return base.startsWith(SYNTHETIC_BASE) ? undefined : base
+    return registryFor(location).rootBase
   }
 
   /**
@@ -1200,7 +1204,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       refCache.set(cacheKey, MISSING)
       return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
     }
-    const pointer = found.pointer ?? []
+    const pointer = found.pointer
     // Same document, same resource: the ref means the same thing where it lands,
     // because that resource is carried over whole with its `$id`.
     const sameResource = baseLocation === targetLocation && nodeBase === targetBase && !siteInRoot

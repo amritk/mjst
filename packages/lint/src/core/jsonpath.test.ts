@@ -171,11 +171,23 @@ describe('jsonpath queryMany', () => {
   it('keeps every route for a query that can see it', () => {
     const shared = { leaf: { description: 'x' } }
     const tree = { a: { s: shared }, b: { s: shared } }
-    // `@path` spells out the route, and `^^` climbs from the seed past the shared object.
-    for (const expression of ['$..[?(@path && @.description)]', '$..description^^']) {
+    // `@path` spells out the route — in the descent or in a step after it — and
+    // `^^` climbs from the seed past the shared object.
+    for (const expression of ['$..[?(@path && @.description)]', '$..leaf[?(@path && @)]', '$..description^^']) {
       const [nodes] = queryManyNodes(tree, [compileQuery(expression)], [], { skipRevisits: true })
       expect(nodes?.map((node) => matchPath(node)[0])).toStrictEqual(['a', 'b'])
     }
+  })
+
+  it('walks a shared object again when it is entered in another walk state', () => {
+    // Under `a` both queries are live; under `b` only the second is. A matching
+    // key is not enough to skip: the state the walk enters in decides what can match.
+    const shared = { description: 'x' }
+    const tree = { a: { s: shared }, b: { s: shared } }
+    const compiled = [compileQuery('$.a..description'), compileQuery('$..description')]
+    const [underA, everywhere] = queryManyNodes(tree, compiled, [], { skipRevisits: true })
+    expect(underA?.map((node) => matchPath(node).join('.'))).toStrictEqual(['a.s.description'])
+    expect(everywhere?.map((node) => matchPath(node).join('.'))).toStrictEqual(['a.s.description', 'b.s.description'])
   })
 
   it('walks layered shared objects in linear time when skipping revisits', () => {
