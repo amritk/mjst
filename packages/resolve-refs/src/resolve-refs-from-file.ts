@@ -11,6 +11,7 @@ import {
   isScopeSensitive,
   type ScopeSensitiveNodes,
 } from './dynamic-scope'
+import { getByPointer } from './get-by-pointer'
 import { isContainedPath } from './is-contained-path'
 import { isPrivateHost } from './is-private-host'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
@@ -727,23 +728,25 @@ const enclosingDefinitionLength = (pointer: JsonPath): number => {
   return 0
 }
 
+/** How a name is compared for collisions: as written, unless `keyOf` says otherwise. */
+const asWritten = (name: string): string => name
+
 /**
- * The value at `path` in `root`, through own members only — `undefined` rather
- * than a throw for a member that is not there, since a resolve reports and never
- * throws. Bundling only asks for a prefix of a pointer it just resolved, so that
- * is a guard, not a case it expects.
+ * How bundling compares definition names: the way a code generator files them.
+ * `refToFilename` in `@amritk/helpers` kebab-cases a name, so `Money` and `money`
+ * (or `#/definitions/Money` and `#/$defs/Money`) become one file; comparing names
+ * case- and punctuation-blind catches every such pair, at the cost of an
+ * occasional suffix a generator would not have needed.
  */
-const valueAt = (root: unknown, path: JsonPath): unknown => {
-  let value = root
-  for (const segment of path) {
-    if (value === null || typeof value !== 'object' || !Object.hasOwn(value, segment)) return undefined
-    value = (value as Record<string | number, unknown>)[segment]
-  }
-  return value
-}
+const asFilename = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 
 /** Derives a readable `$defs` key for a hoisted cycle target. */
-const hoistName = (targetLocation: string, fragment: string, taken: Set<string>): string => {
+const hoistName = (
+  targetLocation: string,
+  fragment: string,
+  taken: Set<string>,
+  keyOf: (name: string) => string = asWritten,
+): string => {
   const fragmentTail = fragment.split('/').filter(Boolean).pop()
   const locationTail = targetLocation
     .split('/')
@@ -753,8 +756,8 @@ const hoistName = (targetLocation: string, fragment: string, taken: Set<string>)
   const raw = fragmentTail || locationTail || 'cycle'
   const sanitized = raw.replace(/[^A-Za-z0-9_.-]/g, '-') || 'cycle'
   let name = sanitized
-  for (let n = 2; taken.has(name); n++) name = `${sanitized}-${n}`
-  taken.add(name)
+  for (let n = 2; taken.has(keyOf(name)); n++) name = `${sanitized}-${n}`
+  taken.add(keyOf(name))
   return name
 }
 
@@ -1000,13 +1003,16 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   // already called `b` — and the hoist then overwrote it, silently re-pointing
   // every kept `#/$defs/b` cycle ref at the wrong schema.
   const rootDoc = docCache.get(rootLocation)
-  const rootDefs =
-    rootDoc !== null && typeof rootDoc === 'object' && !Array.isArray(rootDoc)
-      ? (rootDoc as Record<string, unknown>)['$defs']
-      : undefined
-  const hoistTaken = new Set<string>(
-    rootDefs !== null && typeof rootDefs === 'object' && !Array.isArray(rootDefs) ? Object.keys(rootDefs) : [],
-  )
+  // Bundling also seeds the root's other definition maps, compared as a generator
+  // files them (see `asFilename`): a hoisted `Money` beside a root `definitions/Money`
+  // is one type file. Inlining keeps exact names, so its output is unchanged.
+  const nameKey = options.bundle === true ? asFilename : asWritten
+  const definitionNames = (root: unknown): string[] =>
+    (options.bundle === true ? DEFINITION_CONTAINERS : [['$defs']]).flatMap((container) => {
+      const map = getByPointer(root, `/${container.join('/')}`)
+      return map !== null && typeof map === 'object' && !Array.isArray(map) ? Object.keys(map) : []
+    })
+  const hoistTaken = new Set<string>(definitionNames(rootDoc).map(nameKey))
   // Every node carrying a `#/$defs/<name>` ref the CYCLE branch emitted, paired
   // with the hoist it names. The seeding above reads the *source* root, but the
   // hoists land in the *resolved* root's `$defs` — and under a pure-`$ref` root
@@ -1098,19 +1104,25 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   }
 
   /**
-   * Whether the walk is placing output in the root's own resource — where a
-   * `#/...` ref reads from the output document's root — rather than inside an
-   * embedded one (any node with an `$id` below the root, a hoisted document that
-   * keeps its `$id`, and whatever is inlined into either), where `#` names that
-   * resource instead. Only `bundle` reads it: inlining never writes a ref that
-   * depends on where it lands. Set by {@link resolveAt} on entering an `$id`.
+   * The embedded resources the walk is placing output inside, innermost last, by
+   * base URI: any node with an `$id` below the root, a hoisted document that keeps
+   * its `$id`, and whatever is inlined into either. Empty while output lands in the
+   * root's own resource, where a `#/...` ref reads from the output document's root;
+   * inside one, `#` names that resource instead. Only `bundle` reads it: inlining
+   * never writes a ref that depends on where it lands. Kept by {@link resolveAt}.
    */
-  let placedInRoot = true
+  const placements: string[] = []
 
   // Absolute `$id`s already embedded by bundling, to the document each came from.
-  // Two documents claiming one id would make the output name two resources the
-  // same way, so the second is inlined instead.
+  // A second document claiming one keeps the inlining behavior — it carries the
+  // same `$id` either way, so the input is ambiguous, and embedding it too would
+  // only add a second resource every URI ref to that id could mean.
   const embeddedIds = new Map<string, string>()
+
+  // What each bundling hoist holds: the document and the pointer hoisted. A
+  // definition of a document that is also hoisted whole is already inside that
+  // hoist, so it is pointed at there instead of attached a second time.
+  const hoistTargets = new Map<string, { location: string; pointer: JsonPath }>()
 
   /**
    * The absolute `$id` a document declares at its root, or `undefined`. Only a
@@ -1129,18 +1141,73 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   /**
    * An absolute URI naming the node at `pointer` in `location`: the base of the
    * resource it sits in, plus the pointer from that resource's root. `undefined`
-   * when the resource has no real URI — the synthetic base a document without an
-   * `$id` resolves against is not one any output could name.
+   * unless the output declares that base as an `$id`: the synthetic base a local
+   * document without one resolves against names nothing, and a remote document's
+   * URL names a document that is not in the output.
    */
   const uriFor = (location: string, base: string, pointer: JsonPath): string | undefined => {
     if (base.startsWith(SYNTHETIC_BASE)) return undefined
     const registry = registryFor(location)
+    const declared = base === registry.rootBase ? absoluteRootId(location) === base : registry.resources.has(base)
+    if (!declared) return undefined
     const resourcePointer = base === registry.rootBase ? [] : registry.resources.get(base)?.pointer
     if (resourcePointer === undefined || resourcePointer.some((segment, index) => pointer[index] !== segment)) {
       return undefined
     }
     const inner = pointer.slice(resourcePointer.length)
     return inner.length === 0 ? base : `${base}${pathToRef(inner)}`
+  }
+
+  /** The absolute URI of a cycle's target, for closing it from inside a resource. */
+  const cycleTargetUri = (
+    scoped: ScopedTarget | undefined,
+    keyword: RefKeyword,
+    targetLocation: string,
+    fragment: string,
+  ): string | undefined => {
+    const { found, base } = lookupTarget(scoped, keyword, targetLocation, fragment)
+    return found === undefined ? undefined : uriFor(targetLocation, base, found.pointer)
+  }
+
+  /**
+   * Registers (once) and resolves (once) the hoist a bundled ref into another
+   * document needs: the enclosing definition for a target inside one in a document
+   * without an `$id`, the target itself otherwise in such a document, and the whole
+   * document when it keeps its `$id`. Returns its key, name and hoisted pointer.
+   */
+  const hoistFor = (
+    targetLocation: string,
+    found: ResolvedTarget,
+    targetBase: string,
+    plain: boolean,
+    depth: number,
+  ): { key: string; name: string; pointer: JsonPath } => {
+    const split = plain ? enclosingDefinitionLength(found.pointer) : 0
+    const pointer = plain ? (split > 0 ? found.pointer.slice(0, split) : found.pointer) : []
+    // Keyed by where the target is — its document and pointer — not by how the
+    // ref spells it: `./common.json#/$defs/T` written in the root and `#/$defs/T`
+    // written inside common.json are one definition, and keyed by spelling they
+    // were hoisted twice, the second named after the file.
+    const key = `$ref ${targetLocation}${pathToRef(pointer)}`
+    const name = hoists.get(key) ?? hoistName(targetLocation, pathToRef(pointer).slice(1), hoistTaken, nameKey)
+    hoists.set(key, name)
+    hoistTargets.set(key, { location: targetLocation, pointer })
+    // `CYCLE` while the target is being resolved further up this walk: its hoist is
+    // registered above, so a ref back into it only has to name it.
+    if (!refCache.has(key)) {
+      refCache.set(key, CYCLE)
+      const whole = pointer.length === found.pointer.length
+      // Bundling copies a node's members over unchanged (only `$ref` values are
+      // rewritten), so a pointer past the hoist still leads to the target in it.
+      const value = whole ? found.value : getByPointer(docCache.get(targetLocation), pathToRef(pointer).slice(1))
+      const base = whole ? targetBase : registryFor(targetLocation).rootBase
+      const resolved = resolveAt(value, targetLocation, base, depth + 1, roleAtPath(pointer))
+      refCache.set(key, { value: resolved, pointer, base })
+      if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
+        origins.set(resolved, { location: targetLocation, pointer })
+      }
+    }
+    return { key, name, pointer }
   }
 
   /**
@@ -1158,10 +1225,10 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
    *
    * What the ref says depends on where it lands. In the root's own resource a
    * `#/...` pointer reaches anything in the output. Inside an embedded resource
-   * `#` names that resource, so a ref there is kept as written when its target is
-   * in the same resource, names its target by absolute URI when the target's
-   * resource has one, and is otherwise inlined — the target has no name that
-   * reads the same from there.
+   * `#` names that resource, so a ref there is kept as written only when it lands
+   * in the very resource it was written in and its target is there too; otherwise
+   * it names its target by absolute URI when the target's resource has one, and is
+   * inlined when it has none — there is no name that reads the same from there.
    */
   const bundleReference = (
     obj: Record<string, unknown>,
@@ -1175,7 +1242,8 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     depth: number,
     role: NodeRole,
   ): Record<string, unknown> | undefined => {
-    const siteInRoot = placedInRoot && nodeBase === registryFor(baseLocation).rootBase
+    const placedIn = placements.at(-1)
+    const siteInRoot = placedIn === undefined && nodeBase === registryFor(baseLocation).rootBase
     const intoRoot = scoped !== undefined ? baseLocation === rootLocation : targetLocation === rootLocation
     const plain = !intoRoot && registryFor(targetLocation).bases.size === 0
     const embeddedId = intoRoot || plain ? undefined : absoluteRootId(targetLocation)
@@ -1187,6 +1255,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       if (registryFor(rootLocation).resources.has(embeddedId) || (claimedBy ?? targetLocation) !== targetLocation) {
         return undefined
       }
+      embeddedIds.set(embeddedId, targetLocation)
     }
     if (plain && !siteInRoot) return undefined
     if (refCache.get(cacheKey) === MISSING) return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
@@ -1204,60 +1273,28 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       refCache.set(cacheKey, MISSING)
       return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
     }
-    const pointer = found.pointer
-    // Same document, same resource: the ref means the same thing where it lands,
-    // because that resource is carried over whole with its `$id`.
-    const sameResource = baseLocation === targetLocation && nodeBase === targetBase && !siteInRoot
-
-    let target: string | undefined
-    let hoistKey: string | undefined
-    let suffix = ''
-    if (intoRoot) {
-      // A fragment written in the root (`#/$defs/X`, `#anchor`) is kept as written.
-      // Anything else names a root node by URI — an embedded resource's `$id`
-      // (`child.json`, `https://example.com/node#leaf`) — which reads as a ref to
-      // another document; from the root's resource it becomes the node's pointer,
-      // so the output's refs there are all `#...`.
-      if (siteInRoot) target = baseLocation === rootLocation && value.startsWith('#') ? value : pathToRef(pointer)
-      else target = sameResource ? value : uriFor(rootLocation, targetBase, pointer)
-    } else {
-      // Keyed by where the target is — its document and pointer — not by how the
-      // ref spells it: `./common.json#/$defs/T` written in the root and
-      // `#/$defs/T` written inside common.json are one definition, and keyed by
-      // spelling they were hoisted twice, the second named after the file.
-      const split = plain ? enclosingDefinitionLength(pointer) : 0
-      const hoisted = plain ? (split > 0 ? pointer.slice(0, split) : pointer) : []
-      hoistKey = `$ref ${targetLocation}${pathToRef(hoisted)}`
-      let name = hoists.get(hoistKey)
-      if (name === undefined) {
-        name = hoistName(targetLocation, pathToRef(hoisted).slice(1), hoistTaken)
-        hoists.set(hoistKey, name)
-      }
-      if (embeddedId !== undefined) embeddedIds.set(embeddedId, targetLocation)
-      // `CYCLE` while the target is being resolved further up this walk: its
-      // hoist is registered above, so a ref back into it only has to name it.
-      if (!refCache.has(hoistKey)) {
-        refCache.set(hoistKey, CYCLE)
-        // Bundling copies a node's members over unchanged (only `$ref` values are
-        // rewritten), so a pointer past the hoist still leads to the target in it.
-        const hoistValue =
-          hoisted.length === pointer.length ? found.value : valueAt(docCache.get(targetLocation), hoisted)
-        const hoistBase = hoisted.length === pointer.length ? targetBase : registryFor(targetLocation).rootBase
-        const resolved = resolveAt(hoistValue, targetLocation, hoistBase, depth + 1, roleAtPath(hoisted))
-        refCache.set(hoistKey, { value: resolved, pointer: hoisted, base: hoistBase })
-        if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
-          origins.set(resolved, { location: targetLocation, pointer: hoisted })
-        }
-      }
-      if (siteInRoot) {
-        suffix = pathToRef(pointer.slice(hoisted.length)).slice(1)
-        target = `#/$defs/${name}${suffix}`
-      } else {
-        target = sameResource ? value : uriFor(targetLocation, targetBase, pointer)
-        // Named by URI or as written, not by the hoist's name, so a rename never touches it.
-        hoistKey = undefined
-      }
-    }
+    // The ref lands in the resource it was written in, and names something there,
+    // so it means the same thing where it lands: that resource is carried over
+    // whole with its `$id`. Content inlined into another resource is not.
+    const sameResource =
+      placedIn !== undefined && placedIn === nodeBase && nodeBase === targetBase && baseLocation === targetLocation
+    const hoist = intoRoot ? undefined : hoistFor(targetLocation, found, targetBase, plain, depth)
+    const suffix =
+      hoist !== undefined && siteInRoot ? pathToRef(found.pointer.slice(hoist.pointer.length)).slice(1) : ''
+    // A fragment written in the root (`#/$defs/X`, `#anchor`) is kept as written.
+    // Anything else names a root node by URI — an embedded resource's `$id`
+    // (`child.json`, `https://example.com/node#leaf`) — which reads as a ref to
+    // another document; from the root's resource it becomes the node's pointer, so
+    // the output's refs there are all `#...`.
+    const target = siteInRoot
+      ? hoist !== undefined
+        ? `#/$defs/${hoist.name}${suffix}`
+        : baseLocation === rootLocation && value.startsWith('#')
+          ? value
+          : pathToRef(found.pointer)
+      : sameResource
+        ? value
+        : uriFor(targetLocation, targetBase, found.pointer)
     if (target === undefined) return undefined
 
     const kept: Record<string, unknown> = {}
@@ -1268,23 +1305,24 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         key === '$ref' ? target : resolveAt(obj[key], baseLocation, nodeBase, depth + 1, childRole(role, key)),
       )
     }
-    // Registered so the final rename (see the hoist attach below) reaches it.
-    if (hoistKey !== undefined) {
-      hoistRefSites.set(kept, hoistKey)
+    // A ref naming its hoist by name is registered so the final rename (see the
+    // hoist attach below) reaches it; one naming a URI or written as is is not.
+    if (hoist !== undefined && siteInRoot) {
+      hoistRefSites.set(kept, hoist.key)
       if (suffix !== '') hoistRefSuffixes.set(kept, suffix)
     }
     return kept
   }
 
   /**
-   * {@link resolveNode}, keeping track of {@link placedInRoot}: a schema with an
-   * `$id` anywhere but the output's root starts a resource of its own, and
-   * everything under it — inlined targets included — lands in that resource.
+   * {@link resolveNode}, keeping track of {@link placements}: while bundling, a
+   * schema with an `$id` anywhere but the output's root starts a resource of its
+   * own, and everything under it — inlined targets included — lands in that
+   * resource.
    */
   const resolveAt = (node: unknown, baseLocation: string, base: string, depth: number, role: NodeRole): unknown => {
     const entersResource =
       options.bundle === true &&
-      placedInRoot &&
       role !== 'value' &&
       role !== 'schemaMap' &&
       node !== null &&
@@ -1293,11 +1331,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       typeof (node as Record<string, unknown>)['$id'] === 'string' &&
       !(depth === 0 && baseLocation === rootLocation)
     if (!entersResource) return resolveNode(node, baseLocation, base, depth, role)
-    placedInRoot = false
+    placements.push(baseOfNode(registryFor(baseLocation), node as Record<string, unknown>, base))
     try {
       return resolveNode(node, baseLocation, base, depth, role)
     } finally {
-      placedInRoot = true
+      placements.pop()
     }
   }
 
@@ -1391,7 +1429,8 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         scoped !== undefined
           ? `${keyword} ${baseLocation} ${nodeBase} ${value}`
           : `${keyword} ${targetLocation}#${fragment}`
-      const cacheKey = options.bundle === true && !placedInRoot ? `${refKey} (in resource)` : refKey
+      const placedIn = options.bundle === true ? placements.at(-1) : undefined
+      const cacheKey = placedIn === undefined ? refKey : `${refKey} (in ${placedIn})`
       if (options.bundle === true && keyword === '$ref') {
         const bundled = bundleReference(
           obj,
@@ -1418,16 +1457,22 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         //   exists in the resolved output);
         // - target in ANOTHER document → `#/$defs/<name>`, and the resolved
         //   target is attached there once resolution completes.
+        // While bundling inside an embedded resource, `#...` names that resource, so
+        // the cycle is closed by the target's URI where it has one. Without one
+        // it falls through to the pointer inlining has always written.
+        const cycleUri = placedIn === undefined ? undefined : cycleTargetUri(scoped, keyword, targetLocation, fragment)
         let keptRef: string
         let hoisted = false
-        if (scoped !== undefined && baseLocation === rootLocation) {
+        if (cycleUri !== undefined) {
+          keptRef = cycleUri
+        } else if (scoped !== undefined && baseLocation === rootLocation) {
           keptRef = pathToRef(scoped.pointer)
         } else if (scoped === undefined && targetLocation === rootLocation) {
           keptRef = `#${fragment}`
         } else {
           let name = hoists.get(cacheKey)
           if (name === undefined) {
-            name = hoistName(targetLocation, fragment, hoistTaken)
+            name = hoistName(targetLocation, fragment, hoistTaken, nameKey)
             hoists.set(cacheKey, name)
           }
           hoisted = true
@@ -1614,19 +1659,33 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       // at), it is the only thing standing between a hoist and overwriting a
       // definition that document already had — silently re-pointing every
       // `#/$defs/<name>` in the output at the wrong schema.
-      const taken = new Set(Object.keys(defs))
+      //
+      // A bundling hoist of a definition whose document is hoisted whole as well is
+      // already inside that hoist (`$defs/common/$defs/Money`), so its refs point
+      // there and it is not attached a second time beside it.
+      const insideWhole = new Map<string, { whole: string; suffix: string }>()
+      for (const [key, { location, pointer }] of hoistTargets) {
+        const whole = `$ref ${location}#`
+        if (pointer.length > 0 && hoists.has(whole))
+          insideWhole.set(key, { whole, suffix: pathToRef(pointer).slice(1) })
+      }
+      const taken = new Set([...Object.keys(defs), ...definitionNames(container)].map(nameKey))
       const finalNames = new Map<string, string>()
       for (const [cacheKey, name] of hoists) {
+        if (insideWhole.has(cacheKey)) continue
         let unique = name
-        for (let n = 2; taken.has(unique); n++) unique = `${name}-${n}`
-        taken.add(unique)
+        for (let n = 2; taken.has(nameKey(unique)); n++) unique = `${name}-${n}`
+        taken.add(nameKey(unique))
         finalNames.set(cacheKey, unique)
       }
       for (const [node, cacheKey] of hoistRefSites) {
-        const name = finalNames.get(cacheKey)
-        if (name !== undefined) assignKey(node, '$ref', `#/$defs/${name}${hoistRefSuffixes.get(node) ?? ''}`)
+        const redirect = insideWhole.get(cacheKey)
+        const name = finalNames.get(redirect?.whole ?? cacheKey)
+        if (name === undefined) continue
+        assignKey(node, '$ref', `#/$defs/${name}${redirect?.suffix ?? ''}${hoistRefSuffixes.get(node) ?? ''}`)
       }
       for (const [cacheKey] of hoists) {
+        if (insideWhole.has(cacheKey)) continue
         const cached = refCache.get(cacheKey)
         const attachable = cached !== undefined && cached !== CYCLE && cached !== MISSING
         // `finalNames` was built from this very map a few lines up, so every

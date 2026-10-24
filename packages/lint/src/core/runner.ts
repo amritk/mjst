@@ -233,11 +233,13 @@ const missingFunction = (ruleset: Ruleset, rule: ResolvedRule): string | undefin
  * node) and skipped; a rule function that throws (or rejects) becomes an
  * error-severity diagnostic on that node so one bad rule cannot abort the run.
  *
- * `resolved` says `data` is the `$ref`-resolved tree, where one object stands
- * wherever a reference pointed at it. Its walk then enters each object once per
- * walk state instead of once per route (see `SharedWalkOptions`): {@link locate}
- * translates every route back to the same authored node, so a revisit could only
- * add findings that `withoutDuplicates` drops.
+ * `resolved` says `data` is a tree a resolver produced from `$ref`s, where one
+ * object stands wherever a reference pointed at it. Its walk then enters each
+ * object once per walk state instead of once per route (see `SharedWalkOptions`):
+ * {@link locate} translates every route back to the same authored node, so a
+ * revisit could only add findings that `withoutDuplicates` drops. Data the caller
+ * built may share objects for other reasons, where routes are distinct authored
+ * paths, so it is never passed here as `resolved`.
  *
  * `scope` is the run's {@link RunScope}, handed to every function context.
  */
@@ -483,7 +485,9 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
         documentFormats,
         diagnostics,
         options.sources,
-        true,
+        // With no resolver the "resolved" tree is the parsed data itself, whose
+        // sharing (if any) is the caller's, not `$ref`'s.
+        options.resolved !== document.data,
         scope,
       )
     }

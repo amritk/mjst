@@ -788,7 +788,23 @@ export const queryManyNodes = (
 
   if (descents.length > 0) {
     const seeds: Node[][] = descents.map(() => [])
-    walkShared(data, descents, seeds, walk.skipRevisits === true && descents.every(revisitSafe))
+    // A query that can see the route walks every route; the rest share a walk that
+    // skips revisits, so one such rule does not give the exponential walk back to all.
+    const all = descents.map((_, d) => d)
+    const safe = walk.skipRevisits === true ? all.filter((d) => revisitSafe(descents[d] as Descent)) : []
+    const unsafe = all.filter((d) => !safe.includes(d))
+    for (const [indices, skip] of [
+      [safe, true],
+      [unsafe, false],
+    ] as const) {
+      if (indices.length === 0) continue
+      walkShared(
+        data,
+        indices.map((d) => descents[d] as Descent),
+        indices.map((d) => seeds[d] as Node[]),
+        skip,
+      )
+    }
     for (let d = 0; d < descents.length; d++) {
       const { rest, schemaAware } = descents[d] as Descent
       const seeded = seeds[d] as Node[]
@@ -853,17 +869,14 @@ const toDescent = (steps: Step[], schemaAware: boolean): Descent | undefined => 
 const revisitSafe = (descent: Descent): boolean => {
   const readsPath = (selector: Selector): boolean => selector.kind === 'filter' && selector.usesPath
   if (descent.prefix.some(readsPath) || readsPath(descent.first) || descent.first.kind === 'parent') return false
-  // Depth below the revisited object; a seed is at least one level down.
-  let depth = 1
-  for (const step of descent.rest) {
-    if (readsPath(step.selector)) return false
-    if (step.selector.kind === 'parent') {
-      if (step.recursive || --depth < 0) return false
-    } else {
-      depth++
-    }
-  }
-  return true
+  // Depth below the revisited object (a seed is at least one level down), or
+  // `undefined` once a step reads the route or climbs past the object.
+  const depth = descent.rest.reduce<number | undefined>((current, step) => {
+    if (current === undefined || readsPath(step.selector)) return undefined
+    if (step.selector.kind !== 'parent') return current + 1
+    return step.recursive || current === 0 ? undefined : current - 1
+  }, 1)
+  return depth !== undefined
 }
 
 /**
@@ -1061,23 +1074,20 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
   // tracked only when some descent is schema-aware, which is the only reader.
   const tracksNameMaps = descents.some((descent) => descent.schemaAware)
   const nameMaps: boolean[] = [false]
-  // Objects already entered, by walk state: the scope (interned, so one object
-  // per state), the key the object was entered under, and whether it was a name
-  // map — a bit each, since that flag also decides what its children match.
-  const entered = skipRevisits ? new WeakMap<object, Map<Scope, Map<string | number, number>>>() : undefined
+  // Objects already entered, by walk state: the scope (interned, so one object per
+  // state), the key the object was entered under, and whether it was a name map,
+  // since that flag also decides what its children match. Keyed state-first, so the
+  // maps are made per distinct state and key, and an object costs one set entry.
+  const entered = new Map<Scope, Map<string | number, readonly [WeakSet<object>, WeakSet<object>]>>()
   /** Records an entry into `child`, returning false when an identical one was already made. */
   const firstEntry = (child: object, scope: Scope, key: string | number, nameMap: boolean): boolean => {
-    const byScope = (entered as WeakMap<object, Map<Scope, Map<string | number, number>>>).get(child)
-    let byKey = byScope?.get(scope)
-    const bit = nameMap ? 2 : 1
-    const seen = byKey?.get(key) ?? 0
-    if (seen & bit) return false
-    if (byKey === undefined) {
-      byKey = new Map()
-      if (byScope === undefined) entered?.set(child, new Map([[scope, byKey]]))
-      else byScope.set(scope, byKey)
-    }
-    byKey.set(key, seen | bit)
+    const byKey = entered.get(scope) ?? new Map()
+    if (byKey.size === 0) entered.set(scope, byKey)
+    const sets = byKey.get(key) ?? ([new WeakSet<object>(), new WeakSet<object>()] as const)
+    if (!byKey.has(key)) byKey.set(key, sets)
+    const set = sets[nameMap ? 1 : 0]
+    if (set.has(child)) return false
+    set.add(child)
     return true
   }
   while (nodes.length > 0) {

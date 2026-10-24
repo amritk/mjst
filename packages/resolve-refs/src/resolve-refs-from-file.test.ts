@@ -1738,6 +1738,119 @@ describe('resolve-refs-from-file', () => {
     })
   })
 
+  it('does not keep root refs as written in root content inlined into an embedded resource', async () => {
+    // Inside e.json's resource `#/$defs/B` names e.json's own `$defs`, so the copy of
+    // `A` that lands there cannot keep it: B is named by the root's URI, or inlined.
+    const root = {
+      properties: { e: { $ref: './e.json' } },
+      $defs: { A: { properties: { b: { $ref: '#/$defs/B' } } }, B: { type: 'string' } },
+    }
+    writeFileSync(
+      join(dir, 'e.json'),
+      JSON.stringify({ $id: 'https://ex.com/e.json', properties: { a: { $ref: './root.json#/$defs/A' } } }),
+    )
+    const aInE = async () => {
+      const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+      return (resolved as { $defs: { e: { properties: { a: unknown } } } }).$defs.e.properties.a
+    }
+
+    writeFileSync(join(dir, 'root.json'), JSON.stringify(root))
+    expect(await aInE()).toEqual({ properties: { b: { type: 'string' } } })
+
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ $id: 'https://ex.com/root.json', ...root }))
+    expect(await aInE()).toEqual({ $ref: 'https://ex.com/root.json#/$defs/A' })
+  })
+
+  it('closes a cycle inside an embedded resource by its target URI', async () => {
+    // b.json claims the id a.json already has, so it is inlined; inside its copy the
+    // cycle cannot be a `#/$defs/...` pointer into the root's hoists.
+    writeFileSync(join(dir, 'a.json'), JSON.stringify({ $id: 'https://ex.com/same', type: 'string' }))
+    writeFileSync(
+      join(dir, 'b.json'),
+      JSON.stringify({
+        $id: 'https://ex.com/same',
+        $ref: '#/$defs/Node',
+        $defs: { Node: { items: { $ref: '#/$defs/Node' } } },
+      }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { a: { $ref: './a.json' }, b: { $ref: './b.json' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(JSON.stringify((resolved as { properties: { b: unknown } }).properties.b)).toContain(
+      '"$ref":"https://ex.com/same#/$defs/Node"',
+    )
+  })
+
+  it('names a hoist apart from root definitions a generator would file under the same name', async () => {
+    writeFileSync(
+      join(dir, 'common.json'),
+      JSON.stringify({ $defs: { Money: { type: 'integer' }, Id: { type: 'string' } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        definitions: { Money: { type: 'string' } },
+        $defs: { id: { type: 'number' } },
+        properties: { a: { $ref: './common.json#/$defs/Money' }, b: { $ref: './common.json#/$defs/Id' } },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    // `Money` would land in money.ts beside `definitions/Money`, and `Id` in id.ts beside `$defs/id`.
+    expect((resolved as { properties: object }).properties).toEqual({
+      a: { $ref: '#/$defs/Money-2' },
+      b: { $ref: '#/$defs/Id-2' },
+    })
+  })
+
+  it('points a definition of a document hoisted whole into that hoist', async () => {
+    writeFileSync(join(dir, 'common.json'), JSON.stringify({ $defs: { Money: { type: 'integer' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { all: { $ref: './common.json' }, m: { $ref: './common.json#/$defs/Money' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(resolved).toEqual({
+      properties: { all: { $ref: '#/$defs/common' }, m: { $ref: '#/$defs/common/$defs/Money' } },
+      $defs: { common: { $defs: { Money: { type: 'integer' } } } },
+    })
+  })
+
+  it('never names a target by the URL of a document that declares no $id', async () => {
+    // A remote root has a URL, but no `$id` puts it in the output, so a ref there
+    // from inside a resource would send a consumer to fetch a different document.
+    const documents: Record<string, unknown> = {
+      'https://api.example.com/root.json': {
+        properties: { e: { $ref: './e.json' } },
+        $defs: { B: { type: 'string' } },
+      },
+      'https://api.example.com/e.json': {
+        $id: 'https://ex.com/e.json',
+        properties: { b: { $ref: './root.json#/$defs/B' } },
+      },
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url) => new Response(JSON.stringify(documents[String(url)] ?? {}), { status: 200 }),
+    )
+
+    const { resolved } = await resolveRefsFromFile('https://api.example.com/root.json', {
+      allowedHosts: ['api.example.com'],
+      bundle: true,
+    })
+
+    expect(JSON.stringify(resolved)).not.toContain('https://api.example.com/')
+    expect((resolved as { $defs: { e: { properties: { b: unknown } } } }).$defs.e.properties.b).toEqual({
+      type: 'string',
+    })
+  })
+
   it('bundles documents with $ids to what inlining produces once inlined in memory', async () => {
     writeFileSync(
       join(dir, 'money.json'),

@@ -179,6 +179,15 @@ describe('jsonpath queryMany', () => {
     }
   })
 
+  it('keeps skipping revisits for the queries that cannot see the route when one can', () => {
+    const shared = { leaf: { description: 'x' } }
+    const tree = { a: { s: shared }, b: { s: shared } }
+    const compiled = [compileQuery('$..description'), compileQuery('$..[?(@path && @.description)]')]
+    const [plain, routed] = queryManyNodes(tree, compiled, [], { skipRevisits: true })
+    expect(plain?.map((node) => matchPath(node)[0])).toStrictEqual(['a'])
+    expect(routed?.map((node) => matchPath(node)[0])).toStrictEqual(['a', 'b'])
+  })
+
   it('walks a shared object again when it is entered in another walk state', () => {
     // Under `a` both queries are live; under `b` only the second is. A matching
     // key is not enough to skip: the state the walk enters in decides what can match.

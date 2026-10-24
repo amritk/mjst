@@ -129,6 +129,26 @@ describe('lint pipeline', () => {
     expect(schemaOnly.diagnostics.map((d) => d.path.join('/'))).toEqual(['components/schemas/Event/properties/payload'])
   })
 
+  it('reports every route through objects the caller shared, with no resolver', async () => {
+    // Without a resolver nothing says the sharing came from a `$ref`, so each route
+    // is its own authored path and keeps its own finding.
+    const shared = { description: 'eval(1)' }
+    // One key under two parents: the walk enters `shared` the same way both times.
+    const data = { a: { s: shared }, b: { s: shared } }
+    const ruleset = build({
+      rules: {
+        'no-eval': {
+          given: '$..description',
+          resolved: true,
+          severity: 'error',
+          then: { function: 'pattern', functionOptions: { notMatch: 'eval\\(' } },
+        },
+      },
+    })
+    const { diagnostics } = await lintWithResult({ data }, { ruleset })
+    expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['a/s/description', 'b/s/description'])
+  })
+
   it('reports a shared node once and fast when references layer on each other', async () => {
     // Each schema references the next twice, so the resolved tree has 2^30 routes to the
     // last one. Every route translates back to the same authored node, so walking each
