@@ -1,5 +1,6 @@
 import { validate } from '@amritk/runtime-validators'
 
+import { runCache } from '../../../core/run-scope'
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../../../core/types'
 import { isObject } from './helpers'
 
@@ -68,6 +69,9 @@ const buildValidatorOrNull = (schema: unknown): RuntimeValidator | null => build
 // the cache and skip the build+run+format work; inline (un-shared) nodes miss and
 // compute once, exactly as before. The findings are byte-identical. An empty array
 // records "no finding here" so misses are not recomputed per occurrence.
+//
+// The memo lives for one run (`runCache`), never across runs: callers edit the data
+// they lint in place, and a node edited since the last run must be validated again.
 
 /** A finding minus its absolute location: the message plus the path suffix appended to `context.path`. */
 type RelativeFinding = {
@@ -75,13 +79,16 @@ type RelativeFinding = {
   suffix: JsonPath
 }
 
-// Keyed by the Schema Object node; `oasSchemaExample` validates a schema's own
-// `example`/`default` against the schema minus its `example`/`examples` keywords.
-const schemaExampleResults = new WeakMap<object, RelativeFinding[]>()
+// Each run's memo is keyed by the Schema Object node; `oasSchemaExample` validates a
+// schema's own `example`/`default` against the schema minus its `example`/`examples`
+// keywords.
+const SCHEMA_EXAMPLE_RESULTS = {}
 // Keyed by the Media Type / Response Object node; `oasMediaExample` validates the
 // object's example(s) against its `schema`. The node (not the schema) is the cache
-// key because two media objects can share a `schema` but carry different examples.
-const mediaExampleResults = new WeakMap<object, RelativeFinding[]>()
+// key because two media objects can share a `schema` but carry different examples,
+// and each OpenAPI major version keeps its own memo, since the two read a node's
+// examples differently and one run may ask about a node under both.
+const MEDIA_EXAMPLE_RESULTS = { 2: {}, 3: {} } as const
 
 const withPath = (findings: RelativeFinding[], path: JsonPath): IFunctionResult[] => {
   if (findings.length === 0) return []
@@ -101,6 +108,7 @@ export const oasSchemaExample: RulesetFunction = (schema, _options, context) => 
   if (!isObject(schema)) return []
   if (schema['example'] === undefined && schema['default'] === undefined) return []
   if (isPropertiesMap(context.path)) return []
+  const schemaExampleResults = runCache<RelativeFinding[]>(context, SCHEMA_EXAMPLE_RESULTS)
   let findings = schemaExampleResults.get(schema)
   if (findings === undefined) {
     findings = []
@@ -142,6 +150,7 @@ export const oasMediaExample: RulesetFunction<unknown, IOasExampleOptions> = (me
   const hasExample = (oasVersion !== 2 && media['example'] !== undefined) || isObject(media['examples'])
   if (!hasExample) return []
 
+  const mediaExampleResults = runCache<RelativeFinding[]>(context, MEDIA_EXAMPLE_RESULTS[oasVersion === 2 ? 2 : 3])
   let findings = mediaExampleResults.get(media)
   if (findings === undefined) {
     findings = []

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { lint } from '../../../core'
+import { createDocumentFromData, createLinter, lint } from '../../../core'
+import { createRunScope, RUN_SCOPE } from '../../../core/run-scope'
 import { createOpenApiRuleset, oas } from '../index'
+import { oasMediaExample } from './example-validation'
 
 // Per-rule coverage for the OpenAPI-specific functions. Each function is driven
 // end to end through the built ruleset (rather than called in isolation) so the
@@ -400,6 +402,46 @@ describe('oas-functions', () => {
       components: { schemas: { A: { type: 'object', properties: { example: { type: 'string' } } } } },
     }
     expect(await has(doc, 'oas3-valid-schema-example')).toBe(false)
+  })
+
+  it('validates examples again after the data is edited in place between runs', async () => {
+    // Both example rules memoize by node identity. Callers keep the data they lint and
+    // edit it, so the memo has to end with the run — the edited node must be checked again.
+    const schema: Record<string, unknown> = { type: 'integer', example: 1 }
+    const media: Record<string, unknown> = { schema: { type: 'string' }, example: 'ok' }
+    const data = {
+      ...base3(),
+      paths: { '/a': { get: { responses: { '200': { description: 'ok', content: { 'application/json': media } } } } } },
+      components: { schemas: { A: schema } },
+    }
+    const codes = async (run: () => Promise<{ code: string | number }[]>) =>
+      new Set((await run()).map((finding) => finding.code))
+    const document = createDocumentFromData(data)
+    const runs = [
+      () => lint({ data }, { ruleset: allRules }),
+      () => createLinter(allRules).run(document, { resolved: data }),
+    ]
+    for (const run of runs) {
+      schema['example'] = 1
+      media['example'] = 'ok'
+      expect(await codes(run)).not.toContain('oas3-valid-schema-example')
+      schema['example'] = 'one'
+      media['example'] = 5
+      const edited = await codes(run)
+      expect(edited).toContain('oas3-valid-schema-example')
+      expect(edited).toContain('oas3-valid-media-example')
+    }
+  })
+
+  it('keeps a media example memo for each OpenAPI version within one run', async () => {
+    // One node read the OAS3 way (a singular `example`) and the OAS2 way (an
+    // `examples` mime map) in the same run must not share an answer.
+    const context = { [RUN_SCOPE]: createRunScope(), path: [] } as unknown as Parameters<typeof oasMediaExample>[2]
+    const media = { schema: { type: 'string' }, example: 5, examples: { 'application/json': 'ok' } }
+    const oas3 = oasMediaExample(media, { oasVersion: 3 }, context) ?? []
+    const oas2 = oasMediaExample(media, { oasVersion: 2 }, context) ?? []
+    expect(oas3.length).toBeGreaterThan(0)
+    expect(oas2).toEqual([])
   })
 
   // oasMediaExample --------------------------------------------------------

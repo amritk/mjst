@@ -5,8 +5,9 @@ import { matchesGlob } from './glob'
 import { type CompiledPath, compileQuery, type MatchNode, matchPath, query, queryManyNodes } from './jsonpath'
 import { bySourceThenPosition } from './order'
 import { ownKey } from './own-key'
-import { pointerToPath, resolveSourcePath } from './pointers'
+import { createSourcePathIndex, pointerToPath, resolveSourcePath } from './pointers'
 import type { Ruleset } from './ruleset'
+import { createRunScope, RUN_SCOPE, type RunScope } from './run-scope'
 import { severityFromName } from './severity'
 import {
   DiagnosticSeverity,
@@ -57,7 +58,7 @@ const targetPath = (target: Target): JsonPath => {
 const TARGET = Symbol('target')
 
 /** The context handed to a rule function, carrying the target its `path` getter reads. */
-type RunContext = IFunctionContext & { [TARGET]: Target }
+type RunContext = IFunctionContext & { [TARGET]: Target; [RUN_SCOPE]: RunScope }
 
 /**
  * Every rule function's context inherits `path` from here, so the path is only
@@ -231,6 +232,18 @@ const missingFunction = (ruleset: Ruleset, rule: ResolvedRule): string | undefin
  * A rule that references an unknown named function is reported once (not per
  * node) and skipped; a rule function that throws (or rejects) becomes an
  * error-severity diagnostic on that node so one bad rule cannot abort the run.
+ *
+ * `resolved` says `data` is a tree a resolver produced from `$ref`s, where one
+ * object stands wherever a reference pointed at it. Its walk then enters each
+ * object once per walk state instead of once per route (see `SharedWalkOptions`):
+ * {@link locate} translates every route back to the same authored node, so a
+ * revisit could only add a finding at the same location: one `withoutDuplicates`
+ * drops, unless its message spells the route out (`{{path}}`) or the caller reads
+ * `Linter.run`'s findings before deduplication. Data the caller
+ * built may share objects for other reasons, where routes are distinct authored
+ * paths, so it is never passed here as `resolved`.
+ *
+ * `scope` is the run's {@link RunScope}, handed to every function context.
  */
 const runPlan = async (
   ruleset: Ruleset,
@@ -240,6 +253,8 @@ const runPlan = async (
   formats: Set<string>,
   out: IDiagnostic[],
   sources: ISourceSet | undefined,
+  resolved: boolean,
+  scope: RunScope,
 ): Promise<void> => {
   if (rules.length === 0) return
   const order: string[] = []
@@ -280,6 +295,14 @@ const runPlan = async (
     data,
     planned.map((group) => group.compiled),
     planned.map((group) => (group.schemaAware ? { schemaAware: true } : undefined)),
+    resolved
+      ? {
+          skipRevisits: true,
+          ...(sources === undefined && routesMayDiverge(document.data, data)
+            ? { sameNode: sameAuthoredNode(document.data) }
+            : {}),
+        }
+      : {},
   )
   for (let i = 0; i < order.length; i++) {
     const group = groups.get(order[i] as string) as { rules: ResolvedRule[] }
@@ -289,10 +312,98 @@ const runPlan = async (
       const match: Match = { node, path: undefined }
       for (const rule of group.rules) {
         for (const then of rule.then) {
-          await runThen(ruleset, rule, then, node.value, match, document, out, sources)
+          await runThen(ruleset, rule, then, node.value, match, document, out, sources, scope)
         }
       }
     }
+  }
+}
+
+/**
+ * Siblings of a `$ref` that only annotate it. A resolver lays them over the target
+ * at the ref site, so a route past them reads the site's own value, never a node
+ * shared with another site.
+ */
+const ANNOTATION_KEYS = new Set([
+  '$ref',
+  '$comment',
+  'title',
+  'summary',
+  'description',
+  'deprecated',
+  'readOnly',
+  'writeOnly',
+  'example',
+  'examples',
+  'default',
+  'nullable',
+])
+
+/**
+ * Whether two routes to one shared object of `resolved` could trace back to
+ * different authored paths. {@link resolveSourcePath} follows internal `$ref`s and
+ * reads a ref's own siblings at the ref site, so routes only part ways at a ref
+ * site the resolver changed that either names another document (followed by no
+ * internal step) or carries siblings beyond annotations (where a resolver merges
+ * the target in, as into the ref's own `allOf`). A ref left as written in the
+ * resolved tree inlined nothing. A site the resolved tree no longer has at its
+ * path counts as changed, since nothing says otherwise. So does an object the
+ * parsed document itself reaches twice — data a caller built, which a resolver
+ * may hand back as is, shares it at authored paths of its own. One pass over the
+ * parsed document, iterative because its depth is the author's to choose; paths
+ * are spelled out only for ref sites.
+ */
+const routesMayDiverge = (data: unknown, resolved: unknown): boolean => {
+  type Entry = { value: unknown; parent: Entry | undefined; key: string | number }
+  const pathOf = (entry: Entry): JsonPath => {
+    const path: JsonPath = []
+    for (let at: Entry | undefined = entry; at?.parent !== undefined; at = at.parent) path.push(at.key)
+    return path.reverse()
+  }
+  const stack: Entry[] = [{ value: data, parent: undefined, key: '' }]
+  const seen = new WeakSet<object>()
+  while (stack.length > 0) {
+    const entry = stack.pop() as Entry
+    const value = entry.value
+    if (value === null || typeof value !== 'object') continue
+    if (seen.has(value)) return true
+    seen.add(value)
+    const ref = (value as { $ref?: unknown }).$ref
+    if (
+      typeof ref === 'string' &&
+      (!ref.startsWith('#') || Object.keys(value).some((key) => !ANNOTATION_KEYS.has(key)))
+    ) {
+      const there = pathOf(entry).reduce<unknown>(
+        (node, segment) =>
+          node !== null && typeof node === 'object' && Object.hasOwn(node, segment)
+            ? (node as Record<string | number, unknown>)[segment]
+            : undefined,
+        resolved,
+      )
+      if (there === null || typeof there !== 'object' || (there as { $ref?: unknown }).$ref !== ref) return true
+    }
+    const keys: (string | number)[] = Array.isArray(value) ? value.map((_, index) => index) : Object.keys(value)
+    for (const key of keys) stack.push({ value: (value as Record<string | number, unknown>)[key], parent: entry, key })
+  }
+  return false
+}
+
+/**
+ * A `sameNode` for a resolved tree that came without a source set. {@link locate}
+ * then traces a route with {@link resolveSourcePath}, which follows internal
+ * `$ref`s only and reads a ref's own siblings at the ref site: a node a
+ * cross-document ref inlined is reported at each ref site, and so is a target a
+ * resolver merged into a ref's `allOf`. Two routes to one object are the same
+ * finding only when they trace back to the same authored path, which this asks
+ * of an index built once per walk. With a source set every route is traced to
+ * the node's own document, so no check is needed.
+ */
+const sameAuthoredNode = (data: unknown): ((first: MatchNode, again: MatchNode) => boolean) => {
+  const sourcePathOf = createSourcePathIndex<MatchNode>(data)
+  return (first, again) => {
+    const a = sourcePathOf(first)
+    const b = sourcePathOf(again)
+    return a.length === b.length && a.every((segment, index) => segment === b[index])
   }
 }
 
@@ -360,6 +471,7 @@ const runThen = async (
   document: Document,
   out: IDiagnostic[],
   sources: ISourceSet | undefined,
+  scope: RunScope,
 ): Promise<void> => {
   // A malformed rule (e.g. a `then` with no `function`, which `validateRuleset`
   // warns about) is skipped rather than crashing the whole run.
@@ -380,6 +492,7 @@ const runThen = async (
       context.rule = rule
       context.functionOptions = then.functionOptions
       context[TARGET] = target
+      context[RUN_SCOPE] = scope
       const raw: unknown = fn(target.value, then.functionOptions ?? {}, context)
       results = (isThenable(raw) ? await raw : raw) as IFunctionResult[] | undefined
     } catch (error) {
@@ -440,6 +553,8 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
   run: async (document, options = {}) => {
     const documentFormats = detectFormats(document.data, ruleset.formats)
     const diagnostics: IDiagnostic[] = []
+    // Fresh for every run, so nothing a function memoized outlives the data it read.
+    const scope = createRunScope()
 
     // Rules split by which document they run against (resolved vs raw). Each
     // dataset is linted with a single deduped query plan so that identical
@@ -457,9 +572,21 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
     // Raw rules run against the root's unresolved tree, so positions always come
     // straight from the root document; only resolved rules can land on inlined
     // external nodes and need the source set.
-    await runPlan(ruleset, rawRules, document.data, document, documentFormats, diagnostics, undefined)
+    await runPlan(ruleset, rawRules, document.data, document, documentFormats, diagnostics, undefined, false, scope)
     if (resolvedRules.length > 0) {
-      await runPlan(ruleset, resolvedRules, options.resolved, document, documentFormats, diagnostics, options.sources)
+      await runPlan(
+        ruleset,
+        resolvedRules,
+        options.resolved,
+        document,
+        documentFormats,
+        diagnostics,
+        options.sources,
+        // With no resolver the "resolved" tree is the parsed data itself, whose
+        // sharing (if any) is the caller's, not `$ref`'s.
+        options.resolved !== document.data,
+        scope,
+      )
     }
 
     return applyScopedOverrides(ruleset, document.source, diagnostics).sort(bySourceThenPosition)

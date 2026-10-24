@@ -14,9 +14,12 @@ import { buildResolveOptions, formatResolveErrors } from './resolve-policy'
  * pointers is parsed as-is — the generator resolves those internal `$ref`s
  * itself into named type files, so inlining them here would collapse that
  * structure. When a cross-file or remote `$ref` is present (which the generator
- * cannot follow on its own), the schema is dereferenced with
- * `@amritk/resolve-refs`, inlining every external target into a single document.
- * Any resolve failures are surfaced as a CLI error rather than silently yielding
+ * cannot follow on its own), the schema is *bundled* with `@amritk/resolve-refs`:
+ * every external target is pulled into the root's `$defs` once and its refs point
+ * there, so the generator sees a single document and still turns each shared
+ * schema into one named type. Inlining instead lost those names for internal refs
+ * too — any one external `$ref` turned every shared schema into a copy at each use,
+ * which on layered schemas is exponential in the output. Any resolve failures are surfaced as a CLI error rather than silently yielding
  * a half-resolved schema.
  *
  * Avro splits the difference, and is the reason this is not a plain
@@ -38,6 +41,7 @@ export const loadSchema = async (config: Partial<CliConfig>, schemaPath: string)
     const { resolved, errors } = await resolveRefsFromFile(schemaPath, {
       ...buildResolveOptions(config, schemaPath),
       rootDocument: data,
+      bundle: true,
     })
     if (errors.length > 0) throw new Error(formatResolveErrors(schemaPath, errors))
     return resolved
