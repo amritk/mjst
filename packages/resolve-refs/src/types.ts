@@ -174,13 +174,15 @@ export type ResolveOptions = {
    * promise to resolve. (When a second document claims the same `$id`, refs from
    * the root's own resource fall back to the hoist's pointer, which names one.)
    * Inside any embedded resource `#` names that resource, so a ref there is kept
-   * as written when its target is in the same resource, names its target by
-   * absolute URI otherwise, and is inlined when the target has no URI (a
-   * document without an `$id`). A target with no URI that is part of a cycle
-   * cannot be inlined, and has no name that reads the same from inside the
-   * resource, so a document whose resource meets one is inlined instead, as
-   * without this option. A document whose `$id` is relative, or
-   * whose `$id` another bundled document already claims, is inlined.
+   * as written when it is a `#...` pointer (or resolves by `$id`) to a target in
+   * the same resource, names its target by absolute URI otherwise, and is
+   * inlined when the target has no URI (a document without an `$id`). A target
+   * with no URI that is part of a cycle cannot be inlined, and has no name that
+   * reads the same from inside the resource, so a document whose resource meets
+   * one is inlined instead, as without this option. (A resource nested in the
+   * root document cannot be inlined; there the ref is the root-relative pointer
+   * inlining has always written.) A document whose `$id` is relative, or whose
+   * `$id` another bundled document already claims, is inlined.
    * `$dynamicRef` and `$recursiveRef` are resolved as without this option.
    * Defaults to `false`.
    */

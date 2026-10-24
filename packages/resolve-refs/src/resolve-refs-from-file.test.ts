@@ -1816,6 +1816,88 @@ describe('resolve-refs-from-file', () => {
     })
   })
 
+  it('resolves root pointers under an $id that sets no new base when it lands in a resource', async () => {
+    // `#R` inlined into e.json's resource is still a location, not a resource: the
+    // `#/definitions/Q` under it would read against e.json there, so it is inlined.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        definitions: {
+          R: { $id: '#R', properties: { next: { $ref: '#/definitions/Q' } } },
+          Q: { type: 'string' },
+        },
+        properties: { e: { $ref: 'e.json' } },
+      }),
+    )
+    writeFileSync(
+      join(dir, 'e.json'),
+      JSON.stringify({ $id: 'https://example.com/e.json', properties: { r: { $ref: 'root.json#/definitions/R' } } }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    const e = (resolved as { $defs: { e: { properties: { r: { properties: { next: unknown } } } } } }).$defs.e
+    expect(e.properties.r.properties.next).toEqual({ type: 'string' })
+  })
+
+  it('names a document by URI inside its resource when a ref names it by file', async () => {
+    // Inside the resource `./a.json` reads against the `$id`, which names no such file.
+    writeFileSync(
+      join(dir, 'a.json'),
+      JSON.stringify({
+        $id: 'https://example.com/schemas/a',
+        properties: { x: { $ref: './a.json#/$defs/X' } },
+        $defs: { X: { type: 'string' } },
+      }),
+    )
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { a: { $ref: './a.json' } } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    const a = (resolved as { $defs: { a: { properties: { x: unknown } } } }).$defs.a
+    expect(a.properties.x).toEqual({ $ref: 'https://example.com/schemas/a#/$defs/X' })
+  })
+
+  it('reports the depth limit once when bundling runs a second pass', async () => {
+    writeFileSync(
+      join(dir, 'a.json'),
+      JSON.stringify({ $id: 'https://ex.com/a.json', $defs: { T: { properties: { b: { $ref: './b.json' } } } } }),
+    )
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ properties: { next: { $ref: '#' } } }))
+    let deep: unknown = { type: 'string' }
+    for (let i = 0; i < 20; i++) deep = { items: deep }
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { t: { $ref: './a.json#/$defs/T' }, deep } }))
+
+    // Deep enough for the cycle in b.json to close (which forces the second pass),
+    // shallow enough that `deep` trips the limit while the documents are fetched.
+    const inlined = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 14 })
+    const bundled = await resolveRefsFromFile(join(dir, 'root.json'), { maxDepth: 14, bundle: true })
+
+    expect(inlined.errors).toHaveLength(1)
+    expect(JSON.stringify(bundled.resolved)).not.toContain('https://ex.com/a.json')
+    expect(bundled.errors).toEqual(inlined.errors)
+  })
+
+  it('reports a missing target once when it lands in two resources', async () => {
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ properties: { bad: { $ref: '#/$defs/Nope' } } }))
+    writeFileSync(
+      join(dir, 'e.json'),
+      JSON.stringify({ $id: 'https://ex.com/e.json', properties: { c: { $ref: './c.json' } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { c: { $ref: './c.json' }, e: { $ref: './e.json' } } }),
+    )
+
+    const inlined = await resolveRefsFromFile(join(dir, 'root.json'))
+    const bundled = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(inlined.errors).toHaveLength(1)
+    expect(bundled.errors).toEqual(inlined.errors)
+  })
+
   it('closes a cycle inside an embedded resource by its target URI', async () => {
     // b.json claims the id a.json already has, so it is inlined; inside its copy the
     // cycle cannot be a `#/$defs/...` pointer into the root's hoists.

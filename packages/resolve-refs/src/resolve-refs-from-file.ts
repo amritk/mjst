@@ -1057,6 +1057,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   // document instead, as a resolve without `bundle` does. Errors and the depth
   // report from the pass that gave up are dropped with it.
   const errorsBeforeResolve = errors.length
+  const depthReportedBeforeResolve = depthLimitReported
   const resolvePass = (inlineOnly: ReadonlySet<string>): { result: ResolveResult; unplaceable: Set<string> } => {
     // Embedded documents whose resource met a cycle it cannot name (see above).
     const unplaceable = new Set<string>()
@@ -1348,6 +1349,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       targetLocation: string,
       fragment: string,
       cacheKey: string,
+      refKey: string,
       baseLocation: string,
       nodeBase: string,
       depth: number,
@@ -1371,7 +1373,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         }
       }
       if (plain && !siteInRoot) return undefined
-      if (refCache.get(cacheKey) === MISSING)
+      if (refCache.get(cacheKey) === MISSING || refCache.get(refKey) === MISSING)
         return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
 
       const { found, base: targetBase } = lookupTarget(scoped, '$ref', targetLocation, fragment)
@@ -1384,14 +1386,22 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
             path: baseLocation === rootLocation ? refPathAt('$ref', value) : [],
           })
         }
+        // A target is missing wherever it lands, so it is reported once (see `refKey`).
         refCache.set(cacheKey, MISSING)
+        refCache.set(refKey, MISSING)
         return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
       }
       // The ref lands in the resource it was written in, and names something there,
       // so it means the same thing where it lands: that resource is carried over
       // whole with its `$id`. Content inlined into another resource is not.
+      // Only a `#...` ref, or one resolved by `$id`, reads that way: a file part
+      // resolves against the `$id` there, not against the file it was read from.
       const sameResource =
-        placedIn !== undefined && placedIn === nodeBase && nodeBase === targetBase && baseLocation === targetLocation
+        placedIn !== undefined &&
+        placedIn === nodeBase &&
+        nodeBase === targetBase &&
+        baseLocation === targetLocation &&
+        (scoped !== undefined || splitRef(value).uriPart === '')
       // A target inside an embedded resource is named by its URI from anywhere: a
       // `#/...` pointer that runs from the root into a resource with its own `$id` is
       // one JSON Schema does not promise to resolve. Outside the root's resource a
@@ -1460,9 +1470,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         typeof node === 'object' &&
         !Array.isArray(node) &&
         typeof (node as Record<string, unknown>)['$id'] === 'string' &&
+        // Draft-07's `#Foo` names a location, not a resource, wherever it lands.
+        splitRef((node as Record<string, unknown>)['$id'] as string).uriPart !== '' &&
         !(depth === 0 && baseLocation === rootLocation)
-      // An `$id` that sets no new base (draft-07's `#Foo`, or the base the output is
-      // already in) starts no resource, so a `#` under it still reads as before.
+      // Nor does an `$id` naming the base the output is already in, so a `#` under
+      // it still reads as before.
       const nodeBase = entersResource
         ? baseOfNode(registryFor(baseLocation), node as Record<string, unknown>, base)
         : base
@@ -1577,6 +1589,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
             targetLocation,
             fragment,
             cacheKey,
+            refKey,
             baseLocation,
             nodeBase,
             depth,
@@ -1587,7 +1600,8 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         let resolved: unknown
         let pointer: JsonPath
         let targetBase = nodeBase
-        const cached = refCache.get(cacheKey)
+        // Missing is missing wherever the target lands: reported once, by `refKey`.
+        const cached = refCache.get(cacheKey) ?? (refCache.get(refKey) === MISSING ? MISSING : undefined)
         if (cached === CYCLE) {
           // Mid-resolution revisit — a reference cycle. Keep a reference instead
           // of collapsing the branch to `{}`:
@@ -1600,11 +1614,13 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           // it falls through to the pointer inlining has always written.
           const cycleUri =
             placedIn === undefined ? undefined : cycleTargetUri(scoped, keyword, targetLocation, fragment)
+          // Every embedded document on the way here is marked: inlining only the
+          // innermost lands the cycle in the next one out, which then meets it too.
           if (placedIn !== undefined && cycleUri === undefined) {
-            const embeddedAt = placements
-              .map((base) => embeddedIds.get(base))
-              .find((location) => location !== undefined)
-            if (embeddedAt !== undefined) unplaceable.add(embeddedAt)
+            for (const base of placements) {
+              const embeddedAt = embeddedIds.get(base)
+              if (embeddedAt !== undefined) unplaceable.add(embeddedAt)
+            }
           }
           let keptRef: string
           let hoisted = false
@@ -1692,6 +1708,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
               })
             }
             refCache.set(cacheKey, MISSING)
+            refCache.set(refKey, MISSING)
             return keepScopedReference(obj, keyword, baseLocation, nodeBase, depth, role)
           }
           pointer = found?.pointer ?? []
@@ -1896,7 +1913,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     const more = [...unplaceable].filter((location) => !inlineOnly.has(location))
     if (more.length === 0) return result
     errors.length = errorsBeforeResolve
-    depthLimitReported = false
+    depthLimitReported = depthReportedBeforeResolve
     return settle(new Set([...inlineOnly, ...more]))
   }
   return settle(new Set())
