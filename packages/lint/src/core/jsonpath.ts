@@ -881,13 +881,19 @@ const toDescent = (steps: Step[], schemaAware: boolean): Descent | undefined => 
 const revisitSafe = (descent: Descent): boolean => {
   const readsPath = (selector: Selector): boolean => selector.kind === 'filter' && selector.usesPath
   if (descent.prefix.some(readsPath) || readsPath(descent.first) || descent.first.kind === 'parent') return false
-  // Depth below the revisited object (a seed is at least one level down), or
-  // `undefined` once a step reads the route or climbs past the object.
-  const depth = descent.rest.reduce<number | undefined>((current, step) => {
-    if (current === undefined || readsPath(step.selector)) return undefined
-    if (step.selector.kind !== 'parent') return current + 1
-    return step.recursive || current === 0 ? undefined : current - 1
-  }, 1)
+  // Depth below the revisited object, or `undefined` once a step reads the route
+  // or climbs past the object. A seed is a child of a node at or under it, except a
+  // `~` seed: a key stands at its node's own level, under that node's parent, so
+  // `~` taken at the object itself starts level with it.
+  const depth = descent.rest.reduce<number | undefined>(
+    (current, step) => {
+      if (current === undefined || readsPath(step.selector)) return undefined
+      if (step.selector.kind === 'keys') return current
+      if (step.selector.kind !== 'parent') return current + 1
+      return step.recursive || current === 0 ? undefined : current - 1
+    },
+    descent.first.kind === 'keys' ? 0 : 1,
+  )
   return depth !== undefined
 }
 
@@ -1100,24 +1106,28 @@ const walkShared = (
   // tracked only when some descent is schema-aware, which is the only reader.
   const tracksNameMaps = descents.some((descent) => descent.schemaAware)
   const nameMaps: boolean[] = [false]
-  // The node each object was first entered through, by walk state: the scope
-  // (interned, so one object per state), the key the object was entered under, and
-  // whether it was a name map, since that flag also decides what its children
-  // match. Keyed state-first, so maps are made per distinct state and key.
-  const entered = new Map<Scope, Map<string | number, readonly [Map<object, Node>, Map<object, Node>]>>()
-  /** Whether entering `node` repeats an entry already made in this state, so what is below it is known. */
-  const revisits = (node: Node, scope: Scope, nameMap: boolean): boolean => {
-    const byKey = getOrInsert(entered, scope, () => new Map())
-    const firsts = getOrInsert(byKey, node.key as string | number, () => [new Map(), new Map()] as const)[
-      nameMap ? 1 : 0
-    ]
-    const first = firsts.get(node.value as object)
-    if (first === undefined) {
-      firsts.set(node.value as object, node)
-      return false
-    }
-    return (sameNode as (first: Node, again: Node) => boolean)(first, node)
-  }
+  // The node each object was first entered through, by walk state: whether it
+  // was entered as a name map (that flag also decides what its children match),
+  // the scope (interned, so one object per state) and the key it was entered
+  // under. Keyed state-first, so a map is made per distinct state and key.
+  const entered = [new Map(), new Map()] as const satisfies readonly Map<
+    Scope,
+    Map<string | number, Map<object, Node>>
+  >[]
+  /** Whether entering `child` through `node` repeats an entry already made in this state. */
+  const revisits =
+    sameNode === undefined
+      ? undefined
+      : (child: object, node: Node, scope: Scope, nameMap: boolean): boolean => {
+          const byKey = getOrInsert(entered[nameMap ? 1 : 0], scope, () => new Map())
+          const firsts = getOrInsert(byKey, node.key as string | number, () => new Map<object, Node>())
+          const first = firsts.get(child)
+          if (first === undefined) {
+            firsts.set(child, node)
+            return false
+          }
+          return sameNode(first, node)
+        }
   while (nodes.length > 0) {
     const current = nodes.pop() as Node
     const outer = scopes.pop() as Scope
@@ -1172,7 +1182,7 @@ const walkShared = (
         // The child itself was matched above, against this route's key and parent;
         // only what lies below it is the same on every entry, and that is skipped.
         const entry = visit ? (node ?? { value: child, parent: current, key }) : undefined
-        if (entry !== undefined && !(sameNode !== undefined && childIsNode && revisits(entry, inner, childNameMap))) {
+        if (entry !== undefined && !(childIsNode && revisits?.(child, entry, inner, childNameMap))) {
           nodes.push(entry)
           scopes.push(inner)
           if (tracksNameMaps) nameMaps.push(childNameMap)

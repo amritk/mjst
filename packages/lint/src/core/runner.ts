@@ -5,7 +5,7 @@ import { matchesGlob } from './glob'
 import { type CompiledPath, compileQuery, type MatchNode, matchPath, query, queryManyNodes } from './jsonpath'
 import { bySourceThenPosition } from './order'
 import { ownKey } from './own-key'
-import { pointerToPath, resolveSourcePath } from './pointers'
+import { createSourcePathIndex, pointerToPath, resolveSourcePath } from './pointers'
 import type { Ruleset } from './ruleset'
 import { createRunScope, RUN_SCOPE, type RunScope } from './run-scope'
 import { severityFromName } from './severity'
@@ -296,8 +296,8 @@ const runPlan = async (
     resolved
       ? {
           skipRevisits: true,
-          ...(sources === undefined && inlinesOtherDocuments(document.data, data)
-            ? { sameNode: sameAuthoredNode(document) }
+          ...(sources === undefined && routesMayDiverge(document.data, data)
+            ? { sameNode: sameAuthoredNode(document.data) }
             : {}),
         }
       : {},
@@ -318,16 +318,38 @@ const runPlan = async (
 }
 
 /**
- * Whether the resolver inlined a `$ref` that names another document — the only
- * kind whose target {@link locate} cannot follow without a source set. Each such
- * ref in the parsed document is looked up at the same path in the resolved tree:
- * left as written there, nothing was inlined from it. A site the resolved tree no
- * longer has at that path (an ancestor that was merged with its target) counts as
- * inlined, since nothing says otherwise. One pass over the parsed document,
- * iterative because its depth is the author's to choose.
+ * Siblings of a `$ref` that only annotate it. A resolver lays them over the target
+ * at the ref site, so a route past them reads the site's own value, never a node
+ * shared with another site.
  */
-const inlinesOtherDocuments = (data: unknown, resolved: unknown): boolean => {
-  // Each entry links to its parent, so a path is only spelled out for a ref site.
+const ANNOTATION_KEYS = new Set([
+  '$ref',
+  '$comment',
+  'title',
+  'summary',
+  'description',
+  'deprecated',
+  'readOnly',
+  'writeOnly',
+  'example',
+  'examples',
+  'default',
+  'nullable',
+])
+
+/**
+ * Whether two routes to one shared object of `resolved` could trace back to
+ * different authored paths. {@link resolveSourcePath} follows internal `$ref`s and
+ * reads a ref's own siblings at the ref site, so routes only part ways at a ref
+ * site the resolver changed that either names another document (followed by no
+ * internal step) or carries siblings beyond annotations (where a resolver merges
+ * the target in, as into the ref's own `allOf`). A ref left as written in the
+ * resolved tree inlined nothing. A site the resolved tree no longer has at its
+ * path counts as changed, since nothing says otherwise. One pass over the parsed
+ * document, iterative because its depth is the author's to choose; paths are
+ * spelled out only for ref sites.
+ */
+const routesMayDiverge = (data: unknown, resolved: unknown): boolean => {
   type Entry = { value: unknown; parent: Entry | undefined; key: string | number }
   const pathOf = (entry: Entry): JsonPath => {
     const path: JsonPath = []
@@ -340,8 +362,17 @@ const inlinesOtherDocuments = (data: unknown, resolved: unknown): boolean => {
     const value = entry.value
     if (value === null || typeof value !== 'object') continue
     const ref = (value as { $ref?: unknown }).$ref
-    if (typeof ref === 'string' && !ref.startsWith('#')) {
-      const there = valueAtPath(resolved, pathOf(entry))
+    if (
+      typeof ref === 'string' &&
+      (!ref.startsWith('#') || Object.keys(value).some((key) => !ANNOTATION_KEYS.has(key)))
+    ) {
+      const there = pathOf(entry).reduce<unknown>(
+        (node, segment) =>
+          node !== null && typeof node === 'object' && Object.hasOwn(node, segment)
+            ? (node as Record<string | number, unknown>)[segment]
+            : undefined,
+        resolved,
+      )
       if (there === null || typeof there !== 'object' || (there as { $ref?: unknown }).$ref !== ref) return true
     }
     const keys: (string | number)[] = Array.isArray(value) ? value.map((_, index) => index) : Object.keys(value)
@@ -350,30 +381,24 @@ const inlinesOtherDocuments = (data: unknown, resolved: unknown): boolean => {
   return false
 }
 
-/** The value at `path` in `root`, through own members only. */
-const valueAtPath = (root: unknown, path: JsonPath): unknown =>
-  path.reduce<unknown>(
-    (value, segment) =>
-      value !== null && typeof value === 'object' && Object.hasOwn(value, segment)
-        ? (value as Record<string | number, unknown>)[segment]
-        : undefined,
-    root,
-  )
-
 /**
  * A `sameNode` for a resolved tree that came without a source set. {@link locate}
- * then follows internal `$ref`s only, so a node a cross-document ref inlined is
- * reported at each ref site, and two routes to it are only the same finding when
- * they lead back to the same authored path. With a source set every route is
- * traced to the node's own document, so no check is needed.
+ * then traces a route with {@link resolveSourcePath}, which follows internal
+ * `$ref`s only and reads a ref's own siblings at the ref site: a node a
+ * cross-document ref inlined is reported at each ref site, and so is a target a
+ * resolver merged into a ref's `allOf`. Two routes to one object are the same
+ * finding only when they trace back to the same authored path, which this asks
+ * of an index built once per walk. With a source set every route is traced to
+ * the node's own document, so no check is needed.
  */
-const sameAuthoredNode =
-  (document: Document) =>
-  (first: MatchNode, again: MatchNode): boolean => {
-    const a = resolveSourcePath(document.data, matchPath(first))
-    const b = resolveSourcePath(document.data, matchPath(again))
+const sameAuthoredNode = (data: unknown): ((first: MatchNode, again: MatchNode) => boolean) => {
+  const sourcePathOf = createSourcePathIndex<MatchNode>(data)
+  return (first, again) => {
+    const a = sourcePathOf(first)
+    const b = sourcePathOf(again)
     return a.length === b.length && a.every((segment, index) => segment === b[index])
   }
+}
 
 /** Applies `overrides` whose `files` entry includes a JSON pointer scope (`file#/path`). */
 const applyScopedOverrides = (

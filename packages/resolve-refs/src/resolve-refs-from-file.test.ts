@@ -1808,6 +1808,22 @@ describe('resolve-refs-from-file', () => {
     })
   })
 
+  it('names a hoist apart from a nested root definition a generator would file under the same name', async () => {
+    // `#/$defs/user/$defs/meta` is filed as user-meta, and so would a hoisted `UserMeta` be.
+    writeFileSync(join(dir, 'other.json'), JSON.stringify({ $defs: { UserMeta: { type: 'string' } } }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { meta: { $ref: './other.json#/$defs/UserMeta' } },
+        $defs: { user: { $defs: { meta: { type: 'integer' } } } },
+      }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect((resolved as { properties: object }).properties).toEqual({ meta: { $ref: '#/$defs/UserMeta-2' } })
+  })
+
   it('points a definition of a document hoisted whole into that hoist', async () => {
     writeFileSync(join(dir, 'common.json'), JSON.stringify({ $defs: { Money: { type: 'integer' } } }))
     writeFileSync(

@@ -206,6 +206,19 @@ describe('jsonpath queryMany', () => {
     expect(nodes?.map((node) => matchPath(node).join('.'))).toStrictEqual(['a.properties.enum.description'])
   })
 
+  it('keeps every route for a key selector a parent step climbs back out of', () => {
+    // `~` names the shared object's own key under its own parent, so `^` from it
+    // lands on each route's parent: those are different nodes.
+    const shared = { x: 1 }
+    const tree = { a: { s: shared }, b: { s: shared } }
+    for (const expression of ['$..~^', '$..s~^', '$..s.x~^^']) {
+      const compiled = [compileQuery(expression)]
+      const paths = (skipRevisits: boolean) =>
+        queryManyNodes(tree, compiled, [], { skipRevisits })[0]?.map((node) => matchPath(node).join('.'))
+      expect(paths(true)).toStrictEqual(paths(false))
+    }
+  })
+
   it('walks a shared object again when it is entered in another walk state', () => {
     // Under `a` both queries are live; under `b` only the second is. A matching
     // key is not enough to skip: the state the walk enters in decides what can match.

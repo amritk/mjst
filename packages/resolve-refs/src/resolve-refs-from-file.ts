@@ -740,6 +740,35 @@ const asWritten = (name: string): string => name
  */
 const asFilename = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 
+/** The members a generator reads a nested definition's name through (`refToFilename`'s containers). */
+const NAME_CONTAINERS = ['$defs', 'definitions', 'properties'] as const
+
+/**
+ * Every name a generator could file a definition in `map` under: each member,
+ * and each definition nested in one through a name container, joined to its
+ * parents' names the way `refToFilename` joins them (`#/$defs/user/$defs/meta` is
+ * `user-meta`). Walked iteratively, since a document nests as deep as it likes.
+ */
+const nestedDefinitionNames = (map: Record<string, unknown>): string[] => {
+  const names: string[] = []
+  const stack: { prefix: string; map: Record<string, unknown> }[] = [{ prefix: '', map }]
+  while (stack.length > 0) {
+    const { prefix, map: current } = stack.pop() as { prefix: string; map: Record<string, unknown> }
+    for (const [key, value] of Object.entries(current)) {
+      const name = prefix === '' ? key : `${prefix}-${key}`
+      names.push(name)
+      if (value === null || typeof value !== 'object' || Array.isArray(value)) continue
+      for (const container of NAME_CONTAINERS) {
+        const nested = (value as Record<string, unknown>)[container]
+        if (nested !== null && typeof nested === 'object' && !Array.isArray(nested)) {
+          stack.push({ prefix: name, map: nested as Record<string, unknown> })
+        }
+      }
+    }
+  }
+  return names
+}
+
 /** Derives a readable `$defs` key for a hoisted cycle target. */
 const hoistName = (
   targetLocation: string,
@@ -1010,7 +1039,8 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   const definitionNames = (root: unknown): string[] =>
     (options.bundle === true ? DEFINITION_CONTAINERS : [['$defs']]).flatMap((container) => {
       const map = getByPointer(root, `/${container.join('/')}`)
-      return map !== null && typeof map === 'object' && !Array.isArray(map) ? Object.keys(map) : []
+      if (map === null || typeof map !== 'object' || Array.isArray(map)) return []
+      return options.bundle === true ? nestedDefinitionNames(map as Record<string, unknown>) : Object.keys(map)
     })
   const hoistTaken = new Set<string>(definitionNames(rootDoc).map(nameKey))
   // Every node carrying a `#/$defs/<name>` ref the CYCLE branch emitted, paired
@@ -1255,7 +1285,6 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       if (registryFor(rootLocation).resources.has(embeddedId) || (claimedBy ?? targetLocation) !== targetLocation) {
         return undefined
       }
-      embeddedIds.set(embeddedId, targetLocation)
     }
     if (plain && !siteInRoot) return undefined
     if (refCache.get(cacheKey) === MISSING) return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
@@ -1278,6 +1307,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     // whole with its `$id`. Content inlined into another resource is not.
     const sameResource =
       placedIn !== undefined && placedIn === nodeBase && nodeBase === targetBase && baseLocation === targetLocation
+    // Outside the root's resource the ref names its target by URI, so a target with
+    // none is inlined before anything is hoisted or claimed for it.
+    const uri = siteInRoot || sameResource ? undefined : uriFor(targetLocation, targetBase, found.pointer)
+    if (!siteInRoot && !sameResource && uri === undefined) return undefined
+    if (embeddedId !== undefined) embeddedIds.set(embeddedId, targetLocation)
     const hoist = intoRoot ? undefined : hoistFor(targetLocation, found, targetBase, plain, depth)
     const suffix =
       hoist !== undefined && siteInRoot ? pathToRef(found.pointer.slice(hoist.pointer.length)).slice(1) : ''
@@ -1294,7 +1328,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           : pathToRef(found.pointer)
       : sameResource
         ? value
-        : uriFor(targetLocation, targetBase, found.pointer)
+        : uri
     if (target === undefined) return undefined
 
     const kept: Record<string, unknown> = {}

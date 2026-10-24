@@ -194,6 +194,36 @@ describe('lint pipeline', () => {
     expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['c/s/type'])
   })
 
+  it('reports a target merged into each ref site allOf at every site when there is no source set', async () => {
+    // A ref with its own `allOf` is resolved by appending its target there, and an
+    // `allOf` entry is read at the ref site, so the two sites are two findings.
+    const source = JSON.stringify({
+      x: { $ref: '#/$defs/A', allOf: [{ minLength: 1 }] },
+      y: { $ref: '#/$defs/A', allOf: [{ maxLength: 9 }] },
+      $defs: { A: { type: 'object' } },
+    })
+    const target = { type: 'object' }
+    const resolve = () => ({
+      resolved: {
+        x: { allOf: [{ minLength: 1 }, target] },
+        y: { allOf: [{ maxLength: 9 }, target] },
+        $defs: { A: target },
+      },
+    })
+    const ruleset = build({
+      rules: {
+        'no-object': {
+          given: '$..type',
+          resolved: true,
+          severity: 'error',
+          then: { function: 'pattern', functionOptions: { notMatch: '^object$' } },
+        },
+      },
+    })
+    const { diagnostics } = await lintWithResult(source, { ruleset, resolve })
+    expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['x/allOf/1', 'y/allOf/1', '$defs/A/type'])
+  })
+
   it('reports a shared node once and fast when references layer on each other', async () => {
     // Each schema references the next twice, so the resolved tree has 2^30 routes to the
     // last one. Every route translates back to the same authored node, so walking each

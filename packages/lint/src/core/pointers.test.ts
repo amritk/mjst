@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { pointerToPath, resolveSourceOrigin, resolveSourceOriginFromMap, resolveSourcePath } from './pointers'
+import {
+  createSourcePathIndex,
+  pointerToPath,
+  resolveSourceOrigin,
+  resolveSourceOriginFromMap,
+  resolveSourcePath,
+} from './pointers'
 import type { IDocumentRegistry, IOriginMap, ISourceDocument, JsonPath } from './types'
 
 describe('pointerToPath', () => {
@@ -50,6 +56,72 @@ describe('resolveSourcePath (internal refs, single document)', () => {
     expect(resolveSourcePath(shadow, ['a', 'type'])).toEqual(['a', 'type'])
     // And the `$ref` key itself is at the `$ref` site by definition.
     expect(resolveSourcePath(root, ['a', '$ref'])).toEqual(['a', '$ref'])
+  })
+})
+
+describe('createSourcePathIndex', () => {
+  type Node = { value: unknown; parent: Node | undefined; key: string | number | undefined }
+
+  /** Every node of a walk over `tree`, parent-linked, as far as `limit` nodes. */
+  const walk = (tree: unknown, limit = 5000): Node[] => {
+    const nodes: Node[] = [{ value: tree, parent: undefined, key: undefined }]
+    for (let i = 0; i < nodes.length && nodes.length < limit; i++) {
+      const node = nodes[i] as Node
+      const value = node.value
+      if (value === null || typeof value !== 'object') continue
+      for (const key of Array.isArray(value) ? value.keys() : Object.keys(value)) {
+        nodes.push({ value: (value as Record<string | number, unknown>)[key], parent: node, key })
+      }
+    }
+    return nodes
+  }
+
+  const pathOf = (node: Node): JsonPath => {
+    const path: JsonPath = []
+    for (let at: Node | undefined = node; at?.parent !== undefined; at = at.parent) path.push(at.key as string | number)
+    return path.reverse()
+  }
+
+  it('answers every node of a walk the way resolveSourcePath does', () => {
+    // Internal refs, a ref with siblings, one with its own `allOf`, an external ref,
+    // and a cycle, walked through a tree whose shape follows none of them exactly.
+    const source = {
+      components: {
+        schemas: {
+          A: {
+            type: 'object',
+            properties: { b: { $ref: '#/components/schemas/B' }, self: { $ref: '#/components/schemas/A' } },
+          },
+          B: { type: 'string', nullable: true },
+          C: { $ref: '#/components/schemas/A', description: 'aside', allOf: [{ minProperties: 1 }] },
+          D: { $ref: './other.json#/D' },
+        },
+      },
+      paths: { '/x': { get: { responses: { 200: { schema: { $ref: '#/components/schemas/C' } } } } } },
+    }
+    const shared = { type: 'object', properties: { b: { type: 'string', nullable: true }, self: {} } }
+    const resolved = {
+      components: {
+        schemas: {
+          A: shared,
+          B: { type: 'string' },
+          C: { description: 'aside', allOf: [{ minProperties: 1 }, shared] },
+          D: { e: 1 },
+        },
+      },
+      paths: {
+        '/x': {
+          get: { responses: { 200: { schema: { description: 'aside', allOf: [{ minProperties: 1 }, shared] } } } },
+        },
+      },
+    }
+    const sourcePathOf = createSourcePathIndex<Node>(source)
+    const nodes = walk(resolved)
+    // Asked in reverse, so most answers come from a parent that is not answered yet.
+    for (const node of [...nodes].reverse()) {
+      expect(sourcePathOf(node)).toEqual(resolveSourcePath(source, pathOf(node)))
+    }
+    expect(nodes.length).toBeGreaterThan(30)
   })
 })
 

@@ -34,6 +34,12 @@ export type LintResolverResult = {
  * infinite loop, not a `RangeError`. Shared subtrees are fine and expected;
  * `@amritk/resolve-refs` keeps the `$ref` node in place when a chain would close
  * a cycle, which is what makes its output safe here.
+ *
+ * Sharing should come from `$ref`s: an object that stands in the resolved tree
+ * wherever a reference pointed at its target. The rule walk enters such an object
+ * once rather than once per route, since every route leads back to the same
+ * authored node; a resolver that shared objects for any other reason, without a
+ * source set, would have findings at the later routes dropped.
  */
 export type LintResolver = (
   document: Document,

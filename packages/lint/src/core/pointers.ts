@@ -139,6 +139,100 @@ export const resolveSourcePath = (root: unknown, path: JsonPath): JsonPath => {
 }
 
 /**
+ * A path built by appending to a shared prefix, so taking a step costs one link
+ * rather than a copy of every segment before it. `base` is where the last `$ref`
+ * followed led (or the root); `segments` holds what was read after it, innermost
+ * first.
+ */
+type PathTail = { readonly segment: string | number; readonly rest: PathTail | undefined }
+
+/** A route's progress through {@link resolveSourcePath}: up to a node, before following refs past it. */
+type SourceStep = {
+  readonly base: JsonPath
+  readonly segments: PathTail | undefined
+  readonly node: unknown
+  readonly stopped: boolean
+}
+
+/** The whole path a step stands for. */
+const pathOfStep = (step: SourceStep): JsonPath => {
+  const tail: (string | number)[] = []
+  for (let link = step.segments; link !== undefined; link = link.rest) tail.push(link.segment)
+  return [...step.base, ...tail.reverse()]
+}
+
+/**
+ * Follows `$ref`s at `step` the way {@link resolveSourcePath} does before reading
+ * `next` (bounded the same way, against a ref cycle in the source).
+ */
+const followRefsAt = (root: unknown, step: SourceStep, next: string | number | undefined, guard = 0): SourceStep => {
+  if (guard >= 100 || !stepsThroughRef(step.node, next)) return step
+  const target = pointerToPath(step.node.$ref)
+  if (!target) return step
+  return followRefsAt(
+    root,
+    { base: target, segments: undefined, node: getAtPath(root, target), stopped: false },
+    next,
+    guard + 1,
+  )
+}
+
+/** One segment of {@link resolveSourcePath}, from the step before it. */
+const stepInto = (root: unknown, step: SourceStep, segment: string | number): SourceStep => {
+  if (step.stopped) return step
+  const followed = followRefsAt(root, step, segment)
+  if (!isContainer(followed.node)) return { ...followed, stopped: true }
+  return {
+    base: followed.base,
+    segments: { segment, rest: followed.segments },
+    node: childOf(followed.node, segment),
+    stopped: false,
+  }
+}
+
+/**
+ * {@link resolveSourcePath} for nodes of a parent-linked walk, computed once per
+ * node from its parent's answer rather than from the root on every call. Asking
+ * for many nodes of one walk — as revisit checks over a shared tree do — then
+ * costs one step each, plus spelling out the path of a node actually asked about.
+ * The climb to the nearest node already answered is iterative, since a walk is as
+ * deep as its document.
+ */
+export const createSourcePathIndex = <
+  N extends { readonly parent: N | undefined; readonly key: string | number | undefined },
+>(
+  root: unknown,
+): ((node: N) => JsonPath) => {
+  const steps = new WeakMap<N, SourceStep>()
+  const answers = new WeakMap<N, JsonPath>()
+  const stepOf = (node: N): SourceStep => {
+    const chain: N[] = [node]
+    while (!steps.has(chain[chain.length - 1] as N) && (chain[chain.length - 1] as N).parent !== undefined) {
+      chain.push((chain[chain.length - 1] as N).parent as N)
+    }
+    const top = chain[chain.length - 1] as N
+    const start = steps.get(top) ?? { base: [], segments: undefined, node: root, stopped: false }
+    steps.set(top, start)
+    return chain
+      .slice(0, -1)
+      .reverse()
+      .reduce((step, at) => {
+        const next = stepInto(root, step, at.key as string | number)
+        steps.set(at, next)
+        return next
+      }, start)
+  }
+  return (node) => {
+    const known = answers.get(node)
+    if (known !== undefined) return known
+    const step = stepOf(node)
+    const answer = pathOfStep(step.stopped ? step : followRefsAt(root, step, undefined))
+    answers.set(node, answer)
+    return answer
+  }
+}
+
+/**
  * Cross-document generalization of {@link resolveSourcePath}: translates a path
  * in the *resolved* (dereferenced) tree back to the document it actually came
  * from and the path within it, following both internal (`#/...`) and external
