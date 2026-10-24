@@ -178,9 +178,8 @@ export type ResolveOptions = {
    * absolute URI otherwise, and is inlined when the target has no URI (a
    * document without an `$id`). A target with no URI that is part of a cycle
    * cannot be inlined, and has no name that reads the same from inside the
-   * resource: that ref is written as the root-relative pointer inlining has
-   * always written, which a consumer resolving `#` against the document root
-   * follows and a strict one does not. A document whose `$id` is relative, or
+   * resource, so a document whose resource meets one is inlined instead, as
+   * without this option. A document whose `$id` is relative, or
    * whose `$id` another bundled document already claims, is inlined.
    * `$dynamicRef` and `$recursiveRef` are resolved as without this option.
    * Defaults to `false`.

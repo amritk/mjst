@@ -237,7 +237,9 @@ const missingFunction = (ruleset: Ruleset, rule: ResolvedRule): string | undefin
  * object stands wherever a reference pointed at it. Its walk then enters each
  * object once per walk state instead of once per route (see `SharedWalkOptions`):
  * {@link locate} translates every route back to the same authored node, so a
- * revisit could only add findings that `withoutDuplicates` drops. Data the caller
+ * revisit could only add a finding at the same location: one `withoutDuplicates`
+ * drops, unless its message spells the route out (`{{path}}`) or the caller reads
+ * `Linter.run`'s findings before deduplication. Data the caller
  * built may share objects for other reasons, where routes are distinct authored
  * paths, so it is never passed here as `resolved`.
  *

@@ -1769,6 +1769,53 @@ describe('resolve-refs-from-file', () => {
     expect(await aInE()).toEqual({ $ref: 'https://ex.com/root.json#/$defs/A' })
   })
 
+  it('inlines an embedded document whose resource meets a cycle it cannot name', async () => {
+    // b.json has no `$id` and refers to itself, so inside a.json's resource no ref
+    // names it; a.json is inlined instead, which is the output without `bundle`.
+    writeFileSync(
+      join(dir, 'a.json'),
+      JSON.stringify({ $id: 'https://ex.com/a.json', $defs: { T: { properties: { b: { $ref: './b.json' } } } } }),
+    )
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ properties: { next: { $ref: '#' } } }))
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { t: { $ref: './a.json#/$defs/T' } } }))
+
+    const inlined = await resolveRefsFromFile(join(dir, 'root.json'))
+    const bundled = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(bundled.errors).toEqual(inlined.errors)
+    expect(JSON.stringify(bundled.resolved)).not.toContain('https://ex.com/a.json')
+    const t = (bundled.resolved as { properties: { t: { properties: { b: unknown } } } }).properties.t
+    expect(t.properties.b).toEqual({ $ref: '#/$defs/b' })
+    expect((bundled.resolved as { $defs: unknown }).$defs).toEqual({
+      b: { properties: { next: { $ref: '#/$defs/b' } } },
+    })
+  })
+
+  it('keeps pointers as written under an $id that sets no new base', async () => {
+    // Draft-07's `#Foo` names a location, not a resource: `#` under it is still the root.
+    writeFileSync(join(dir, 'common.json'), JSON.stringify({ type: 'string' }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        definitions: {
+          Foo: { $id: '#Foo', properties: { bar: { $ref: '#/definitions/Bar' }, c: { $ref: './common.json' } } },
+          Bar: { type: 'integer' },
+        },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      definitions: {
+        Foo: { $id: '#Foo', properties: { bar: { $ref: '#/definitions/Bar' }, c: { $ref: '#/$defs/common' } } },
+        Bar: { type: 'integer' },
+      },
+      $defs: { common: { type: 'string' } },
+    })
+  })
+
   it('closes a cycle inside an embedded resource by its target URI', async () => {
     // b.json claims the id a.json already has, so it is inlined; inside its copy the
     // cycle cannot be a `#/$defs/...` pointer into the root's hoists.

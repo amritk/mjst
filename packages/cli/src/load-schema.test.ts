@@ -1,8 +1,10 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import type { JSONSchema } from 'json-schema-typed/draft-2020-12'
 import { describe, expect, it } from 'vitest'
 
+import { generateFiles } from './generate-files'
 import { loadSchema } from './load-schema'
 
 const tmp = (): string => mkdtempSync(join(tmpdir(), 'mjst-load-schema-'))
@@ -97,6 +99,35 @@ describe('loadSchema', () => {
       properties: { total: { $ref: '#/$defs/Line' }, tax: { $ref: '#/$defs/Money' } },
       $defs: { Line: { properties: { price: { $ref: '#/$defs/Money' } } }, Money: { type: 'integer' } },
     })
+  })
+
+  it('names hoists so the generator files every bundled type apart', async () => {
+    // `#/$defs/Order/properties/money` is filed as `order-money`, and so would a
+    // hoist named after `order-money.json` be: the hoist has to take another name,
+    // the same one the generator's own file naming keeps apart.
+    const dir = tmp()
+    write(dir, 'order-money.json', { type: 'object', properties: { cents: { type: 'integer' } } })
+    write(dir, 'money.json', { type: 'object', properties: { amount: { type: 'number' } } })
+    const main = write(dir, 'root.json', {
+      type: 'object',
+      properties: {
+        order: { $ref: '#/$defs/Order' },
+        money: { $ref: '#/$defs/Order/properties/money' },
+        other: { $ref: './order-money.json' },
+      },
+      $defs: { Order: { type: 'object', properties: { money: { $ref: './money.json' } } } },
+    })
+
+    const schema = (await loadSchema({}, main)) as JSONSchema & { properties: { other: { $ref: string } } }
+    const files = await generateFiles({}, schema, 'Root', { mode: 'package' })
+    const names = files.map((file) => file.filename)
+
+    expect(new Set(names).size).toBe(names.length)
+    const hoisted = schema.properties.other.$ref.slice('#/$defs/'.length)
+    expect(names).toContain(`${hoisted}.ts`)
+    expect(files.find((file) => file.filename === `${hoisted}.ts`)?.content).toContain('cents')
+    expect(files.find((file) => file.filename === 'order-money.ts')?.content).toContain('parseMoney')
+    expect(files.find((file) => file.filename === 'money.ts')?.content).toContain('amount')
   })
 
   it('resolves a pointer into another file', async () => {
