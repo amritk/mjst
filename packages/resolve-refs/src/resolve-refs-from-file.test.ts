@@ -1898,6 +1898,33 @@ describe('resolve-refs-from-file', () => {
     expect(bundled.errors).toEqual(inlined.errors)
   })
 
+  it('inlines only the embedded document that holds an unnameable cycle', async () => {
+    // a.json pulls e.json in whole for `T`, but only e.json's `U` reaches the cycle
+    // in c.json: e.json is inlined and a.json stays a resource.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { a: { $ref: './a.json' }, u: { $ref: './e.json#/$defs/U' } } }),
+    )
+    writeFileSync(
+      join(dir, 'a.json'),
+      JSON.stringify({ $id: 'https://ex.com/a.json', properties: { t: { $ref: './e.json#/$defs/T' } } }),
+    )
+    writeFileSync(
+      join(dir, 'e.json'),
+      JSON.stringify({ $id: 'https://ex.com/e.json', $defs: { T: { type: 'string' }, U: { $ref: './c.json' } } }),
+    )
+    writeFileSync(join(dir, 'c.json'), JSON.stringify({ properties: { next: { $ref: '#' } } }))
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    const output = JSON.stringify(resolved)
+    expect(output).toContain('"$id":"https://ex.com/a.json"')
+    expect(output).not.toContain('https://ex.com/e.json')
+    const a = (resolved as { $defs: { a: { properties: { t: unknown } } } }).$defs.a
+    expect(a.properties.t).toEqual({ type: 'string' })
+  })
+
   it('closes a cycle inside an embedded resource by its target URI', async () => {
     // b.json claims the id a.json already has, so it is inlined; inside its copy the
     // cycle cannot be a `#/$defs/...` pointer into the root's hoists.

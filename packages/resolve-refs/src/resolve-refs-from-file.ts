@@ -1614,13 +1614,13 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           // it falls through to the pointer inlining has always written.
           const cycleUri =
             placedIn === undefined ? undefined : cycleTargetUri(scoped, keyword, targetLocation, fragment)
-          // Every embedded document on the way here is marked: inlining only the
-          // innermost lands the cycle in the next one out, which then meets it too.
+          // The innermost embedded document holds the cycle, so it is the one
+          // marked. One further out is walked here only because its ref pulled
+          // that document in whole; the next pass marks it too if its own refs
+          // still reach the cycle once the inner one is inlined.
           if (placedIn !== undefined && cycleUri === undefined) {
-            for (const base of placements) {
-              const embeddedAt = embeddedIds.get(base)
-              if (embeddedAt !== undefined) unplaceable.add(embeddedAt)
-            }
+            const innermost = placements.findLast((base) => embeddedIds.has(base))
+            if (innermost !== undefined) unplaceable.add(embeddedIds.get(innermost) as string)
           }
           let keptRef: string
           let hoisted = false
