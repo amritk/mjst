@@ -32,10 +32,7 @@ export const createRunScope = (): RunScope => new Map()
 export const runCache = <V>(context: IFunctionContext, owner: object): WeakMap<object, V> => {
   const scope = (context as ScopedContext)[RUN_SCOPE]
   if (scope === undefined) return new WeakMap()
-  let cache = scope.get(owner)
-  if (cache === undefined) {
-    cache = new WeakMap()
-    scope.set(owner, cache)
-  }
+  const cache = scope.get(owner) ?? new WeakMap()
+  scope.set(owner, cache)
   return cache as WeakMap<object, V>
 }

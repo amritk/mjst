@@ -63,18 +63,18 @@ const resolveCase = async (testCase: SuiteCase, index: number, bundle: boolean) 
 
 const CASES = loadSuiteCases().filter((testCase) => reachesRemote(testCase.schema))
 
-describe('bundle conformance', () => {
+describe('bundle-conformance', () => {
   it('covers the suite cross-document cases', () => {
     expect(CASES.length).toBeGreaterThan(40)
   })
 
   it('answers every case inlining answers, and reports the same errors', async () => {
     const regressions: string[] = []
-    let preserved = 0
+    const preserved: string[] = []
     for (const [index, testCase] of CASES.entries()) {
       const inlined = await resolveCase(testCase, index, false)
       if (verdict(inlined.resolved, testCase.data) !== testCase.valid) continue
-      preserved++
+      preserved.push(testCase.key)
       const bundled = await resolveCase(testCase, index, true)
       if (verdict(bundled.resolved, testCase.data) !== testCase.valid) regressions.push(`${testCase.key}: verdict`)
       const messages = (result: typeof inlined) => result.errors.map((error) => error.message)
@@ -82,7 +82,7 @@ describe('bundle conformance', () => {
         regressions.push(`${testCase.key}: errors`)
       }
     }
-    expect(preserved).toBeGreaterThan(30)
+    expect(preserved.length).toBeGreaterThan(30)
     expect(regressions).toEqual([])
   })
 })

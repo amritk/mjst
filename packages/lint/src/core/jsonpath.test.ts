@@ -188,6 +188,24 @@ describe('jsonpath queryMany', () => {
     expect(routed?.map((node) => matchPath(node)[0])).toStrictEqual(['a', 'b'])
   })
 
+  it('skips revisits for a query that steps on from its descent without seeing the route', () => {
+    const shared = { leaf: { description: 'x' } }
+    const tree = { a: { s: shared }, b: { s: shared } }
+    const [nodes] = queryManyNodes(tree, [compileQuery('$..leaf.description')], [], { skipRevisits: true })
+    expect(nodes?.map((node) => matchPath(node).join('.'))).toStrictEqual(['a.s.leaf.description'])
+  })
+
+  it('tells an entry into a name map from one into a schema when skipping revisits', () => {
+    // `x` is entered under the key `properties` both times, but only the second time
+    // is it a map of names, where `enum` is a property rather than instance data.
+    const x = { enum: { description: 'x' } }
+    const tree = { properties: { properties: x }, a: { properties: x } }
+    const [nodes] = queryManyNodes(tree, [compileQuery('$..description')], [{ schemaAware: true }], {
+      skipRevisits: true,
+    })
+    expect(nodes?.map((node) => matchPath(node).join('.'))).toStrictEqual(['a.properties.enum.description'])
+  })
+
   it('walks a shared object again when it is entered in another walk state', () => {
     // Under `a` both queries are live; under `b` only the second is. A matching
     // key is not enough to skip: the state the walk enters in decides what can match.

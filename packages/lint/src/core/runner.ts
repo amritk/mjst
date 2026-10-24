@@ -293,7 +293,14 @@ const runPlan = async (
     data,
     planned.map((group) => group.compiled),
     planned.map((group) => (group.schemaAware ? { schemaAware: true } : undefined)),
-    { skipRevisits: resolved },
+    resolved
+      ? {
+          skipRevisits: true,
+          ...(sources === undefined && inlinesOtherDocuments(document.data, data)
+            ? { sameNode: sameAuthoredNode(document) }
+            : {}),
+        }
+      : {},
   )
   for (let i = 0; i < order.length; i++) {
     const group = groups.get(order[i] as string) as { rules: ResolvedRule[] }
@@ -309,6 +316,64 @@ const runPlan = async (
     }
   }
 }
+
+/**
+ * Whether the resolver inlined a `$ref` that names another document — the only
+ * kind whose target {@link locate} cannot follow without a source set. Each such
+ * ref in the parsed document is looked up at the same path in the resolved tree:
+ * left as written there, nothing was inlined from it. A site the resolved tree no
+ * longer has at that path (an ancestor that was merged with its target) counts as
+ * inlined, since nothing says otherwise. One pass over the parsed document,
+ * iterative because its depth is the author's to choose.
+ */
+const inlinesOtherDocuments = (data: unknown, resolved: unknown): boolean => {
+  // Each entry links to its parent, so a path is only spelled out for a ref site.
+  type Entry = { value: unknown; parent: Entry | undefined; key: string | number }
+  const pathOf = (entry: Entry): JsonPath => {
+    const path: JsonPath = []
+    for (let at: Entry | undefined = entry; at?.parent !== undefined; at = at.parent) path.push(at.key)
+    return path.reverse()
+  }
+  const stack: Entry[] = [{ value: data, parent: undefined, key: '' }]
+  while (stack.length > 0) {
+    const entry = stack.pop() as Entry
+    const value = entry.value
+    if (value === null || typeof value !== 'object') continue
+    const ref = (value as { $ref?: unknown }).$ref
+    if (typeof ref === 'string' && !ref.startsWith('#')) {
+      const there = valueAtPath(resolved, pathOf(entry))
+      if (there === null || typeof there !== 'object' || (there as { $ref?: unknown }).$ref !== ref) return true
+    }
+    const keys: (string | number)[] = Array.isArray(value) ? value.map((_, index) => index) : Object.keys(value)
+    for (const key of keys) stack.push({ value: (value as Record<string | number, unknown>)[key], parent: entry, key })
+  }
+  return false
+}
+
+/** The value at `path` in `root`, through own members only. */
+const valueAtPath = (root: unknown, path: JsonPath): unknown =>
+  path.reduce<unknown>(
+    (value, segment) =>
+      value !== null && typeof value === 'object' && Object.hasOwn(value, segment)
+        ? (value as Record<string | number, unknown>)[segment]
+        : undefined,
+    root,
+  )
+
+/**
+ * A `sameNode` for a resolved tree that came without a source set. {@link locate}
+ * then follows internal `$ref`s only, so a node a cross-document ref inlined is
+ * reported at each ref site, and two routes to it are only the same finding when
+ * they lead back to the same authored path. With a source set every route is
+ * traced to the node's own document, so no check is needed.
+ */
+const sameAuthoredNode =
+  (document: Document) =>
+  (first: MatchNode, again: MatchNode): boolean => {
+    const a = resolveSourcePath(document.data, matchPath(first))
+    const b = resolveSourcePath(document.data, matchPath(again))
+    return a.length === b.length && a.every((segment, index) => segment === b[index])
+  }
 
 /** Applies `overrides` whose `files` entry includes a JSON pointer scope (`file#/path`). */
 const applyScopedOverrides = (

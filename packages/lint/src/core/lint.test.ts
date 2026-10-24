@@ -149,6 +149,51 @@ describe('lint pipeline', () => {
     expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['a/s/description', 'b/s/description'])
   })
 
+  it('reports a node a cross-document ref inlined at every ref site when there is no source set', async () => {
+    // Without a source set a finding inside another document is located at the
+    // `$ref` that reached it, so the two ref sites are two findings, not one.
+    const source = JSON.stringify({ a: { schema: { $ref: './pet.json' } }, b: { schema: { $ref: './pet.json' } } })
+    const pet = { type: 'object' }
+    const resolve = () => ({ resolved: { a: { schema: pet }, b: { schema: pet } } })
+    const ruleset = build({
+      rules: {
+        'no-object': {
+          given: '$..type',
+          resolved: true,
+          severity: 'error',
+          then: { function: 'pattern', functionOptions: { notMatch: '^object$' } },
+        },
+      },
+    })
+    const { diagnostics } = await lintWithResult(source, { ruleset, resolve })
+    expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['a/schema/type', 'b/schema/type'])
+  })
+
+  it('checks every route when a cross-document ref site is gone from the resolved tree', async () => {
+    // The resolver merged `a` into an `allOf`, so nothing says what it inlined at
+    // `a/b`: routes are checked rather than assumed to be one finding, and the node
+    // shared by an internal ref is still reported once.
+    const source = JSON.stringify({
+      a: { b: { $ref: './x.json' } },
+      c: { s: { type: 'object' } },
+      d: { s: { $ref: '#/c/s' } },
+    })
+    const shared = { type: 'object' }
+    const resolve = () => ({ resolved: { a: { allOf: [{ b: {} }] }, c: { s: shared }, d: { s: shared } } })
+    const ruleset = build({
+      rules: {
+        'no-object': {
+          given: '$..type',
+          resolved: true,
+          severity: 'error',
+          then: { function: 'pattern', functionOptions: { notMatch: '^object$' } },
+        },
+      },
+    })
+    const { diagnostics } = await lintWithResult(source, { ruleset, resolve })
+    expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['c/s/type'])
+  })
+
   it('reports a shared node once and fast when references layer on each other', async () => {
     // Each schema references the next twice, so the resolved tree has 2^30 routes to the
     // last one. Every route translates back to the same authored node, so walking each

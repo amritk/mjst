@@ -1311,6 +1311,14 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       hoistRefSites.set(kept, hoist.key)
       if (suffix !== '') hoistRefSuffixes.set(kept, suffix)
     }
+    // Scaffolding for a dynamic reference stays where it binds, as on every other
+    // path that builds a node (see `dynamic-scope.ts`).
+    if (
+      Object.values(kept).some((child) => isScopeSensitive(sensitive, child)) ||
+      declaresAmbiguousAnchor(obj, ambiguousDynamicAnchors)
+    ) {
+      sensitive.add(kept)
+    }
     return kept
   }
 
@@ -1610,6 +1618,10 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
           // this one pointing at whatever else ended up under the old name.
           const hoistOf = hoistRefSites.get(resolved as Record<string, unknown>)
           if (hoistOf !== undefined) hoistRefSites.set(overridden, hoistOf)
+          // A bundled ref into a definition carries the pointer past the hoist's
+          // name; without it the rename would point the copy at the whole hoist.
+          const suffixOf = hoistRefSuffixes.get(resolved as Record<string, unknown>)
+          if (suffixOf !== undefined) hoistRefSuffixes.set(overridden, suffixOf)
           if (origins && !origins.has(overridden)) origins.set(overridden, { location: targetLocation, pointer })
           if (inlineIsSensitive) sensitive.add(overridden)
           return overridden
@@ -1680,8 +1692,8 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       }
       for (const [node, cacheKey] of hoistRefSites) {
         const redirect = insideWhole.get(cacheKey)
-        const name = finalNames.get(redirect?.whole ?? cacheKey)
-        if (name === undefined) continue
+        // Every site names a hoist, and every hoist not inside a whole one was named above.
+        const name = finalNames.get(redirect?.whole ?? cacheKey) as string
         assignKey(node, '$ref', `#/$defs/${name}${redirect?.suffix ?? ''}${hoistRefSuffixes.get(node) ?? ''}`)
       }
       for (const [cacheKey] of hoists) {

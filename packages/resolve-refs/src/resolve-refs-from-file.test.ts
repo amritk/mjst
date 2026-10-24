@@ -1851,6 +1851,51 @@ describe('resolve-refs-from-file', () => {
     })
   })
 
+  it('keeps the pointer into a definition on a bundled ref copied over by annotation siblings', async () => {
+    // c.json declares an `$id` only below its root, so it is inlined; the copy of its
+    // `A` that takes `x`'s description must still point inside `Order`.
+    writeFileSync(
+      join(dir, 'plain.json'),
+      JSON.stringify({ $defs: { Order: { properties: { lines: { type: 'array' } } } } }),
+    )
+    writeFileSync(
+      join(dir, 'c.json'),
+      JSON.stringify({ $defs: { A: { $ref: './plain.json#/$defs/Order/properties/lines' }, Z: { $id: 'z.json' } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { x: { $ref: './c.json#/$defs/A', description: 'd' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect((resolved as { properties: object }).properties).toEqual({
+      x: { $ref: '#/$defs/Order/properties/lines', description: 'd' },
+    })
+  })
+
+  it('keeps a bundled ref whose sibling holds a dynamic reference that binds at evaluation time', async () => {
+    // `#x` is declared twice, so `$dynamicRef: '#x'` is kept for the validator to bind.
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { p: { $ref: '#/$defs/s', properties: { q: { $dynamicRef: '#x' } } } },
+        $defs: {
+          s: { type: 'object' },
+          a: { $id: 'https://ex.com/a', $dynamicAnchor: 'x' },
+          b: { $id: 'https://ex.com/b', $dynamicAnchor: 'x' },
+        },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect((resolved as { properties: object }).properties).toEqual({
+      p: { $ref: '#/$defs/s', properties: { q: { $dynamicRef: '#x' } } },
+    })
+  })
+
   it('bundles documents with $ids to what inlining produces once inlined in memory', async () => {
     writeFileSync(
       join(dir, 'money.json'),

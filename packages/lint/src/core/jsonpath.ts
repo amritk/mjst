@@ -747,7 +747,19 @@ export type SharedWalkOptions = {
    * {@link revisitSafe} turns the option off for a walk serving such a query.
    */
   skipRevisits?: boolean
+  /**
+   * With `skipRevisits`, decides each revisit instead of skipping it outright:
+   * `true` when the route that just reached an object leads to the same authored
+   * node as the route that first did, so nothing below it can be new. For a tree
+   * whose routes may not all lead back to one node — `$ref`s into other documents
+   * resolved with no source map, which locate at each ref site — rather than
+   * giving up the walk for every shared object.
+   */
+  sameNode?: (first: MatchNode, again: MatchNode) => boolean
 }
+
+/** A `sameNode` for a tree whose every route to an object leads to one authored node. */
+const alwaysSame = (): boolean => true
 
 /**
  * {@link queryMany}, but each match stays a {@link MatchNode} with no path built.
@@ -794,8 +806,8 @@ export const queryManyNodes = (
     const safe = walk.skipRevisits === true ? all.filter((d) => revisitSafe(descents[d] as Descent)) : []
     const unsafe = all.filter((d) => !safe.includes(d))
     for (const [indices, skip] of [
-      [safe, true],
-      [unsafe, false],
+      [safe, walk.sameNode ?? alwaysSame],
+      [unsafe, undefined],
     ] as const) {
       if (indices.length === 0) continue
       walkShared(
@@ -1036,6 +1048,15 @@ const childScope = (
   return built
 }
 
+/** The value at `key` in `map`, made and stored by `make` the first time it is asked for. */
+const getOrInsert = <K, V>(map: Map<K, V>, key: K, make: () => V): V => {
+  const found = map.get(key)
+  if (found !== undefined) return found
+  const made = make()
+  map.set(key, made)
+  return made
+}
+
 /** Whether anything in `scope` can still produce a match at or under a node. */
 const isLive = (scope: Scope): boolean => scope.active.length > 0 || scope.pending.length > 0
 
@@ -1058,7 +1079,12 @@ const isLive = (scope: Scope): boolean => scope.active.length > 0 || scope.pendi
  * Seed order is document order, the order the per-path evaluation produces and
  * the order findings come out in.
  */
-const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][], skipRevisits: boolean): void => {
+const walkShared = (
+  data: unknown,
+  descents: readonly Descent[],
+  seeds: Node[][],
+  sameNode: ((first: Node, again: Node) => boolean) | undefined,
+): void => {
   const rootActive: number[] = []
   const rootPending: (readonly [number, number])[] = []
   for (let d = 0; d < descents.length; d++) {
@@ -1074,21 +1100,23 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
   // tracked only when some descent is schema-aware, which is the only reader.
   const tracksNameMaps = descents.some((descent) => descent.schemaAware)
   const nameMaps: boolean[] = [false]
-  // Objects already entered, by walk state: the scope (interned, so one object per
-  // state), the key the object was entered under, and whether it was a name map,
-  // since that flag also decides what its children match. Keyed state-first, so the
-  // maps are made per distinct state and key, and an object costs one set entry.
-  const entered = new Map<Scope, Map<string | number, readonly [WeakSet<object>, WeakSet<object>]>>()
-  /** Records an entry into `child`, returning false when an identical one was already made. */
-  const firstEntry = (child: object, scope: Scope, key: string | number, nameMap: boolean): boolean => {
-    const byKey = entered.get(scope) ?? new Map()
-    if (byKey.size === 0) entered.set(scope, byKey)
-    const sets = byKey.get(key) ?? ([new WeakSet<object>(), new WeakSet<object>()] as const)
-    if (!byKey.has(key)) byKey.set(key, sets)
-    const set = sets[nameMap ? 1 : 0]
-    if (set.has(child)) return false
-    set.add(child)
-    return true
+  // The node each object was first entered through, by walk state: the scope
+  // (interned, so one object per state), the key the object was entered under, and
+  // whether it was a name map, since that flag also decides what its children
+  // match. Keyed state-first, so maps are made per distinct state and key.
+  const entered = new Map<Scope, Map<string | number, readonly [Map<object, Node>, Map<object, Node>]>>()
+  /** Whether entering `node` repeats an entry already made in this state, so what is below it is known. */
+  const revisits = (node: Node, scope: Scope, nameMap: boolean): boolean => {
+    const byKey = getOrInsert(entered, scope, () => new Map())
+    const firsts = getOrInsert(byKey, node.key as string | number, () => [new Map(), new Map()] as const)[
+      nameMap ? 1 : 0
+    ]
+    const first = firsts.get(node.value as object)
+    if (first === undefined) {
+      firsts.set(node.value as object, node)
+      return false
+    }
+    return (sameNode as (first: Node, again: Node) => boolean)(first, node)
   }
   while (nodes.length > 0) {
     const current = nodes.pop() as Node
@@ -1143,8 +1171,9 @@ const walkShared = (data: unknown, descents: readonly Descent[], seeds: Node[][]
         const childNameMap = tracksNameMaps && !isArray && !nameMap && NAME_MAP_KEYWORDS.has(key as string)
         // The child itself was matched above, against this route's key and parent;
         // only what lies below it is the same on every entry, and that is skipped.
-        if (visit && (!skipRevisits || !childIsNode || firstEntry(child, inner, key, childNameMap))) {
-          nodes.push(node === undefined ? { value: child, parent: current, key } : node)
+        const entry = visit ? (node ?? { value: child, parent: current, key }) : undefined
+        if (entry !== undefined && !(sameNode !== undefined && childIsNode && revisits(entry, inner, childNameMap))) {
+          nodes.push(entry)
           scopes.push(inner)
           if (tracksNameMaps) nameMaps.push(childNameMap)
         }
