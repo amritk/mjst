@@ -802,9 +802,11 @@ export const queryManyNodes = (
     const seeds: Node[][] = descents.map(() => [])
     // A query that can see the route walks every route; the rest share a walk that
     // skips revisits, so one such rule does not give the exponential walk back to all.
-    const all = descents.map((_, d) => d)
-    const safe = walk.skipRevisits === true ? all.filter((d) => revisitSafe(descents[d] as Descent)) : []
-    const unsafe = all.filter((d) => !safe.includes(d))
+    const safe: number[] = []
+    const unsafe: number[] = []
+    for (const [d, descent] of descents.entries()) {
+      ;(walk.skipRevisits === true && revisitSafe(descent) ? safe : unsafe).push(d)
+    }
     for (const [indices, skip] of [
       [safe, walk.sameNode ?? alwaysSame],
       [unsafe, undefined],

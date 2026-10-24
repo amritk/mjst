@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { createDocumentFromData, createLinter, lint } from '../../../core'
+import { createRunScope, RUN_SCOPE } from '../../../core/run-scope'
 import { createOpenApiRuleset, oas } from '../index'
+import { oasMediaExample } from './example-validation'
 
 // Per-rule coverage for the OpenAPI-specific functions. Each function is driven
 // end to end through the built ruleset (rather than called in isolation) so the
@@ -429,6 +431,17 @@ describe('oas-functions', () => {
       expect(edited).toContain('oas3-valid-schema-example')
       expect(edited).toContain('oas3-valid-media-example')
     }
+  })
+
+  it('keeps a media example memo for each OpenAPI version within one run', async () => {
+    // One node read the OAS3 way (a singular `example`) and the OAS2 way (an
+    // `examples` mime map) in the same run must not share an answer.
+    const context = { [RUN_SCOPE]: createRunScope(), path: [] } as unknown as Parameters<typeof oasMediaExample>[2]
+    const media = { schema: { type: 'string' }, example: 5, examples: { 'application/json': 'ok' } }
+    const oas3 = oasMediaExample(media, { oasVersion: 3 }, context) ?? []
+    const oas2 = oasMediaExample(media, { oasVersion: 2 }, context) ?? []
+    expect(oas3.length).toBeGreaterThan(0)
+    expect(oas2).toEqual([])
   })
 
   // oasMediaExample --------------------------------------------------------

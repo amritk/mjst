@@ -345,9 +345,11 @@ const ANNOTATION_KEYS = new Set([
  * internal step) or carries siblings beyond annotations (where a resolver merges
  * the target in, as into the ref's own `allOf`). A ref left as written in the
  * resolved tree inlined nothing. A site the resolved tree no longer has at its
- * path counts as changed, since nothing says otherwise. One pass over the parsed
- * document, iterative because its depth is the author's to choose; paths are
- * spelled out only for ref sites.
+ * path counts as changed, since nothing says otherwise. So does an object the
+ * parsed document itself reaches twice — data a caller built, which a resolver
+ * may hand back as is, shares it at authored paths of its own. One pass over the
+ * parsed document, iterative because its depth is the author's to choose; paths
+ * are spelled out only for ref sites.
  */
 const routesMayDiverge = (data: unknown, resolved: unknown): boolean => {
   type Entry = { value: unknown; parent: Entry | undefined; key: string | number }
@@ -357,10 +359,13 @@ const routesMayDiverge = (data: unknown, resolved: unknown): boolean => {
     return path.reverse()
   }
   const stack: Entry[] = [{ value: data, parent: undefined, key: '' }]
+  const seen = new WeakSet<object>()
   while (stack.length > 0) {
     const entry = stack.pop() as Entry
     const value = entry.value
     if (value === null || typeof value !== 'object') continue
+    if (seen.has(value)) return true
+    seen.add(value)
     const ref = (value as { $ref?: unknown }).$ref
     if (
       typeof ref === 'string' &&

@@ -85,8 +85,10 @@ type RelativeFinding = {
 const SCHEMA_EXAMPLE_RESULTS = {}
 // Keyed by the Media Type / Response Object node; `oasMediaExample` validates the
 // object's example(s) against its `schema`. The node (not the schema) is the cache
-// key because two media objects can share a `schema` but carry different examples.
-const MEDIA_EXAMPLE_RESULTS = {}
+// key because two media objects can share a `schema` but carry different examples,
+// and each OpenAPI major version keeps its own memo, since the two read a node's
+// examples differently and one run may ask about a node under both.
+const MEDIA_EXAMPLE_RESULTS = { 2: {}, 3: {} } as const
 
 const withPath = (findings: RelativeFinding[], path: JsonPath): IFunctionResult[] => {
   if (findings.length === 0) return []
@@ -148,7 +150,7 @@ export const oasMediaExample: RulesetFunction<unknown, IOasExampleOptions> = (me
   const hasExample = (oasVersion !== 2 && media['example'] !== undefined) || isObject(media['examples'])
   if (!hasExample) return []
 
-  const mediaExampleResults = runCache<RelativeFinding[]>(context, MEDIA_EXAMPLE_RESULTS)
+  const mediaExampleResults = runCache<RelativeFinding[]>(context, MEDIA_EXAMPLE_RESULTS[oasVersion === 2 ? 2 : 3])
   let findings = mediaExampleResults.get(media)
   if (findings === undefined) {
     findings = []

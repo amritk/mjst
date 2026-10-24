@@ -224,6 +224,26 @@ describe('lint pipeline', () => {
     expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['x/allOf/1', 'y/allOf/1', '$defs/A/type'])
   })
 
+  it('reports every route through objects the caller shared when a resolver hands them back', async () => {
+    // The resolver returns the caller's own shared objects, so their routes are
+    // distinct authored paths even with no `$ref` in sight.
+    const shared = { type: 'object' }
+    const data = { a: { s: shared }, b: { s: shared } }
+    const resolve = (document: { data: unknown }) => ({ resolved: { ...(document.data as object) } })
+    const ruleset = build({
+      rules: {
+        'no-object': {
+          given: '$..type',
+          resolved: true,
+          severity: 'error',
+          then: { function: 'pattern', functionOptions: { notMatch: '^object$' } },
+        },
+      },
+    })
+    const { diagnostics } = await lintWithResult({ data }, { ruleset, resolve })
+    expect(diagnostics.map((d) => d.path.join('/'))).toEqual(['a/s/type', 'b/s/type'])
+  })
+
   it('reports a shared node once and fast when references layer on each other', async () => {
     // Each schema references the next twice, so the resolved tree has 2^30 routes to the
     // last one. Every route translates back to the same authored node, so walking each

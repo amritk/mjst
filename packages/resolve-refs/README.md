@@ -72,7 +72,7 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
 | `parse` | `JSON.parse` | Custom content parser (e.g. YAML-aware). |
 | `rootDocument` | — | The root's already-parsed value. The named file is then neither read nor parsed; its location still anchors relative refs, `allowedRoots`, and `origins`. The value is only read, never written or aliased into the result. |
 | `trackOrigins` | `false` | Record a per-node origin map on the result. |
-| `bundle` | `false` | Bundle instead of inlining: hoist each target from another document into the root's `$defs` once and point its refs there, keeping refs into the root as written. The output is one document with only internal refs — what a code generator wants, since a shared schema stays one definition instead of a copy at every use. A document with an absolute `$id` is embedded whole with its `$id`, and refs from inside an embedded resource name their target by URI; a document with a relative `$id` is inlined. |
+| `bundle` | `false` | Bundle instead of inlining: hoist each target from another document into the root's `$defs` once and point its refs there, keeping refs into the root as written. The output is one document with only internal refs — what a code generator wants, since a shared schema stays one definition instead of a copy at every use. A document with an absolute `$id` is embedded whole with its `$id`, and refs to anything in an embedded resource name it by that URI; a document with a relative `$id` is inlined. |
 
 Errors (a missing file, a refused host, a refused path, a bad URL, a document too
 deeply nested) are collected on `result.errors` rather than thrown; the

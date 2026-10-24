@@ -740,34 +740,80 @@ const asWritten = (name: string): string => name
  */
 const asFilename = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]/g, '')
 
-/** The members a generator reads a nested definition's name through (`refToFilename`'s containers). */
-const NAME_CONTAINERS = ['$defs', 'definitions', 'properties'] as const
+/** The members that hold nested definitions a generator emits a type for. */
+const NAME_CONTAINERS = ['$defs', 'definitions'] as const
+
+/** The members `refToFilename` (in `@amritk/helpers`) reads a nested name through. */
+const POINTER_NAME_CONTAINERS = new Set(['$defs', 'definitions', 'properties'])
+
+/**
+ * The name a generator files the target of the internal pointer `pointer` under,
+ * mirroring `refToFilename`'s `pointerNameParts`: the last segment, and each
+ * earlier one a name container introduced (`/$defs/Order/properties/money` is
+ * `Order-money`, `/components/schemas/User` is `User`).
+ */
+const generatedName = (pointer: string): string => {
+  const segments = pointer.split('/').filter((segment) => segment !== '')
+  const named = segments
+    .map((segment, index) => ({
+      segment,
+      nested: index > 0 && POINTER_NAME_CONTAINERS.has(segments[index - 1] as string),
+    }))
+    .filter(({ segment }) => !POINTER_NAME_CONTAINERS.has(segment))
+  return named
+    .filter((part, index) => part.nested || index === named.length - 1)
+    .map(({ segment }) => segment)
+    .join('-')
+}
+
+/** Every internal pointer a `$ref` in `root` names, once each. Iterative; depth-capped and cycle-safe. */
+const internalPointers = (root: unknown): Set<string> => {
+  const pointers = new Set<string>()
+  const seen = new WeakSet<object>()
+  const stack: { value: unknown; depth: number }[] = [{ value: root, depth: 0 }]
+  while (stack.length > 0) {
+    const { value, depth } = stack.pop() as (typeof stack)[number]
+    if (value === null || typeof value !== 'object' || seen.has(value) || depth > DEFAULT_MAX_DEPTH) continue
+    seen.add(value)
+    const ref = (value as { $ref?: unknown }).$ref
+    if (typeof ref === 'string' && ref.startsWith('#/')) pointers.add(ref.slice(1))
+    for (const member of Object.values(value)) stack.push({ value: member, depth: depth + 1 })
+  }
+  return pointers
+}
 
 /**
  * Every name a generator could file a definition in `map` under: each member,
  * and each definition nested in one through a name container, joined to its
  * parents' names the way `refToFilename` joins them (`#/$defs/user/$defs/meta` is
- * `user-meta`). Walked iteratively, since a document nests as deep as it likes.
+ * `user-meta`), after `prefix` when one is given. Walked iteratively and at most
+ * {@link DEFAULT_MAX_DEPTH} deep, each map once: a parsed document can be cyclic
+ * (a YAML recursive anchor) or reach one map through several parents.
  */
-const nestedDefinitionNames = (map: Record<string, unknown>): string[] => {
+const nestedDefinitionNames = (map: Record<string, unknown>, prefix = ''): string[] => {
   const names: string[] = []
-  const stack: { prefix: string; map: Record<string, unknown> }[] = [{ prefix: '', map }]
+  const seen = new WeakSet<object>()
+  const stack: { prefix: string; map: Record<string, unknown>; depth: number }[] = [{ prefix, map, depth: 0 }]
   while (stack.length > 0) {
-    const { prefix, map: current } = stack.pop() as { prefix: string; map: Record<string, unknown> }
+    const { prefix: parent, map: current, depth } = stack.pop() as (typeof stack)[number]
+    if (seen.has(current) || depth > DEFAULT_MAX_DEPTH) continue
+    seen.add(current)
     for (const [key, value] of Object.entries(current)) {
-      const name = prefix === '' ? key : `${prefix}-${key}`
+      const name = parent === '' ? key : `${parent}-${key}`
       names.push(name)
-      if (value === null || typeof value !== 'object' || Array.isArray(value)) continue
-      for (const container of NAME_CONTAINERS) {
-        const nested = (value as Record<string, unknown>)[container]
-        if (nested !== null && typeof nested === 'object' && !Array.isArray(nested)) {
-          stack.push({ prefix: name, map: nested as Record<string, unknown> })
-        }
-      }
+      for (const nested of containedNameMaps(value)) stack.push({ prefix: name, map: nested, depth: depth + 1 })
     }
   }
   return names
 }
+
+/** The name containers (`$defs`, `definitions`, `properties`) a schema holds. */
+const containedNameMaps = (schema: unknown): Record<string, unknown>[] =>
+  schema === null || typeof schema !== 'object' || Array.isArray(schema)
+    ? []
+    : NAME_CONTAINERS.map((container) => (schema as Record<string, unknown>)[container]).filter(
+        (map): map is Record<string, unknown> => map !== null && typeof map === 'object' && !Array.isArray(map),
+      )
 
 /** Derives a readable `$defs` key for a hoisted cycle target. */
 const hoistName = (
@@ -1042,7 +1088,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       if (map === null || typeof map !== 'object' || Array.isArray(map)) return []
       return options.bundle === true ? nestedDefinitionNames(map as Record<string, unknown>) : Object.keys(map)
     })
-  const hoistTaken = new Set<string>(definitionNames(rootDoc).map(nameKey))
+  // Bundling also claims what the root's own pointer refs are filed under, since a
+  // generator emits a type for each (`#/$defs/Order/properties/lines` is `Order-lines`).
+  const rootRefNames = (root: unknown): string[] =>
+    options.bundle === true ? [...internalPointers(root)].map(generatedName) : []
+  const hoistTaken = new Set<string>([...definitionNames(rootDoc), ...rootRefNames(rootDoc)].map(nameKey))
   // Every node carrying a `#/$defs/<name>` ref the CYCLE branch emitted, paired
   // with the hoist it names. The seeding above reads the *source* root, but the
   // hoists land in the *resolved* root's `$defs` — and under a pure-`$ref` root
@@ -1148,11 +1198,29 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   // same `$id` either way, so the input is ambiguous, and embedding it too would
   // only add a second resource every URI ref to that id could mean.
   const embeddedIds = new Map<string, string>()
+  // Ids a second document claimed after the first was embedded. A ref by such an
+  // id would name either resource, so a ref from the root's resource that named an
+  // embedded document by URI is pointed at its hoist instead (see the attach).
+  const contestedIds = new Set<string>()
+  // Root-resource refs that name an embedded document by URI: the node, the hoist
+  // it lives in, the document's id, and the pointer to the target inside it.
+  const uriRefSites = new Map<Record<string, unknown>, { key: string; id: string; suffix: string }>()
 
   // What each bundling hoist holds: the document and the pointer hoisted. A
   // definition of a document that is also hoisted whole is already inside that
   // hoist, so it is pointed at there instead of attached a second time.
   const hoistTargets = new Map<string, { location: string; pointer: JsonPath }>()
+
+  /** Whether a document's root declares an `$id` at all. */
+  const declaresRootId = (location: string): boolean => {
+    const root = docCache.get(location)
+    return (
+      root !== null &&
+      typeof root === 'object' &&
+      !Array.isArray(root) &&
+      typeof (root as { $id?: unknown }).$id === 'string'
+    )
+  }
 
   /**
    * The absolute `$id` a document declares at its root, or `undefined`. Only a
@@ -1212,8 +1280,11 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     plain: boolean,
     depth: number,
   ): { key: string; name: string; pointer: JsonPath } => {
-    const split = plain ? enclosingDefinitionLength(found.pointer) : 0
-    const pointer = plain ? (split > 0 ? found.pointer.slice(0, split) : found.pointer) : []
+    // A document already hoisted whole holds every definition in it, so a ref into
+    // one points inside that hoist instead of resolving the definition again.
+    const wholeHoisted = plain && hoists.has(`$ref ${targetLocation}#`)
+    const split = plain && !wholeHoisted ? enclosingDefinitionLength(found.pointer) : 0
+    const pointer = plain && !wholeHoisted ? (split > 0 ? found.pointer.slice(0, split) : found.pointer) : []
     // Keyed by where the target is — its document and pointer — not by how the
     // ref spells it: `./common.json#/$defs/T` written in the root and `#/$defs/T`
     // written inside common.json are one definition, and keyed by spelling they
@@ -1275,7 +1346,9 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     const placedIn = placements.at(-1)
     const siteInRoot = placedIn === undefined && nodeBase === registryFor(baseLocation).rootBase
     const intoRoot = scoped !== undefined ? baseLocation === rootLocation : targetLocation === rootLocation
-    const plain = !intoRoot && registryFor(targetLocation).bases.size === 0
+    // No `$id` anywhere: the registry records a base only where one changes, so a
+    // document whose root `$id` is the URL it was read from records none.
+    const plain = !intoRoot && registryFor(targetLocation).bases.size === 0 && !declaresRootId(targetLocation)
     const embeddedId = intoRoot || plain ? undefined : absoluteRootId(targetLocation)
     // A target in a document whose `$id`s cannot be carried over keeps the inlining
     // behavior; so does a plain target reached from inside a resource.
@@ -1283,6 +1356,7 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       if (embeddedId === undefined) return undefined
       const claimedBy = embeddedIds.get(embeddedId)
       if (registryFor(rootLocation).resources.has(embeddedId) || (claimedBy ?? targetLocation) !== targetLocation) {
+        if (claimedBy !== undefined && claimedBy !== targetLocation) contestedIds.add(embeddedId)
         return undefined
       }
     }
@@ -1307,29 +1381,30 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     // whole with its `$id`. Content inlined into another resource is not.
     const sameResource =
       placedIn !== undefined && placedIn === nodeBase && nodeBase === targetBase && baseLocation === targetLocation
-    // Outside the root's resource the ref names its target by URI, so a target with
-    // none is inlined before anything is hoisted or claimed for it.
-    const uri = siteInRoot || sameResource ? undefined : uriFor(targetLocation, targetBase, found.pointer)
-    if (!siteInRoot && !sameResource && uri === undefined) return undefined
+    // A target inside an embedded resource is named by its URI from anywhere: a
+    // `#/...` pointer that runs from the root into a resource with its own `$id` is
+    // one JSON Schema does not promise to resolve. Outside the root's resource a
+    // `#` names that resource, so a target there is named by URI too. A target with
+    // none is inlined, decided before anything is hoisted or claimed for it.
+    const byUri = !sameResource && (!siteInRoot || embeddedId !== undefined)
+    const uri = byUri ? uriFor(targetLocation, targetBase, found.pointer) : undefined
+    if (byUri && uri === undefined) return undefined
     if (embeddedId !== undefined) embeddedIds.set(embeddedId, targetLocation)
     const hoist = intoRoot ? undefined : hoistFor(targetLocation, found, targetBase, plain, depth)
-    const suffix =
-      hoist !== undefined && siteInRoot ? pathToRef(found.pointer.slice(hoist.pointer.length)).slice(1) : ''
-    // A fragment written in the root (`#/$defs/X`, `#anchor`) is kept as written.
-    // Anything else names a root node by URI — an embedded resource's `$id`
-    // (`child.json`, `https://example.com/node#leaf`) — which reads as a ref to
-    // another document; from the root's resource it becomes the node's pointer, so
-    // the output's refs there are all `#...`.
-    const target = siteInRoot
-      ? hoist !== undefined
-        ? `#/$defs/${hoist.name}${suffix}`
-        : baseLocation === rootLocation && value.startsWith('#')
-          ? value
-          : pathToRef(found.pointer)
-      : sameResource
+    const named = hoist !== undefined && plain && siteInRoot
+    const suffix = named ? pathToRef(found.pointer.slice(hoist.pointer.length)).slice(1) : ''
+    // Into the root, from its own resource: a ref resolved by `$id` or anchor, or
+    // written as a `#` pointer, reads the same where it is, so it is kept as
+    // written; one naming the root document by its file becomes a pointer.
+    const target =
+      uri ??
+      (sameResource
         ? value
-        : uri
-    if (target === undefined) return undefined
+        : named
+          ? `#/$defs/${hoist.name}${suffix}`
+          : scoped !== undefined || value.startsWith('#')
+            ? value
+            : pathToRef(found.pointer))
 
     const kept: Record<string, unknown> = {}
     for (const key of Object.keys(obj)) {
@@ -1341,9 +1416,12 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     }
     // A ref naming its hoist by name is registered so the final rename (see the
     // hoist attach below) reaches it; one naming a URI or written as is is not.
-    if (hoist !== undefined && siteInRoot) {
+    if (named) {
       hoistRefSites.set(kept, hoist.key)
       if (suffix !== '') hoistRefSuffixes.set(kept, suffix)
+    }
+    if (siteInRoot && hoist !== undefined && embeddedId !== undefined) {
+      uriRefSites.set(kept, { key: hoist.key, id: embeddedId, suffix: pathToRef(found.pointer).slice(1) })
     }
     // Scaffolding for a dynamic reference stays where it binds, as on every other
     // path that builds a node (see `dynamic-scope.ts`).
@@ -1715,14 +1793,53 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
         if (pointer.length > 0 && hoists.has(whole))
           insideWhole.set(key, { whole, suffix: pathToRef(pointer).slice(1) })
       }
-      const taken = new Set([...Object.keys(defs), ...definitionNames(container)].map(nameKey))
+      // What the root's own definitions and refs are filed under, from the source
+      // root: the hoists and refs rewritten into this container are not in it yet.
+      const taken = new Set(
+        [
+          ...Object.keys(defs),
+          ...definitionNames(container),
+          ...definitionNames(rootDoc),
+          ...rootRefNames(rootDoc),
+        ].map(nameKey),
+      )
+      // The paths into each hoist its refs use (`Order` pointed into at
+      // `/properties/money`), each of which a generator files a type under.
+      const usedSuffixes = new Map<string, Set<string>>()
+      for (const [node, cacheKey] of hoistRefSites) {
+        const redirect = insideWhole.get(cacheKey)
+        const key = redirect?.whole ?? cacheKey
+        const suffix = `${redirect?.suffix ?? ''}${hoistRefSuffixes.get(node) ?? ''}`
+        if (suffix !== '') usedSuffixes.set(key, (usedSuffixes.get(key) ?? new Set()).add(suffix))
+      }
       const finalNames = new Map<string, string>()
       for (const [cacheKey, name] of hoists) {
         if (insideWhole.has(cacheKey)) continue
+        // A name claims the files of what is filed under it as well: the
+        // definitions nested in it and the paths into it its refs use.
+        const cached = refCache.get(cacheKey)
+        const value = cached !== undefined && cached !== CYCLE && cached !== MISSING ? cached.value : undefined
+        const claims = (candidate: string): string[] =>
+          [
+            candidate,
+            ...(options.bundle === true
+              ? [
+                  ...containedNameMaps(value).flatMap((map) => nestedDefinitionNames(map, candidate)),
+                  ...[...(usedSuffixes.get(cacheKey) ?? [])].map((suffix) =>
+                    generatedName(`/$defs/${candidate}${suffix}`),
+                  ),
+                ]
+              : []),
+          ].map(nameKey)
         let unique = name
-        for (let n = 2; taken.has(nameKey(unique)); n++) unique = `${name}-${n}`
-        taken.add(nameKey(unique))
+        for (let n = 2; claims(unique).some((claim) => taken.has(claim)); n++) unique = `${name}-${n}`
+        for (const claim of claims(unique)) taken.add(claim)
         finalNames.set(cacheKey, unique)
+      }
+      // A contested id names two resources, so refs from the root's resource to the
+      // document embedded under it point at its hoist, which names exactly one.
+      for (const [node, { key, id, suffix }] of uriRefSites) {
+        if (contestedIds.has(id)) assignKey(node, '$ref', `#/$defs/${finalNames.get(key) as string}${suffix}`)
       }
       for (const [node, cacheKey] of hoistRefSites) {
         const redirect = insideWhole.get(cacheKey)

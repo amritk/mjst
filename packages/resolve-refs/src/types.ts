@@ -168,7 +168,11 @@ export type ResolveOptions = {
    *
    * A document that declares an absolute `$id` at its root is embedded whole
    * under the root's `$defs` with that `$id` kept — how JSON Schema bundles a
-   * resource — so the `#/...` pointers written inside it still read against it.
+   * resource — so the `#/...` pointers written inside it still read against it,
+   * and every ref to something in it names it by that URI: a `#/...` pointer from
+   * the root into a resource with its own `$id` is one JSON Schema does not
+   * promise to resolve. (When a second document claims the same `$id`, refs from
+   * the root's own resource fall back to the hoist's pointer, which names one.)
    * Inside any embedded resource `#` names that resource, so a ref there is kept
    * as written when its target is in the same resource, names its target by
    * absolute URI otherwise, and is inlined when the target has no URI (a
