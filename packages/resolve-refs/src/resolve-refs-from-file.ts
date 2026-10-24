@@ -1093,18 +1093,71 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
   }
 
   /**
+   * Whether the walk is placing output in the root's own resource — where a
+   * `#/...` ref reads from the output document's root — rather than inside an
+   * embedded one (any node with an `$id` below the root, a hoisted document that
+   * keeps its `$id`, and whatever is inlined into either), where `#` names that
+   * resource instead. Only `bundle` reads it: inlining never writes a ref that
+   * depends on where it lands. Set by {@link resolveAt} on entering an `$id`.
+   */
+  let placedInRoot = true
+
+  // Absolute `$id`s already embedded by bundling, to the document each came from.
+  // Two documents claiming one id would make the output name two resources the
+  // same way, so the second is inlined instead.
+  const embeddedIds = new Map<string, string>()
+
+  /**
+   * The absolute `$id` a document declares at its root, or `undefined`. Only a
+   * literal absolute one: embedded under the root's `$defs`, a relative `$id`
+   * would resolve against the output root's base instead of the location the
+   * document was read from, and name a different resource.
+   */
+  const absoluteRootId = (location: string): string | undefined => {
+    const root = docCache.get(location)
+    if (root === null || typeof root !== 'object' || Array.isArray(root)) return undefined
+    const id = (root as Record<string, unknown>)['$id']
+    if (typeof id !== 'string' || !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(id)) return undefined
+    const base = registryFor(location).rootBase
+    return base.startsWith(SYNTHETIC_BASE) ? undefined : base
+  }
+
+  /**
+   * An absolute URI naming the node at `pointer` in `location`: the base of the
+   * resource it sits in, plus the pointer from that resource's root. `undefined`
+   * when the resource has no real URI — the synthetic base a document without an
+   * `$id` resolves against is not one any output could name.
+   */
+  const uriFor = (location: string, base: string, pointer: JsonPath): string | undefined => {
+    if (base.startsWith(SYNTHETIC_BASE)) return undefined
+    const registry = registryFor(location)
+    const resourcePointer = base === registry.rootBase ? [] : registry.resources.get(base)?.pointer
+    if (resourcePointer === undefined || resourcePointer.some((segment, index) => pointer[index] !== segment)) {
+      return undefined
+    }
+    const inner = pointer.slice(resourcePointer.length)
+    return inner.length === 0 ? base : `${base}${pathToRef(inner)}`
+  }
+
+  /**
    * The `bundle` option's answer for a `$ref`: a node that keeps its reference,
-   * pointing into the output instead of copying the target in. A target in the
-   * root document stays where it is — the root is walked whole, so nothing needs
-   * moving — and the ref is kept as written, or re-expressed against the root
-   * when written in another document. A target in another document is resolved
-   * once and hoisted into the root's `$defs` when resolution completes; every ref
-   * naming it shares that one definition, which is the point.
+   * pointing into the output instead of copying the target in, or `undefined` when
+   * the ref has to be inlined after all.
    *
-   * Returns `undefined` when the ref has to be inlined after all: inside an
-   * embedded resource, or into a document that declares an `$id`, a `#/...`
-   * pointer means something relative to that resource, and moving the node
-   * under the root's `$defs` would change what it names.
+   * Where the target goes:
+   * - in the root document, it stays where it is (the root is walked whole);
+   * - in a document with no `$id`, it is hoisted into the root's `$defs` as a
+   *   plain definition (the enclosing one, for a target inside a definition);
+   * - in a document with an absolute root `$id`, the whole document is embedded
+   *   under the root's `$defs` with that `$id` kept, so every `#...` pointer
+   *   inside it still reads against it — how JSON Schema bundles a resource.
+   *
+   * What the ref says depends on where it lands. In the root's own resource a
+   * `#/...` pointer reaches anything in the output. Inside an embedded resource
+   * `#` names that resource, so a ref there is kept as written when its target is
+   * in the same resource, names its target by absolute URI when the target's
+   * resource has one, and is otherwise inlined — the target has no name that
+   * reads the same from there.
    */
   const bundleReference = (
     obj: Record<string, unknown>,
@@ -1118,9 +1171,20 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     depth: number,
     role: NodeRole,
   ): Record<string, unknown> | undefined => {
-    if (nodeBase !== registryFor(baseLocation).rootBase) return undefined
+    const siteInRoot = placedInRoot && nodeBase === registryFor(baseLocation).rootBase
     const intoRoot = scoped !== undefined ? baseLocation === rootLocation : targetLocation === rootLocation
-    if (!intoRoot && registryFor(targetLocation).bases.size > 0) return undefined
+    const plain = !intoRoot && registryFor(targetLocation).bases.size === 0
+    const embeddedId = intoRoot || plain ? undefined : absoluteRootId(targetLocation)
+    // A target in a document whose `$id`s cannot be carried over keeps the inlining
+    // behavior; so does a plain target reached from inside a resource.
+    if (!intoRoot && !plain) {
+      if (embeddedId === undefined) return undefined
+      const claimedBy = embeddedIds.get(embeddedId)
+      if (registryFor(rootLocation).resources.has(embeddedId) || (claimedBy ?? targetLocation) !== targetLocation) {
+        return undefined
+      }
+    }
+    if (plain && !siteInRoot) return undefined
     if (refCache.get(cacheKey) === MISSING) return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
 
     const { found, base: targetBase } = lookupTarget(scoped, '$ref', targetLocation, fragment)
@@ -1137,47 +1201,60 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       return keepScopedReference(obj, '$ref', baseLocation, nodeBase, depth, role)
     }
     const pointer = found.pointer ?? []
+    // Same document, same resource: the ref means the same thing where it lands,
+    // because that resource is carried over whole with its `$id`.
+    const sameResource = baseLocation === targetLocation && nodeBase === targetBase && !siteInRoot
 
-    let target: string
+    let target: string | undefined
     let hoistKey: string | undefined
     let suffix = ''
     if (intoRoot) {
       // A fragment written in the root (`#/$defs/X`, `#anchor`) is kept as written.
       // Anything else names a root node by URI — an embedded resource's `$id`
       // (`child.json`, `https://example.com/node#leaf`) — which reads as a ref to
-      // another document; it becomes the node's pointer, so the output's refs are
-      // all `#...`. The ref sits at the root's base (checked above), so the
-      // pointer reads from the document root the way its URI resolved.
-      target = baseLocation === rootLocation && value.startsWith('#') ? value : pathToRef(pointer)
+      // another document; from the root's resource it becomes the node's pointer,
+      // so the output's refs there are all `#...`.
+      if (siteInRoot) target = baseLocation === rootLocation && value.startsWith('#') ? value : pathToRef(pointer)
+      else target = sameResource ? value : uriFor(rootLocation, targetBase, pointer)
     } else {
       // Keyed by where the target is — its document and pointer — not by how the
       // ref spells it: `./common.json#/$defs/T` written in the root and
       // `#/$defs/T` written inside common.json are one definition, and keyed by
       // spelling they were hoisted twice, the second named after the file.
-      const split = enclosingDefinitionLength(pointer)
-      const hoisted = split > 0 ? pointer.slice(0, split) : pointer
-      suffix = split > 0 ? pathToRef(pointer.slice(split)).slice(1) : ''
+      const split = plain ? enclosingDefinitionLength(pointer) : 0
+      const hoisted = plain ? (split > 0 ? pointer.slice(0, split) : pointer) : []
       hoistKey = `$ref ${targetLocation}${pathToRef(hoisted)}`
       let name = hoists.get(hoistKey)
       if (name === undefined) {
         name = hoistName(targetLocation, pathToRef(hoisted).slice(1), hoistTaken)
         hoists.set(hoistKey, name)
       }
-      target = `#/$defs/${name}${suffix}`
+      if (embeddedId !== undefined) embeddedIds.set(embeddedId, targetLocation)
       // `CYCLE` while the target is being resolved further up this walk: its
       // hoist is registered above, so a ref back into it only has to name it.
       if (!refCache.has(hoistKey)) {
         refCache.set(hoistKey, CYCLE)
         // Bundling copies a node's members over unchanged (only `$ref` values are
-        // rewritten), so the suffix still leads to the target inside the copy.
-        const value = split > 0 ? valueAt(docCache.get(targetLocation), hoisted) : found.value
-        const resolved = resolveAt(value, targetLocation, targetBase, depth + 1, roleAtPath(hoisted))
-        refCache.set(hoistKey, { value: resolved, pointer: hoisted, base: targetBase })
+        // rewritten), so a pointer past the hoist still leads to the target in it.
+        const hoistValue =
+          hoisted.length === pointer.length ? found.value : valueAt(docCache.get(targetLocation), hoisted)
+        const hoistBase = hoisted.length === pointer.length ? targetBase : registryFor(targetLocation).rootBase
+        const resolved = resolveAt(hoistValue, targetLocation, hoistBase, depth + 1, roleAtPath(hoisted))
+        refCache.set(hoistKey, { value: resolved, pointer: hoisted, base: hoistBase })
         if (origins && resolved !== null && typeof resolved === 'object' && !origins.has(resolved)) {
           origins.set(resolved, { location: targetLocation, pointer: hoisted })
         }
       }
+      if (siteInRoot) {
+        suffix = pathToRef(pointer.slice(hoisted.length)).slice(1)
+        target = `#/$defs/${name}${suffix}`
+      } else {
+        target = sameResource ? value : uriFor(targetLocation, targetBase, pointer)
+        // Named by URI or as written, not by the hoist's name, so a rename never touches it.
+        hoistKey = undefined
+      }
     }
+    if (target === undefined) return undefined
 
     const kept: Record<string, unknown> = {}
     for (const key of Object.keys(obj)) {
@@ -1195,7 +1272,32 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
     return kept
   }
 
+  /**
+   * {@link resolveNode}, keeping track of {@link placedInRoot}: a schema with an
+   * `$id` anywhere but the output's root starts a resource of its own, and
+   * everything under it — inlined targets included — lands in that resource.
+   */
   const resolveAt = (node: unknown, baseLocation: string, base: string, depth: number, role: NodeRole): unknown => {
+    const entersResource =
+      options.bundle === true &&
+      placedInRoot &&
+      role !== 'value' &&
+      role !== 'schemaMap' &&
+      node !== null &&
+      typeof node === 'object' &&
+      !Array.isArray(node) &&
+      typeof (node as Record<string, unknown>)['$id'] === 'string' &&
+      !(depth === 0 && baseLocation === rootLocation)
+    if (!entersResource) return resolveNode(node, baseLocation, base, depth, role)
+    placedInRoot = false
+    try {
+      return resolveNode(node, baseLocation, base, depth, role)
+    } finally {
+      placedInRoot = true
+    }
+  }
+
+  const resolveNode = (node: unknown, baseLocation: string, base: string, depth: number, role: NodeRole): unknown => {
     if (node === null || typeof node !== 'object') return node
     // Instance data (`enum`, `const`, `default`, `examples`): a `$ref` key in
     // here belongs to the value, so the subtree is handed back untouched.
@@ -1276,10 +1378,16 @@ export const resolveRefsFromFile = async (filename: string, options: ResolveOpti
       // Cache/cycle key includes the keyword (`$ref #x` and `$dynamicRef #x`
       // can bind to different targets) and, for scoped refs, the base URI (the
       // same anchor name can bind differently inside different resources).
-      const cacheKey =
+      //
+      // While bundling, what a target resolves to also depends on where it lands:
+      // its own bundled refs are `#/...` pointers in the root's resource, and URIs
+      // or inlined copies inside an embedded one. One entry for both would hand a
+      // copy made for one place to the other.
+      const refKey =
         scoped !== undefined
           ? `${keyword} ${baseLocation} ${nodeBase} ${value}`
           : `${keyword} ${targetLocation}#${fragment}`
+      const cacheKey = options.bundle === true && !placedInRoot ? `${refKey} (in resource)` : refKey
       if (options.bundle === true && keyword === '$ref') {
         const bundled = bundleReference(
           obj,

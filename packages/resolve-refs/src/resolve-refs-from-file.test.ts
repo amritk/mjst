@@ -1479,8 +1479,9 @@ describe('resolve-refs-from-file', () => {
     expect(bundled.resolved).toEqual({ properties: { x: { $ref: './common.json#/$defs/Nope' } } })
   })
 
-  it('inlines a target in a document that declares an $id, even when bundling', async () => {
-    // Under the root's `$defs`, the `#/$defs/Inner` written inside it would resolve against its own `$id`.
+  it('embeds a document with an absolute $id whole, keeping its $id and its pointers', async () => {
+    // Its `#/$defs/Inner` reads against its own `$id`, which it keeps, so it still
+    // names its own `Inner` once the document sits under the root's `$defs`.
     writeFileSync(
       join(dir, 'scoped.json'),
       JSON.stringify({
@@ -1489,11 +1490,128 @@ describe('resolve-refs-from-file', () => {
         $defs: { Inner: { type: 'boolean' } },
       }),
     )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        properties: { flag: { $ref: './scoped.json' }, inner: { $ref: './scoped.json#/$defs/Inner' } },
+      }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      properties: { flag: { $ref: '#/$defs/scoped' }, inner: { $ref: '#/$defs/scoped/$defs/Inner' } },
+      $defs: {
+        scoped: { $id: 'https://example.com/scoped', $ref: '#/$defs/Inner', $defs: { Inner: { type: 'boolean' } } },
+      },
+    })
+  })
+
+  it('names a target in another embedded resource by its URI from inside a resource', async () => {
+    // `#/$defs/money` written inside `order` would name order's own `$defs`.
+    writeFileSync(join(dir, 'money.json'), JSON.stringify({ $id: 'https://example.com/money.json', type: 'integer' }))
+    writeFileSync(
+      join(dir, 'order.json'),
+      JSON.stringify({ $id: 'https://example.com/order.json', properties: { total: { $ref: './money.json' } } }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { order: { $ref: './order.json' }, tax: { $ref: './money.json' } } }),
+    )
+
+    const { resolved, errors } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(errors).toEqual([])
+    expect(resolved).toEqual({
+      properties: { order: { $ref: '#/$defs/order' }, tax: { $ref: '#/$defs/money' } },
+      $defs: {
+        order: {
+          $id: 'https://example.com/order.json',
+          properties: { total: { $ref: 'https://example.com/money.json' } },
+        },
+        money: { $id: 'https://example.com/money.json', type: 'integer' },
+      },
+    })
+  })
+
+  it('inlines a document without an $id where it is referenced from inside a resource', async () => {
+    // A hoisted plain definition has no URI, and `#/$defs/e` inside `d` would name d's own `$defs`.
+    writeFileSync(join(dir, 'e.json'), JSON.stringify({ type: 'integer', maximum: 5 }))
+    writeFileSync(
+      join(dir, 'd.json'),
+      JSON.stringify({ $id: 'https://example.com/d.json', properties: { e: { $ref: './e.json' } } }),
+    )
+    writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { d: { $ref: './d.json' } } }))
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect((resolved as { $defs: object }).$defs).toEqual({
+      d: { $id: 'https://example.com/d.json', properties: { e: { type: 'integer', maximum: 5 } } },
+    })
+  })
+
+  it('inlines a document whose $id is relative, even when bundling', async () => {
+    // Under the root, `scoped.json` would resolve against the root's base, not the location it was read from.
+    writeFileSync(
+      join(dir, 'scoped.json'),
+      JSON.stringify({ $id: 'scoped.json', $ref: '#/$defs/Inner', $defs: { Inner: { type: 'boolean' } } }),
+    )
     writeFileSync(join(dir, 'root.json'), JSON.stringify({ properties: { flag: { $ref: './scoped.json' } } }))
 
     const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
 
-    expect(JSON.stringify(resolved)).not.toContain('"$ref":"#/$defs/')
+    expect(JSON.stringify(resolved)).not.toContain('"$ref":"#/$defs/scoped')
+  })
+
+  it('inlines the second of two documents that claim one $id', async () => {
+    writeFileSync(join(dir, 'a.json'), JSON.stringify({ $id: 'https://example.com/same', type: 'string' }))
+    writeFileSync(join(dir, 'b.json'), JSON.stringify({ $id: 'https://example.com/same', type: 'integer' }))
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({ properties: { a: { $ref: './a.json' }, b: { $ref: './b.json' } } }),
+    )
+
+    const { resolved } = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+
+    expect(resolved).toEqual({
+      properties: { a: { $ref: '#/$defs/a' }, b: { $id: 'https://example.com/same', type: 'integer' } },
+      $defs: { a: { $id: 'https://example.com/same', type: 'string' } },
+    })
+  })
+
+  it('bundles documents with $ids to what inlining produces once inlined in memory', async () => {
+    writeFileSync(
+      join(dir, 'money.json'),
+      JSON.stringify({
+        $id: 'https://example.com/money.json',
+        type: 'object',
+        properties: { amount: { type: 'integer' } },
+      }),
+    )
+    writeFileSync(
+      join(dir, 'line.json'),
+      JSON.stringify({
+        $id: 'https://example.com/line.json',
+        properties: { price: { $ref: './money.json' }, qty: { $ref: '#/$defs/qty' } },
+        $defs: { qty: { type: 'integer', minimum: 1 } },
+      }),
+    )
+    writeFileSync(
+      join(dir, 'root.json'),
+      JSON.stringify({
+        type: 'object',
+        properties: { lines: { type: 'array', items: { $ref: './line.json' } }, total: { $ref: './money.json' } },
+      }),
+    )
+
+    const inlined = await resolveRefsFromFile(join(dir, 'root.json'))
+    const bundled = await resolveRefsFromFile(join(dir, 'root.json'), { bundle: true })
+    const { $defs, ...reinlined } = resolveRefs(bundled.resolved).resolved as Record<string, unknown>
+
+    expect(bundled.errors).toEqual([])
+    expect(Object.keys($defs as object)).toEqual(['line', 'money'])
+    expect(reinlined).toEqual(inlined.resolved)
   })
 
   it('bundles to what inlining produces once its refs are inlined in memory', async () => {

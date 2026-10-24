@@ -166,11 +166,15 @@ export type ResolveOptions = {
    * definition rather than an inline copy at every use, which on schemas that
    * reference each other in layers is exponential in the output's size.
    *
-   * A target in a document that declares an `$id`, or a ref inside an embedded
-   * resource of the root, is still inlined: moved under the root's `$defs`, a
-   * `#/...` pointer would resolve against a different resource than the one it
-   * was written in. `$dynamicRef` and `$recursiveRef` are resolved as without
-   * this option. Defaults to `false`.
+   * A document that declares an absolute `$id` at its root is embedded whole
+   * under the root's `$defs` with that `$id` kept — how JSON Schema bundles a
+   * resource — so the `#/...` pointers written inside it still read against it.
+   * Inside any embedded resource `#` names that resource, so a ref there is kept
+   * as written when its target is in the same resource, names its target by
+   * absolute URI otherwise, and is inlined when the target has no URI (a
+   * document without an `$id`). A document whose `$id` is relative, or whose
+   * `$id` another bundled document already claims, is inlined. `$dynamicRef` and
+   * `$recursiveRef` are resolved as without this option. Defaults to `false`.
    */
   bundle?: boolean
   /**
