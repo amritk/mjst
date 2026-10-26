@@ -1,5 +1,13 @@
 # @amritk/resolve-refs
 
+## 0.10.0
+
+### Minor Changes
+
+- 6985bcf: `resolveRefsFromFile` takes a `bundle` option: each `$ref` target in another document is hoisted into the root's `$defs` once and its refs point there, a ref into the root is kept as written, and a ref that points inside another document's definition hoists that whole definition and points into it. The output is one document whose refs all resolve inside it. A document that declares an absolute `$id` is embedded whole under `$defs` with that `$id` kept, so its own `#/...` pointers still read against it, and refs to anything in it name it by that `$id` URI — the form JSON Schema defines for a bundled resource, where a `#/...` pointer running into it is not one it promises to resolve; a ref by an embedded resource's `$id` is kept as written for the same reason. A ref from inside an embedded resource names its target by absolute URI, or is inlined when the target has none, rather than written as a `#/...` pointer that would name the wrong resource. A document with a relative `$id` is still inlined. Types generated from an embedded document's definitions are named from their path inside it (`CommonMoney` for `common.json`'s `Money`).
+
+  `mjst` now bundles a schema with cross-file or remote `$ref`s instead of inlining it, so the generated code changes for those schemas: each shared definition is one named type file, as it is when the same definitions sit in one file, where before every use of a shared schema — internal refs included, once any `$ref` crossed a file — was emitted as its own inline copy. On schemas whose definitions reference each other in layers that was exponential: a 104-definition schema split into two files generated 143 MB in 22 s and now generates 613 KB in 0.2 s, identical to the single-file output. Schemas whose refs all stay in one document are unaffected.
+
 ## 0.9.0
 
 ### Minor Changes
