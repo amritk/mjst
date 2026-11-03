@@ -241,3 +241,92 @@ describe('perf-paths: block scalar line ends', () => {
     expect(node.end).toBe(src.indexOf('two') + 3)
   })
 })
+
+describe('perf-paths: plain scalar line scan', () => {
+  // A block plain scalar's line end and its `: ` check are found in one pass,
+  // with a single comparison for any character above `:`. These pin the
+  // characters on either side of that boundary, and every way a line can end.
+  const problems = (src: string) => parseDocument(src).errors.map((e) => [e.code, e.start, e.end])
+
+  it('reports a `: ` at its own offset, whatever follows the colon', () => {
+    for (const src of [
+      'a: b: c\n',
+      'a: b:\tc\n',
+      'a: b:\n',
+      'a: b:',
+      'a: b:\r\nc: d\r\n',
+      'a: b:\rc: d\r',
+      'a: b:  # note\n',
+    ]) {
+      expect(problems(src)).toEqual([['BAD_SCALAR_CONTENT', 4, 5]])
+    }
+    expect(problems('a: x y: z\n')).toEqual([['BAD_SCALAR_CONTENT', 6, 7]])
+  })
+
+  it('leaves a colon glued to the next character, or inside a trailing comment, alone', () => {
+    expect(parseDocument('a: b:#c\n').toJS()).toEqual({ a: 'b:#c' })
+    expect(parseDocument('a: b # c: d\n').toJS()).toEqual({ a: 'b' })
+    expect(parseDocument('a: 1:2:3\n').toJS()).toEqual({ a: '1:2:3' })
+    for (const src of ['a: b:#c\n', 'a: b # c: d\n', 'a: 1:2:3\n']) expect(problems(src)).toEqual([])
+  })
+
+  it('ends the scalar before trailing white space and a comment', () => {
+    const src = 'a: value \t # c\nb: 1\n'
+    const doc = parseDocument(src)
+    const node = nodeAtPath(doc.contents, ['a']) as YamlScalar
+    expect(node.source).toBe('value')
+    expect(node.end).toBe(src.indexOf(' \t'))
+    expect(doc.toJS()).toEqual({ a: 'value', b: 1 })
+  })
+})
+
+describe('perf-paths: flow plain scalar line scan', () => {
+  // A lookup table decides which characters stop a flow plain scalar; only a
+  // `:` and a `#` then need a second look at their neighbours.
+  it('stops at flow indicators and separating colons, and keeps every other character', () => {
+    expect(parseDocument('{ url: http://x:80/y, n: a#b }').toJS()).toEqual({ url: 'http://x:80/y', n: 'a#b' })
+    expect(parseDocument('{a:{b: 1}}').toJS()).toEqual({ a: { b: 1 } })
+    expect(parseDocument('{a:1}').toJS()).toEqual({ 'a:1': null })
+    expect(parseDocument('[a:[b]]').toJS()).toEqual([{ a: ['b'] }])
+    expect(parseDocument('[a, b #c\n, d]').toJS()).toEqual(['a', 'b', 'd'])
+    expect(parseDocument('[ é, ü:v ]').toJS()).toEqual(['é', 'ü:v'])
+  })
+})
+
+describe('perf-paths: repeated line peeks', () => {
+  // The line after a plain scalar, and the line that closes a nested block, are
+  // measured once and the answer reused by every caller that asks again.
+  it('hands the line that closes several levels to each of them', () => {
+    const src = 'a:\n  b:\n    c:\n      d: 1\ne: 2\n'
+    const doc = parseDocument(src)
+    expect(doc.toJS()).toEqual({ a: { b: { c: { d: 1 } } }, e: 2 })
+    expect(nodeAtPath(doc.contents, ['e'])?.start).toBe(src.indexOf('2'))
+    expect(parseDocument('a:\n  - x\n  - y\nb: z\n').toJS()).toEqual({ a: ['x', 'y'], b: 'z' })
+    expect(parseDocument('k: a\n  b\nn: 1\n').toJS()).toEqual({ k: 'a b', n: 1 })
+  })
+
+  it('still measures a tab-indented line against the caller asking', () => {
+    // A tab inside the indentation the line owes is an error; past it, it is
+    // separation. Which one depends on the caller, so these lines are never reused.
+    const inside = parseDocument('a:\n  b: 1\n\tc: 2\n')
+    expect(inside.errors.map((e) => [e.code, e.start, e.end])).toEqual([
+      ['TAB_INDENT', 10, 11],
+      ['UNEXPECTED_CONTENT', 11, 15],
+    ])
+    const past = parseDocument('a:\n  b: x\n \tc: 2\n')
+    expect(past.errors.map((e) => [e.code, e.start, e.end])).toEqual([['TAB_INDENT', 11, 12]])
+    expect(past.toJS()).toEqual({ a: { b: 'x', c: 2 } })
+  })
+
+  it('records each comment once when nested blocks close around it', () => {
+    const doc = parseDocument('a:\n  b: 1 # one\n# own line\n  c: 2\nd: 3 # three\n', { keepComments: true })
+    expect(doc.comments.map((c) => [c.text, c.start])).toEqual([
+      [' one', 10],
+      [' own line', 16],
+      [' three', 39],
+    ])
+    const closing = parseDocument('a:\n  b:\n    c: x\n  # between\nd: y\n', { keepComments: true })
+    expect(closing.comments.map((c) => [c.text, c.start])).toEqual([[' between', 19]])
+    expect(closing.toJS()).toEqual({ a: { b: { c: 'x' } }, d: 'y' })
+  })
+})

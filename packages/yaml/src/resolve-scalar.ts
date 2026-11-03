@@ -50,53 +50,88 @@ export const resolvePlainValue = (text: string): string | number | boolean | nul
   const c = text.charCodeAt(0)
   if (c >= 128 || MAYBE_SPECIAL[c] === 0) return text
 
-  switch (text) {
-    case '~':
-    case 'null':
-    case 'Null':
-    case 'NULL':
-      return null
-    case 'true':
-    case 'True':
-    case 'TRUE':
-      return true
-    case 'false':
-    case 'False':
-    case 'FALSE':
-      return false
-    case '.inf':
-    case '.Inf':
-    case '.INF':
-    case '+.inf':
-    case '+.Inf':
-    case '+.INF':
-      return Number.POSITIVE_INFINITY
-    case '-.inf':
-    case '-.Inf':
-    case '-.INF':
-      return Number.NEGATIVE_INFINITY
-    case '.nan':
-    case '.NaN':
-    case '.NAN':
-      return Number.NaN
+  // The keywords, dispatched on their first character. A string `switch` over all
+  // of them compared every key that merely *starts* like one (`type`, `name`,
+  // `tags`, `format` — most OpenAPI keys) against the whole list before giving
+  // up; an integer switch settles each in at most two comparisons. A word that
+  // opens on n/N/t/T/f/F and is not a keyword can only be a string, so those
+  // cases return outright and never reach the numeric patterns below.
+  switch (c) {
+    case 0x6e: // n
+      return text === 'null' ? null : text
+    case 0x4e: // N
+      return text === 'Null' || text === 'NULL' ? null : text
+    case 0x74: // t
+      return text === 'true' ? true : text
+    case 0x54: // T
+      return text === 'True' || text === 'TRUE' ? true : text
+    case 0x66: // f
+      return text === 'false' ? false : text
+    case 0x46: // F
+      return text === 'False' || text === 'FALSE' ? false : text
+    case 0x7e: // ~
+      if (text === '~') return null
+      break
+    case 0x2e: // .
+      if (text === '.inf' || text === '.Inf' || text === '.INF') return Number.POSITIVE_INFINITY
+      if (text === '.nan' || text === '.NaN' || text === '.NAN') return Number.NaN
+      break
+    case 0x2b: // +
+      if (text === '+.inf' || text === '+.Inf' || text === '+.INF') return Number.POSITIVE_INFINITY
+      break
+    case 0x2d: // -
+      if (text === '-.inf' || text === '-.Inf' || text === '-.INF') return Number.NEGATIVE_INFINITY
+      break
     default:
       break
   }
 
-  // Only digits, signs, and `.` can begin a number. A word starting with
-  // n/N/t/T/f/F that was not a keyword above is a plain string, so we can skip
-  // the numeric regexes entirely — a meaningful win on key-heavy documents.
-  if (c === 0x6e || c === 0x4e || c === 0x74 || c === 0x54 || c === 0x66 || c === 0x46) return text
-
-  if (INT_DEC.test(text)) return Number.parseInt(text, 10)
+  const afterSign = c === 0x2b || c === 0x2d ? 1 : 0
+  if (isDecimalInt(text, afterSign)) return Number.parseInt(text, 10)
+  // Hex and octal are the only forms with a letter second, so a value that does
+  // not open on `0x`/`0o` (past its sign) is spared both patterns. That matters
+  // for the version strings every OpenAPI document leads with — `3.1.0` used to
+  // run all four patterns before it was allowed to stay a string.
+  const radix = text.charCodeAt(afterSign) === 0x30 ? text.charCodeAt(afterSign + 1) : 0
   // `parseInt` already honours a leading sign, so stripping only the `0x`/`0o`
   // base marker leaves e.g. `-10` for it to parse as -16. An extra sign multiply
   // here would double-negate and flip `-0x10` back to +16.
-  if (INT_HEX.test(text)) return Number.parseInt(text.replace('0x', ''), 16)
-  if (INT_OCT.test(text)) return Number.parseInt(text.replace('0o', ''), 8)
+  if (radix === 0x78 && INT_HEX.test(text)) return Number.parseInt(text.replace('0x', ''), 16)
+  if (radix === 0x6f && INT_OCT.test(text)) return Number.parseInt(text.replace('0o', ''), 8)
   if (FLOAT.test(text)) return Number.parseFloat(text)
 
   return text
+}
+
+/**
+ * {@link resolvePlainValue} for a scalar the parser just sliced out of `src` at
+ * `start`, reading the first character from the source instead of from `text`.
+ *
+ * The answer is the same; what differs is what the engine has to do for it.
+ * JavaScriptCore (Bun) makes `slice` a lazy view of the source and builds the
+ * real string the first time anything reads one of its characters — so asking
+ * `text` for its first character, only to learn that it is an ordinary word,
+ * paid for a copy of every plain scalar in the document. Read from the source,
+ * a string that resolves to itself is never touched here at all.
+ */
+export const resolvePlainSlice = (text: string, src: string, start: number): string | number | boolean | null => {
+  const c = src.charCodeAt(start)
+  if (text.length !== 0 && (c >= 128 || MAYBE_SPECIAL[c] === 0)) return text
+  return resolvePlainValue(text)
+}
+
+/**
+ * {@link INT_DEC} without the regex, for the hot path: `text` from `from` on is
+ * one or more ASCII digits and nothing else. `from` is past the optional sign.
+ */
+const isDecimalInt = (text: string, from: number): boolean => {
+  const len = text.length
+  if (from >= len) return false
+  for (let i = from; i < len; i++) {
+    const c = text.charCodeAt(i)
+    if (c < 0x30 || c > 0x39) return false
+  }
+  return true
 }
 
 /**
