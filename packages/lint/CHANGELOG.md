@@ -1,5 +1,12 @@
 # @amritk/lint
 
+## 0.10.1
+
+### Patch Changes
+
+- Updated dependencies [9d6b0ee]
+  - @amritk/yaml@0.8.1
+
 ## 0.10.0
 
 ### Minor Changes
