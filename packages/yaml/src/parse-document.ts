@@ -1,6 +1,7 @@
 import {
   isCoreInt,
   resolveDoubleQuoted,
+  resolvePlainSlice,
   resolvePlainValue,
   resolveSingleQuoted,
   trimTrailingSpaces,
@@ -157,6 +158,30 @@ type State = {
    */
   columnHintPos: number
   columnHintLineStart: number
+  /**
+   * Where {@link plainScalarLineEnd} found a `: ` inside the line it last
+   * scanned, or `-1`. Its second result, read straight after the call.
+   */
+  plainColon: number
+  /**
+   * A line {@link peekLine} already knows the answer for: its start, and the
+   * indent and content offset measured there. `-1` while there is none.
+   *
+   * Most lines are measured more than once. A plain scalar measures the line
+   * after it to see whether it continues there, and then the mapping holding it
+   * peeks that same line for its next entry; a nested collection that ends hands
+   * the line that ended it to every enclosing one, which each peek it again.
+   * The answer depends on the offset alone — the source never changes under a
+   * parse — so a repeat question is answered from here.
+   *
+   * Only a line whose indentation is all spaces and whose content is not a
+   * comment is remembered. A tab in the indentation is reported against the
+   * `minIndent` of whichever caller is asking, and a comment line is skipped
+   * (and, with `keepComments`, recorded), so both always go the long way.
+   */
+  peekLineStart: number
+  peekIndent: number
+  peekContentPos: number
 }
 
 /**
@@ -284,6 +309,12 @@ const isMarkerLine = (src: string, line: LineInfo, len: number): boolean => {
 const peekLine = (state: State, minIndent: number): LineInfo => {
   const { src, len, line } = state
   let p = state.pos
+  if (p === state.peekLineStart) {
+    line.eof = false
+    line.indent = state.peekIndent
+    line.contentPos = state.peekContentPos
+    return line
+  }
   while (p < len) {
     let i = p
     while (i < len && src.charCodeAt(i) === SPACE) i++
@@ -322,6 +353,9 @@ const peekLine = (state: State, minIndent: number): LineInfo => {
     line.eof = false
     line.indent = i - p
     line.contentPos = i
+    state.peekLineStart = p
+    state.peekIndent = i - p
+    state.peekContentPos = i
     return line
   }
   state.pos = len
@@ -767,9 +801,15 @@ const findKeyColon = (src: string, from: number, len: number): number => {
   }
   // Past any opening quote, the only things that matter are line end, a ` #`
   // comment, and the `key:` colon. Hoisting the quote checks keeps this the
-  // tight inner loop it wants to be — three comparisons per character.
+  // tight inner loop it wants to be. All four of those characters sort at or
+  // below `:`, while a key is mostly letters, which sort above it — so one
+  // comparison clears a letter and only the rest pay for the full set.
   while (i < len) {
     const c = src.charCodeAt(i)
+    if (c > COLON) {
+      i++
+      continue
+    }
     if (c === NL || c === CR) return -1
     if (c === HASH && i > from && isSpace(src.charCodeAt(i - 1))) return -1
     if (c === COLON) {
@@ -1298,7 +1338,7 @@ const isBadPlainStart = (c: number): boolean => c < 128 && PLAIN_START[c] !== 0
  * Some starts are left to the reports that already cover them rather than
  * reported twice at the same offset:
  * - a `:` — followed by white space it is the `: ` separator, which
- *   {@link plainColonAt} reports inside a block scalar, and a flow scanner never
+ *   {@link plainScalarLineEnd} reports inside a block scalar, and a flow scanner never
  *   starts a scalar on it at all (it reads as an empty key);
  * - a block `- ` — the sequence-on-a-key-line report is the more useful one;
  * - a flow indicator inside a flow collection — the entry comes back empty and
@@ -1423,6 +1463,13 @@ const plainLineEnd = (src: string, from: number, len: number): number => {
   let lastNonSpace = from
   while (i < len) {
     const c = src.charCodeAt(i)
+    // Every character this loop has to look at twice — the two line breaks, the
+    // `#`, a space and a tab — sorts at or below `#`, so anything above it is
+    // ordinary content and costs a single comparison.
+    if (c > HASH) {
+      lastNonSpace = ++i
+      continue
+    }
     if (c === NL || c === CR) break
     if (c === HASH && i > from && isSpace(src.charCodeAt(i - 1))) break
     i++
@@ -1432,8 +1479,10 @@ const plainLineEnd = (src: string, from: number, len: number): number => {
 }
 
 /**
- * Offset of a `: ` mapping-value indicator inside the plain scalar text
- * `[from, end)`, or -1 when there is none.
+ * {@link plainLineEnd} for a block plain scalar, which also has to know whether
+ * its text holds a `: ` mapping-value indicator. The offset of the first one (or
+ * -1) is left in {@link State.plainColon}; the return value is the trimmed end,
+ * exactly as `plainLineEnd` computes it.
  *
  * A plain scalar may not hold one: YAML 1.2's `ns-plain-char` ends the scalar at
  * a `:` that is followed by white space or a line break, which is what makes
@@ -1441,24 +1490,38 @@ const plainLineEnd = (src: string, from: number, len: number): number => {
  * strings. Without the check both fold into the value silently — the author
  * wrote a mapping and got the text of one.
  *
- * The scan is bounded by `end` — the scalar's own text — rather than handed to
- * `indexOf`, which cannot be told where to stop. `indexOf` reads better and is
- * vectorized, but it searches to the end of the *document*: on a colon-free
- * scalar it walked the entire remaining source to answer a question about one
- * line, so a document with a large colon-free tail (a long list of plain
- * scalars — hostnames, package names, an allow-list) cost O(n²) overall. A
- * 1.4 MB list of 80,000 entries took 700 ms, and four times that at twice the
- * size. Per character this loop is the comparison `indexOf` was doing anyway,
- * and it never reads past the scalar.
+ * The colon is looked for in the same pass that finds the line end, rather than
+ * in a second one over the text it bounds: every plain value in a document is
+ * read here, and reading each one twice was a measurable share of parsing a
+ * small one. A `:` that is the last character before the trimmed end is followed
+ * by a space, a tab, a line break or the end of input, so testing the character
+ * after it answers the same question the text bound used to. The scan never
+ * reads past the line — `indexOf` would, and on a colon-free tail of plain
+ * scalars (a long allow-list) that made the parse quadratic.
  */
-const plainColonAt = (src: string, from: number, end: number): number => {
-  for (let i = from; i < end; i++) {
-    if (src.charCodeAt(i) !== COLON) continue
-    // A `:` at the very end of the scalar's text is followed by the line break
-    // `plainLineEnd` trimmed, so it separates just as much as `: ` does.
-    if (i + 1 >= end || isSpace(src.charCodeAt(i + 1))) return i
+const plainScalarLineEnd = (state: State, from: number): number => {
+  const { src, len } = state
+  let i = from
+  let lastNonSpace = from
+  let colon = -1
+  while (i < len) {
+    const c = src.charCodeAt(i)
+    // Letters and most punctuation sort above `:`, and none of them matter here.
+    if (c > COLON) {
+      lastNonSpace = ++i
+      continue
+    }
+    if (c === NL || c === CR) break
+    if (c === HASH && i > from && isSpace(src.charCodeAt(i - 1))) break
+    if (c === COLON && colon < 0) {
+      const n = src.charCodeAt(i + 1)
+      if (i + 1 >= len || n === SPACE || n === TAB || n === NL || n === CR) colon = i
+    }
+    i++
+    if (c !== SPACE && c !== TAB) lastNonSpace = i
   }
-  return -1
+  state.plainColon = colon
+  return lastNonSpace
 }
 
 const reportPlainColon = (state: State, at: number): void => {
@@ -1493,10 +1556,10 @@ const endsAtComment = (src: string, from: number, len: number): boolean => {
 const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
   const { src, len } = state
   const start = state.pos
-  let valueEnd = plainLineEnd(src, start, len)
+  let valueEnd = plainScalarLineEnd(state, start)
   /** One `: ` report per scalar — a value the author meant as a mapping is wrong once, not once a line. */
   let colonReported = false
-  const firstColon = plainColonAt(src, start, valueEnd)
+  const firstColon = state.plainColon
   if (firstColon >= 0) {
     reportPlainColon(state, firstColon)
     colonReported = true
@@ -1518,6 +1581,14 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
     }
     if (i >= len) break
     const indent = i - scan
+    // This is the measurement `peekLine` would make of the same line, which the
+    // mapping around this scalar is about to ask for whenever the scalar ends
+    // here; see `State.peekLineStart` for what may be remembered.
+    if (c !== HASH && c !== TAB) {
+      state.peekLineStart = scan
+      state.peekIndent = indent
+      state.peekContentPos = i
+    }
     if (indent <= parentIndent || c === HASH) break
     // A comment ends the scalar, so the line below it is not a continuation of
     // anything — it is content the document did not attach to a node, which the
@@ -1533,9 +1604,9 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
     // the scalar, so treating it as a misplaced directive would reject a valid
     // document to catch an invalid one — the worse of the two errors.
     if (indent === 0 && (c === DASH || c === DOT) && isDocMarker(src, i, len)) break
-    const lineEnd = plainLineEnd(src, i, len)
+    const lineEnd = plainScalarLineEnd(state, i)
     if (!colonReported) {
-      const colon = plainColonAt(src, i, lineEnd)
+      const colon = state.plainColon
       if (colon >= 0) {
         reportPlainColon(state, colon)
         colonReported = true
@@ -1550,7 +1621,14 @@ const scanPlainScalar = (state: State, parentIndent: number): YamlScalar => {
   state.pos = valueEnd
   if (!segments) {
     const text = src.slice(start, valueEnd)
-    return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end: valueEnd }
+    return {
+      kind: 'scalar',
+      value: resolvePlainSlice(text, src, start),
+      source: text,
+      style: 'plain',
+      start,
+      end: valueEnd,
+    }
   }
   // Drop trailing blank segments that turned out to precede sibling structure.
   while (segments.length > 1 && segments[segments.length - 1] === '') segments.pop()
@@ -1886,6 +1964,18 @@ const skipFlowWs = (state: State): void => {
 }
 
 /**
+ * The characters {@link flowPlainLineEnd} has to stop and look at, as a 128-entry
+ * lookup table: the five flow indicators and the two line breaks always end the
+ * scalar, while a `:` or a `#` only might. One indexed read per character
+ * replaces the nine comparisons an ordinary letter used to pay.
+ */
+const FLOW_PLAIN_STOP = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(128)
+  for (const c of [COMMA, LBRACKET, RBRACKET, LBRACE, RBRACE, NL, CR, COLON, HASH]) t[c] = 1
+  return t
+})()
+
+/**
  * Advances to where a flow plain scalar ends *on the current line* — the first
  * flow indicator (`,` `[` `]` `{` `}`), a `:` that separates a key from a value,
  * a ` #` comment, or a line break. `lineStart` is the offset the current line's
@@ -1902,9 +1992,13 @@ const flowPlainLineEnd = (src: string, from: number, lineStart: number, len: num
   let i = from
   while (i < len) {
     const c = src.charCodeAt(i)
-    if (c === COMMA || c === LBRACKET || c === RBRACKET || c === LBRACE || c === RBRACE || c === NL || c === CR) break
-    if (c === COLON && flowColonEnds(src, i + 1, len)) break
-    if (c === HASH && i > lineStart && isSpace(src.charCodeAt(i - 1))) break
+    if (c < 128 && FLOW_PLAIN_STOP[c] !== 0) {
+      if (c === COLON) {
+        if (flowColonEnds(src, i + 1, len)) break
+      } else if (c === HASH) {
+        if (i > lineStart && isSpace(src.charCodeAt(i - 1))) break
+      } else break
+    }
     i++
   }
   return i
@@ -1942,7 +2036,14 @@ const scanFlowPlain = (state: State): YamlScalar => {
   if (stop !== NL && stop !== CR) {
     const text = src.slice(start, firstEnd)
     state.pos = i
-    return { kind: 'scalar', value: resolvePlainValue(text), source: text, style: 'plain', start, end: firstEnd }
+    return {
+      kind: 'scalar',
+      value: resolvePlainSlice(text, src, start),
+      source: text,
+      style: 'plain',
+      start,
+      end: firstEnd,
+    }
   }
 
   // The scalar wraps. Gather each continuation line as a segment, staging blank
@@ -3008,7 +3109,7 @@ const parseBlockMap = (
         const text = src.slice(lineContentPos, end)
         key = {
           kind: 'scalar',
-          value: resolvePlainValue(text),
+          value: resolvePlainSlice(text, src, lineContentPos),
           source: text,
           style: 'plain',
           start: lineContentPos,
@@ -3875,6 +3976,10 @@ const newState = (source: string, options: ParseOptions): State => ({
   hasCR: source.indexOf('\r') !== -1,
   columnHintPos: 0,
   columnHintLineStart: 0,
+  plainColon: -1,
+  peekLineStart: -1,
+  peekIndent: 0,
+  peekContentPos: 0,
 })
 
 /**
