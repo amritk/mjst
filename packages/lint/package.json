@@ -73,6 +73,24 @@
       "default": "./dist/rules/asyncapi/index.js"
     }
   },
+  "imports": {
+    "#deps/runtime-validators": {
+      "types": "./src/deps/runtime-validators.ts",
+      "development": "./src/deps/runtime-validators.ts",
+      "browser": "./dist/deps/runtime-validators.js",
+      "bun": "./dist/deps/runtime-validators-lazy.js",
+      "module-sync": "./dist/deps/runtime-validators-lazy.js",
+      "default": "./dist/deps/runtime-validators.js"
+    },
+    "#deps/yaml": {
+      "types": "./src/deps/yaml.ts",
+      "development": "./src/deps/yaml.ts",
+      "browser": "./dist/deps/yaml.js",
+      "bun": "./dist/deps/yaml-lazy.js",
+      "module-sync": "./dist/deps/yaml-lazy.js",
+      "default": "./dist/deps/yaml.js"
+    }
+  },
   "dependencies": {
     "@amritk/runtime-validators": "workspace:*",
     "@amritk/yaml": "workspace:*",

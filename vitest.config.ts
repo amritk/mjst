@@ -7,6 +7,11 @@ export default defineConfig({
   resolve: {
     alias: [
       { find: /^@\//, replacement: `${resolve(process.cwd(), 'src')}/` },
+      // `@amritk/lint`'s own `#deps/*` imports pick a module by runtime condition
+      // (see its package.json). Source tests take the variant that imports
+      // statically, so they run against the dependencies' aliases below; the
+      // dist tests under scripts/ cover the variant that loads on first use.
+      { find: /^#deps\/(runtime-validators|yaml)$/, replacement: resolve(root, 'packages/lint/src/deps/$1.ts') },
       { find: /^@amritk\/adapters\/(.*)$/, replacement: resolve(root, 'packages/adapters/src/$1.ts') },
       // api can be consumed from src: its only runtime dependency,
       // @amritk/runtime-validators, is aliased to dist below.

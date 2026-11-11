@@ -1,14 +1,5 @@
-import {
-  isAlias,
-  isMap,
-  isPair,
-  isScalar,
-  isSeq,
-  keyText,
-  type YamlMap,
-  type YamlNode,
-  type YamlPair,
-} from '@amritk/yaml'
+import type { YamlMap, YamlNode, YamlPair } from '@amritk/yaml'
+import { isAlias, isMap, isPair, isScalar, isSeq, keyText } from '#deps/yaml'
 
 /**
  * True when a pair is a `<<` merge key, whose value folds into the parent map

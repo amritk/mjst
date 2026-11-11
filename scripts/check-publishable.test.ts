@@ -101,6 +101,16 @@ describe('check-publishable', () => {
     expect(problems[0]).toContain('development')
   })
 
+  it('rejects a development condition surviving in imports', async () => {
+    const pkg = {
+      ...HEALTHY,
+      imports: { '#deps/yaml': { development: './src/deps/yaml.ts', default: './dist/deps/yaml.js' } },
+    }
+    const problems = checkPublishable(await write('unstripped-imports', pkg))
+    expect(problems).toHaveLength(1)
+    expect(problems[0]).toContain('imports still carries a `development` condition')
+  })
+
   it('rejects a missing LICENSE, which npm only bundles from inside the package', async () => {
     const problems = checkPublishable(await write('unlicensed', HEALTHY, { license: false }))
     expect(problems).toHaveLength(1)

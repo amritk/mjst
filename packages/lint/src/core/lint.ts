@@ -1,3 +1,5 @@
+import { preloadYaml } from '#deps/yaml'
+
 import { detectFormat, type ParserFormat } from '../parsers'
 import { createDocument, createDocumentFromData, type Document, type IDocumentOptions } from './document'
 import { bySourceThenPosition, withoutDuplicates } from './order'
@@ -110,6 +112,9 @@ export const lintWithResult = async (input: LintInput, options: LintOptions): Pr
   let document: Document
   let text: string
   if (typeof input === 'string') {
+    // The parse below is synchronous; load the YAML parser for it here, where
+    // there is an async step to do it in (see `#deps/yaml`).
+    if ((documentOptions.format ?? detectFormat(input)) === 'yaml') await preloadYaml()
     const duplicateKeys = toParserSeverity(ruleset.parserOptions?.duplicateKeys)
     const incompatibleValues = toParserSeverity(ruleset.parserOptions?.incompatibleValues)
     document = createDocument(input, {

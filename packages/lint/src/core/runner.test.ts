@@ -178,6 +178,64 @@ describe('runner', () => {
     ])
   })
 
+  it('reports a rejecting function, and a thenable whose then throws, on the node they ran on', async () => {
+    const rejects: RulesetFunction = (() => Promise.reject(new Error('late'))) as unknown as RulesetFunction
+    const badThenable: RulesetFunction = (() => ({
+      then: () => {
+        throw new Error('bad then')
+      },
+    })) as unknown as RulesetFunction
+    const diagnostics = await run(
+      {
+        rules: {
+          rejects: { given: '$.paths.*.get', severity: 'error', then: { function: 'rejects' } },
+          thenable: { given: '$.paths.*.post', severity: 'error', then: { function: 'badThenable' } },
+        },
+      },
+      { rejects, badThenable },
+    )
+    expect(diagnostics.map((d) => [d.message, d.path])).toEqual([
+      ['Rule "rejects" threw: late', ['paths', '/users', 'get']],
+      ['Rule "thenable" threw: bad then', ['paths', '/users', 'post']],
+    ])
+  })
+
+  // Targets after the first async one run once it settles, so findings keep the
+  // order a fully synchronous run would give them; the sort that ends the run
+  // keeps that order between findings at the same position.
+  it('runs the targets after an async one in order', async () => {
+    const calls: string[] = []
+    const record = ((input: unknown, _options: unknown, context: { path: JsonPath }) => {
+      const key = String(context.path[context.path.length - 1])
+      calls.push(`start ${key}`)
+      const report = () => {
+        calls.push(`end ${key}`)
+        return [{ message: `${key}=${String(input)}` }]
+      }
+      return key === 'get' ? Promise.resolve().then(report) : report()
+    }) as unknown as RulesetFunction
+    const diagnostics = await run(
+      { rules: { keys: { given: '$.paths./users', severity: 'error', then: { field: '@key', function: 'record' } } } },
+      { record },
+    )
+    expect(calls).toEqual(['start get', 'end get', 'start post', 'end post'])
+    expect(diagnostics.map((d) => d.message)).toEqual(['get=get', 'post=post'])
+  })
+
+  it('finishes a run of synchronous functions without yielding between matches', async () => {
+    let yielded = false
+    queueMicrotask(() => {
+      yielded = true
+    })
+    const seen: boolean[] = []
+    const watch: RulesetFunction = () => {
+      seen.push(yielded)
+      return []
+    }
+    await run({ rules: { watch: { given: '$.paths.*.*', severity: 'error', then: { function: 'watch' } } } }, { watch })
+    expect(seen).toEqual([false, false])
+  })
+
   it('reports @key targets on each key', async () => {
     const diagnostics = await run({
       rules: {

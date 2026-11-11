@@ -59,6 +59,32 @@ const collectDistModules = async (): Promise<string[]> => collectDistFiles(['.js
 const SUBPATH_IMPORT = /(?:\bfrom|\bimport|\brequire)\s*\(?\s*(['"])(#[^'"]*)\1/g
 
 /**
+ * Whether a package resolves `specifier` through its own `imports` to files it
+ * ships: every target a runtime can pick (anything but `types`, which only the
+ * type checker reads, and `development`, which the publish job strips) is under
+ * `./dist/` and exists. `@amritk/lint` keeps `#deps/*` in its dist on purpose,
+ * to choose a module by runtime condition, which a rewrite to one relative path
+ * could not do.
+ */
+const resolvesToShippedFiles = (packageDir: string, imports: unknown, specifier: string): boolean => {
+  const entry = (imports as Record<string, unknown> | undefined)?.[specifier]
+  const targets: string[] = []
+  const collect = (node: unknown): void => {
+    if (typeof node === 'string') targets.push(node)
+    else if (node !== null && typeof node === 'object') {
+      for (const [condition, value] of Object.entries(node)) {
+        if (condition !== 'types' && condition !== 'development') collect(value)
+      }
+    }
+  }
+  collect(entry)
+  return (
+    targets.length > 0 &&
+    targets.every((target) => target.startsWith('./dist/') && existsSync(join(packageDir, target)))
+  )
+}
+
+/**
  * The helper sources `@amritk/validation` reads out of an *installed*
  * `@amritk/helpers` in `--helpers=embedded` mode. Mirrors `RuntimeHelperName`
  * in `packages/validation/src/parsers/helpers/collect-helpers.ts`; keep in sync.
@@ -95,7 +121,7 @@ describe('dist-smoke', () => {
     expect(sources.sort()).toEqual(RUNTIME_HELPER_SOURCES)
   })
 
-  it('no `#` subpath-import specifier survives into dist', async () => {
+  it('no `#` subpath-import specifier survives into dist unless it resolves to shipped files', async () => {
     // parsers and generate-examples declare `imports` maps such as
     // `{ "#generators/*": "./src/generators/*.ts" }` and publish them, but
     // their `files` ships no `src/` — so any `#` specifier that
@@ -103,17 +129,24 @@ describe('dist-smoke', () => {
     // rewrites all of them today; this pins that, because the failure mode
     // (ERR_MODULE_NOT_FOUND only for installed consumers) is invisible to the
     // aliased unit tests and to a repo-local `node dist/...`, where the
-    // untrimmed source tree still satisfies the mapping.
+    // untrimmed source tree still satisfies the mapping. A specifier whose every
+    // runtime target is a shipped dist file is the exception (see
+    // `resolvesToShippedFiles`).
     const files = await collectDistFiles(['.js', '.d.ts'])
     expect(files.length).toBeGreaterThan(40)
 
     const offenders: string[] = []
     for (const file of files) {
       const source = await readFile(file, 'utf-8')
+      const packageDir = join(ROOT, 'packages', file.slice(join(ROOT, 'packages').length + 1).split('/')[0] as string)
+      const { imports } = JSON.parse(await readFile(join(packageDir, 'package.json'), 'utf-8')) as { imports?: unknown }
       SUBPATH_IMPORT.lastIndex = 0
       let match = SUBPATH_IMPORT.exec(source)
       while (match !== null) {
-        offenders.push(`${file.slice(ROOT.length + 1)} → ${match[2]}`)
+        const specifier = match[2] as string
+        if (!resolvesToShippedFiles(packageDir, imports, specifier)) {
+          offenders.push(`${file.slice(ROOT.length + 1)} → ${specifier}`)
+        }
         match = SUBPATH_IMPORT.exec(source)
       }
     }

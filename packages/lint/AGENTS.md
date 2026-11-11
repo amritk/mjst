@@ -33,6 +33,17 @@ bun run --filter='@amritk/lint' types:check
   can edit it. `withoutDuplicates` (`core/order.ts`) then relies on that — it
   keys on `path` as well as `range`, because a range alone cannot tell three
   absent siblings apart.
+- **`@amritk/runtime-validators` and `@amritk/yaml` load on first use where
+  they can.** The engine reaches them only through `#deps/runtime-validators`
+  and `#deps/yaml` (`src/deps/`, mapped in `package.json`'s `imports`). Under the
+  `bun` and `module-sync` conditions — exactly the runtimes where `require()` can
+  load an ES module — those resolve to the `*-lazy` modules, which load on first
+  call; everywhere else they resolve to modules that import statically, because
+  `schema()`, `parseWithPointers` and the fix edits are synchronous and public and
+  would have nowhere else to load from. `Linter.run` and `lint` preload with
+  `import()` when a run will need them. A value import of either package outside
+  `src/deps/` (the OpenAPI and AsyncAPI subpaths aside) loads it at startup again;
+  `scripts/lint-startup.test.ts` traces the built CLI to catch that.
 - **OpenAPI and AsyncAPI support live in the `./rules/openapi` and
   `./rules/asyncapi` subpaths**, layered on top of core — never merge either into
   the root entry. What the two genuinely share (the Server Object's `variables`,

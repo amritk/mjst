@@ -1,4 +1,5 @@
-import { isAlias, isMap, isSeq, type YamlDocument, type YamlNode } from '@amritk/yaml'
+import type { YamlDocument, YamlNode } from '@amritk/yaml'
+import { isAlias, isMap, isSeq } from '#deps/yaml'
 
 import type { LineMap } from './lines'
 import type { ILocation, JsonPath } from './types'

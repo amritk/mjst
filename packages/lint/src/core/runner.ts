@@ -1,3 +1,5 @@
+import { preloadRuntimeValidators } from '#deps/runtime-validators'
+
 import type { IRange, JsonPath } from '../parsers'
 import type { Document } from './document'
 import { detectFormats } from './formats'
@@ -18,34 +20,50 @@ import {
   type ISourceSet,
   type IThen,
   type ResolvedRule,
+  type RulesetFunction,
 } from './types'
 
 const ZERO_RANGE: IRange = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } }
-
-/** A JSONPath match and, once something has read it, its path. Shared by every rule on the match. */
-type Match = {
-  node: MatchNode
-  path: JsonPath | undefined
-}
 
 /**
  * A node a `then` runs against. Its path is built by {@link targetPath} on first
  * read: most targets never become findings, and building a path for every match
  * was the single largest cost of a run on a large spec.
+ *
+ * Each JSONPath match is itself a target, shared by every rule and every `then`
+ * on it that has no `field`. Only a `field` allocates more, one per node it
+ * narrows to, so a `then` costs no allocation beyond its function's context.
  */
 type Target = {
   value: unknown
-  match: Match
-  /** Segments a `field` adds after the match's path; `undefined` when the target is the match itself. */
+  node: MatchNode
+  /** The match this target narrows with a `field`; `undefined` when the target is the match itself. */
+  match: Target | undefined
+  /** Segments the `field` adds after the match's path. */
   suffix: JsonPath | undefined
   path: JsonPath | undefined
 }
 
+const matchTarget = (node: MatchNode): Target => ({
+  value: node.value,
+  node,
+  match: undefined,
+  suffix: undefined,
+  path: undefined,
+})
+
+const fieldTarget = (match: Target, value: unknown, suffix: JsonPath): Target => ({
+  value,
+  node: match.node,
+  match,
+  suffix,
+  path: undefined,
+})
+
 const targetPath = (target: Target): JsonPath => {
   if (target.path !== undefined) return target.path
   const match = target.match
-  match.path ??= matchPath(match.node)
-  target.path = target.suffix === undefined ? match.path : [...match.path, ...target.suffix]
+  target.path = match === undefined ? matchPath(target.node) : [...targetPath(match), ...(target.suffix as JsonPath)]
   return target.path
 }
 
@@ -87,29 +105,24 @@ const isThenable = (value: unknown): value is Promise<unknown> =>
   typeof (value as { then?: unknown } | null)?.then === 'function'
 
 /**
- * Narrows a matched value to the nodes a `then` runs against, mirroring
+ * Narrows a match to the nodes a `then` with a `field` runs against, mirroring
  * Spectral's `getLintTargets`. Both objects and arrays are indexable containers,
  * so `@key` yields keys/indices and a numeric field indexes into an array; a
  * field against a primitive lints the matched value itself; a `$`-prefixed field
  * runs as a sub-query.
  */
-const resolveTargets = (value: unknown, match: Match, field: string | undefined): Target[] => {
-  if (field === undefined) return [{ value, match, suffix: undefined, path: undefined }]
+const resolveTargets = (match: Target, field: string): Target[] => {
+  const value = match.value
   // A field only narrows into a container; against a primitive (or null) the
   // matched value itself is the target.
-  if (!isIndexable(value)) return [{ value, match, suffix: undefined, path: undefined }]
+  if (!isIndexable(value)) return [match]
   if (field === '@key') {
     // Object.keys over an array yields its indices (as strings); normalize those
     // back to numbers for the path so lookups stay consistent.
-    return Object.keys(value).map((key) => ({
-      value: key,
-      match,
-      suffix: [Array.isArray(value) ? Number(key) : key],
-      path: undefined,
-    }))
+    return Object.keys(value).map((key) => fieldTarget(match, key, [Array.isArray(value) ? Number(key) : key]))
   }
   if (field.startsWith('$')) {
-    return query(value, field).map((sub) => ({ value: sub.value, match, suffix: sub.path, path: undefined }))
+    return query(value, field).map((sub) => fieldTarget(match, sub.value, sub.path))
   }
   // A plain property name, or a numeric index into an array. `Object.hasOwn`, not
   // a bare index: `field` is ruleset input, so `field: 'constructor'` otherwise
@@ -117,7 +130,7 @@ const resolveTargets = (value: unknown, match: Match, field: string | undefined)
   // and `truthy` both passed on a key the document does not have.
   const key = Array.isArray(value) && /^\d+$/.test(field) ? Number(field) : field
   const own = Object.hasOwn(value, key) ? (value as Record<string | number, unknown>)[key] : undefined
-  return [{ value: own, match, suffix: [key], path: undefined }]
+  return [fieldTarget(match, own, [key])]
 }
 
 const stringify = (value: unknown): string => {
@@ -304,15 +317,17 @@ const runPlan = async (
         }
       : {},
   )
+  const state: RunState = { ruleset, document, out, sources, scope }
   for (let i = 0; i < order.length; i++) {
     const group = groups.get(order[i] as string) as { rules: ResolvedRule[] }
     const nodes = matchesPerGiven[i] as MatchNode[]
     for (const node of nodes) {
       // Shared by every rule on this node, so its path is built once at most.
-      const match: Match = { node, path: undefined }
+      const match = matchTarget(node)
       for (const rule of group.rules) {
         for (const then of rule.then) {
-          await runThen(ruleset, rule, then, node.value, match, document, out, sources, scope)
+          const pending = runThen(state, rule, then, match)
+          if (pending !== undefined) await pending
         }
       }
     }
@@ -462,52 +477,108 @@ const applyScopedOverrides = (
   return result
 }
 
-const runThen = async (
-  ruleset: Ruleset,
-  rule: ResolvedRule,
-  then: IThen,
-  value: unknown,
-  match: Match,
-  document: Document,
-  out: IDiagnostic[],
-  sources: ISourceSet | undefined,
-  scope: RunScope,
-): Promise<void> => {
+/** What every `then` in one plan reads and writes: the run's inputs and its findings so far. */
+type RunState = {
+  ruleset: Ruleset
+  document: Document
+  out: IDiagnostic[]
+  sources: ISourceSet | undefined
+  scope: RunScope
+}
+
+/**
+ * Runs one `then` against a match. Returns `undefined` when every function call
+ * finished synchronously, and a Promise only once one returned a thenable (a
+ * Spectral-style async function): awaiting every `then` cost each match a
+ * microtask, which a rule-dense run pays tens of thousands of times for nothing.
+ * Targets still run one after another, so findings land in the same order.
+ */
+const runThen = (state: RunState, rule: ResolvedRule, then: IThen, match: Target): Promise<void> | undefined => {
   // A malformed rule (e.g. a `then` with no `function`, which `validateRuleset`
   // warns about) is skipped rather than crashing the whole run.
-  if (!then || (typeof then.function !== 'function' && typeof then.function !== 'string')) return
-  const fn = typeof then.function === 'function' ? then.function : ruleset.getFunction(then.function)
+  if (!then || (typeof then.function !== 'function' && typeof then.function !== 'string')) return undefined
+  const fn = typeof then.function === 'function' ? then.function : state.ruleset.getFunction(then.function)
   // Unknown named functions are handled once per rule in `runPlan`; nothing to do.
-  if (!fn) return
+  if (!fn) return undefined
+  if (then.field === undefined) return runTarget(state, rule, then, fn, match)
 
-  for (const target of resolveTargets(value, match, then.field)) {
-    let results: IFunctionResult[] | undefined
-    try {
-      // The declared signature is synchronous, but a function reference may in
-      // fact return a Promise (a Spectral-style async function), so treat the raw
-      // result as unknown and await it when it is thenable.
-      const context: RunContext = Object.create(contextPrototype)
-      context.document = document
-      context.value = target.value
-      context.rule = rule
-      context.functionOptions = then.functionOptions
-      context[TARGET] = target
-      context[RUN_SCOPE] = scope
-      const raw: unknown = fn(target.value, then.functionOptions ?? {}, context)
-      results = (isThenable(raw) ? await raw : raw) as IFunctionResult[] | undefined
-    } catch (error) {
-      // Isolate the failure: convert it into an error diagnostic on this node so
-      // the rest of the run (and already-collected findings) survive.
-      const { sourcePath, range, source } = locate(rule, targetPath(target), document, sources)
-      const reason = error instanceof Error ? error.message : String(error)
-      out.push(errorDiagnostic(rule, sourcePath, `Rule "${rule.name}" threw: ${reason}`, range, source))
-      continue
-    }
-    if (!results) continue
-    for (const result of results) {
-      out.push(toDiagnostic(rule, result, target, document, sources))
-    }
+  const targets = resolveTargets(match, then.field)
+  for (let i = 0; i < targets.length; i++) {
+    const pending = runTarget(state, rule, then, fn, targets[i] as Target)
+    if (pending !== undefined) return finishTargets(pending, state, rule, then, fn, targets, i + 1)
   }
+  return undefined
+}
+
+/** Carries on with a `then`'s remaining targets once one of them went async. */
+const finishTargets = async (
+  pending: Promise<void>,
+  state: RunState,
+  rule: ResolvedRule,
+  then: IThen,
+  fn: RulesetFunction,
+  targets: Target[],
+  from: number,
+): Promise<void> => {
+  await pending
+  for (let i = from; i < targets.length; i++) {
+    const next = runTarget(state, rule, then, fn, targets[i] as Target)
+    if (next !== undefined) await next
+  }
+}
+
+/**
+ * Calls a rule function on one target and records what it reports. A function
+ * that throws (or rejects) becomes an error diagnostic on that node, so one bad
+ * rule cannot abort the run; an error while building a finding still does.
+ */
+const runTarget = (
+  state: RunState,
+  rule: ResolvedRule,
+  then: IThen,
+  fn: RulesetFunction,
+  target: Target,
+): Promise<void> | undefined => {
+  let raw: unknown
+  try {
+    const context: RunContext = Object.create(contextPrototype)
+    context.document = state.document
+    context.value = target.value
+    context.rule = rule
+    context.functionOptions = then.functionOptions
+    context[TARGET] = target
+    context[RUN_SCOPE] = state.scope
+    // The declared signature is synchronous, but a function reference may in
+    // fact return a Promise, so treat the raw result as unknown.
+    raw = fn(target.value, then.functionOptions ?? {}, context)
+  } catch (error) {
+    reportThrow(state, rule, target, error)
+    return undefined
+  }
+  if (!isThenable(raw)) {
+    collect(state, rule, target, raw as IFunctionResult[] | undefined)
+    return undefined
+  }
+  // `Promise.resolve` adopts the thenable the way `await` would, so a `then`
+  // that throws is a rejection here too.
+  return Promise.resolve(raw).then(
+    (results) => collect(state, rule, target, results as IFunctionResult[] | undefined),
+    (error: unknown) => reportThrow(state, rule, target, error),
+  )
+}
+
+const collect = (state: RunState, rule: ResolvedRule, target: Target, results: IFunctionResult[] | undefined): void => {
+  if (!results) return
+  for (const result of results) {
+    state.out.push(toDiagnostic(rule, result, target, state.document, state.sources))
+  }
+}
+
+/** Records a function that threw or rejected as an error diagnostic on its node, so the run carries on. */
+const reportThrow = (state: RunState, rule: ResolvedRule, target: Target, error: unknown): void => {
+  const { sourcePath, range, source } = locate(rule, targetPath(target), state.document, state.sources)
+  const reason = error instanceof Error ? error.message : String(error)
+  state.out.push(errorDiagnostic(rule, sourcePath, `Rule "${rule.name}" threw: ${reason}`, range, source))
 }
 
 const toDiagnostic = (
@@ -541,6 +612,19 @@ const toDiagnostic = (
   return diagnostic
 }
 
+/**
+ * Whether any of `rules` runs the `schema` function. A run loads its validator
+ * before the first rule when one does, from the async step `run` already has:
+ * the function itself is synchronous, so loading it there would take a
+ * `require()` (see `#deps/runtime-validators`).
+ */
+const runsSchema = (ruleset: Ruleset, rules: ResolvedRule[]): boolean => {
+  const schema = ruleset.getFunction('schema')
+  return rules.some((rule) =>
+    rule.then.some((then) => then?.function === 'schema' || (schema !== undefined && then?.function === schema)),
+  )
+}
+
 const hasIntersection = (a: Set<string>, b: Set<string>): boolean => {
   for (const value of a) {
     if (b.has(value)) return true
@@ -568,6 +652,8 @@ export const createLinter = (ruleset: Ruleset): Linter => ({
       if (rule.resolved && resolvedAvailable) resolvedRules.push(rule)
       else rawRules.push(rule)
     }
+
+    if (runsSchema(ruleset, rawRules) || runsSchema(ruleset, resolvedRules)) await preloadRuntimeValidators()
 
     // Raw rules run against the root's unresolved tree, so positions always come
     // straight from the root document; only resolved rules can land on inlined

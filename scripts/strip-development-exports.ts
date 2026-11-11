@@ -2,7 +2,8 @@ import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /**
- * Strips the `development` condition from every workspace package's `exports`.
+ * Strips the `development` condition from every workspace package's `exports`
+ * and `imports`.
  *
  * Locally we resolve packages to their TypeScript source via the `development`
  * export condition (see the `dev` scripts and `--conditions development`). That
@@ -20,11 +21,11 @@ import { join } from 'node:path'
 const ROOT = join(import.meta.dir, '..')
 
 type Exports = Record<string, unknown>
-type PackageJson = { name?: string; exports?: Exports }
+type PackageJson = { name?: string; exports?: Exports; imports?: Exports }
 
 const readJson = async (path: string): Promise<PackageJson> => JSON.parse(await readFile(path, 'utf-8'))
 
-/** Recursively delete every `development` condition within an exports subtree. */
+/** Recursively delete every `development` condition within an exports or imports subtree. */
 const stripDevelopment = (node: unknown): boolean => {
   if (node === null || typeof node !== 'object') return false
   let changed = false
@@ -47,11 +48,13 @@ const run = async (): Promise<void> => {
     if (!entry.isDirectory()) continue
     const path = join(packagesDir, entry.name, 'package.json')
     const pkg = await readJson(path)
-    if (!pkg.exports) continue
-
-    if (stripDevelopment(pkg.exports)) {
+    // Not `||`: both maps need stripping, and `||` would skip `imports` once
+    // `exports` had changed.
+    const strippedExports = stripDevelopment(pkg.exports)
+    const strippedImports = stripDevelopment(pkg.imports)
+    if (strippedExports || strippedImports) {
       await writeFile(path, `${JSON.stringify(pkg, null, 2)}\n`, 'utf-8')
-      console.log(`Stripped development exports in ${pkg.name ?? path}`)
+      console.log(`Stripped development conditions in ${pkg.name ?? path}`)
     }
   }
 }

@@ -1,4 +1,4 @@
-import { validate as buildValidator } from '@amritk/runtime-validators'
+import { validate as buildValidator } from '#deps/runtime-validators'
 
 import type { IFunctionResult, JsonPath, RulesetFunction } from '../core/types'
 

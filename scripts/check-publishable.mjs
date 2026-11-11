@@ -45,7 +45,7 @@ const distTargets = (node, found = []) => {
  */
 const ENTRY_FIELDS = ['exports', 'bin', 'main', 'module', 'types']
 
-/** True when a `development` condition survives anywhere in an exports subtree. */
+/** True when a `development` condition survives anywhere in an exports or imports subtree. */
 const hasDevelopmentCondition = (node) => {
   if (node === null || typeof node !== 'object') return false
   if ('development' in node) return true
@@ -91,12 +91,16 @@ export const checkPublishable = (dir) => {
     problems.push(`the manifest points at files that do not exist — run \`bun run build\`:\n  ${missing.join('\n  ')}`)
   }
 
-  if (hasDevelopmentCondition(pkg.exports ?? {})) {
+  for (const field of ['exports', 'imports']) {
+    if (!hasDevelopmentCondition(pkg[field] ?? {})) continue
     // The condition points at `./src/*.ts`. `@amritk/helpers` ships four of those
     // files outright, so for that package it resolves rather than failing — which
     // is the quiet version of this bug and the reason it is checked here at all.
+    // `imports` is no safer: `@amritk/lint` resolves its own `#deps/*` through
+    // it, so a consumer running with `--conditions development` would load
+    // TypeScript the tarball does not have.
     problems.push(
-      'exports still carries a `development` condition — run `bun run scripts/strip-development-exports.ts`',
+      `${field} still carries a \`development\` condition — run \`bun run scripts/strip-development-exports.ts\``,
     )
   }
 

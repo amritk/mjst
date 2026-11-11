@@ -1,5 +1,6 @@
-import { isMap, isScalar, isSeq, keyText, parseDocument, type YamlNode, type YamlSeq } from '@amritk/yaml'
+import type { YamlNode, YamlSeq } from '@amritk/yaml'
 import { applyEdits, findNodeAtLocation, modify, type Node, parseTree } from 'jsonc-parser'
+import { isMap, isScalar, isSeq, keyText, parseDocument } from '#deps/yaml'
 
 import type { ParserFormat } from './index'
 import type { JsonPath } from './types'

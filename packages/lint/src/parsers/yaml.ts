@@ -1,4 +1,5 @@
-import { parseAllDocuments, type YamlDocument } from '@amritk/yaml'
+import type { YamlDocument } from '@amritk/yaml'
+import { parseAllDocuments } from '#deps/yaml'
 
 import { createLineMap } from './lines'
 import { DiagnosticSeverity, type IDiagnostic, type IParseResult, type IParserOptions } from './types'

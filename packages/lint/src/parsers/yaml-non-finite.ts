@@ -1,4 +1,5 @@
-import { isAlias, isMap, isPair, isScalar, isSeq, keyText, type YamlNode, type YamlScalar } from '@amritk/yaml'
+import type { YamlNode, YamlScalar } from '@amritk/yaml'
+import { isAlias, isMap, isPair, isScalar, isSeq, keyText } from '#deps/yaml'
 
 import { createMergeResolver, isMergePair, type MergeResolver } from './yaml-merge-key'
 
