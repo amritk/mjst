@@ -83,6 +83,11 @@ jobs:
         with:
           version: bun run release:version
           publish: bun run release:publish
+          # The Version PR is squash-merged like any other, so its title and
+          # commit are conventional too (the default "Version Packages" fails
+          # pr-title.yml).
+          title: "chore(release): version packages"
+          commit: "chore(release): version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
