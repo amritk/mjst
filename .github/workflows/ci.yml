@@ -87,3 +87,17 @@ jobs:
 
       - name: Smoke and e2e test built artifacts
         run: bun run test:dist
+
+  # The one check to require: green only when every job above succeeded. A
+  # job added to this workflow joins `needs` below.
+  ci-gate:
+    name: ci-gate
+    if: always()
+    needs: [check, dist]
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - uses: amritk/workflows/actions/ci-gate@ac64e0798cf86da4bcdec948b09335334e5eae3c # main, with amritk/workflows#6
+        with:
+          needs: ${{ toJSON(needs) }}
