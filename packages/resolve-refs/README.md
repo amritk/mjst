@@ -109,14 +109,16 @@ The remote path has always been default-deny; the local path now matches it.
   uses the same key.
 - **The SSRF guard runs in two passes.** `isPrivateHost` is synchronous and reads
   only the URL (every IPv4 encoding, IPv4-in-IPv6 embeddings, ULA/link-local/
-  site-local IPv6, plus a name denylist for cloud-metadata endpoints).
-  `assertPublicHost` then resolves the name and refuses it when any address is
-  non-public. Both run on every redirect hop.
-- **Known residual gap: DNS rebinding.** A record that changes between the check
-  and the connection still wins; closing that requires pinning the socket to the
-  verified address, which Node's `fetch` does not let us do. What the DNS pass
-  buys is that a name *statically* pointing at a private address is refused —
-  which is the case that actually shows up.
+  site-local IPv6, plus a name denylist for cloud-metadata endpoints). The name
+  is then resolved and refused when any address is non-public. Both run on every
+  redirect hop.
+- **The connection dials the addresses that were checked.** The DNS pass runs
+  inside the socket's own lookup, so the name is resolved once per connection and
+  a rebinding record (public for the check, `127.0.0.1` for the connect) has no
+  second answer to give. `Host`, SNI, and certificate checks still use the name.
+  A custom `fetch` makes its own connections and cannot be pinned: it gets the
+  check as a pre-flight only, which stops a name that statically points at a
+  private address but not one that rebinds.
 - **A resolve is bounded** by `maxDocuments`, `totalTimeoutMs`, and `maxDepth`, so
   a hostile document cannot use the resolver as an egress amplifier, hold the
   process for hours, or crash it with nesting.

@@ -39,7 +39,9 @@ const remote = await resolveRefsFromFile('https://api.example.com/schema.json', 
    `169.254.169.254` / metadata hosts by name (`metadata.google.internal`,
    `*.internal`) are refused unless `allowPrivateHosts: true` or an explicit
    `allowedHosts` entry. Hostnames are also resolved and refused when they point
-   at a private address (`verifyDns: false` opts out).
+   at a private address, and the connection dials only the addresses that were
+   checked, so a DNS-rebinding record cannot slip past (`verifyDns: false` opts
+   out; a custom `fetch` gets the check as a pre-flight only).
 4. **Local `$ref`s are confined to the root document's directory.** A
    `{"$ref": "../common/schemas.json"}` is refused by default — pass
    `allowedRoots: ['./specs']` (or whatever contains both files) to allow it.
