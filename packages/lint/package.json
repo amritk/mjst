@@ -80,8 +80,8 @@
   },
   "devDependencies": {
     "@amritk/resolve-refs": "workspace:*",
-    "@stoplight/spectral-core": "^1.23.1",
+    "@stoplight/spectral-core": "^1.24.1",
     "@stoplight/spectral-parsers": "^1.0.5",
-    "@stoplight/spectral-rulesets": "^1.22.7"
+    "@stoplight/spectral-rulesets": "^1.23.1"
   }
 }
