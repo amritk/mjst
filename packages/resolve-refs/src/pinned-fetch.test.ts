@@ -74,6 +74,21 @@ describe('pinned-fetch', () => {
     expect(hits).toBe(0)
   })
 
+  it('refuses a URL that includes credentials', async () => {
+    let hits = 0
+    const port = await listen((_request, response) => {
+      hits++
+      response.end('{}')
+    })
+    const { resolveHost, asked } = recordingResolver()
+
+    await expect(
+      createPinnedFetch(resolveHost)(`http://user:secret@schemas.example.test:${port}/`, init()),
+    ).rejects.toThrow(/includes credentials/)
+    expect(hits).toBe(0)
+    expect(asked).toEqual([])
+  })
+
   it('returns a redirect without following it', async () => {
     const port = await listen((_request, response) => {
       response.writeHead(302, { location: 'http://169.254.169.254/latest/meta-data/' })

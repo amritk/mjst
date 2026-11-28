@@ -64,6 +64,11 @@ export const createPinnedFetch =
   (resolveHost: ResolveHost) =>
   (url: string, init: PinnedFetchInit): Promise<Response> => {
     const target = new URL(url)
+    // `fetch` refuses a URL with credentials in it; `http.request` would drop
+    // them without a word. Keep `fetch`'s answer.
+    if (target.username !== '' || target.password !== '') {
+      return Promise.reject(new TypeError(`refusing a URL that includes credentials: ${target.host}`))
+    }
     const send = target.protocol === 'https:' ? httpsRequest : httpRequest
 
     const lookup: LookupFunction = (hostname, options, callback) => {
