@@ -61,7 +61,7 @@
     "@amritk/yaml": "workspace:*",
     "fast-glob": "^3.3.2",
     "json-schema-typed": "catalog:",
-    "yargs": "^17.7.2"
+    "yargs": "^18.2.0"
   },
   "devDependencies": {
     "@types/yargs": "^17.0.33"
