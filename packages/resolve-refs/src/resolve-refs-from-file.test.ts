@@ -1,4 +1,8 @@
+import dns from 'node:dns'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { syncBuiltinESMExports } from 'node:module'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -267,6 +271,65 @@ describe('resolve-refs-from-file', () => {
     expect(resolved).toMatchObject({ a: { type: 'string' }, b: { type: 'string' } })
     // Both refs hit the same document, which is fetched and cached exactly once.
     expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a host that rebinds to loopback between the DNS check and the connection', async () => {
+    // DNS rebinding: a short-TTL record answers with a public address while the
+    // guard looks, and with loopback when the socket connects. Faking the
+    // resolver is the only way to get two different answers for one name, so
+    // both of Node's lookup entry points are swapped for one shared sequence.
+    // 203.0.113.10 is TEST-NET-3: public to the guard, routed nowhere.
+    let hits = 0
+    const canary = createServer((_request, response) => {
+      hits++
+      response.end(JSON.stringify({ secret: 'LOOPBACK_MARKER' }))
+    })
+    await new Promise<void>((resolve) => canary.listen(0, '127.0.0.1', resolve))
+    const { port } = canary.address() as AddressInfo
+
+    const answers: string[] = []
+    const nextAnswer = (): string => {
+      const address = answers.length === 0 ? '203.0.113.10' : '127.0.0.1'
+      answers.push(address)
+      return address
+    }
+    const realLookup = dns.lookup
+    const realPromisesLookup = dns.promises.lookup
+    const rebindingLookup = (hostname: string, options: unknown, callback: unknown): void => {
+      const done = (typeof options === 'function' ? options : callback) as (...args: unknown[]) => void
+      const all = typeof options === 'object' && options !== null && 'all' in options && options.all === true
+      if (hostname !== 'rebind.example.test') {
+        Reflect.apply(realLookup, dns, [hostname, typeof options === 'function' ? {} : options, done])
+        return
+      }
+      const address = nextAnswer()
+      process.nextTick(() => (all ? done(null, [{ address, family: 4 }]) : done(null, address, 4)))
+    }
+    vi.spyOn(dns, 'lookup').mockImplementation(rebindingLookup as typeof dns.lookup)
+    vi.spyOn(dns.promises, 'lookup').mockImplementation((async (hostname: string, options?: { all?: boolean }) => {
+      if (hostname !== 'rebind.example.test') return realPromisesLookup(hostname, options ?? {})
+      const address = nextAnswer()
+      return options?.all ? [{ address, family: 4 }] : { address, family: 4 }
+    }) as typeof dns.promises.lookup)
+    // Named imports of a builtin (`import { lookup } from 'node:dns/promises'`)
+    // only see a patched export once the ESM view is re-synced.
+    syncBuiltinESMExports()
+
+    try {
+      writeFileSync(join(dir, 'api.json'), JSON.stringify({ $ref: `http://rebind.example.test:${port}/` }))
+      const { resolved, errors } = await resolveRefsFromFile(join(dir, 'api.json'), { timeoutMs: 1_000 })
+
+      expect(hits).toBe(0)
+      expect(JSON.stringify(resolved)).not.toContain('LOOPBACK_MARKER')
+      expect(errors).toHaveLength(1)
+      // One resolution per connection: the address that was checked is the
+      // address that was dialed, so there is no second answer to rebind to.
+      expect(answers).toEqual(['203.0.113.10'])
+    } finally {
+      vi.restoreAllMocks()
+      syncBuiltinESMExports()
+      await new Promise<void>((resolve) => canary.close(() => resolve()))
+    }
   })
 
   it('refuses a redirect that lands on a private host (SSRF via redirect)', async () => {
@@ -956,10 +1019,10 @@ describe('resolve-refs-from-file', () => {
     )
     writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://example.com/s.json' } }))
 
-    const first = await resolveRefsFromFile(join(dir, 'api.json'))
+    const first = await resolveRefsFromFile(join(dir, 'api.json'), { allowedHosts: ['example.com'] })
     ;(first.resolved as { x: { properties: { k: { enum: string[] } } } }).x.properties.k.enum.push('INJECTED')
 
-    const second = await resolveRefsFromFile(join(dir, 'api.json'))
+    const second = await resolveRefsFromFile(join(dir, 'api.json'), { allowedHosts: ['example.com'] })
 
     expect(second.resolved).toMatchObject({ x: { properties: { k: { enum: ['a', 'b'] } } } })
   })
@@ -994,10 +1057,10 @@ describe('resolve-refs-from-file', () => {
     )
     writeFileSync(join(dir, 'api.json'), JSON.stringify({ x: { $ref: 'https://example.com/s.json' } }))
 
-    const first = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2 })
+    const first = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2, allowedHosts: ['example.com'] })
     ;(first.resolved as { x: { deep: { deeper: { leaf: string } } } }).x.deep.deeper.leaf = 'INJECTED'
 
-    const second = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2 })
+    const second = await resolveRefsFromFile(join(dir, 'api.json'), { maxDepth: 2, allowedHosts: ['example.com'] })
 
     expect(second.resolved).toMatchObject({ x: { deep: { deeper: { leaf: 'ORIGINAL' } } } })
   })

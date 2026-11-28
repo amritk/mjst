@@ -15,6 +15,7 @@ import { getByPointer } from './get-by-pointer'
 import { isContainedPath } from './is-contained-path'
 import { isPrivateHost } from './is-private-host'
 import { DEFAULT_MAX_DEPTH, depthLimitError } from './max-depth'
+import { createPinnedFetch } from './pinned-fetch'
 import { refPathIndex } from './ref-path-index'
 import {
   ANNOTATION_ONLY_SIBLINGS,
@@ -24,6 +25,7 @@ import {
   readReference,
   resolveFragment,
 } from './reference'
+import { resolvePublicHost } from './resolve-public-host'
 import {
   baseOfNode,
   buildResourceRegistry,
@@ -291,6 +293,12 @@ const cacheKeyFor = (location: string, options: ResolveOptions): string =>
   `${fetchScope(location, options)}${SCOPE_SEPARATOR}${location}`
 
 /**
+ * The default client for hosts that need the DNS check: resolves each name once,
+ * refuses it if any address is non-public, and connects only to those addresses.
+ */
+const pinnedPublicFetch = createPinnedFetch((hostname) => resolvePublicHost(hostname))
+
+/**
  * Fetches and parses a remote document, following redirects manually so the
  * SSRF guard is re-applied to every hop. `fetch` follows redirects by default,
  * which would let an allow-listed public URL bounce to a private/loopback
@@ -298,19 +306,28 @@ const cacheKeyFor = (location: string, options: ResolveOptions): string =>
  * `redirect: 'manual'` and re-run {@link denialReason} on each `Location`.
  * Caller-supplied headers are only sent on hops that share the original URL's
  * origin, so a cross-origin redirect can't exfiltrate credentials.
+ *
+ * When the DNS half of the guard applies, the default client is
+ * {@link pinnedPublicFetch}: it verifies the name inside the socket's own lookup
+ * and dials exactly the addresses it verified, so a rebinding record has no
+ * second resolution to answer differently. A caller-supplied `fetch` makes its
+ * own connections, which we cannot pin — it gets {@link assertPublicHost} as a
+ * pre-check, which stops a name that statically points somewhere private but
+ * not one that rebinds between the check and the connection.
  */
 const fetchRemote = async (location: string, options: ResolveOptions, deadline: number): Promise<unknown> => {
   const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS
   const timeoutMs = options.timeoutMs ?? FETCH_TIMEOUT_MS
   const maxBytes = options.maxBytes ?? MAX_REMOTE_BYTES
-  const doFetch = options.fetch ?? fetch
+  const verifyDns = needsDnsVerification(options)
+  const doFetch = options.fetch ?? (verifyDns ? pinnedPublicFetch : fetch)
   const origin = new URL(location).origin
 
   let current = location
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const reason = denialReason(current, options)
     if (reason !== null) throw new Error(`refusing to follow redirect (${reason}): ${current}`)
-    if (needsDnsVerification(options)) await assertPublicHost(new URL(current).hostname)
+    if (verifyDns && options.fetch !== undefined) await assertPublicHost(new URL(current).hostname)
 
     const headers = new URL(current).origin === origin ? headersFor(location, options) : undefined
     const response = await doFetch(current, {
@@ -323,11 +340,16 @@ const fetchRemote = async (location: string, options: ResolveOptions, deadline: 
     })
     if (response.status >= 300 && response.status < 400) {
       const next = response.headers.get('location')
+      // Release the connection: the body of a redirect or an error is never read.
+      await response.body?.cancel()
       if (!next) throw new Error(`HTTP ${response.status} redirect with no Location header`)
       current = new URL(next, current).href
       continue
     }
-    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`)
+    if (!response.ok) {
+      await response.body?.cancel()
+      throw new Error(`HTTP ${response.status} ${response.statusText}`)
+    }
 
     // Parse against the original request location so the caller's format sniffing
     // (e.g. `.yaml` vs `.json`) and any relative refs key off a stable identity.

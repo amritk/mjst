@@ -111,9 +111,10 @@ export type ResolveOptions = {
    * (behind an egress proxy) and a local lookup would fail; allow-listed hosts
    * skip the check either way.
    *
-   * This narrows DNS rebinding rather than closing it: the record can still
-   * change between the check and the connection, which would take pinning the
-   * socket to the verified address to prevent.
+   * The default client verifies inside the connection's own lookup and dials
+   * only the addresses it verified, so a rebinding record cannot answer the
+   * check and the connection differently. A custom `fetch` cannot be pinned
+   * that way and gets the check as a pre-flight only.
    */
   verifyDns?: boolean
   /**
@@ -201,7 +202,13 @@ export type ResolveOptions = {
    * proxy-aware one, a test stub). Called once per redirect hop with
    * `redirect: 'manual'` and a timeout signal. The SSRF guard still evaluates
    * every hop before this is called — a custom fetch widens *how* documents are
-   * fetched, never *which* hosts may be. Defaults to the global `fetch`.
+   * fetched, never *which* hosts may be.
+   *
+   * Defaults to a built-in client that pins each connection to the addresses
+   * the DNS check verified (see `verifyDns`), or to the global `fetch` when that
+   * check is off. A custom fetch resolves names itself, so for it the DNS check
+   * is a pre-flight that a rebinding record can still answer differently from
+   * the connection: pin the address yourself if that matters.
    */
   fetch?: (
     url: string,
