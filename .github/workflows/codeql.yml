@@ -1,0 +1,24 @@
+# CodeQL code scanning through amritk/workflows' reusable workflow, pinned by
+# commit. Alerts land on Security > Code scanning and, on a pull request, as
+# annotations on the diff. `actions` scans the workflow files themselves.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 5 * * 2"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  codeql:
+    uses: amritk/workflows/.github/workflows/codeql.yml@eb1910524625cfaa41519d00d309306f04be615d # main, with amritk/workflows#7
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      languages: '["actions", "javascript-typescript"]'
