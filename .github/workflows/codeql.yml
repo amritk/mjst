@@ -15,7 +15,7 @@ permissions: {}
 
 jobs:
   codeql:
-    uses: amritk/workflows/.github/workflows/codeql.yml@a07fd4bbde41858c86f578b0f8b008c16a4a12b9 # amritk/workflows#7, unreleased
+    uses: amritk/workflows/.github/workflows/codeql.yml@eb1910524625cfaa41519d00d309306f04be615d # main, with amritk/workflows#7
     permissions:
       contents: read
       security-events: write
