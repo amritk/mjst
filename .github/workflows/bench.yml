@@ -100,30 +100,12 @@ jobs:
           --changed changed-files.txt
           --output bench-delta.md
 
-      - name: Add delta table to the job summary
-        run: cat bench-delta.md >> "$GITHUB_STEP_SUMMARY"
-
-      # Forked PRs get a read-only token, so they keep the job-summary table
-      # above but skip the description update. The marker-splice logic lives in
-      # scripts/splice-bench-delta.cjs (unit-tested; repairs dangling markers
-      # instead of letting them eat the description on the next run).
-      - name: Update the PR description with the delta
-        if: github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/github-script@v7
+      # The job summary always gets the table; the PR description gets it too,
+      # between the mjst-bench-delta markers, unless the PR is from a fork
+      # (read-only token). The splice, and its repair of dangling markers,
+      # lives in the shared action.
+      - name: Publish the delta table
+        uses: amritk/workflows/actions/pr-delta@ac64e0798cf86da4bcdec948b09335334e5eae3c # main, with amritk/workflows#6
         with:
-          script: |
-            const { readFileSync } = require('node:fs')
-            const { spliceBenchDelta } = require(`${process.env.GITHUB_WORKSPACE}/scripts/splice-bench-delta.cjs`)
-            const table = readFileSync('bench-delta.md', 'utf8')
-            const { owner, repo } = context.repo
-            const pull_number = context.payload.pull_request.number
-
-            // Re-fetch the body rather than trusting the event payload — the
-            // description may have been edited since this run was queued.
-            const { data: pr } = await github.rest.pulls.get({ owner, repo, pull_number })
-            const body = pr.body ?? ''
-
-            const next = spliceBenchDelta(body, table)
-            if (next !== body) {
-              await github.rest.pulls.update({ owner, repo, pull_number, body: next })
-            }
+          file: bench-delta.md
+          marker: mjst-bench-delta
